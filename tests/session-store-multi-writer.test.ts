@@ -38,7 +38,7 @@ function stubSession(id: string, overrides: Record<string, unknown> = {}): any {
     status: "completed",
     completedAt: Date.now(),
     costUsd: 0,
-    getOutput: () => [],
+    getOutput: (): never[] => [],
     ...overrides,
   };
 }

@@ -836,7 +836,7 @@ async function answerExpectedCallback(params: {
       offset,
       timeout: 2,
     });
-    const updates = Array.isArray(result) ? result : [];
+    const updates: unknown[] = Array.isArray(result) ? result : [];
     for (const update of updates) {
       if (!update || typeof update !== "object" || Array.isArray(update)) continue;
       const record = update as Record<string, unknown>;

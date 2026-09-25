@@ -9,6 +9,7 @@ import { setSessionManager } from "../src/singletons";
 import { makeAgentWorktreeCleanupTool } from "../src/tools/agent-worktree-cleanup";
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
 import { createWorktree, getBranchName } from "../src/worktree";
+import type { PersistedSessionInfo } from "../src/types";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -65,12 +66,12 @@ afterEach(() => {
 describe("agent_worktree_status", () => {
   it("treats missing or null params as listing all worktrees", async () => {
     setSessionManager({
-      list: () => [],
-      listPersistedSessions: () => [],
+      list: (): never[] => [],
+      listPersistedSessions: (): never[] => [],
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
-    for (const params of [undefined, null] as const) {
+    for (const params of [undefined, null] as unknown[]) {
       const result = await tool.execute("tool-id", params);
       assert.equal((result.content[0] as { text: string }).text, "No sessions with worktrees found.");
     }
@@ -78,8 +79,8 @@ describe("agent_worktree_status", () => {
 
   it("returns an error for malformed params without throwing", async () => {
     setSessionManager({
-      list: () => [],
-      listPersistedSessions: () => [],
+      list: (): never[] => [],
+      listPersistedSessions: (): never[] => [],
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
@@ -100,7 +101,7 @@ describe("agent_worktree_status", () => {
       git(repoDir, "commit", "-m", "main diverges");
       git(repoDir, "cherry-pick", releasedCommit);
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-released-status",
         harnessSessionId: "h-released-status",
         name: "released-status",
@@ -119,8 +120,8 @@ describe("agent_worktree_status", () => {
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>
@@ -151,7 +152,7 @@ describe("agent_worktree_status", () => {
     try {
       const conflicted = await createCommittedWorktree(repoDir, "conflict-resolving-status", "feature.txt", "resolver\n");
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-conflict-resolving",
         harnessSessionId: "h-conflict-resolving",
         name: "conflict-resolving-status",
@@ -170,8 +171,8 @@ describe("agent_worktree_status", () => {
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>
@@ -227,7 +228,7 @@ describe("agent_worktree_status", () => {
       git(repoDir, "checkout", "fix-test-session-store-isolation");
       git(repoDir, "merge", "--ff-only", helperCommit);
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-pr-314-comments-cleanup",
         harnessSessionId: "h-pr-314-comments-cleanup",
         name: "pr-314-comments-cleanup",
@@ -250,8 +251,8 @@ describe("agent_worktree_status", () => {
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>
@@ -352,7 +353,7 @@ describe("agent_worktree_cleanup", () => {
       ];
 
       setSessionManager({
-        list: () => [],
+        list: (): never[] => [],
         resolve(ref: string) {
           if (ref === "s-unique") {
             return { id: "s-unique", name: "unique-task", status: "running", worktreePath: unique.worktreePath } as any;
@@ -389,7 +390,7 @@ describe("agent_worktree_cleanup", () => {
       git(repoDir, "merge", "--ff-only", merged.branchName);
       const legacyResolvedAt = "2024-02-03T04:05:06.000Z";
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-clean",
         harnessSessionId: "h-clean",
         name: "merged-clean",
@@ -400,21 +401,21 @@ describe("agent_worktree_cleanup", () => {
         worktreePath: merged.worktreePath,
         worktreeBranch: merged.branchName,
         worktreeBaseBranch: "main",
-        worktreeState: "ready",
+        worktreeState: "provisioned",
         worktreeMergedAt: legacyResolvedAt,
         pendingWorktreeDecisionSince: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
         lastWorktreeReminderAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
         worktreeDecisionSnoozedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         worktreeLifecycle: {
-          state: "active",
+          state: "provisioned",
           updatedAt: new Date().toISOString(),
           baseBranch: "main",
         },
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>
@@ -468,7 +469,7 @@ describe("agent_worktree_cleanup", () => {
       git(repoDir, "commit", "-m", "main diverges");
       git(repoDir, "cherry-pick", releasedCommit);
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-released-clean",
         harnessSessionId: "h-released-clean",
         name: "released-clean",
@@ -479,20 +480,20 @@ describe("agent_worktree_cleanup", () => {
         worktreePath: released.worktreePath,
         worktreeBranch: released.branchName,
         worktreeBaseBranch: "main",
-        worktreeState: "ready",
+        worktreeState: "provisioned",
         pendingWorktreeDecisionSince: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
         lastWorktreeReminderAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
         worktreeDecisionSnoozedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         worktreeLifecycle: {
-          state: "active",
+          state: "provisioned",
           updatedAt: new Date().toISOString(),
           baseBranch: "main",
         },
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>
@@ -540,7 +541,7 @@ describe("agent_worktree_cleanup", () => {
       const legacyMergedAt = "2024-01-02T03:04:05.000Z";
       const legacyDismissedAt = "2024-02-03T04:05:06.000Z";
 
-      const persisted = {
+      const persisted: PersistedSessionInfo = {
         sessionId: "s-dismissed-clean",
         harnessSessionId: "h-dismissed-clean",
         name: "dismissed-clean",
@@ -551,7 +552,7 @@ describe("agent_worktree_cleanup", () => {
         worktreePath: dismissed.worktreePath,
         worktreeBranch: dismissed.branchName,
         worktreeBaseBranch: "main",
-        worktreeState: "ready",
+        worktreeState: "provisioned",
         worktreeMergedAt: legacyMergedAt,
         worktreeDismissedAt: legacyDismissedAt,
         worktreeLifecycle: {
@@ -562,8 +563,8 @@ describe("agent_worktree_cleanup", () => {
       };
 
       setSessionManager({
-        list: () => [],
-        resolve: () => undefined,
+        list: (): never[] => [],
+        resolve: (): undefined => undefined,
         listPersistedSessions: () => [persisted] as any,
         getPersistedSession(ref: string) {
           return [persisted].find((session) =>

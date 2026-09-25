@@ -51,6 +51,11 @@ export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginNa
   return unexpected;
 }
 
+/**
+ * @param {string} profileDir
+ * @param {NodeJS.ProcessEnv} [sourceEnv]
+ * @returns {NodeJS.ProcessEnv}
+ */
 export function createIsolatedOpenClawEnv(profileDir, sourceEnv = process.env) {
   const env = Object.fromEntries(
     Object.entries(sourceEnv).filter(([key]) => !key.startsWith("OPENCLAW_")),

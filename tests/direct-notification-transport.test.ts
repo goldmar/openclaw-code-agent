@@ -74,7 +74,7 @@ describe("RuntimeDirectNotificationTransport", () => {
     let runtimeConfigReads = 0;
     setPluginRuntime({
       config: {
-        current: () => {
+        current: (): null => {
           runtimeConfigReads += 1;
           return null;
         },

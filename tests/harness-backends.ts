@@ -13,8 +13,35 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeCodeHarness } from "../src/harness/claude-code";
 import { CodexHarness } from "../src/harness/codex";
 import type { JsonRpcClient, JsonRpcId, JsonRpcNotificationHandler, JsonRpcRequestHandler } from "../src/harness/codex-rpc";
+import type {
+  ItemCompletedNotification,
+  ServerRequestResolvedNotification,
+  TurnCompletedNotification,
+  TurnInterruptResponse,
+  TurnPlanUpdatedNotification,
+  TurnStartedNotification,
+  TurnSteerResponse,
+} from "../src/harness/codex-app-server-protocol";
 import { OpenCodeHarness } from "../src/harness/opencode";
 import type { AgentHarness } from "../src/harness/types";
+import { checkProtocol, openCodeEventErrors, openCodeRequestErrors, openCodeResponseErrors } from "./protocol-schema";
+import {
+  CODEX_FIXTURE_CWD,
+  CodexProtocolChecker,
+  codexAgentMessage,
+  codexInitializeResponse,
+  codexPlanItem,
+  codexThreadResumeResponse,
+  codexThreadStartResponse,
+  codexTurn,
+  type CodexServerRequestParams,
+  type CodexThreadResponseOptions,
+  type CommandExecutionRequestApprovalResponse,
+  type GetAccountResponse,
+  type ModelListResponse,
+  type ToolRequestUserInputResponse,
+  type TurnStartResponse,
+} from "./codex-fixtures";
 
 export type BackendName = "claude-code" | "codex" | "opencode";
 
@@ -67,6 +94,8 @@ export interface BackendDriver {
   readonly supportsPermissionRequests: boolean;
   /** Whether a plan decision is carried by the backend protocol itself. */
   readonly nativePlanDecisions: boolean;
+  /** Frames that did not match the vendored protocol schema (empty for a correct fake and a correct OCA). */
+  readonly protocolViolations: readonly string[];
   waitForTurns(count: number): Promise<void>;
   /** Raise a structured question inside the running turn. */
   ask(questions: QuestionSpec[]): Promise<QuestionOutcome>;
@@ -150,6 +179,8 @@ export class ClaudeBackend implements BackendDriver {
   readonly steers: string[] = [];
   readonly supportsPermissionRequests = false;
   readonly nativePlanDecisions = true;
+  /** The Claude Agent SDK is typed in-process; there is no wire schema to check. */
+  readonly protocolViolations: readonly string[] = [];
   readonly permissionModes: string[] = [];
   private output = new Pushable<unknown>();
   private canUseTool: ClaudeCanUseTool | undefined;
@@ -190,9 +221,9 @@ export class ClaudeBackend implements BackendDriver {
       streamInput: async (input: AsyncIterable<SDKUserMessage>) => {
         await this.consumePrompts(input, output);
       },
-      interrupt: async () => undefined,
+      interrupt: async (): Promise<undefined> => undefined,
       getContextUsage: async () => { throw new Error("not supported by the fake query"); },
-      supportedModels: async () => [],
+      supportedModels: async (): Promise<never[]> => [],
     };
   }
 
@@ -287,6 +318,10 @@ export class ClaudeBackend implements BackendDriver {
 // ---------------------------------------------------------------------------
 
 const CODEX_THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
+const CODEX_WORKSPACE_WRITE: CodexThreadResponseOptions = {
+  approvalPolicy: "on-request",
+  sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+};
 
 type CodexServerRequest = { id: JsonRpcId; method: string; response: Promise<unknown> };
 
@@ -299,6 +334,8 @@ export class CodexBackend implements BackendDriver {
   readonly nativePlanDecisions = false;
   readonly turnStartParams: Array<Record<string, unknown>> = [];
   readonly threadStartParams: Array<Record<string, unknown>> = [];
+  /** Validates every frame against the vendored Codex JSON Schema. */
+  readonly protocol = new CodexProtocolChecker();
   private notificationHandler: JsonRpcNotificationHandler = () => undefined;
   private requestHandler: JsonRpcRequestHandler = async () => ({});
   private activeTurnId: string | undefined;
@@ -310,6 +347,10 @@ export class CodexBackend implements BackendDriver {
     this.harness = new CodexHarness({ createClient: () => this.client() });
   }
 
+  get protocolViolations(): readonly string[] {
+    return this.protocol.violations;
+  }
+
   private client(): JsonRpcClient {
     return {
       connect: async () => undefined,
@@ -318,39 +359,33 @@ export class CodexBackend implements BackendDriver {
       setNotificationHandler: (handler) => { this.notificationHandler = handler; },
       setRequestHandler: (handler) => { this.requestHandler = handler; },
       setCloseHandler: () => undefined,
-      request: async (method, params) => this.handle(method, (params ?? {}) as Record<string, unknown>),
+      request: async (method, params) => {
+        this.protocol.clientRequest(method, params);
+        return this.protocol.clientResult(method, this.handle(method, (params ?? {}) as Record<string, unknown>));
+      },
     };
   }
 
-  private threadResponse(threadId: string): Record<string, unknown> {
-    return {
-      thread: { id: threadId },
-      model: "gpt-6-sol",
-      modelProvider: "openai",
-      serviceTier: null,
-      cwd: "/tmp",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: { type: "workspaceWrite" },
-      activePermissionProfile: null,
-      reasoningEffort: null,
-    };
+  /** Send a server notification after checking it against the schema. */
+  private async notify<M extends string>(method: M, params: unknown): Promise<void> {
+    this.protocol.notification(method, params);
+    await this.notificationHandler(method, params);
   }
 
-  private async handle(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private handle(method: string, params: Record<string, unknown>): unknown {
     switch (method) {
       case "initialize":
-        return { userAgent: "fake", codexHome: "/tmp", platformFamily: "unix", platformOs: "linux" };
+        return codexInitializeResponse();
       case "account/read":
-        return { account: null, requiresOpenaiAuth: false, workspaceRouting: null };
+        return { account: null, requiresOpenaiAuth: false, workspaceRouting: null } satisfies GetAccountResponse;
       case "model/list":
-        return { data: [], nextCursor: null };
+        return { data: [], nextCursor: null } satisfies ModelListResponse;
       case "thread/start":
         this.threadStartParams.push(params);
-        return this.threadResponse(CODEX_THREAD_ID);
+        return codexThreadStartResponse(CODEX_THREAD_ID, CODEX_WORKSPACE_WRITE);
       case "thread/resume":
         this.threadStartParams.push(params);
-        return this.threadResponse(String(params.threadId));
+        return codexThreadResumeResponse(String(params.threadId), CODEX_WORKSPACE_WRITE);
       case "turn/start": {
         this.turnStartParams.push(params);
         const input = Array.isArray(params.input) ? params.input : [];
@@ -361,50 +396,57 @@ export class CodexBackend implements BackendDriver {
         const turnId = `turn-${this.turnCounter}`;
         this.activeTurnId = turnId;
         queueMicrotask(() => {
-          void this.notificationHandler("turn/started", { threadId: CODEX_THREAD_ID, turn: this.turnPayload(turnId, "inProgress") });
+          void this.notify("turn/started", { threadId: CODEX_THREAD_ID, turn: codexTurn(turnId, "inProgress") } satisfies TurnStartedNotification);
         });
-        return { turn: this.turnPayload(turnId, "inProgress") };
+        return { turn: codexTurn(turnId, "inProgress") } satisfies TurnStartResponse;
       }
       case "turn/steer": {
         if (!this.activeTurnId || params.expectedTurnId !== this.activeTurnId) throw new Error("no active turn to steer");
         const input = Array.isArray(params.input) ? params.input : [];
         this.steers.push(input.map((item) => String((item as { text?: unknown }).text ?? "")).join(""));
-        return { turnId: this.activeTurnId };
+        return { turnId: this.activeTurnId } satisfies TurnSteerResponse;
       }
       case "turn/interrupt":
-        return {};
+        return {} satisfies TurnInterruptResponse;
       default:
         throw new Error(`fake Codex app server does not implement ${method}`);
     }
-  }
-
-  private turnPayload(id: string, status: string): Record<string, unknown> {
-    return { id, items: [], itemsView: "notLoaded", status, error: null, startedAt: null, completedAt: null, durationMs: 1 };
   }
 
   waitForTurns(count: number): Promise<void> {
     return waitUntil(() => this.turns.length >= count && !!this.activeTurnId, `${count} Codex turn(s)`);
   }
 
-  private serverRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private serverRequest<M extends "item/tool/requestUserInput" | "item/commandExecution/requestApproval">(
+    method: M,
+    params: CodexServerRequestParams<M>,
+  ): Promise<unknown> {
     if (!this.activeTurnId) throw new Error("no active Codex turn");
-    this.requestCounter += 1;
+    this.protocol.serverRequest(method, params);
     const id = this.requestCounter;
-    const response = this.requestHandler(method, {
-      threadId: CODEX_THREAD_ID,
-      turnId: this.activeTurnId,
-      itemId: `item-${id}`,
-      ...params,
-    }, id);
+    const response = this.requestHandler(method, params, id).then((result) => {
+      this.protocol.serverResult(method, result);
+      return result;
+    });
     this.pendingRequest = { id, method, response };
     void response.finally(() => {
       if (this.pendingRequest?.id === id) this.pendingRequest = undefined;
-    }).catch(() => undefined);
+    }).catch((): undefined => undefined);
     return response;
   }
 
+  private nextItemId(): string {
+    this.requestCounter += 1;
+    return `item-${this.requestCounter}`;
+  }
+
   async ask(questions: QuestionSpec[]): Promise<QuestionOutcome> {
+    const turnId = this.activeTurnId;
+    if (!turnId) throw new Error("no active Codex turn");
     const response = await this.serverRequest("item/tool/requestUserInput", {
+      threadId: CODEX_THREAD_ID,
+      turnId,
+      itemId: this.nextItemId(),
       isBlocking: true,
       autoResolutionMs: null,
       questions: questions.map((question) => ({
@@ -415,7 +457,7 @@ export class CodexBackend implements BackendDriver {
         isSecret: false,
         options: question.options ? question.options.map((label) => ({ label, description: `${label} option` })) : null,
       })),
-    }) as { answers?: Record<string, { answers: string[] } | undefined> };
+    }) as ToolRequestUserInputResponse;
     const raw = response.answers ?? {};
     if (Object.keys(raw).length === 0) return { kind: "cancelled", reason: "resolved without answers" };
     const answers: QuestionAnswers = {};
@@ -427,30 +469,41 @@ export class CodexBackend implements BackendDriver {
   }
 
   async requestPermission(description: string): Promise<PermissionOutcome> {
+    const turnId = this.activeTurnId;
+    if (!turnId) throw new Error("no active Codex turn");
     const response = await this.serverRequest("item/commandExecution/requestApproval", {
+      kind: "command",
+      threadId: CODEX_THREAD_ID,
+      turnId,
+      itemId: this.nextItemId(),
+      startedAtMs: 0,
+      environmentId: null,
       command: description,
-      cwd: "/tmp",
+      cwd: CODEX_FIXTURE_CWD,
       reason: "The test needs it",
       availableDecisions: ["accept", "acceptForSession", "decline", "cancel"],
-    }) as { decision: PermissionOutcome["decision"] };
-    return { decision: response.decision };
+    }) as CommandExecutionRequestApprovalResponse;
+    const decision = response.decision;
+    if (typeof decision !== "string") throw new Error(`unexpected structured Codex approval decision ${JSON.stringify(decision)}`);
+    return { decision };
   }
 
   proposePlan(markdown: string): undefined {
     void (async () => {
       const turnId = this.activeTurnId;
-      await this.notificationHandler("turn/plan/updated", {
+      if (!turnId) throw new Error("no active Codex turn");
+      await this.notify("turn/plan/updated", {
         threadId: CODEX_THREAD_ID,
         turnId,
         explanation: "Implementation plan",
         plan: [{ step: "Change the code", status: "pending" }],
-      });
-      await this.notificationHandler("item/completed", {
+      } satisfies TurnPlanUpdatedNotification);
+      await this.notify("item/completed", {
         threadId: CODEX_THREAD_ID,
         turnId,
         completedAtMs: 0,
-        item: { type: "plan", id: `plan-${turnId}`, text: markdown },
-      });
+        item: codexPlanItem(`plan-${turnId}`, markdown),
+      } satisfies ItemCompletedNotification);
       await this.endTurn(markdown);
     })();
     return undefined;
@@ -459,20 +512,20 @@ export class CodexBackend implements BackendDriver {
   async endTurn(text = "Done."): Promise<void> {
     const turnId = this.activeTurnId;
     if (!turnId) throw new Error("no active Codex turn to end");
-    await this.notificationHandler("item/completed", {
+    await this.notify("item/completed", {
       threadId: CODEX_THREAD_ID,
       turnId,
       completedAtMs: 0,
-      item: { type: "agentMessage", id: `msg-${turnId}-${text.length}`, text, phase: null, memoryCitation: null, delivery: null, questions: null },
-    });
+      item: codexAgentMessage(`msg-${turnId}-${text.length}`, text),
+    } satisfies ItemCompletedNotification);
     this.activeTurnId = undefined;
-    await this.notificationHandler("turn/completed", { threadId: CODEX_THREAD_ID, turn: this.turnPayload(turnId, "completed") });
+    await this.notify("turn/completed", { threadId: CODEX_THREAD_ID, turn: codexTurn(turnId, "completed") } satisfies TurnCompletedNotification);
   }
 
   async expirePendingRequest(): Promise<void> {
     const pending = this.pendingRequest;
     if (!pending) throw new Error("no pending Codex server request");
-    await this.notificationHandler("serverRequest/resolved", { threadId: CODEX_THREAD_ID, requestId: pending.id });
+    await this.notify("serverRequest/resolved", { threadId: CODEX_THREAD_ID, requestId: pending.id } satisfies ServerRequestResolvedNotification);
   }
 }
 
@@ -482,9 +535,8 @@ export class CodexBackend implements BackendDriver {
 
 type OpenCodeRequest = { method: string; path: string; body?: Record<string, unknown> };
 
-function json(value: unknown): Response {
-  return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
-}
+const OPENCODE_DIRECTORY = "/tmp";
+const OPENCODE_MODEL = { providerID: "opencode", modelID: "test" } as const;
 
 export class OpenCodeBackend implements BackendDriver {
   readonly name = "opencode" as const;
@@ -494,11 +546,14 @@ export class OpenCodeBackend implements BackendDriver {
   readonly supportsPermissionRequests = true;
   readonly nativePlanDecisions = true;
   readonly requests: OpenCodeRequest[] = [];
+  /** Requests, responses, and events that do not match the vendored OpenAPI document. */
+  readonly protocolViolations: string[] = [];
   private readonly streams: ReadableStreamDefaultController<Uint8Array>[] = [];
   private readonly encoder = new TextEncoder();
   private readonly messages = new Map<string, unknown[]>();
   private sessionCounter = 0;
   private requestCounter = 0;
+  private eventCounter = 0;
   private activeSessionId: string | undefined;
   private busy = false;
   private readonly replyWaiters = new Map<string, (request: OpenCodeRequest) => void>();
@@ -522,13 +577,35 @@ export class OpenCodeBackend implements BackendDriver {
     });
   }
 
-  private readonly fetch: typeof fetch = async (input, init) => {
+  private session(id: string): Record<string, unknown> {
+    return {
+      id,
+      slug: id,
+      projectID: "prj_test",
+      directory: OPENCODE_DIRECTORY,
+      title: "OCA test session",
+      version: "1.18.32",
+      cost: 0,
+      time: { created: 1, updated: 1 },
+    };
+  }
+
+  /** A JSON response, checked against the documented response schema. */
+  private json(method: string, path: string, value: unknown): Response {
+    checkProtocol(this.protocolViolations, `OpenCode ${method} ${path} response`, openCodeResponseErrors(method, path, 200, value));
+    return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+  }
+
+  /** The fake server's request handler (in-memory `fetch`, or behind a real HTTP listener). */
+  readonly fetch: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : (input as Request).url);
     const method = init?.method ?? "GET";
     const path = url.pathname;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
     const request = { method, path, body };
     this.requests.push(request);
+    // Every route OCA calls must be documented, and its JSON body must match.
+    checkProtocol(this.protocolViolations, `OCA's OpenCode ${method} ${path} request`, openCodeRequestErrors(method, path, body));
     if (path === "/global/event") {
       return new Response(new ReadableStream<Uint8Array>({
         start: (controller) => { this.streams.push(controller); },
@@ -538,48 +615,67 @@ export class OpenCodeBackend implements BackendDriver {
       this.sessionCounter += 1;
       const id = `ses_${this.sessionCounter}`;
       this.messages.set(id, []);
-      return json({ id });
+      return this.json(method, path, this.session(id));
     }
     if (method === "GET" && path === "/session/status") {
-      return json(this.activeSessionId && this.busy ? { [this.activeSessionId]: { type: "busy" } } : {});
+      return this.json(method, path, this.activeSessionId && this.busy ? { [this.activeSessionId]: { type: "busy" } } : {});
     }
     const messageMatch = /^\/session\/([^/]+)\/message$/.exec(path);
-    if (method === "GET" && messageMatch) return json(this.messages.get(messageMatch[1]) ?? []);
+    if (method === "GET" && messageMatch) return this.json(method, path, this.messages.get(messageMatch[1]!) ?? []);
     const promptMatch = /^\/session\/([^/]+)\/prompt_async$/.exec(path);
     if (method === "POST" && promptMatch) {
-      const id = promptMatch[1];
+      const id = promptMatch[1]!;
       this.activeSessionId = id;
       this.busy = true;
       const parts = Array.isArray(body?.parts) ? body.parts : [];
       const text = parts.map((part) => String((part as { text?: unknown }).text ?? "")).join("");
       this.turns.push({ text, planMode: body?.agent === "plan" });
-      this.messages.get(id)?.push({ info: { role: "user", id: `msg_user_${this.turns.length}` }, parts: [] });
+      this.messages.get(id)?.push({
+        info: {
+          role: "user",
+          id: `msg_user_${this.turns.length}`,
+          sessionID: id,
+          time: { created: this.turns.length * 1_000 },
+          agent: typeof body?.agent === "string" ? body.agent : "build",
+          model: { ...OPENCODE_MODEL },
+        },
+        parts: [],
+      });
       queueMicrotask(() => this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "busy" } } }));
+      checkProtocol(this.protocolViolations, `OpenCode ${method} ${path} response`, openCodeResponseErrors(method, path, 204, undefined));
       return new Response(null, { status: 204 });
     }
-    if (method === "POST" && /^\/session\/[^/]+\/abort$/.test(path)) return json(true);
+    if (method === "POST" && /^\/session\/[^/]+\/abort$/.test(path)) return this.json(method, path, true);
     const sessionMatch = /^\/session\/([^/]+)$/.exec(path);
-    if (sessionMatch && (method === "GET" || method === "PATCH")) return json({ id: sessionMatch[1], cost: 0 });
+    if (sessionMatch && (method === "GET" || method === "PATCH")) return this.json(method, path, this.session(sessionMatch[1]!));
     const replyMatch = /^\/(permission|question)\/([^/]+)\/reply$/.exec(path);
     if (method === "POST" && replyMatch) {
-      const waiter = this.replyWaiters.get(replyMatch[2]);
-      this.replyWaiters.delete(replyMatch[2]);
+      const kind = replyMatch[1] as "permission" | "question";
+      const requestId = replyMatch[2]!;
+      const waiter = this.replyWaiters.get(requestId);
+      this.replyWaiters.delete(requestId);
       waiter?.(request);
-      if (this.pendingRequestId === replyMatch[2]) {
-        const requestId = replyMatch[2];
-        const kind = replyMatch[1];
+      if (this.pendingRequestId === requestId) {
+        const sessionID = this.activeSessionId;
         this.pendingRequestId = undefined;
-        queueMicrotask(() => this.emit({ type: `${kind}.replied`, properties: { sessionID: this.activeSessionId, requestID: requestId } }));
+        const properties = kind === "permission"
+          ? { sessionID, requestID: requestId, reply: body?.reply }
+          : { sessionID, requestID: requestId, answers: body?.answers ?? [] };
+        queueMicrotask(() => this.emit({ type: `${kind}.replied`, properties }));
       }
-      return json(true);
+      return this.json(method, path, true);
     }
     return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
   };
 
-  private emit(payload: unknown): void {
-    const frame = this.encoder.encode(`data: ${JSON.stringify({ directory: "/tmp", payload })}\n\n`);
+  /** Broadcast one `/global/event` frame, checked against the documented event schema. */
+  private emit(payload: { type: string; properties: Record<string, unknown> }): void {
+    this.eventCounter += 1;
+    const frame = { directory: OPENCODE_DIRECTORY, payload: { id: `evt_${this.eventCounter}`, ...payload } };
+    checkProtocol(this.protocolViolations, `OpenCode ${payload.type} event`, openCodeEventErrors(frame));
+    const bytes = this.encoder.encode(`data: ${JSON.stringify(frame)}\n\n`);
     for (const stream of this.streams) {
-      try { stream.enqueue(frame); } catch { /* closed */ }
+      try { stream.enqueue(bytes); } catch { /* closed */ }
     }
   }
 
@@ -628,7 +724,7 @@ export class OpenCodeBackend implements BackendDriver {
   }
 
   async requestPermission(description: string): Promise<PermissionOutcome> {
-    const reply = await this.raise("permission", { permission: "bash", patterns: [description] });
+    const reply = await this.raise("permission", { permission: "bash", patterns: [description], metadata: {}, always: [] });
     const value = String(reply.body?.reply ?? "");
     const message = typeof reply.body?.message === "string" ? reply.body.message : undefined;
     const decision = value === "once" ? "accept" : value === "always" ? "acceptForSession" : "decline";
@@ -645,20 +741,27 @@ export class OpenCodeBackend implements BackendDriver {
     if (!id) throw new Error("no active OpenCode session");
     const records = this.messages.get(id) ?? [];
     const created = 1_000 + records.length * 1_000;
+    const messageID = `msg_asst_${records.length}`;
+    const partID = `prt_${records.length}`;
     records.push({
       info: {
         role: "assistant",
-        id: `msg_asst_${records.length}`,
-        providerID: "opencode",
-        modelID: "test",
+        id: messageID,
+        sessionID: id,
+        parentID: `msg_user_${this.turns.length}`,
+        providerID: OPENCODE_MODEL.providerID,
+        modelID: OPENCODE_MODEL.modelID,
+        mode: "build",
+        agent: "build",
+        path: { cwd: OPENCODE_DIRECTORY, root: OPENCODE_DIRECTORY },
         cost: 0,
         tokens: { total: 2, input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created, completed: created + 10 },
       },
-      parts: [{ type: "text", text }],
+      parts: [{ id: partID, sessionID: id, messageID, type: "text", text }],
     });
     this.busy = false;
-    this.emit({ type: "message.part.delta", properties: { sessionID: id, field: "text", delta: text, messageID: `msg_asst_${records.length}`, partID: "p1" } });
+    this.emit({ type: "message.part.delta", properties: { sessionID: id, field: "text", delta: text, messageID, partID } });
     this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "idle" } } });
     this.emit({ type: "session.idle", properties: { sessionID: id } });
   }

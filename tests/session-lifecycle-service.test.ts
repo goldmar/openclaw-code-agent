@@ -887,9 +887,6 @@ describe("SessionLifecycleService", () => {
           assert.match(evidence.question, /Which policy source should I use\?/);
           return { summary: "Codex needs the policy source before it can continue." };
         },
-        async generateQuestionOptionDescriptions() {
-          throw new Error("option descriptions must not be sent to the LLM");
-        },
       },
     });
 
@@ -960,9 +957,6 @@ describe("SessionLifecycleService", () => {
       questionContextSummaryProvider: {
         async generateQuestionContextSummary() {
           return undefined;
-        },
-        async generateQuestionOptionDescriptions() {
-          throw new Error("option descriptions must not be sent to the LLM");
         },
       },
     });

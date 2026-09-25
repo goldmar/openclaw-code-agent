@@ -31,7 +31,7 @@ function createRepoWithRemote(prefix: string): { repoDir: string; remoteDir: str
   return { repoDir, remoteDir };
 }
 
-async function createCommittedWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+async function createCommittedWorktree(repoDir: string, name: string): Promise<{ worktreePath: string; branchName: string }> {
   const worktreePath = await createWorktree(repoDir, name);
   const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
@@ -43,7 +43,7 @@ async function createCommittedWorktree(repoDir: string, name: string): { worktre
   return { worktreePath, branchName };
 }
 
-async function createReadmeChangingWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+async function createReadmeChangingWorktree(repoDir: string, name: string): Promise<{ worktreePath: string; branchName: string }> {
   const worktreePath = await createWorktree(repoDir, name);
   const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
@@ -129,7 +129,7 @@ function installPersistedSessionWithNotificationService(args: {
   );
 
   setSessionManager({
-    resolve: () => undefined,
+    resolve: (): undefined => undefined,
     getPersistedSession(ref: string) {
       return matchesRef(ref) ? persistedSession as any : undefined;
     },
@@ -172,7 +172,7 @@ function installPersistedSessionStub(
   };
 
   setSessionManager({
-    resolve: () => undefined,
+    resolve: (): undefined => undefined,
     getPersistedSession(ref: string) {
       if (ref === sessionName || ref === persistedSession.harnessSessionId) return persistedSession as any;
       return undefined;

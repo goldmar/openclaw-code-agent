@@ -33,6 +33,9 @@ describe("SessionHarnessEventApplier", () => {
         events.push(`mode:${mode}`);
       },
       handleRunCompleted: (data) => { events.push(`done:${data.session_id}`); },
+      notePlanApprovalRequest: () => { events.push("plan-approval-request"); },
+      noteBackendInfo: () => { events.push("backend-info"); },
+      noteUsage: () => { events.push("usage"); },
     });
 
     applier.applyMessage({ type: "backend_ref", ref: { kind: "claude-code", conversationId: "thread-1" } }, {
@@ -49,7 +52,7 @@ describe("SessionHarnessEventApplier", () => {
       planModeApproved: false,
       pendingInputState,
     });
-    applier.applyMessage({ type: "pending_input", state: { requestId: "req-1", kind: "text", prompt: "Need answer" } as PendingInputState }, {
+    applier.applyMessage({ type: "pending_input", state: { requestId: "req-1", kind: "question", promptText: "Need answer", options: [] } }, {
       pendingPlanApproval: false,
       currentPermissionMode: currentPermissionMode as "default" | "plan",
       permissionMode: "default",

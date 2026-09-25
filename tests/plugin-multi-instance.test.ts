@@ -6,7 +6,7 @@ import { appendFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { TEST_RUNTIME_LLM } from "./helpers";
+import { createFakeHost, type FakeHost, type FakeHostOptions } from "./fake-host";
 import { getSharedRuntime, resetSharedRuntimeSlotForTests } from "../src/process-runtime";
 
 /**
@@ -23,41 +23,12 @@ import { getSharedRuntime, resetSharedRuntimeSlotForTests } from "../src/process
 
 const repoRoot = join(import.meta.dirname, "..");
 const scratchRoots: string[] = [];
+const hosts: FakeHost[] = [];
 
-type Captured = {
-  tools: Array<{ factory: (ctx: Record<string, unknown>) => { execute: (id: string, params: unknown) => unknown }; options?: { name?: string } }>;
-  services: Array<{ start: (ctx: Record<string, unknown>) => Promise<void> | void; stop?: (ctx: Record<string, unknown>) => Promise<void> | void }>;
-  interactiveHandlers: Array<{ channel: string; handler: (ctx: Record<string, unknown>) => Promise<unknown> }>;
-  disposers: Array<() => void | Promise<void>>;
-};
-
-function createPluginApi(
-  label: string,
-  pluginConfig: Record<string, unknown> = { autoUpdate: false },
-): { api: Record<string, unknown>; runtime: Record<string, unknown>; captured: Captured } {
-  const captured: Captured = { tools: [], services: [], interactiveHandlers: [], disposers: [] };
-  const runtime = { label, config: { current: () => ({ owner: label }) }, llm: TEST_RUNTIME_LLM };
-  const api = {
-    pluginConfig,
-    runtime,
-    lifecycle: {
-      onDispose(dispose: () => void | Promise<void>) {
-        captured.disposers.push(dispose);
-        return () => {};
-      },
-    },
-    registerTool(factory: Captured["tools"][number]["factory"], options?: { name?: string }) {
-      captured.tools.push({ factory, options });
-    },
-    registerCommand() {},
-    registerService(service: Captured["services"][number]) {
-      captured.services.push(service);
-    },
-    registerInteractiveHandler(handler: Captured["interactiveHandlers"][number]) {
-      captured.interactiveHandlers.push(handler);
-    },
-  };
-  return { api, runtime, captured };
+function createPluginHost(label: string, pluginConfig: Record<string, unknown> = { autoUpdate: false }): FakeHost {
+  const host = createFakeHost({ pluginConfig, config: { owner: label } as FakeHostOptions["config"] });
+  hosts.push(host);
+  return host;
 }
 
 type PluginCopy = {
@@ -114,16 +85,22 @@ function telegramCallbackCtx(tokenId: string) {
   return { ctx, replies };
 }
 
-async function runTool(captured: Captured, name: string): Promise<unknown> {
-  const tool = captured.tools.find((entry) => entry.options?.name === name);
-  assert.ok(tool, `expected ${name}`);
-  return await tool.factory({}).execute("t", {});
+async function runTool(host: FakeHost, name: string): Promise<unknown> {
+  return await host.runTool(name, {});
 }
 
-async function stopAll(...plugins: Array<{ captured: Captured }>): Promise<void> {
+async function startService(host: FakeHost, config: Record<string, unknown> = {}): Promise<void> {
+  await host.services[0]!.start({ ...host.serviceContext, config: config as FakeHost["serviceContext"]["config"] });
+}
+
+async function stopAll(...plugins: FakeHost[]): Promise<void> {
   for (const plugin of plugins) {
-    for (const service of plugin.captured.services) await service.stop?.({});
+    for (const service of plugin.services) await service.stop?.(plugin.serviceContext);
   }
+}
+
+async function disposeHost(host: FakeHost): Promise<void> {
+  for (const dispose of host.disposers.splice(0)) await dispose();
 }
 
 describe("one OCA runtime per Gateway process", () => {
@@ -138,6 +115,7 @@ describe("one OCA runtime per Gateway process", () => {
   after(() => {
     rmSync(repoDir, { recursive: true, force: true });
     for (const root of scratchRoots) rmSync(root, { recursive: true, force: true });
+    for (const host of hosts.splice(0)) rmSync(host.stateDir, { recursive: true, force: true });
   });
 
   for (const choice of ["No PR", "Manual"] as const) {
@@ -146,15 +124,15 @@ describe("one OCA runtime per Gateway process", () => {
       const b = await loadPluginCopy(`b-${choice === "No PR" ? "nopr" : "manual"}`);
       assert.notEqual(a.singletons, b.singletons, "each capture must be its own module graph");
 
-      const pluginA = createPluginApi("A");
-      const pluginB = createPluginApi("B");
+      const pluginA = createPluginHost("A");
+      const pluginB = createPluginHost("B");
       a.index.register(pluginA.api);
       b.index.register(pluginB.api);
       try {
         // Gateway boot: the active registry's service starts first.
-        await pluginA.captured.services[0]!.start({ config: {} });
+        await startService(pluginA, {});
         // The orchestrator's first tool call runs in the agent-runtime registry.
-        await runTool(pluginB.captured, "agent_sessions");
+        await runTool(pluginB, "agent_sessions");
         const sm = a.singletons.sessionManager;
         assert.ok(sm);
         assert.equal(b.singletons.sessionManager, sm, "both registries must share one SessionManager");
@@ -183,9 +161,8 @@ describe("one OCA runtime per Gateway process", () => {
 
         // The user presses the button; Telegram callbacks dispatch through the active registry (A).
         sm.launchAfterRepoPolicyChoice = async () => ({ text: "launched" });
-        const telegramHandler = pluginA.captured.interactiveHandlers.find((entry) => entry.channel === "telegram")!;
         const { ctx, replies } = telegramCallbackCtx(button.callbackData);
-        await telegramHandler.handler(ctx);
+        await pluginA.runInteractive("telegram", ctx);
 
         assert.doesNotMatch(replies.join("\n"), /stale or has already been used/);
         assert.match(replies.join("\n"), /Repo policy saved/);
@@ -201,40 +178,40 @@ describe("one OCA runtime per Gateway process", () => {
     const a = await loadPluginCopy("handles-a");
     const b = await loadPluginCopy("handles-b");
     const c = await loadPluginCopy("handles-c");
-    const pluginA = createPluginApi("A");
-    const pluginB = createPluginApi("B");
-    const pluginC = createPluginApi("C");
+    const pluginA = createPluginHost("A");
+    const pluginB = createPluginHost("B");
+    const pluginC = createPluginHost("C");
     a.index.register(pluginA.api);
     b.index.register(pluginB.api);
     c.index.register(pluginC.api);
     try {
-      await pluginA.captured.services[0]!.start({ config: { from: "A" } });
+      await startService(pluginA, { from: "A" });
       const sm = a.singletons.sessionManager;
       assert.ok(sm);
       // A created the runtime, so A's module graph runs it: its runtime store is what matters.
       assert.equal(a.runtimeStore.getPluginRuntime(), pluginA.runtime);
 
-      await runTool(pluginB.captured, "agent_sessions");
-      await runTool(pluginC.captured, "agent_sessions");
+      await runTool(pluginB, "agent_sessions");
+      await runTool(pluginC, "agent_sessions");
       assert.equal(a.runtimeStore.getPluginRuntime(), pluginC.runtime, "the newest owner's handles win");
 
       // The newest registry is retired by the host: the runtime switches to B before C is gone.
-      for (const dispose of pluginC.captured.disposers) await dispose();
+      await disposeHost(pluginC);
       assert.equal(a.runtimeStore.getPluginRuntime(), pluginB.runtime);
       assert.equal(c.singletons.sessionManager, null);
-      await assert.rejects(runTool(pluginC.captured, "agent_sessions"), /retired by the host/);
+      await assert.rejects(runTool(pluginC, "agent_sessions"), /retired by the host/);
 
       // The creating registry retires while B remains: the runtime keeps running on
       // B's handles, and the creator graph's singletons (which the runtime's own
       // automatic merge/PR paths read) keep pointing at it.
-      for (const dispose of pluginA.captured.disposers) await dispose();
+      await disposeHost(pluginA);
       assert.ok(getSharedRuntime());
       assert.equal(a.singletons.sessionManager, sm);
       assert.equal(a.runtimeStore.getPluginRuntime(), pluginB.runtime);
       assert.equal(b.singletons.sessionManager, sm);
 
       // The last owner stops the runtime and every handle is cleared.
-      for (const dispose of pluginB.captured.disposers) await dispose();
+      await disposeHost(pluginB);
       assert.equal(getSharedRuntime(), undefined);
       assert.equal(a.runtimeStore.getPluginRuntime(), undefined);
       assert.equal(a.singletons.sessionManager, null);
@@ -246,15 +223,15 @@ describe("one OCA runtime per Gateway process", () => {
   it("rebuilds the runtime when a newer registration brings different plugin settings", async () => {
     const a = await loadPluginCopy("config-a");
     const b = await loadPluginCopy("config-b");
-    const pluginA = createPluginApi("A", { autoUpdate: false, maxSessions: 3 });
-    const pluginB = createPluginApi("B", { autoUpdate: false, maxSessions: 7 });
+    const pluginA = createPluginHost("A", { autoUpdate: false, maxSessions: 3 });
+    const pluginB = createPluginHost("B", { autoUpdate: false, maxSessions: 7 });
     a.index.register(pluginA.api);
     b.index.register(pluginB.api);
     try {
-      await pluginA.captured.services[0]!.start({ config: {} });
+      await startService(pluginA, {});
       const before = a.singletons.sessionManager;
       assert.equal(before.maxSessions, 3);
-      await pluginB.captured.services[0]!.start({ config: {} });
+      await startService(pluginB, {});
       const after = b.singletons.sessionManager;
       assert.notEqual(after, before, "services are rebuilt from the new settings");
       assert.equal(after.maxSessions, 7);
@@ -269,23 +246,23 @@ describe("one OCA runtime per Gateway process", () => {
     const older = await loadPluginCopy("older-idle", { distinctBuild: true });
     const newer = await loadPluginCopy("newer-ran");
     const inspection = await loadPluginCopy("inspection-only", { distinctBuild: true });
-    const pluginOlder = createPluginApi("older");
-    const pluginNewer = createPluginApi("newer");
+    const pluginOlder = createPluginHost("older");
+    const pluginNewer = createPluginHost("newer");
     older.index.register(pluginOlder.api);
     newer.index.register(pluginNewer.api);
     try {
       // A newer build registered after `older` starts and stops again; `older` never started.
-      await pluginNewer.captured.services[0]!.start({ config: {} });
-      await pluginNewer.captured.services[0]!.stop?.({});
+      await startService(pluginNewer, {});
+      await pluginNewer.services[0]!.stop?.(pluginNewer.serviceContext);
       assert.equal(getSharedRuntime(), undefined);
-      await assert.rejects(runTool(pluginOlder.captured, "agent_sessions"), /superseded by a newer build/);
+      await assert.rejects(runTool(pluginOlder, "agent_sessions"), /superseded by a newer build/);
       assert.equal(getSharedRuntime(), undefined);
 
       // A later registration that only inspects the plugin (never starts) does not
       // block the build that is running.
-      const pluginInspection = createPluginApi("inspection");
+      const pluginInspection = createPluginHost("inspection");
       inspection.index.register(pluginInspection.api);
-      await runTool(pluginNewer.captured, "agent_sessions");
+      await runTool(pluginNewer, "agent_sessions");
       assert.ok(newer.singletons.sessionManager);
     } finally {
       await stopAll(pluginNewer, pluginOlder);
@@ -295,11 +272,11 @@ describe("one OCA runtime per Gateway process", () => {
   it("hands off to a newer build only after the old runtime stopped", async () => {
     const oldBuild = await loadPluginCopy("old-build");
     const newBuild = await loadPluginCopy("new-build", { distinctBuild: true });
-    const pluginOld = createPluginApi("old");
+    const pluginOld = createPluginHost("old");
     oldBuild.index.register(pluginOld.api);
     const events: string[] = [];
     try {
-      await pluginOld.captured.services[0]!.start({ config: {} });
+      await startService(pluginOld, {});
       const oldSm = oldBuild.singletons.sessionManager;
       assert.ok(oldSm);
       const originalShutdown = oldSm.shutdown.bind(oldSm);
@@ -316,10 +293,10 @@ describe("one OCA runtime per Gateway process", () => {
       };
 
       // Hot reload: the new build registers after the old one and starts.
-      const pluginNew = createPluginApi("new");
+      const pluginNew = createPluginHost("new");
       newBuild.index.register(pluginNew.api);
       try {
-        await pluginNew.captured.services[0]!.start({ config: {} });
+        await startService(pluginNew, {});
         assert.deepEqual(events, ["old:shutdown:start", "old:shutdown:done", "new:started"]);
         const newSm = newBuild.singletons.sessionManager;
         assert.ok(newSm);
@@ -328,7 +305,7 @@ describe("one OCA runtime per Gateway process", () => {
         assert.notEqual(getSharedRuntime()?.buildId, undefined);
 
         // The superseded build never creates a second writer.
-        await assert.rejects(runTool(pluginOld.captured, "agent_sessions"), /superseded by a newer build/);
+        await assert.rejects(runTool(pluginOld, "agent_sessions"), /superseded by a newer build/);
         assert.equal(newBuild.singletons.sessionManager, newSm);
       } finally {
         NewSessionManager.prototype.bootstrapMaintenanceSchedules = originalBootstrap;
@@ -336,7 +313,7 @@ describe("one OCA runtime per Gateway process", () => {
       }
       // Not even once the newer runtime has stopped and the slot is empty.
       assert.equal(getSharedRuntime(), undefined);
-      await assert.rejects(runTool(pluginOld.captured, "agent_sessions"), /superseded by a newer build/);
+      await assert.rejects(runTool(pluginOld, "agent_sessions"), /superseded by a newer build/);
       assert.equal(getSharedRuntime(), undefined);
     } finally {
       await stopAll(pluginOld);

@@ -70,6 +70,23 @@ pnpm verify
 
 Use `pnpm verify` before merging behavior changes. CI and release workflows both gate on that exact command. `pnpm test` runs the stable per-file suite without force-exit, and `pnpm test:file tests/foo.test.ts` is the fastest way to rerun one file while debugging orchestration edge cases.
 
+`pnpm typecheck` checks the plugin source (`tsconfig.typecheck.json`, ES2022 library) and then the tests with the source (`tsconfig.tests.json`: ES2024 library for Node 24+ test code, and `allowJs` so imported `scripts/*.mjs` helpers are typed from their JavaScript and JSDoc). Keep test fakes typed: derive their types from the production or SDK types (`Pick<SessionManager, ...>`, `satisfies`, the vendored protocol types) instead of `any`; when a partial fake must stand in for a full type, cast once at that boundary with `as unknown as T` and say why.
+
+### Coverage
+
+```bash
+pnpm coverage                          # whole suite
+pnpm coverage tests/agent-pr-execute.test.ts  # selected files
+```
+
+`scripts/coverage.mjs` runs `scripts/run-tests.mjs` with `NODE_V8_COVERAGE` set and renders the result with c8 (pinned in the script and fetched through `pnpm dlx`, so it is not a project dependency). It prints a per-file table and totals for `src/` (excluding the generated Codex protocol types) and writes `coverage/coverage-summary.json` and `coverage/lcov.info` (gitignored). Coverage is for review only; CI does not gate on it. The full suite is CPU-heavy, so on a shared host run it remotely like `pnpm verify`.
+
+### Test Fakes
+
+- `tests/fake-host.ts`: a fake OpenClaw host. `createFakeHost()` returns an `OpenClawPluginApi` whose members OCA uses are typed as the SDK members: `runtime.llm.complete` (scripted replies; fails like a host without a model by default), `runtime.system.enqueueSystemEvent` / `requestHeartbeat`, `runtime.tasks.async.managedFlows` (an in-memory managed Task Flow store with revisions), `runtime.logging`, `runtime.config.current`, `runtime.state.resolveStateDir`, a `sendDurableMessageBatch` stand-in (`directNotificationTransport()` wires it into `RuntimeDirectNotificationTransport`), and tool, command, service, and interactive-handler registration with `runTool`, `runCommand`, `runInteractive`, `startServices`, and `stopServices`. Every call is recorded. `tests/host-sdk-contract.test.ts` pins OCA's payloads to the SDK types with `satisfies`.
+- `tests/fake-github.ts`: real git repositories behind a `git@github.com:<owner>/<repo>.git` remote (served offline from a local bare repository through a repo-local `core.sshCommand`, so OCA's GitHub detection sees github.com) and a scriptable `gh` on `PATH` backed by a JSON state file (`pr list/view/create/edit/comment`, failure switches, recorded calls). `tests/agent-pr-execute.test.ts` drives `agent_pr` and the auto-PR worktree strategy through it.
+- `tests/harness-backends.ts`: fake Claude, Codex, and OpenCode backends behind the production harness classes (see below). The Codex fake builds its frames from `tests/codex-fixtures.ts`, typed with the vendored protocol types, and both the Codex and the OpenCode fake validate every frame they send and receive against the vendored schemas (`tests/protocol-schema.ts`); a mismatch throws where it happens and fails the fixture's `dispose()`. `tests/codex-harness.test.ts` checks OCA's Codex request params and its mock's replies the same way.
+
 ### Test Isolation
 
 Tests must never read or write the real OpenClaw state (`~/.openclaw`), however a file is started: `pnpm test`, `pnpm test:file`, `node --import tsx --test tests/foo.test.ts`, `node --import tsx tests/foo.test.ts`, or an IDE runner.
@@ -121,7 +138,7 @@ Release checklist:
 
 1. `pnpm verify` (includes the ClawHub static scan of the packed files), `pnpm check-plugin-security`, and `pnpm run audit:prod`. The release workflow also runs the ClawHub package inspector (`clawhub package validate --runtime`).
 2. `pnpm run validate:release-metadata -- <version>` and `pnpm verify:npm-consumer`.
-3. `pnpm sync:codex-protocol --check` against the Codex CLI you validate with; it must report no drift. With a live Codex environment, run `pnpm smoke:codex-live` and `pnpm smoke:codex-release`, which repeat that check first.
+3. `pnpm sync:codex-protocol --check` against the Codex CLI you validate with, and `pnpm sync:opencode-openapi --check` against the OpenCode you validate with; both must report no drift. With a live Codex environment, run `pnpm smoke:codex-live` and `pnpm smoke:codex-release`, which repeat that check first.
 4. `npm pack --dry-run` to review the package contents (`prepack` rebuilds `dist/`).
 
 Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
@@ -168,7 +185,7 @@ Stop the sessions with `agent_kill` and delete the scratch repository afterwards
 
 ### Codex App Server Protocol Types
 
-`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.
+`src/harness/codex-app-server-protocol/` and `tests/protocol/codex-app-server.schema.json` are generated. Do not edit them by hand. Regenerate both from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses, and `codex app-server generate-json-schema --experimental` pruned to the requests, notifications, and server requests the harness handles, listed in the script), and check drift with `pnpm sync:codex-protocol --check`. Add a method to the script's lists before a test fake sends it. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.
 
 ### Live Codex Release Check
 
@@ -179,6 +196,10 @@ Before running it:
 1. Make sure the local Codex App Server environment is configured and reachable.
 2. Run it from a workspace where short-lived Codex threads in temporary directories are acceptable.
 3. Treat failures as operator/runtime regressions first, not just test flakes.
+
+### OpenCode OpenAPI Document
+
+`tests/protocol/opencode-openapi.json` is generated from `opencode serve` (`GET /doc`) by `pnpm sync:opencode-openapi`, pruned to the operations the harness calls (listed in `scripts/sync-opencode-openapi.mjs`) and the component schemas they reference. The server runs under a throwaway `HOME`/XDG profile. The document records the OpenCode version it came from in `x-oca-source-version` (currently `opencode 1.18.32`; the harness supports `opencode >= 1.16.2`). Check drift against the installed OpenCode with `pnpm sync:opencode-openapi --check`, and after an OpenCode upgrade regenerate it, rerun the OpenCode tests, and run the live smoke below.
 
 ### Live OpenCode Smoke Check
 

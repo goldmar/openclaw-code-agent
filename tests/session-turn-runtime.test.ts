@@ -2,6 +2,7 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SessionTurnRuntime } from "../src/session-turn-runtime";
+import type { PendingInputQuestion } from "../src/types";
 
 describe("SessionTurnRuntime", () => {
   it("emits one waiting turn-end when pending input arrives", () => {
@@ -33,7 +34,7 @@ describe("SessionTurnRuntime", () => {
       markAwaitingUserInput: () => {}, applyInputRequested: () => {}, completeTurn: () => {},
       setPlanFilePath: () => {}, setLatestPlanArtifact: () => {},
     });
-    const questions = [
+    const questions: PendingInputQuestion[] = [
       { id: "fast_path_scope", question: "Fast path?", options: [] },
       { id: "think_default", question: "Think default?", options: [] },
     ];

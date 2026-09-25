@@ -9,7 +9,7 @@ function fakeSessionManager() {
   const session = { id: "s-run", name: "runner", status: "running" };
   const sm = {
     resolve: (ref: string) => (ref === "runner" || ref === "s-run" ? session : undefined),
-    getPersistedSession: () => undefined,
+    getPersistedSession: (): undefined => undefined,
     kill: (id: string) => { killed.push(id); return true; },
   };
   return { sm, killed };

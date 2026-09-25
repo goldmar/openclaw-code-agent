@@ -5,7 +5,7 @@ import { getKillSessionText } from "../src/application/session-control";
 
 describe("session-control app layer", () => {
   it("returns not found text for unknown session", () => {
-    const sm: any = { resolve: () => undefined, getPersistedSession: () => undefined };
+    const sm: any = { resolve: (): undefined => undefined, getPersistedSession: (): undefined => undefined };
     const text = getKillSessionText(sm, "missing");
     assert.equal(text, 'Error: Session "missing" not found.');
   });
@@ -14,7 +14,7 @@ describe("session-control app layer", () => {
     let patchRef: string | undefined;
     let patch: Record<string, unknown> | undefined;
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "s-recovered",
         harnessSessionId: "h-recovered",
@@ -44,7 +44,7 @@ describe("session-control app layer", () => {
   it("marks recovered persisted-only sessions completed when requested", () => {
     let patch: Record<string, unknown> | undefined;
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "s-recovered",
         name: "recovered",

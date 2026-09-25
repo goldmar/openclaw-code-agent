@@ -14,7 +14,35 @@ import { setPluginRuntime } from "../src/runtime-store";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
 import type { TokenUsageBreakdown } from "../src/harness/codex-app-server-protocol/v2/TokenUsageBreakdown";
 import type { Model } from "../src/harness/codex-app-server-protocol/v2/Model";
+import type { RateLimitSnapshot } from "../src/harness/codex-app-server-protocol/v2/RateLimitSnapshot";
 import { codexCatalogModel } from "./codex-model-catalog-fixture";
+import type {
+  GetAccountRateLimitsResponse,
+  ReviewStartResponse,
+  ThreadCompactStartResponse,
+  ThreadForkResponse,
+  ThreadRevertResponse,
+  ThreadTurnsListResponse,
+  TurnInterruptResponse,
+  TurnSteerResponse,
+} from "../src/harness/codex-app-server-protocol";
+import type { TurnError } from "../src/harness/codex-app-server-protocol/v2/TurnError";
+import type { TurnStatus } from "../src/harness/codex-app-server-protocol/v2/TurnStatus";
+import {
+  CodexProtocolChecker,
+  codexAgentMessage,
+  codexInitializeResponse,
+  codexPlanItem,
+  codexThread,
+  codexThreadResumeResponse,
+  codexThreadStartResponse,
+  codexTurn,
+  type CodexThreadResponseOptions,
+  type GetAccountResponse,
+  type ModelListResponse,
+  type Turn,
+  type TurnStartResponse,
+} from "./codex-fixtures";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
 type RequestHandler = (method: string, params: unknown, id: JsonRpcId) => Promise<unknown>;
@@ -49,7 +77,7 @@ type MockOptions = {
   rateLimitsResetsAt?: number;
   accountId?: string | null;
   /** Turns returned by thread/turns/list pages (newest first), chunked per page. */
-  turnsPages?: Array<Array<{ id: string; status?: string }>>;
+  turnsPages?: Array<Array<{ id: string; status?: TurnStatus }>>;
   steerError?: string;
 };
 
@@ -64,20 +92,16 @@ function breakdown(input: number, cached: number, write: number, output: number,
   };
 }
 
-function turnPayload(id: string, status: string, error?: MockOptions["turnError"]): Record<string, unknown> {
+function turnPayload(id: string, status: TurnStatus, error?: MockOptions["turnError"]): Turn {
   return {
-    id,
-    items: [],
-    itemsView: "notLoaded",
-    status,
-    error: error ? { message: error.message, codexErrorInfo: error.codexErrorInfo ?? null, additionalDetails: null, misalignment: null } : null,
-    startedAt: null,
-    completedAt: null,
+    ...codexTurn(id, status, error ? { message: error.message, codexErrorInfo: (error.codexErrorInfo ?? null) as TurnError["codexErrorInfo"], additionalDetails: null, misalignment: null } : null),
     durationMs: 42,
   };
 }
 
 class MockCodexClient {
+  /** Checks OCA's request params, the mock's results, and its notifications against the vendored JSON Schema. */
+  readonly protocol = new CodexProtocolChecker();
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
   serverResponses: unknown[] = [];
   closeCalls = 0;
@@ -100,29 +124,38 @@ class MockCodexClient {
     return this.options.threadId ?? VALID_THREAD_ID;
   }
 
-  private threadResponse(params: Record<string, unknown>, threadId: string): Record<string, unknown> {
+  private threadOptions(params: Record<string, unknown>): CodexThreadResponseOptions {
     return {
-      thread: { id: threadId },
       model: (params.model as string | undefined) ?? this.options.threadModel ?? "gpt-6-sol",
-      modelProvider: "openai",
       serviceTier: this.options.serviceTier ?? null,
-      cwd: params.cwd ?? "/tmp",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: { type: "dangerFullAccess" },
-      activePermissionProfile: null,
-      reasoningEffort: null,
+      cwd: (params.cwd as string | undefined) ?? "/tmp",
     };
+  }
+
+  /** Deliver a server notification after checking it against the schema. */
+  private async emitNotification(method: string, params: unknown): Promise<void> {
+    this.protocol.notification(method, params);
+    await this.notificationHandler(method, params);
   }
 
   async request(method: string, params: unknown = {}, timeoutMs?: number): Promise<unknown> {
     this.requests.push({ method, params, timeoutMs });
-    const record = (params ?? {}) as Record<string, unknown>;
+    this.protocol.clientRequest(method, params);
+    return this.protocol.clientResult(method, this.respond(method, (params ?? {}) as Record<string, unknown>));
+  }
+
+  private respond(method: string, record: Record<string, unknown>): unknown {
     switch (method) {
       case "initialize":
-        return { userAgent: "mock", codexHome: "/tmp", platformFamily: "unix", platformOs: "linux" };
+        return codexInitializeResponse("mock");
       case "account/read":
-        return { account: this.options.accountType ? { type: this.options.accountType } : null, requiresOpenaiAuth: true, workspaceRouting: null };
+        return {
+          account: this.options.accountType === "chatgpt"
+            ? { type: "chatgpt", email: null, planType: "pro" }
+            : this.options.accountType === "apiKey" ? { type: "apiKey" } : null,
+          requiresOpenaiAuth: true,
+          workspaceRouting: null,
+        } satisfies GetAccountResponse;
       case "account/rateLimits/read":
         return {
           ordinaryUsageAllowed: true,
@@ -142,16 +175,16 @@ class MockCodexClient {
           rateLimitResetCredits: null,
           accountId: this.options.accountId ?? null,
           rateLimitUpsell: null,
-        };
+        } satisfies GetAccountRateLimitsResponse;
       case "model/list":
-        return { data: this.options.models ?? [], nextCursor: null };
+        return { data: this.options.models ?? [], nextCursor: null } satisfies ModelListResponse;
       case "thread/start":
-        return this.threadResponse(record, this.threadId);
+        return codexThreadStartResponse(this.threadId, this.threadOptions(record));
       case "thread/resume":
         if (this.options.failResume) throw new Error(this.options.failResume);
-        return this.threadResponse(record, record.threadId as string);
+        return codexThreadResumeResponse(record.threadId as string, this.threadOptions(record));
       case "thread/fork":
-        return this.threadResponse(record, FORKED_THREAD_ID);
+        return codexThreadStartResponse(FORKED_THREAD_ID, this.threadOptions(record)) satisfies ThreadForkResponse;
       case "thread/turns/list": {
         if (this.options.turnsPages) {
           const index = record.cursor ? Number(record.cursor) : 0;
@@ -160,29 +193,29 @@ class MockCodexClient {
             data: page.map((turn) => turnPayload(turn.id, turn.status ?? "completed")),
             nextCursor: index + 1 < this.options.turnsPages.length ? String(index + 1) : null,
             backwardsCursor: null,
-          };
+          } satisfies ThreadTurnsListResponse;
         }
         return {
           data: (this.options.turnsList ?? []).map((id) => turnPayload(id, "completed")),
           nextCursor: null,
           backwardsCursor: null,
-        };
+        } satisfies ThreadTurnsListResponse;
       }
       case "thread/revert":
-        return { thread: { id: record.threadId }, turnsBackwardsCursor: null, itemsBackwardsCursor: null };
+        return { thread: codexThread(record.threadId as string), turnsBackwardsCursor: null, itemsBackwardsCursor: null } satisfies ThreadRevertResponse;
       case "turn/interrupt":
-        return {};
+        return {} satisfies TurnInterruptResponse;
       case "turn/steer":
         if (this.options.steerError) throw new Error(this.options.steerError);
         if (record.expectedTurnId !== this.activeTurnId) throw new Error("codex app server rpc error (-32600): no active turn to steer");
-        return { turnId: this.activeTurnId };
+        return { turnId: this.activeTurnId! } satisfies TurnSteerResponse;
       case "turn/start":
-        return { turn: turnPayload(this.startTurn("user"), "inProgress") };
+        return { turn: turnPayload(this.startTurn("user"), "inProgress") } satisfies TurnStartResponse;
       case "thread/compact/start":
         this.startTurn("compact");
-        return {};
+        return {} satisfies ThreadCompactStartResponse;
       case "review/start":
-        return { turn: turnPayload(this.startTurn("review"), "inProgress"), reviewThreadId: this.threadId };
+        return { turn: turnPayload(this.startTurn("review"), "inProgress"), reviewThreadId: this.threadId } satisfies ReviewStartResponse;
       default:
         throw new Error(`mock does not implement ${method}`);
     }
@@ -198,14 +231,14 @@ class MockCodexClient {
 
   private async runTurn(turnId: string, kind: "user" | "compact" | "review"): Promise<void> {
     const threadId = this.threadId;
-    await this.notificationHandler("turn/started", { threadId, turn: turnPayload(turnId, "inProgress") });
+    await this.emitNotification("turn/started", { threadId, turn: turnPayload(turnId, "inProgress") });
     if (kind === "compact") {
-      await this.notificationHandler("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "contextCompaction", id: "c-1" } });
+      await this.emitNotification("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "contextCompaction", id: "c-1" } });
       await this.completeTurn(turnId);
       return;
     }
     if (kind === "review") {
-      await this.notificationHandler("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "agentMessage", id: "r-1", text: "No findings.", phase: "final_answer", memoryCitation: null, delivery: null, questions: null } });
+      await this.emitNotification("item/completed", { threadId, turnId, completedAtMs: 0, item: { ...codexAgentMessage("r-1", "No findings."), phase: "final_answer" } });
       await this.completeTurn(turnId);
       return;
     }
@@ -217,26 +250,26 @@ class MockCodexClient {
         id,
       ).catch((error: unknown) => ({ rpcError: error instanceof JsonRpcResponseError ? error.code : String(error) }));
       this.serverResponses.push(response);
-      await this.notificationHandler("serverRequest/resolved", { threadId, requestId: id });
+      await this.emitNotification("serverRequest/resolved", { threadId, requestId: id });
     }
     if (this.options.assistantText) {
-      await this.notificationHandler("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: this.options.assistantText });
-      await this.notificationHandler("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "agentMessage", id: "msg-1", text: this.options.assistantText, phase: null, memoryCitation: null, delivery: null, questions: null } });
+      await this.emitNotification("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: this.options.assistantText });
+      await this.emitNotification("item/completed", { threadId, turnId, completedAtMs: 0, item: codexAgentMessage("msg-1", this.options.assistantText) });
     }
     if (this.options.agentMessageSnapshot) {
-      await this.notificationHandler("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "agentMessage", id: "msg-2", text: this.options.agentMessageSnapshot, phase: null, memoryCitation: null, delivery: null, questions: null } });
+      await this.emitNotification("item/completed", { threadId, turnId, completedAtMs: 0, item: codexAgentMessage("msg-2", this.options.agentMessageSnapshot) });
     }
     if (this.options.finalPlanMarkdown) {
-      await this.notificationHandler("turn/plan/updated", { threadId, turnId, explanation: "Implementation plan", plan: [{ step: "Update code", status: "pending" }] });
-      await this.notificationHandler("item/completed", { threadId, turnId, completedAtMs: 0, item: { type: "plan", id: "plan-1", text: this.options.finalPlanMarkdown } });
+      await this.emitNotification("turn/plan/updated", { threadId, turnId, explanation: "Implementation plan", plan: [{ step: "Update code", status: "pending" }] });
+      await this.emitNotification("item/completed", { threadId, turnId, completedAtMs: 0, item: codexPlanItem("plan-1", this.options.finalPlanMarkdown) });
     }
     if (this.options.reroutedModel) {
-      await this.notificationHandler("model/rerouted", { threadId, turnId, fromModel: "gpt-5.6-sol", toModel: this.options.reroutedModel, reason: "highRiskCyberActivity" });
+      await this.emitNotification("model/rerouted", { threadId, turnId, fromModel: "gpt-5.6-sol", toModel: this.options.reroutedModel, reason: "highRiskCyberActivity" });
     }
     let total = 0;
     for (const last of this.options.tokenUsage ?? []) {
       total += last.totalTokens;
-      await this.notificationHandler("thread/tokenUsage/updated", {
+      await this.emitNotification("thread/tokenUsage/updated", {
         threadId,
         turnId,
         tokenUsage: { total: { ...last, totalTokens: total }, last, modelContextWindow: 258_400 },
@@ -245,9 +278,9 @@ class MockCodexClient {
     if (!this.options.holdTurns) await this.completeTurn(turnId);
   }
 
-  async completeTurn(turnId = this.activeTurnId!, status?: string): Promise<void> {
+  async completeTurn(turnId = this.activeTurnId!, status?: TurnStatus): Promise<void> {
     if (this.activeTurnId === turnId) this.activeTurnId = undefined;
-    await this.notificationHandler("turn/completed", {
+    await this.emitNotification("turn/completed", {
       threadId: this.threadId,
       turn: turnPayload(turnId, status ?? this.options.turnStatus ?? "completed", this.options.turnError),
     });
@@ -383,7 +416,7 @@ describe("Codex App Server RPC transport", () => {
       if (method === "unsupported") throw new JsonRpcResponseError(-32601, "nope");
       return { ok: true };
     };
-    const common = { pending: new Map(), onNotification: () => undefined, onRequest, respond: (frame: unknown) => { frames.push(frame); } };
+    const common = { pending: new Map(), onNotification: (): undefined => undefined, onRequest, respond: (frame: unknown) => { frames.push(frame); } };
     await dispatchJsonRpcEnvelope({ jsonrpc: "2.0", id: 7, method: "supported", params: {} }, common);
     await dispatchJsonRpcEnvelope({ jsonrpc: "2.0", id: 8, method: "unsupported", params: {} }, common);
     assert.deepEqual(seenIds, [7, 8]);
@@ -655,7 +688,7 @@ describe("CodexHarness launch settings", () => {
     const session = launch(client);
     const iter = session.messages[Symbol.asyncIterator]();
     await nextOfType(iter, "run_started");
-    const update = {
+    const update: RateLimitSnapshot = {
       limitId: "codex", limitName: null, normalModelSlug: null,
       primary: { usedPercent: 81, windowDurationMins: 300, resetsAt: 4_000_000_000 },
       secondary: null, credits: null, individualLimit: null, spendControlReached: null, planType: null, rateLimitReachedType: null,

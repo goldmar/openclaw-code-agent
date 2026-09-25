@@ -10,6 +10,7 @@ import type {
   HarnessSession,
 } from "../src/harness/types";
 import type { SessionConfig } from "../src/types";
+import type { PluginRuntime } from "../src/runtime-store";
 
 type LegacyHarnessMessage =
   | { type: "init"; session_id: string }
@@ -116,9 +117,10 @@ export function createFakeHarness(
 
       // Consume prompt stream in background so MessageStream queue behavior in tests
       // matches real harnesses; tests can pause consumption to create pending messages.
-      if (options.prompt && typeof options.prompt !== "string") {
+      const promptStream = options.prompt;
+      if (promptStream && typeof promptStream !== "string") {
         (async () => {
-          const it = options.prompt[Symbol.asyncIterator]();
+          const it = promptStream[Symbol.asyncIterator]();
           while (true) {
             while (promptConsumptionPaused) {
               await new Promise<void>((r) => { resumePromptConsumption = r; });
@@ -302,7 +304,7 @@ export function tick(ms: number = 10): Promise<void> {
  * surface. OCA calls published runtime surfaces directly (OpenClaw >= 2026.9.6),
  * so a runtime fake that reaches SessionManager must include `llm`.
  */
-export const TEST_RUNTIME_LLM = {
+export const TEST_RUNTIME_LLM: Pick<PluginRuntime["llm"], "complete"> = {
   async complete(): Promise<never> {
     throw Object.assign(new Error("runtime.llm is not used in this test"), { code: "LLM_COMPLETION_FAILED" });
   },

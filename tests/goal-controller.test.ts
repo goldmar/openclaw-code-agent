@@ -60,7 +60,7 @@ function buildTask(overrides: Partial<GoalTaskState> = {}): GoalTaskState {
 
 describe("GoalController", () => {
   it("waits for recoverable-task restoration before finishing startup", async () => {
-    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: () => undefined } as any);
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: (): undefined => undefined } as any);
     const store = createStore();
     (controller as any).store = store;
 
@@ -199,7 +199,7 @@ describe("GoalController", () => {
       name: "goal-task",
       harnessSessionId: "hs-1",
       route: undefined,
-      getOutput: () => [],
+      getOutput: (): string[] => [],
     });
 
     (controller as any).attachSessionObservers(task, session);
@@ -211,7 +211,7 @@ describe("GoalController", () => {
   });
 
   it("coalesces duplicate turn-end evaluations for the same task", async () => {
-    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: () => undefined } as any);
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: (): undefined => undefined } as any);
     const store = createStore();
     (controller as any).store = store;
     (controller as any).restoreRecoverableTasks = async () => {};
@@ -229,7 +229,7 @@ describe("GoalController", () => {
       name: "goal-task",
       harnessSessionId: "hs-1",
       route: undefined,
-      getOutput: () => [],
+      getOutput: (): string[] => [],
     });
 
     controller.start();
@@ -245,7 +245,7 @@ describe("GoalController", () => {
   });
 
   it("preserves the first concrete dirty session hint while a task is in flight", async () => {
-    const controller = new GoalController({ resolve: () => undefined } as any);
+    const controller = new GoalController({ resolve: (): undefined => undefined } as any);
     const store = createStore();
     (controller as any).store = store;
 
@@ -459,7 +459,7 @@ describe("GoalController", () => {
   it("does not treat agent-internal review passes as controller iterations on first-turn Ralph success", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -504,7 +504,7 @@ describe("GoalController", () => {
   it("emits controller-loop progress only when a Ralph goal actually resumes", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -564,7 +564,7 @@ describe("GoalController", () => {
   it("includes a concise Ralph iteration summary when continuing without completion", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -575,7 +575,7 @@ describe("GoalController", () => {
       id: "session-2",
       name: "goal-task",
       harnessSessionId: "hs-2",
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
 
     const task = buildTask({
@@ -613,7 +613,7 @@ describe("GoalController", () => {
   it("falls back to metadata-only Ralph continuation notifications without source output", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -636,7 +636,7 @@ describe("GoalController", () => {
     const session = createStubSession({
       id: "session-1",
       status: "completed",
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
 
     await (controller as any).handleTerminalSession(task, session);
@@ -651,7 +651,7 @@ describe("GoalController", () => {
   it("includes completion-claimed detail when a Ralph completion fails verification", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -660,7 +660,7 @@ describe("GoalController", () => {
     (controller as any).store = store;
     (controller as any).runVerifiers = async () => ({
       status: "fail",
-      steps: [],
+      steps: [] as unknown[],
       summary: "FAIL readiness (exit 1, 25ms)\nbroker gate stayed closed",
       fingerprint: "fingerprint-1",
     });
@@ -704,7 +704,7 @@ describe("GoalController", () => {
   it("includes verifier failure detail in repair iteration notifications", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -713,7 +713,7 @@ describe("GoalController", () => {
     (controller as any).store = store;
     (controller as any).runVerifiers = async () => ({
       status: "fail",
-      steps: [],
+      steps: [] as unknown[],
       summary: "FAIL readiness (exit 1, 25ms)\nbroker gate stayed closed",
       fingerprint: "fingerprint-1",
     });
@@ -766,7 +766,7 @@ describe("GoalController", () => {
     });
     const controller = new GoalController({
       resolve: (id: string) => (id === "session-1" ? session : undefined),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
     } as any);
     const store = createStore();
@@ -798,7 +798,7 @@ describe("GoalController", () => {
     });
     const controller = new GoalController({
       resolve: (id: string) => (id === "session-2" ? session : undefined),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
     } as any);
     const store = createStore();
@@ -842,7 +842,7 @@ describe("GoalController", () => {
     const sessions = new Map<string, any>([["session-1", session]]);
     const controller = new GoalController({
       resolve: (id: string) => sessions.get(id),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       launchAndAwaitRunning: async (config: any) => {
         capturedConfig = config;
         sessions.set("session-1", resumed);
@@ -1003,8 +1003,8 @@ describe("GoalController", () => {
   it("passes persisted backend refs into resume-session selection for goal recovery", async () => {
     let capturedConfig: any;
     const controller = new GoalController({
-      resolveBackendConversationId: () => undefined,
-      resolve: () => undefined,
+      resolveBackendConversationId: (): undefined => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         harness: "codex",
         backendRef: { kind: "codex-app-server", conversationId: "thread-app-server" },
@@ -1030,7 +1030,7 @@ describe("GoalController", () => {
   it("kills sessions restored after stop() races with in-flight recovery", async () => {
     const killed: Array<{ id: string; reason: string }> = [];
     const controller = new GoalController({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       kill: (id: string, reason: string) => {
         killed.push({ id, reason });
       },
@@ -1074,7 +1074,7 @@ describe("GoalController", () => {
   });
 
   it("logs queued evaluation errors instead of dropping the rejection", async () => {
-    const controller = new GoalController({ resolve: () => undefined } as any);
+    const controller = new GoalController({ resolve: (): undefined => undefined } as any);
     const originalWarn = console.warn;
     const warnings: string[] = [];
 

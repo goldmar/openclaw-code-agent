@@ -28,8 +28,8 @@ describe("agent_respond tool parameter validation", () => {
 
   it("accepts approval_rationale when it is a string", async () => {
     setSessionManager({
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as unknown as SessionManager);
     const tool = makeAgentRespondTool();
     const result = await tool.execute("tool-id", {

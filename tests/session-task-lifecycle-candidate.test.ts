@@ -75,7 +75,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     const orphan = await bound.createManaged({ controllerId: "openclaw-code-agent", goal: "Interrupted session", status: "running", notifyPolicy: "silent" });
     setPluginRuntime({ tasks: { async: { managedFlows: managed } } });
     const recovered = await reconcilePersistedSessionTaskMirror({
-      sessionId: "orphan", name: "orphan", prompt: "Interrupted session", workdir: stateDir,
+      sessionId: "orphan", harnessSessionId: "orphan-thread", name: "orphan", prompt: "Interrupted session", workdir: stateDir,
       status: "failed", lifecycle: "terminal", costUsd: 0, originSessionKey: sessionKey,
       taskFlowMirror: orphan,
     });

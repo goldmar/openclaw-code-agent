@@ -84,12 +84,12 @@ export async function startInteractionFixture(
           request.hooks?.onNotifySucceeded?.();
         }
       },
-      notifyWorktreeOutcome: () => undefined,
-      dispose: () => undefined,
+      notifyWorktreeOutcome: (): undefined => undefined,
+      dispose: (): undefined => undefined,
     };
     (manager as unknown as { wakeDispatcher: unknown }).wakeDispatcher = {
-      clearRetryTimersForSession: () => undefined,
-      dispose: () => undefined,
+      clearRetryTimersForSession: (): undefined => undefined,
+      dispose: (): undefined => undefined,
     };
     return manager;
   };
@@ -145,6 +145,10 @@ export async function startInteractionFixture(
     async dispose() {
       await fixture.sm.shutdown();
       setSessionManager(null);
+      // A violation also threw where it happened, but a harness may have caught it.
+      if (backend.protocolViolations.length > 0) {
+        throw new Error(`${name} fake backend saw protocol violations:\n${backend.protocolViolations.join("\n")}`);
+      }
     },
   };
   return fixture;
@@ -182,11 +186,11 @@ export async function clickButton(
           messageText: "prompt",
         },
         respond: {
-          acknowledge: async () => undefined,
+          acknowledge: async (): Promise<undefined> => undefined,
           reply: async ({ text }: { text: string }) => { replies.push(text); },
           clearButtons: async () => { cleared += 1; },
           editButtons: async () => { cleared += 1; },
-          editMessage: async () => undefined,
+          editMessage: async (): Promise<undefined> => undefined,
         },
       }
     : {
@@ -194,10 +198,10 @@ export async function clickButton(
         auth: { isAuthorizedSender: true },
         interaction: { payload },
         respond: {
-          acknowledge: async () => undefined,
+          acknowledge: async (): Promise<undefined> => undefined,
           reply: async ({ text }: { text: string }) => { replies.push(text); },
           followUp: async ({ text }: { text: string }) => { replies.push(text); },
-          editMessage: async () => undefined,
+          editMessage: async (): Promise<undefined> => undefined,
           clearComponents: async () => { cleared += 1; },
         },
       };

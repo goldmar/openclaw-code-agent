@@ -5,6 +5,7 @@ import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
 import { setSessionManager } from "../src/singletons";
 import { formatUnresolvedRepoPolicy } from "../src/tools/agent-repo-policy";
 import { tokenizeCommandArgs } from "../src/commands/args";
+import type { RepoIntegrationPolicy, RepoPolicyRecord } from "../src/types";
 
 type Handler = (ctx: { args?: string; workspaceDir?: string }) => Promise<{ text: string }>;
 
@@ -19,7 +20,7 @@ function captureHandler(): Handler {
   return handler;
 }
 
-function policyRecord(policy: string = "pr-required") {
+function policyRecord(policy: RepoIntegrationPolicy = "pr-required"): RepoPolicyRecord {
   return {
     key: "/repo",
     policy,

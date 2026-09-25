@@ -137,7 +137,7 @@ describe("notification reasoning visibility", () => {
       session.start = async () => {};
       const { service, requests } = recorder();
       const bootstrap = new SessionRuntimeBootstrapService({
-        hydrateSpawnedSession: () => {}, markRunning: () => {}, handleTerminal: async () => {},
+        hydrateSpawnedSession: () => {}, markRunning: () => {}, syncTaskMirror: () => {}, handleTerminal: async () => {},
         handleTurnEnd: async () => {}, formatLaunchWorkdirLabel: () => "/tmp",
         notifySession: (target, text, label) => service.dispatch(target, { label: label!, userMessage: text }),
       });
@@ -223,7 +223,7 @@ describe("notification reasoning visibility", () => {
       const { service, requests } = recorder(restored);
       service.dispatch({ id: session.id } as any, { label: "recovery", userMessage: "⚠️ Recovered after restart" });
       assert.match(requests[0].userMessage!, /reasoning: low$/);
-      const target = resolveWorktreeToolTarget({ resolve: () => undefined, getPersistedSession: () => restored } as any, session.id);
+      const target = resolveWorktreeToolTarget({ resolve: (): undefined => undefined, getPersistedSession: () => restored } as any, session.id);
       assert.equal(target.notificationTarget?.reasoningEffort, "low");
       for (const outcome of ["✅ PR opened: https://example.com/pr/1", "✅ Merged task → main"]) {
         service.notifyWorktreeOutcome(target.notificationTarget as any, outcome, { summaryWakeRequired: false });
@@ -276,8 +276,8 @@ describe("notification reasoning visibility", () => {
     const { service, requests } = recorder();
     const manager = Object.create(SessionManager.prototype);
     manager.notifications = service;
-    manager.resolve = () => undefined;
-    manager.getPersistedSession = () => undefined;
+    manager.resolve = (): undefined => undefined;
+    manager.getPersistedSession = (): undefined => undefined;
     const task = { id: "goal", name: "goal", harness: "codex", model: "gpt-6-astra", reasoningEffort: "medium" };
     for (const label of ["goal-task-started", "goal-task-progress", "goal-task-failed", "goal-task-succeeded"]) {
       manager.emitGoalTaskUpdate(task, "Goal update", label);

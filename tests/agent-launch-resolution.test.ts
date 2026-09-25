@@ -36,7 +36,7 @@ describe("resolveAgentLaunchRequest", () => {
       {
         workspaceDir: "/tmp",
         messageChannel: "telegram",
-        chatId: "123",
+        deliveryContext: { channel: "telegram", to: "123" },
       },
       {
         list: () => [{
@@ -303,7 +303,7 @@ describe("resolveAgentLaunchRequest", () => {
       route: { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:12345" },
     } as any;
     const sessionManager = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => persisted,
       resolveBackendConversationId: () => persisted.harnessSessionId,
     } as any;

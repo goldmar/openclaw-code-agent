@@ -1,7 +1,7 @@
 import "./test-env";
 import { afterEach, describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -14,7 +14,7 @@ import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
 import { GoalController } from "../src/goal-controller";
 import { resetSharedRuntimeSlotForTests } from "../src/process-runtime";
-import { TEST_RUNTIME_LLM } from "./helpers";
+import { createFakeHost, type FakeHost, type FakeHostOptions } from "./fake-host";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 
 // PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
@@ -57,48 +57,25 @@ function compareOpenClawVersions(left: string, right: string): number {
   return 0;
 }
 
-type CapturedTool = {
-  factory: (ctx: Record<string, unknown>) => {
-    execute: (id: string, params: unknown) => Promise<{ content?: Array<{ text?: string }> }> | { content?: Array<{ text?: string }> };
-  };
-  options?: { name?: string };
-};
+/** `openclaw.plugin.json` shapes the manifest tests read. */
+type ManifestUiHint = { advanced?: boolean; sensitive?: boolean; help?: string };
+type HarnessDefaults = Record<string, Record<string, unknown> | undefined>;
 
-function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
-  const tools: CapturedTool[] = [];
-  const commands: Array<{ name: string; handler: (ctx: Record<string, unknown>) => { text: string } | Promise<{ text: string }> }> = [];
-  const services: Array<{ start: (ctx: Record<string, unknown>) => void | Promise<void>; stop?: (ctx: Record<string, unknown>) => void | Promise<void> }> = [];
-  const interactiveHandlers: Array<{ handler: (ctx: Record<string, unknown>) => Promise<unknown> }> = [];
-  const runtimeConfig = { runtime: true };
-  const api = {
-    pluginConfig,
-    runtime: {
-      config: {
-        current: () => runtimeConfig,
-      },
-      llm: TEST_RUNTIME_LLM,
-    },
-    registerTool(factory: CapturedTool["factory"], options?: { name?: string }) {
-      tools.push({ factory, options });
-    },
-    registerCommand(command: { name: string; handler: (ctx: Record<string, unknown>) => { text: string } | Promise<{ text: string }> }) {
-      commands.push(command);
-    },
-    registerService(service: { start: (ctx: Record<string, unknown>) => void | Promise<void>; stop?: (ctx: Record<string, unknown>) => void | Promise<void> }) {
-      services.push(service);
-    },
-    registerInteractiveHandler(handler: { handler: (ctx: Record<string, unknown>) => Promise<unknown> }) {
-      interactiveHandlers.push(handler);
-    },
-  };
-  return { api, commands, services, tools, interactiveHandlers };
+type ToolTextResult = { content?: Array<{ text?: string }> };
+
+function createPluginHost(pluginConfig: Record<string, unknown> = {}): FakeHost {
+  const host = createFakeHost({ pluginConfig, config: { runtime: true } as FakeHostOptions["config"] });
+  hosts.push(host);
+  return host;
 }
 
-async function stopCapturedServices(services: Array<{ stop?: (ctx: Record<string, unknown>) => void | Promise<void> }>): Promise<void> {
-  for (const service of services) {
-    await service.stop?.({});
-  }
-}
+const hosts: FakeHost[] = [];
+after(() => {
+  for (const host of hosts.splice(0)) rmSync(host.stateDir, { recursive: true, force: true });
+});
+
+/** The config snapshot a Gateway passes to service start (content is not inspected here). */
+const GATEWAY_CONFIG: FakeHost["serviceContext"]["config"] = {};
 
 describe("plugin entry source", () => {
   afterEach(async () => {
@@ -178,10 +155,14 @@ describe("plugin entry source", () => {
         encoding: "utf8",
       }),
     );
+    // The packed file list comes from package.json `files`, not from the build:
+    // skip `prepack` so its build output (pnpm prints lockfile notices on stdout
+    // with CI=true) cannot corrupt the JSON on stdout.
     const pack = JSON.parse(
-      execFileSync("npm", ["pack", "--dry-run", "--json"], {
+      execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
         cwd: rootDir,
         encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
       }),
     ) as Array<{ files?: Array<{ path?: string }> }>;
     assert.ok(pack[0]?.files?.some((file) => file.path === "npm-shrinkwrap.json"));
@@ -397,16 +378,15 @@ describe("plugin entry source", () => {
           enum?: string[];
           additionalProperties?: {
             properties?: Record<string, {
+              type?: string;
               enum?: string[];
             }>;
           };
         }>;
       };
-      uiHints?: Record<string, {
-        advanced?: boolean;
-        sensitive?: boolean;
-      }>;
+      uiHints?: Record<string, ManifestUiHint>;
     };
+    const harnessDefaults = pluginManifest.configSchema?.properties?.harnesses?.default as HarnessDefaults | undefined;
 
     assert.deepEqual(pluginManifest.activation, {
       onStartup: true,
@@ -444,14 +424,14 @@ describe("plugin entry source", () => {
       "max",
     ]);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.defaultModel, "gpt-6-sol");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.["claude-code"]?.defaultModel, "opus");
+    assert.equal(harnessDefaults?.codex?.defaultModel, "gpt-6-sol");
+    assert.equal(harnessDefaults?.["claude-code"]?.defaultModel, "opus");
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.reasoningEffort, undefined);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, undefined, "unset so it follows tools.exec.mode");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, undefined);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, undefined);
+    assert.equal(harnessDefaults?.codex?.fastMode, false);
+    assert.equal(harnessDefaults?.codex?.reasoningEffort, undefined);
+    assert.equal(harnessDefaults?.codex?.permissionProfile, undefined, "unset so it follows tools.exec.mode");
+    assert.equal(harnessDefaults?.codex?.approvalPolicy, undefined);
+    assert.equal(harnessDefaults?.codex?.approvalsReviewer, undefined);
     assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.permissionProfile?.enum, [
       ":read-only",
       ":workspace",
@@ -466,7 +446,7 @@ describe("plugin entry source", () => {
       "user",
       "auto_review",
     ]);
-    assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.default?.opencode, {});
+    assert.deepEqual(harnessDefaults?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /OpenCode is experimental/);
   });
@@ -515,10 +495,7 @@ describe("plugin entry source", () => {
 
   it("keeps first-run onboarding focused on workdir, harness, and fallback routing", () => {
     const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
-      uiHints?: Record<string, {
-        advanced?: boolean;
-        sensitive?: boolean;
-      }>;
+      uiHints?: Record<string, ManifestUiHint>;
     };
 
     assert.equal(pluginManifest.uiHints?.defaultWorkdir?.advanced, undefined);
@@ -702,63 +679,57 @@ describe("plugin entry source", () => {
   });
 
   it("keeps tool construction side-effect free and starts before execution", async () => {
-    const { api, services, tools } = createPluginApi();
-    register(api as any);
+    const host = createPluginHost();
+    register(host.api);
     assert.equal(sessionManager, null);
 
-    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
-    assert.ok(factory, "expected agent_sessions factory");
-    const tool = factory({ workspaceDir: rootDir });
+    const tool = host.tool("agent_sessions", { workspaceDir: rootDir });
     assert.equal(sessionManager, null, "tool construction must not initialize SessionManager");
 
-    const result = await tool.execute("tool-id", {});
+    const result = await tool.execute("tool-id", {}) as ToolTextResult;
     assert.ok(sessionManager, "tool execution should initialize SessionManager");
     assert.doesNotMatch(result.content?.[0]?.text ?? "", /SessionManager not initialized/);
-    await stopCapturedServices(services);
+    await host.stopServices();
   });
 
   it("lazily starts the code-agent service before command handlers can observe uninitialized state", async () => {
-    const { api, commands, services } = createPluginApi();
-    register(api as any);
+    const host = createPluginHost();
+    register(host.api);
     assert.equal(sessionManager, null);
 
-    const command = commands.find((entry) => entry.name === "agent_sessions");
-    assert.ok(command, "expected agent_sessions command");
-    const result = await command.handler({ args: "--full" });
+    const result = await host.runCommand("agent_sessions", { args: "--full" });
 
     assert.ok(sessionManager, "command handler should initialize SessionManager");
-    assert.doesNotMatch(result.text, /SessionManager not initialized/);
-    await stopCapturedServices(services);
+    assert.doesNotMatch(result.text ?? "", /SessionManager not initialized/);
+    await host.stopServices();
   });
 
   it("keeps service startup idempotent when service start follows tool execution", async () => {
-    const { api, services, tools } = createPluginApi();
-    register(api as any);
+    const host = createPluginHost();
+    register(host.api);
 
-    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
-    assert.ok(factory, "expected agent_sessions factory");
-    const tool = factory({ workspaceDir: rootDir });
+    const tool = host.tool("agent_sessions", { workspaceDir: rootDir });
     assert.equal(sessionManager, null);
     await tool.execute("tool-id", {});
     const lazySessionManager = sessionManager;
     assert.ok(lazySessionManager, "expected lazy SessionManager");
 
-    await services[0]?.start({ config: { gateway: true } });
+    await host.startServices(GATEWAY_CONFIG);
     assert.equal(sessionManager, lazySessionManager);
 
-    await stopCapturedServices(services);
+    await host.stopServices();
     assert.equal(sessionManager, null);
   });
 
   it("does not create the self-updater when autoUpdate is false", async () => {
-    const { api, services } = createPluginApi({ autoUpdate: false });
-    register(api as any);
+    const host = createPluginHost({ autoUpdate: false });
+    register(host.api);
 
-    await services[0]?.start({ config: { gateway: true } });
+    await host.startServices(GATEWAY_CONFIG);
     assert.ok(sessionManager, "expected a started SessionManager");
     assert.equal(autoUpdateService, null);
 
-    await stopCapturedServices(services);
+    await host.stopServices();
   });
 
   it("shares concurrent startup and waits for drainage before a lazy restart", async () => {
@@ -770,23 +741,22 @@ describe("plugin entry source", () => {
       entered.resolve();
       await drained.promise;
     });
-    const { api, services, tools } = createPluginApi();
-    register(api as any);
-    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
-    assert.ok(factory);
-    const tool = factory({ workspaceDir: rootDir });
+    const host = createPluginHost();
+    register(host.api);
+    const service = host.services[0]!;
+    const tool = host.tool("agent_sessions", { workspaceDir: rootDir });
     let restart: Promise<unknown> | undefined;
     let stopping: Promise<unknown> | undefined;
     try {
       await Promise.all([
         tool.execute("first", {}),
         tool.execute("second", {}),
-        services[0].start({ config: { gateway: true } }),
+        service.start({ ...host.serviceContext, config: GATEWAY_CONFIG }),
       ]);
       assert.equal(start.mock.callCount(), 1);
       const previous = sessionManager;
       assert.ok(previous);
-      stopping = Promise.resolve(services[0].stop?.({}));
+      stopping = Promise.resolve(service.stop?.(host.serviceContext));
       assert.equal(sessionManager, previous);
       let restarted = false;
       restart = Promise.resolve(tool.execute("restart", {})).then(() => { restarted = true; });
@@ -812,7 +782,7 @@ describe("plugin entry source", () => {
     } finally {
       drained.resolve();
       await Promise.allSettled([stopping, restart]);
-      await stopCapturedServices(services);
+      await host.stopServices();
       drain.mock.restore();
       start.mock.restore();
       launch.mock.restore();

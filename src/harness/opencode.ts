@@ -230,6 +230,32 @@ function authHeader(): Record<string, string> {
   };
 }
 
+/**
+ * Headers for every request to the local OpenCode server.
+ *
+ * `connection: close` turns off HTTP keep-alive. The shared server is restarted
+ * after an exit and `--port 0` usually binds the same port (4096) again, so a
+ * pooled keep-alive socket from the previous server generation could be reused
+ * for the first request to the new one and fail with ECONNRESET ("fetch
+ * failed"). A fresh loopback connection per request costs next to nothing.
+ */
+function requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { ...authHeader(), connection: "close", ...extra };
+}
+
+const CONNECTION_RESET_CODES = new Set(["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"]);
+
+/** A request that failed because its connection was reset before a response arrived. */
+export function isConnectionResetError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && CONNECTION_RESET_CODES.has(code)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -474,6 +500,23 @@ class OpenCodeClient {
     body?: unknown,
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<T> {
+    try {
+      return await this.requestOnce<T>(method, path, body, options);
+    } catch (error) {
+      // A reset connection never reached a handler; repeating a read is safe.
+      // Writes are not retried: the server may have applied them.
+      if (method !== "GET" || !isConnectionResetError(error) || options.signal?.aborted) throw error;
+      log.warn(`OpenCode ${method} ${path} connection was reset; retrying once.`);
+      return await this.requestOnce<T>(method, path, body, options);
+    }
+  }
+
+  private async requestOnce<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    options: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<T> {
     const controller = new AbortController();
     let callerAborted = false;
     let timedOut = false;
@@ -503,10 +546,7 @@ class OpenCodeClient {
     try {
       const response = await bounded(this.fetchImpl(this.url(path), {
         method,
-        headers: {
-          ...authHeader(),
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
-        },
+        headers: requestHeaders(body === undefined ? {} : { "content-type": "application/json" }),
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       }));
@@ -550,7 +590,7 @@ class OpenCodeClient {
     onOpen?: () => void,
   ): Promise<void> {
     const response = await this.fetchImpl(this.url(path), {
-      headers: authHeader(),
+      headers: requestHeaders(),
       signal,
     });
     if (!response.ok) {

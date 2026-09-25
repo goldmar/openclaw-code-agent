@@ -21,11 +21,11 @@ describe("agent_request_worktree_decision tool", () => {
   it("delegates to SessionManager.requestWorktreeDecisionFromUser", async () => {
     const calls: Array<{ session: string; summary: string }> = [];
     setSessionManager({
-      requestWorktreeDecisionFromUser(session: string, summary: string) {
+      async requestWorktreeDecisionFromUser(session: string, summary: string) {
         calls.push({ session, summary });
         return "Canonical worktree decision prompt sent for session test [s1]. Wait for the user's Merge, Open PR, Later, or Discard response. Do not send a separate plain-text worktree decision message.";
       },
-    } as SessionManager);
+    } satisfies Pick<SessionManager, "requestWorktreeDecisionFromUser"> as unknown as SessionManager);
 
     const tool = makeAgentRequestWorktreeDecisionTool();
     const result = await tool.execute("tool-id", {

@@ -29,7 +29,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
-async function createRepoWithWorktree(name: string): { repoDir: string; worktreePath: string; branchName: string } {
+async function createRepoWithWorktree(name: string): Promise<{ repoDir: string; worktreePath: string; branchName: string }> {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-session-${name}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");

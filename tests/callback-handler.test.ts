@@ -160,8 +160,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -180,8 +180,8 @@ describe("createCallbackHandler()", () => {
         setSessionManager({
           getActionToken: () => ({ sessionId: "plugin:auto-update", kind, pluginUpdateVersion: "5.0.1" }),
           consumeActionToken: () => ({ sessionId: "plugin:auto-update", kind, pluginUpdateVersion: "5.0.1" }),
-          resolve: () => undefined,
-          getPersistedSession: () => undefined,
+          resolve: (): undefined => undefined,
+          getPersistedSession: (): undefined => undefined,
         } as any);
         const state = createCtx(`token-${kind}`);
         const result = await createCallbackHandler().handler(state.ctx as any);
@@ -197,7 +197,7 @@ describe("createCallbackHandler()", () => {
   it("visibly rejects a stale Telegram callback even when control cleanup fails", async (t) => {
     t.mock.method(console, "warn", (() => {}) as typeof console.warn);
     setSessionManager({
-      getActionToken: () => undefined,
+      getActionToken: (): undefined => undefined,
     } as any);
 
     const state = createCtx("expired-token", "telegram", {
@@ -216,7 +216,7 @@ describe("createCallbackHandler()", () => {
       warnings.push(String(message));
     }) as typeof console.warn);
     setSessionManager({
-      getActionToken: () => undefined,
+      getActionToken: (): undefined => undefined,
     } as any);
 
     const state = createCtx("expired-token", "telegram", {
@@ -242,9 +242,9 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      consumeActionToken: () => undefined,
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      consumeActionToken: (): undefined => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const state = createCtx("raced-update-token");
@@ -279,8 +279,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -325,8 +325,8 @@ describe("createCallbackHandler()", () => {
           pluginUpdateVersion: "4.6.1",
         };
       },
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -363,8 +363,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -400,8 +400,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -436,8 +436,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-install",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -478,8 +478,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-restart",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -519,8 +519,8 @@ describe("createCallbackHandler()", () => {
         kind: "plugin-update-remind-later",
         pluginUpdateVersion: "4.6.1",
       }),
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -611,7 +611,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -646,7 +646,7 @@ describe("createCallbackHandler()", () => {
         return { sessionId: "test-id", kind: "plan-approve" };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => { events.push("notifySession"); },
       clearPlanDecisionTokens: () => { events.push("clearPlanDecisionTokens"); },
     } as any);
@@ -703,7 +703,7 @@ describe("createCallbackHandler()", () => {
         planDecisionVersion: 1,
       }),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -751,7 +751,7 @@ describe("createCallbackHandler()", () => {
         };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => { events.push("notifySession"); },
       clearPlanDecisionTokens: () => { events.push("clearPlanDecisionTokens"); },
     } as any);
@@ -820,7 +820,7 @@ describe("createCallbackHandler()", () => {
         };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => { events.push("notifySession"); },
       clearPlanDecisionTokens: () => { events.push("clearPlanDecisionTokens"); },
     } as any);
@@ -913,7 +913,7 @@ describe("createCallbackHandler()", () => {
       },
       listActiveActionTokens: (kind: string) => tokens.filter((token) => token.kind === kind),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -969,7 +969,7 @@ describe("createCallbackHandler()", () => {
         return token;
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1018,7 +1018,7 @@ describe("createCallbackHandler()", () => {
         };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1064,7 +1064,7 @@ describe("createCallbackHandler()", () => {
         return { ...token, consumedAt: Date.now() };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1182,9 +1182,9 @@ describe("createCallbackHandler()", () => {
 
     setSessionManager({
       getActionToken: () => token,
-      consumeActionToken: () => undefined,
+      consumeActionToken: (): undefined => undefined,
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1241,7 +1241,7 @@ describe("createCallbackHandler()", () => {
         return { ...token, consumedAt: Date.now() };
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => { notifyCount++; },
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1327,7 +1327,7 @@ describe("createCallbackHandler()", () => {
         return undefined;
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
       kill: () => { killCount++; },
@@ -1402,7 +1402,7 @@ describe("createCallbackHandler()", () => {
         return undefined;
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
       kill: () => { killCount++; },
@@ -1476,7 +1476,7 @@ describe("createCallbackHandler()", () => {
         return undefined;
       },
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       updatePersistedSession: (_sessionId: string, patch: Record<string, unknown>) => {
         Object.assign(session, patch);
       },
@@ -1536,7 +1536,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
       clearPlanDecisionTokens: () => {},
     } as any);
@@ -1565,7 +1565,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       kill: (id: string, reason: string) => {
         killed = { id, reason };
@@ -1609,7 +1609,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
       resolve: () => session,
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       kill: (id: string, reason: string) => {
         killed = { id, reason };
@@ -1666,7 +1666,7 @@ describe("createCallbackHandler()", () => {
         approvalState: "pending",
         planDecisionVersion: 4,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => {
         patches.push(patch);
@@ -1713,7 +1713,7 @@ describe("createCallbackHandler()", () => {
         kind: "plan-reject",
         planDecisionVersion: 4,
       }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         id: "test-id",
         name: "spellcast-release-readiness-plan",
@@ -1778,7 +1778,7 @@ describe("createCallbackHandler()", () => {
         approvalPromptVersion: 4,
         canonicalPlanPromptVersion: 4,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       kill: (id: string, reason: string) => {
         killed = { id, reason };
@@ -1817,7 +1817,7 @@ describe("createCallbackHandler()", () => {
         approvalPromptVersion: 5,
         canonicalPlanPromptVersion: 4,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -1850,7 +1850,7 @@ describe("createCallbackHandler()", () => {
         planDecisionVersion: 5,
         canonicalPlanPromptVersion: 4,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       kill: (id: string, reason: string) => {
         killed = { id, reason };
@@ -1887,7 +1887,7 @@ describe("createCallbackHandler()", () => {
         planDecisionVersion: 3,
         actionablePlanDecisionVersion: 3,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -1921,7 +1921,7 @@ describe("createCallbackHandler()", () => {
         approvalPromptVersion: 5,
         canonicalPlanPromptVersion: 4,
       }),
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = createCallbackHandler();
@@ -1936,8 +1936,8 @@ describe("createCallbackHandler()", () => {
   it("clears Telegram buttons and reports duplicate consumed callbacks", async () => {
     let consumes = 0;
     setSessionManager({
-      getActionToken: () => undefined,
-      consumeActionToken: () => {
+      getActionToken: (): undefined => undefined,
+      consumeActionToken: (): undefined => {
         consumes++;
         return undefined;
       },
@@ -2047,7 +2047,7 @@ describe("createCallbackHandler()", () => {
     let consumedRequestId: string | undefined;
     setSessionManager({
       getActionToken: () => token,
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "sess-42",
         harnessSessionId: "backend-42",
@@ -2074,7 +2074,7 @@ describe("createCallbackHandler()", () => {
         consumedRequestId = requestId;
         return [token];
       },
-      consumeActionToken: () => undefined,
+      consumeActionToken: (): undefined => undefined,
     } as any);
 
     const state = createCtx(token.id);
@@ -2102,7 +2102,7 @@ describe("createCallbackHandler()", () => {
     };
     setSessionManager({
       getActionToken: (id: string) => tokens[id],
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "sess-42", harnessSessionId: "backend-42",
         backendRef: { kind: "codex-app-server", conversationId: "backend-42" }, name: "restart-race",
@@ -2119,7 +2119,7 @@ describe("createCallbackHandler()", () => {
       },
       notifyResumedLaunch: () => {},
       consumeQuestionAnswerTokens: () => Object.values(tokens),
-      consumeActionToken: () => undefined,
+      consumeActionToken: (): undefined => undefined,
     } as any);
 
     const firstState = createCtx("first");
@@ -2241,7 +2241,7 @@ describe("createCallbackHandler()", () => {
     let consumes = 0;
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
-      consumeActionToken: () => {
+      consumeActionToken: (): undefined => {
         consumes++;
         return undefined;
       },
@@ -2266,7 +2266,7 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
     } as any);
 
@@ -2294,7 +2294,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
       } as any);
 
@@ -2353,7 +2353,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
       } as any);
 
@@ -2375,7 +2375,7 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: (sessionId: string, options?: { notifyUser?: boolean }) => {
         snoozeCalls.push({ sessionId, notifyUser: options?.notifyUser });
@@ -2400,7 +2400,7 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: () => "Error: session no longer has a pending worktree decision.",
     } as any);
@@ -2428,7 +2428,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         snoozeWorktreeDecision: () => testCase.result,
       } as any);
@@ -2449,7 +2449,7 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       dismissWorktree: async () => shouldFail
         ? "Error: branch deletion failed."
@@ -2488,7 +2488,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         dismissWorktree: async () => testCase.result,
       } as any);
@@ -2508,7 +2508,7 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
     } as any);
@@ -2546,7 +2546,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
       } as any);
@@ -2587,7 +2587,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
       } as any);
@@ -2628,7 +2628,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
       } as any);
@@ -2669,7 +2669,7 @@ describe("createCallbackHandler()", () => {
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
         snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
       } as any);
@@ -2928,8 +2928,8 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
       setRepoPolicy: (workdir: string, policy: string) => {
         calls.push(`set:${workdir}:${policy}`);
         return { policy };
@@ -3010,8 +3010,8 @@ describe("createCallbackHandler()", () => {
         calls.push(`clear:${sessionId}`);
         store.deleteActionTokensForSessionByKind(sessionId, "repo-policy-set");
       },
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
       setRepoPolicy: (workdir: string, policy: string) => {
         calls.push(`set:${workdir}:${policy}`);
         return { policy };
@@ -3074,8 +3074,8 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
       resolveRepoPolicy: () => ({
         identity: {
           key: "/repo|https://gitlab.com/example/repo",
@@ -3127,9 +3127,9 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
-      setRepoPolicy: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+      setRepoPolicy: (): undefined => undefined,
       launchAfterRepoPolicyChoice: () => {
         throw new Error("should not launch");
       },
@@ -3165,8 +3165,8 @@ describe("createCallbackHandler()", () => {
     setSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
       setRepoPolicy: () => ({ policy: "pr-required" }),
       clearRepoPolicyChoiceTokens: () => {},
       launchAfterRepoPolicyChoice: () => {
@@ -3364,7 +3364,7 @@ describe("createCallbackHandler()", () => {
           sessionKey: TELEGRAM_FORUM_SESSION_KEY,
         },
       }),
-      consumeActionToken: () => {
+      consumeActionToken: (): undefined => {
         consumes++;
         return undefined;
       },
@@ -3394,11 +3394,11 @@ describe("createCallbackHandler()", () => {
     let lookups = 0;
     let consumes = 0;
     setSessionManager({
-      getActionToken: () => {
+      getActionToken: (): undefined => {
         lookups++;
         return undefined;
       },
-      consumeActionToken: () => {
+      consumeActionToken: (): undefined => {
         consumes++;
         return undefined;
       },

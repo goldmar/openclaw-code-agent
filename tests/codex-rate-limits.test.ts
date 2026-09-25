@@ -11,6 +11,7 @@ import {
 } from "../src/harness/codex-rate-limits";
 import { formatStats } from "../src/format";
 import type { RateLimitSnapshot } from "../src/harness/codex-app-server-protocol/v2/RateLimitSnapshot";
+import type { GetAccountRateLimitsResponse } from "../src/harness/codex-app-server-protocol";
 
 const NOW = 1_800_000_000_000;
 
@@ -75,7 +76,7 @@ describe("Codex rate-limit surfacing (B14)", () => {
   });
 
   it("keeps accounts separate and never renders account ids", () => {
-    const base = { ordinaryUsageAllowed: true, rateLimitsByLimitId: null, rateLimitResetCredits: null, rateLimitUpsell: null };
+    const base: Omit<GetAccountRateLimitsResponse, "rateLimits" | "accountId"> = { ordinaryUsageAllowed: true, rateLimitsByLimitId: null, rateLimitResetCredits: null, rateLimitUpsell: null };
     const a = recordCodexRateLimits({ ...base, rateLimits: snapshot(), accountId: "acct-secret-a" }, "fb-a", NOW);
     const b = recordCodexRateLimits({ ...base, rateLimits: snapshot({ planType: "plus" }), accountId: "acct-secret-b" }, "fb-b", NOW - 1);
     mergeCodexRateLimitsUpdate(b, snapshot({ primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: NOW / 1000 + 60 } }), NOW - 1);

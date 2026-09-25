@@ -52,7 +52,7 @@ class MockOpenCodeServer {
   private exitListeners: Array<(reason: string) => void> = [];
 
   fetch: typeof fetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : input.url);
+    const url = new URL(typeof input === "string" ? input : (input as Request).url);
     const method = init?.method ?? "GET";
     const path = url.pathname;
     const directory = url.searchParams.get("directory") ?? undefined;
@@ -689,7 +689,7 @@ describe("OpenCodeHarness shared server lifecycle", () => {
     mock.statuses = { ses_1: { type: "busy" } };
     let blockStream = false;
     const fetchImpl: typeof fetch = async (input, init) => {
-      const url = new URL(typeof input === "string" ? input : input.url);
+      const url = new URL(typeof input === "string" ? input : (input as Request).url);
       if (blockStream && url.pathname === "/global/event") {
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });

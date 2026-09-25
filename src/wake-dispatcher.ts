@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import type { NotificationButton } from "./session-interactions";
 import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
@@ -22,7 +23,7 @@ export type SessionNotificationPolicy = "always" | "on-wake-fallback" | "never";
 
 export interface SessionNotificationMessage {
   text: string;
-  buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  buttons?: Array<Array<NotificationButton>>;
   /** A failure delivering this message makes the whole sequence non-actionable. */
   requiredForSequenceSuccess?: boolean;
 }
@@ -45,7 +46,7 @@ export interface SessionNotificationRequest {
   deferConditionalWakeMs?: number;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
-  buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  buttons?: Array<Array<NotificationButton>>;
   shouldDispatch?: () => boolean;
   onUserNotifyFailed?: () => void;
   hooks?: SessionNotificationHooks;
@@ -165,7 +166,7 @@ export class WakeDispatcher {
       sessionKey?: string;
     };
     text: string;
-    buttons?: Array<Array<{ label: string; callbackData: string }>>;
+    buttons?: Array<Array<NotificationButton>>;
   }): Record<string, unknown> {
     const buttons = args.buttons ?? [];
     const flattenedButtons = buttons.flat();
@@ -255,7 +256,7 @@ export class WakeDispatcher {
     session: Session,
     text: string,
     label: string,
-    buttons?: Array<Array<{ label: string; callbackData: string }>>,
+    buttons?: Array<Array<NotificationButton>>,
     onAllFailed?: () => void,
     onSuccess?: () => void,
     requireDirectDelivery: boolean = false,
@@ -462,7 +463,7 @@ export class WakeDispatcher {
        */
       wakeNow: boolean;
       sessionKey?: string;
-      buttons?: Array<Array<{ label: string; callbackData: string }>>;
+      buttons?: Array<Array<NotificationButton>>;
       orderingKey?: string;
       onSuccess?: () => void;
       onFinalFailure?: () => void;

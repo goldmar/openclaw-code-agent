@@ -20,6 +20,7 @@ import {
   resolveCodexExecutionSettings,
   turnErrorMessage,
 } from "../src/harness/codex-protocol";
+import type { CommandExecutionRequestApprovalParams } from "../src/harness/codex-app-server-protocol/v2/CommandExecutionRequestApprovalParams";
 
 const execution = DEFAULT_CODEX_EXECUTION_SETTINGS;
 
@@ -184,8 +185,8 @@ describe("codex protocol turn payloads", () => {
 });
 
 describe("codex protocol server requests", () => {
-  const commandParams = {
-    kind: "command" as const,
+  const commandParams: CommandExecutionRequestApprovalParams = {
+    kind: "command",
     threadId: "t-1",
     turnId: "turn-1",
     itemId: "item-1",

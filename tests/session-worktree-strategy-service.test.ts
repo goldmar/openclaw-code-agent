@@ -8,8 +8,9 @@ import { tmpdir } from "node:os";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { SessionWorktreeController } from "../src/session-worktree-controller";
 import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy-service";
-import { createWorktree, getBranchName, getDiffSummary, mergeBranch } from "../src/worktree";
+import { createWorktree, getBranchName, getDiffSummary, mergeBranch, type DiffSummary } from "../src/worktree";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+import type { SessionNotificationRequest } from "../src/wake-dispatcher";
 
 // PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
 // cold start used to hit the probe timeout and flip these tests).
@@ -20,11 +21,11 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
-async function createConflictedWorktree(name: string): {
+async function createConflictedWorktree(name: string): Promise<{
   repoDir: string;
   worktreePath: string;
   branchName: string;
-} {
+}> {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-auto-merge-${name}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");
@@ -48,11 +49,11 @@ async function createConflictedWorktree(name: string): {
   return { repoDir, worktreePath, branchName };
 }
 
-async function createMergeableWorktree(name: string): {
+async function createMergeableWorktree(name: string): Promise<{
   repoDir: string;
   worktreePath: string;
   branchName: string;
-} {
+}> {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-auto-merge-success-${name}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");
@@ -195,7 +196,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("does not adopt an unrelated parent-checkout PR after the worktree was created", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-unrelated-parent-pr-"));
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -224,7 +225,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -269,7 +270,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("keys generic worktree notifications by terminal cycle and worktree identity", async () => {
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
       isAlreadyMerged: () => false,
@@ -279,7 +280,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       },
       updatePersistedSession: () => true,
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
@@ -306,7 +307,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       completedAt: 1700000004000,
       originalWorkdir: "/tmp/repo",
       harnessSessionId: "h-worktree-generic",
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     } as any);
 
     assert.equal(notifications.length, 1);
@@ -317,7 +318,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("keeps generic worktree notification keys stable when completedAt is populated later", async () => {
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
       isAlreadyMerged: () => false,
@@ -327,7 +328,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       },
       updatePersistedSession: () => true,
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
@@ -353,7 +354,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       completedAt: undefined,
       originalWorkdir: "/tmp/repo",
       harnessSessionId: "h-worktree-generic-retry",
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     };
 
     await service.handleWorktreeStrategy(session);
@@ -369,7 +370,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("does not re-emit an ask-mode worktree prompt after the worktree is PR-open", async () => {
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
       isAlreadyMerged: () => false,
@@ -381,7 +382,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       },
       updatePersistedSession: () => true,
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
@@ -422,7 +423,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("preserves no-change worktrees only after verifying the branch still has an open PR", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-no-change-open-pr-"));
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const patches: Array<Record<string, unknown>> = [];
     let openPrLookup: { repoDir: string; branchName: string; targetRepo?: string } | undefined;
     try {
@@ -447,7 +448,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -500,7 +501,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("allows delegate sessions to receive decision buttons when repo policy blocks follow-through", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("delegate-policy-blocked");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const policyButtons = [[{ label: "Later", callbackData: "later" }]];
     let policyButtonOptions: { allowDelegate?: boolean } | undefined;
     let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
@@ -515,7 +516,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -565,7 +566,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("keeps policy-blocked worktree keys stable when completedAt is populated later", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("policy-blocked-completed-at");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     try {
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -574,7 +575,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         getWorktreeCompletionState: () => "has-commits",
         updatePersistedSession: () => true,
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -623,7 +624,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("runs auto-pr follow-through for completed PR-open worktree follow-up sessions", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("pr-open-auto");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     let autoPrCalled = false;
     try {
       const service = new SessionWorktreeStrategyService({
@@ -636,7 +637,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -686,7 +687,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("updates an existing open PR branch under never-pr policy without prompting for a worktree decision", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("existing-pr-never-pr");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const patches: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     let openPrLookup: { repoDir: string; branchName: string; targetRepo?: string } | undefined;
@@ -702,7 +703,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -775,7 +776,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("updates a recorded open PR under missing repo policy without prompting for merge", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("existing-pr-missing-policy");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const patches: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     let prStatusLookup: { repoDir: string; prUrl: string; targetRepo?: string } | undefined;
@@ -791,7 +792,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -871,7 +872,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("does not bypass a never-pr policy for a recorded PR targeting a different base", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("recorded-pr-wrong-base");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     let autoPrCalled = false;
     try {
       const service = new SessionWorktreeStrategyService({
@@ -884,7 +885,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -941,7 +942,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("downgrades stale pr-open lifecycle under never-pr before starting auto-pr", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("stale-pr-open-never-pr");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     let autoPrCalled = false;
     let openPrLookupCount = 0;
     try {
@@ -955,7 +956,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1044,7 +1045,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(git(repoDir, "rev-list", "--count", `${branchName}..agent/fix-oca-441-regression`), "2");
       git(repoDir, "merge-base", "--is-ancestor", branchName, "agent/fix-oca-441-regression");
 
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       let autoPrCalled = false;
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -1058,7 +1059,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1119,7 +1120,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("preserves represented helper work when the remote PR head cannot be verified", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-fetch-failure-"));
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const patches: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     try {
@@ -1152,7 +1153,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1234,7 +1235,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "merge", "--ff-only", branchName);
       git(repoDir, "merge-base", "--is-ancestor", branchName, "fix-test-session-store-isolation");
 
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       let autoPrCalled = false;
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -1248,7 +1249,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1501,7 +1502,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("summary-success");
     const warn = mock.method(console, "warn", () => {});
     try {
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
         isAlreadyMerged: () => false,
@@ -1512,7 +1513,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-100123\",\"threadId\":\"32947\"}",
@@ -1626,7 +1627,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("marks 0-ahead ancestry-merged auto-merge worktrees as merged without suppressing the generic terminal wake", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("already-merged");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const controller = new SessionWorktreeController();
     try {
       git(repoDir, "merge", "--no-ff", branchName, "-m", "merge already-merged");
@@ -1646,7 +1647,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1699,7 +1700,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     git(repoDir, "add", "README.md");
     git(repoDir, "commit", "-m", "init");
     git(repoDir, "branch", "agent/stash-conflict");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
       isAlreadyMerged: () => false,
@@ -1710,7 +1711,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         return true;
       },
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "",
@@ -1718,7 +1719,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranch: () => ({
+      mergeBranch: async () => ({
         success: true,
         fastForward: true,
         stashPopConflict: true,
@@ -1739,7 +1740,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       worktreePrTargetRepo: undefined,
       worktreePushRemote: undefined,
     };
-    const diffSummary = {
+    const diffSummary: DiffSummary = {
       commits: 1,
       filesChanged: 1,
       insertions: 2,
@@ -1773,7 +1774,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("includes recovery warnings when auto-merge starts conflict resolution", async () => {
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const spawnCalls: Array<Record<string, unknown>> = [];
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
@@ -1785,7 +1786,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         return true;
       },
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
@@ -1793,7 +1794,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranch: () => ({
+      mergeBranch: async () => ({
         success: false,
         rebaseConflict: true,
         error: "rebase conflict",
@@ -1841,7 +1842,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-first");
     try {
       const patches: Array<Record<string, unknown>> = [];
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       const spawnCalls: Array<Record<string, unknown>> = [];
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -1854,7 +1855,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1907,7 +1908,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   it("renders policy-aware buttons when conflict resolver spawn fails", async () => {
     const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-spawn-policy");
     try {
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -1919,7 +1920,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -1975,7 +1976,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   it("falls back to merge buttons when PR-only fallback buttons are blocked", async () => {
     const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-spawn-merge-fallback");
     try {
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
         isAlreadyMerged: () => false,
@@ -1986,7 +1987,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -2039,7 +2040,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   it("escalates after the retry budget is exhausted instead of spawning another resolver", async () => {
     const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-exhausted");
     try {
-      const notifications: Array<Record<string, unknown>> = [];
+      const notifications: SessionNotificationRequest[] = [];
       let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
       let spawnCalled = false;
       const service = new SessionWorktreeStrategyService({
@@ -2052,7 +2053,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -2065,7 +2066,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         isPrAvailable: () => true,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
-        mergeBranch: () => ({
+        mergeBranch: async () => ({
           success: false,
           rebaseConflict: true,
           error: "still conflicts",
@@ -2117,7 +2118,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("renders policy-aware decision buttons when auto-pr fails", async () => {
     const { repoDir, worktreePath, branchName } = await createMergeableWorktree("auto-pr-failure-policy");
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     const patches: Array<Record<string, unknown>> = [];
     let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
     try {
@@ -2132,7 +2133,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           return true;
         },
         dispatchSessionNotification: (_session, request) => {
-          notifications.push(request as Record<string, unknown>);
+          notifications.push(request);
         },
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
@@ -2187,7 +2188,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("resets conflict-resolving sessions to pending decision when the retry fails with a non-rebase error", async () => {
-    const notifications: Array<Record<string, unknown>> = [];
+    const notifications: SessionNotificationRequest[] = [];
     let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
@@ -2199,7 +2200,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         return true;
       },
       dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
+        notifications.push(request);
       },
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
@@ -2211,7 +2212,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranch: () => ({
+      mergeBranch: async () => ({
         success: false,
         error: "ff-only merge failed",
         warnings: ["Failed to check out main during recovery: checkout failed"],

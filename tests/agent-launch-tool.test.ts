@@ -328,7 +328,7 @@ describe("agent_launch tool defaults", () => {
 
     try {
       setSessionManager({
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({
           sessionId: "stable-session-1",
           harnessSessionId: "backend-session-1",
@@ -388,7 +388,7 @@ describe("agent_launch tool defaults", () => {
 
     try {
       setSessionManager({
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({ harness: "codex" }),
         resolveBackendConversationId: (id: string) => `resolved-${id}`,
         checkRepoPolicyForLaunch: () => ({
@@ -427,7 +427,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({ harness: "codex" }),
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
       launchSession(config: Record<string, unknown>) {
@@ -459,8 +459,8 @@ describe("agent_launch tool defaults", () => {
 
   it("rejects rewind_turns without a resume target, for other harnesses, or with invalid counts", async () => {
     setSessionManager({
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
       resolveHarnessSessionId: (id: string) => id,
       launchSession() {
         throw new Error("spawn should not run");
@@ -506,7 +506,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "sess-stable",
         harnessSessionId: "resolved-old-thread",
@@ -563,7 +563,7 @@ describe("agent_launch tool defaults", () => {
       approvalPromptMessageKind: "canonical_buttons",
     };
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => pendingPlan,
       resolveBackendConversationId: () => "thread-plan",
       launchSession(config: Record<string, unknown>) {
@@ -590,7 +590,7 @@ describe("agent_launch tool defaults", () => {
   it("records exact approval state when bypass-resuming a suspended pending plan", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "sess-plan",
         harnessSessionId: "thread-plan",
@@ -632,7 +632,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "_QDNlLZr",
         harnessSessionId: "thread-auto-update-feature",
@@ -673,7 +673,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "_QDNlLZr",
         harnessSessionId: "thread-auto-update-feature",
@@ -715,7 +715,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "_QDNlLZr",
         harnessSessionId: "thread-auto-update-feature",
@@ -758,7 +758,7 @@ describe("agent_launch tool defaults", () => {
   it("allows non-fork resume attempts for completed Codex App Server sessions", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setSessionManager({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "sess-done",
         harnessSessionId: "resolved-old-thread",
@@ -884,7 +884,7 @@ describe("agent_launch tool defaults", () => {
     let spawnCalled = false;
 
     setSessionManager({
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [{
         sessionId: "sess-resume",
         harnessSessionId: "h-resume",
@@ -923,7 +923,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [{
         sessionId: "sess-resume",
         harnessSessionId: "h-resume",

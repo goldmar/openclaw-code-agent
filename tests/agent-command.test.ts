@@ -28,8 +28,8 @@ describe("agent command", () => {
   it("uses the shared launch resolver for routing and policy defaults", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setSessionManager({
-      list: () => [],
-      listPersistedSessions: () => [],
+      list: (): never[] => [],
+      listPersistedSessions: (): never[] => [],
       launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -77,7 +77,7 @@ describe("agent command", () => {
         workdir: "/tmp",
         originChannel: "telegram|123",
       }],
-      listPersistedSessions: () => [],
+      listPersistedSessions: (): never[] => [],
       launchSession() {
         spawnCalled = true;
         throw new Error("spawn should not be called");
