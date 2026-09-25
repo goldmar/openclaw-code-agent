@@ -196,7 +196,8 @@ function shouldAvoidTelegramSenderFallback(
  * Resolve the notification channel for a tool context.
  * Deduplicates the 7 copies of channel resolution from tool factories.
  *
- * Priority: ctx.messageChannel + accountId → agentChannels(workspaceDir) → ctx.messageChannel as-is
+ * Priority: trusted ctx.deliveryContext → ctx.messageChannel (full, or + accountId/chat id/sender id)
+ * → agentChannels(workspaceDir) → pipe-delimited ctx.messageChannel as-is
  */
 export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | undefined {
   const trustedRoute = getTrustedDeliveryRoute(ctx);
