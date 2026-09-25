@@ -154,6 +154,7 @@ export class SessionStore {
   private syncing = false;
   /** A save deferred because another writer held the lock (never blocks the event loop). */
   private deferredSave: { timer: ReturnType<typeof setTimeout>; since: number } | undefined;
+  private persistWaiters: Array<() => void> = [];
 
   constructor(options: SessionStoreOptions = {}) {
     const env = options.env ?? process.env;
@@ -394,6 +395,7 @@ export class SessionStore {
       if (force) log.warn("[SessionStore] Session store lock still held after 5 s; breaking it to save (with a merge).");
       if (this.writeIndex({ force })) {
         this.deferredSave = undefined;
+        this.resolvePersistWaiters();
         return;
       }
       this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
@@ -403,20 +405,45 @@ export class SessionStore {
     this.deferredSave.timer.unref?.();
   }
 
-  /** Write a deferred save now (shutdown), breaking a held lock if necessary. */
+  /**
+   * Resolves once no save is deferred behind another writer's lock. Callers
+   * await it before showing buttons (their tokens must be on disk first) and
+   * before acting on a consumed token.
+   */
+  whenPersisted(): Promise<void> {
+    if (!this.deferredSave) return Promise.resolve();
+    return new Promise((resolve) => { this.persistWaiters.push(resolve); });
+  }
+
+  private resolvePersistWaiters(): void {
+    const waiters = this.persistWaiters;
+    this.persistWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * Write a deferred save now (shutdown). Breaks a held lock; if another writer
+   * keeps recreating it, writes without the lock (still merging first) rather
+   * than leaving changes only in memory.
+   */
   flushPendingSave(): void {
     if (!this.deferredSave) return;
     clearTimeout(this.deferredSave.timer);
     this.deferredSave = undefined;
-    this.writeIndex({ force: true });
+    let written = false;
+    for (let attempt = 0; attempt < 5 && !written; attempt += 1) {
+      written = this.writeIndex({ force: true });
+    }
+    if (!written) this.writeIndex({ force: true, unlocked: true });
+    this.resolvePersistWaiters();
   }
 
   /**
    * Read-merge-write under the index lock. Returns false when another live
    * writer holds the lock (nothing written). The write itself is atomic.
    */
-  private writeIndex(options: { force: boolean }): boolean {
-    const lock = tryAcquireSessionStoreLock(this.indexPath, options);
+  private writeIndex(options: { force: boolean; unlocked?: boolean }): boolean {
+    const lock = options.unlocked ? "unavailable" : tryAcquireSessionStoreLock(this.indexPath, options);
     if (lock === "busy") return false;
     try {
       // Before load completes, the constructor has no base yet; write as loaded.

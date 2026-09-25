@@ -940,6 +940,9 @@ export function createCallbackHandler(
       }
 
       const consumedToken = sessionManager.consumeActionToken(tokenId);
+      // The consumption must be on disk before acting, so another writer of the
+      // index cannot treat this button as unused.
+      if (consumedToken) await sessionManager.whenStorePersisted?.();
       logButtonDiagnostic("callback_token_consume_completed", {
         channel: ctx.channel,
         namespace: CALLBACK_NAMESPACE,

@@ -262,6 +262,33 @@ describe("one OCA runtime per Gateway process", () => {
     assert.equal(getSharedRuntime(), undefined);
   });
 
+  it("never lets an older registration run after a newer build has run, and ignores builds that never start", async () => {
+    const older = await loadPluginCopy("older-idle", { distinctBuild: true });
+    const newer = await loadPluginCopy("newer-ran");
+    const inspection = await loadPluginCopy("inspection-only", { distinctBuild: true });
+    const pluginOlder = createPluginApi("older");
+    const pluginNewer = createPluginApi("newer");
+    older.index.register(pluginOlder.api);
+    newer.index.register(pluginNewer.api);
+    try {
+      // A newer build registered after `older` starts and stops again; `older` never started.
+      await pluginNewer.captured.services[0]!.start({ config: {} });
+      await pluginNewer.captured.services[0]!.stop?.({});
+      assert.equal(getSharedRuntime(), undefined);
+      await assert.rejects(runTool(pluginOlder.captured, "agent_sessions"), /superseded by a newer build/);
+      assert.equal(getSharedRuntime(), undefined);
+
+      // A later registration that only inspects the plugin (never starts) does not
+      // block the build that is running.
+      const pluginInspection = createPluginApi("inspection");
+      inspection.index.register(pluginInspection.api);
+      await runTool(pluginNewer.captured, "agent_sessions");
+      assert.ok(newer.singletons.sessionManager);
+    } finally {
+      await stopAll(pluginNewer, pluginOlder);
+    }
+  });
+
   it("hands off to a newer build only after the old runtime stopped", async () => {
     const oldBuild = await loadPluginCopy("old-build");
     const newBuild = await loadPluginCopy("new-build", { distinctBuild: true });

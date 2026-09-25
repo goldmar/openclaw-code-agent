@@ -75,10 +75,11 @@ export type SharedRuntime<T = unknown> = {
 type RuntimeSlot = {
   nextRegSeq: number;
   /**
-   * Builds a newer build took over from, with the registration sequence at
-   * takeover: registrations of that build made before it can never run again.
+   * For every build that has run a runtime, the highest registration sequence
+   * of its owners. A registration of another build made before that sequence is
+   * older than code that already ran, so it may never run again.
    */
-  supersededBuilds?: Map<string, number>;
+  ranBuilds?: Map<string, number>;
   runtime?: SharedRuntime;
   transition?: Promise<void>;
 };
@@ -125,6 +126,12 @@ function rebindToNewestOwner(runtime: SharedRuntime): void {
   runtime.bindHost(owner?.handles);
 }
 
+function recordRanBuild(state: RuntimeSlot, buildId: string, regSeq: number): void {
+  const ran = state.ranBuilds ?? new Map<string, number>();
+  ran.set(buildId, Math.max(ran.get(buildId) ?? 0, regSeq));
+  state.ranBuilds = ran;
+}
+
 async function runTransition(state: RuntimeSlot, work: () => Promise<void>): Promise<void> {
   const transition = work();
   state.transition = transition;
@@ -158,12 +165,12 @@ async function stopRuntime(state: RuntimeSlot, runtime: SharedRuntime, reason: R
 /**
  * Attach an owner to the process runtime, creating it when none is running.
  *
- * - A runtime of another build registered earlier stops first when this build
- *   starts (sessions are persisted the same way a service stop persists them);
- *   this build then creates a fresh runtime from the persisted store.
- * - A build registered earlier than the running build's owners, or a
- *   registration of a build that was taken over from, throws
- *   `SupersededRuntimeError` and never creates a second writer.
+ * - A registration made before the owners of any other build that has already
+ *   run throws `SupersededRuntimeError`, even when no runtime is running now: it
+ *   is older code and never creates a second writer.
+ * - Otherwise a runtime of another build stops first when this build starts
+ *   (sessions are persisted the same way a service stop persists them); this
+ *   build then creates a fresh runtime from the persisted store.
  * - A newer registration of the same build with different settings restarts
  *   the runtime so its services use those settings.
  * - Otherwise the owner attaches and shares.
@@ -178,23 +185,16 @@ export async function acquireSharedRuntime<T>(
       await state.transition.catch(() => {});
     }
     const runtime = state.runtime as SharedRuntime<T> | undefined;
-    const supersededAt = state.supersededBuilds?.get(owner.buildId);
-    if (supersededAt !== undefined && owner.regSeq < supersededAt) {
-      // A build a newer one took over from never runs again, even once the
-      // slot is empty. A later re-registration of it (host recovery) may.
-      throw new SupersededRuntimeError(owner.buildId, runtime?.buildId ?? "a newer build");
+    for (const [buildId, ranUpTo] of state.ranBuilds ?? []) {
+      if (buildId !== owner.buildId && owner.regSeq < ranUpTo) {
+        // A newer build already ran (even if it has stopped since): this older
+        // registration never runs again. A later re-registration (host recovery) may.
+        throw new SupersededRuntimeError(owner.buildId, buildId);
+      }
     }
     if (runtime && runtime.buildId !== owner.buildId) {
-      if (owner.regSeq < runtime.maxRegSeq) {
-        // Registered before the running build's owners: this build is older.
-        throw new SupersededRuntimeError(owner.buildId, runtime.buildId);
-      }
-      // A newer build takes over only when it actually starts (an inspection-only
+      // A newer build takes over when it actually starts (an inspection-only
       // registration changes nothing): the old runtime persists and stops first.
-      const superseded = state.supersededBuilds ?? new Map<string, number>();
-      superseded.set(runtime.buildId, state.nextRegSeq);
-      superseded.delete(owner.buildId);
-      state.supersededBuilds = superseded;
       await runTransition(state, () => stopRuntime(state, runtime as SharedRuntime, "superseded"));
       continue;
     }
@@ -225,12 +225,14 @@ export async function acquireSharedRuntime<T>(
           stop: services.stop,
         };
         state.runtime = created as SharedRuntime;
+        recordRanBuild(state, owner.buildId, owner.regSeq);
       });
       if (!created) throw new Error("OpenClaw Code Agent runtime creation did not complete");
       continue;
     }
     runtime.owners.set(owner.id, owner);
     runtime.maxRegSeq = Math.max(runtime.maxRegSeq, owner.regSeq);
+    recordRanBuild(state, owner.buildId, owner.regSeq);
     rebindToNewestOwner(runtime as SharedRuntime);
     return runtime;
   }

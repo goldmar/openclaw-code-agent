@@ -265,6 +265,21 @@ describe("SessionStore ownership and write safety", () => {
     assert.deepEqual(rows, ["first", "from-other", "while-locked"]);
   });
 
+  it("holds buttons back until their tokens are persisted", async () => {
+    const lockPath = `${indexPath}.lock`;
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("first"));
+    writeFileSync(lockPath, `${process.ppid} ${Date.now()}`);
+    const token = store.actionTokenStore.createActionToken("s1", "worktree-merge", { expiresAt: Date.now() + 60_000 });
+    let persisted = false;
+    const waiting = store.whenPersisted().then(() => { persisted = true; });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(persisted, false, "the token is not on disk while the lock is held");
+    rmSync(lockPath);
+    await waiting;
+    assert.ok(readIndex(indexPath).actionTokens.some((row: { id: string }) => row.id === token.id));
+  });
+
   it("flushes a deferred save at shutdown", () => {
     const lockPath = `${indexPath}.lock`;
     const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });

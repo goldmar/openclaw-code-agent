@@ -307,7 +307,8 @@ export class SessionManager {
     const registry = new SessionRuntimeRegistry();
     const sessions = registry.sessions;
     const store = new SessionStore(options.store);
-    const wakeDispatcher = new WakeDispatcher();
+    // Buttons go out only after their action tokens are on disk.
+    const wakeDispatcher = new WakeDispatcher({ beforeInteractiveSend: () => store.whenPersisted() });
     const interactions = new SessionInteractionService(store.actionTokenStore, isGitHubCLIAvailable);
     const references = new SessionReferenceService(sessions, store);
     const stateSync = new SessionStateSyncService({
@@ -1165,6 +1166,11 @@ export class SessionManager {
   isSessionOwnedElsewhere(ref: string): boolean {
     if (this.resolve(ref)) return false;
     return this.store.isSessionOwnedElsewhere(ref);
+  }
+
+  /** Resolves once no session-index save is deferred behind another writer's lock. */
+  whenStorePersisted(): Promise<void> {
+    return this.store.whenPersisted();
   }
 
   /** Runtime and store identity for diagnostics (never token values). */
