@@ -56,7 +56,8 @@ Every PR must pass `pnpm verify` locally and in CI. The current automated checks
 |-------|---------|-------|
 | Verify | `pnpm verify` | Canonical guardrails + typecheck + build + ClawHub scan + test gate on Node 24.16.0 and 26.1.0 |
 | Bundle size | — | Complete `dist/` bundle must be <= 700 KB |
-| Lockfile integrity | `pnpm verify:npm-consumer` | `pnpm-lock.yaml` must be in sync with `package.json`, and the packed npm consumer dependency graph must install |
+| Lockfile integrity | `pnpm install --frozen-lockfile` | `pnpm-lock.yaml` must be in sync with `package.json` |
+| npm consumer install | `pnpm verify:npm-consumer` | The packed package must install with its `npm-shrinkwrap.json` dependency graph |
 | Security audit | `pnpm run audit:prod` | Production dependency advisories |
 | Dependency review | — | GitHub Dependency Review of dependency changes |
 | CodeQL | — | GitHub code scanning |

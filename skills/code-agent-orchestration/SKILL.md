@@ -208,7 +208,7 @@ If `agent_worktree_status` reports `released`, the sandbox content is already la
 
 ### `auto-merge` / `auto-pr`
 
-- The plugin merges or opens/updates the PR itself when the session completes, subject to repo policy. An auto-merge conflict starts a conflict-resolver session; a failed auto-PR falls back to a pending worktree decision.
+- The plugin merges or opens/updates the PR itself when the session completes, subject to repo policy. An auto-merge rebase conflict starts a conflict-resolver session; a failed auto-PR falls back to a pending worktree decision.
 
 ### Repo Policy
 
