@@ -1,4 +1,5 @@
 import type { PersistedSessionInfo } from "../types";
+import { fenceAgentOutput } from "../untrusted-output";
 import { buildCompletionFollowupInstructionLines, formatApprovalExecutionContextLines } from "./terminal";
 
 export function buildDelegateWorktreeWakeMessage(args: {
@@ -18,6 +19,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
   };
   allowedActions?: { merge: boolean; pr: boolean };
   policyReason?: string;
+  hookWarning?: string;
 }): string {
   const {
     sessionName,
@@ -31,8 +33,10 @@ export function buildDelegateWorktreeWakeMessage(args: {
     diffSummary,
     allowedActions,
     policyReason,
+    hookWarning,
   } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
+  const mergeAllowed = allowedActions?.merge !== false && !hookWarning;
 
   return [
     `[DELEGATED WORKTREE DECISION] Session "${sessionName}" completed with changes.`,
@@ -42,17 +46,20 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
     ``,
-    ...commitLines,
+    ...(commitLines.length > 0 ? [fenceAgentOutput(commitLines.join("\n"), "commit messages")] : []),
     ...(moreNote ? [moreNote] : []),
     ``,
     `Original task prompt (first 500 chars):`,
     promptSnippet,
     ``,
     ...(policyReason ? [`Policy constraint: ${policyReason}`, ``] : []),
+    ...(hookWarning
+      ? [`Hook changes: ${hookWarning.replace(/^⚠️\s*/u, "")} agent_merge and agent_pr are refused for this branch; call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user decides.`, ``]
+      : []),
     `You own the next step for this worktree.`,
     `- First call agent_output(session='${sessionId}', full=true) to inspect the full session output and use it as source material for your decision.`,
-    ...(allowedActions?.merge === false
-      ? [`- Do not call agent_merge(); repo policy does not allow direct merge for this session.`]
+    ...(!mergeAllowed
+      ? [`- Do not call agent_merge(); ${hookWarning ? "the branch changes hook files, so only the user can merge it" : "repo policy does not allow direct merge for this session"}.`]
       : [`- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`]),
     ...(allowedActions?.pr === false
       ? [`- Do not call agent_pr(); PR creation is unavailable or forbidden by repo policy.`]
@@ -118,7 +125,7 @@ export function buildNoChangeWakeMessage(args: {
     approvalPromptDeliveredAt,
   } = args;
   const previewSection = preview.trim()
-    ? ["", "Output preview:", preview]
+    ? ["", "Output preview:", fenceAgentOutput(preview, "output preview")]
     : [];
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 

@@ -332,9 +332,19 @@ describe("goal loop", () => {
       name: "goal-loop",
       harness: "codex",
       max_iterations: 3,
+      // These tests cover the loop itself; the plan gate is covered below.
+      permission_mode: "bypassPermissions",
       ...extra,
     });
     assert.doesNotMatch(text, /^Error/, text);
+    // D3: orchestrator-supplied verifier commands wait for the user's confirmation.
+    assert.match(text, /waiting for the user's confirmation/);
+    const prompt = await s.waitForMessage(/\$ test -f done\.txt/);
+    assert.equal(s.backend.turns.length, turnsBefore, "nothing runs before the confirmation");
+    const run = prompt.buttons.find((button) => button.label === "Run these checks");
+    assert.ok(run, "the confirmation prompt has a Run button");
+    const click = await s.click(run);
+    assert.match(click.replies.join("\n"), /started with the confirmed verifier commands/);
     await s.backend.waitForTurns(turnsBefore + 1);
     await waitUntil(() => s.gc.listTasks().length === 1, "goal task stored");
     return s.gc.listTasks()[0]!;
@@ -367,6 +377,32 @@ describe("goal loop", () => {
     await waitUntil(() => s.gc.getTask(task.id)?.sessionId !== first, "goal follows the resumed session");
     assert.equal(s.gc.getTask(task.id)?.status, "running");
     await s.waitForMessage(/Goal task resumed after idle timeout/);
+  });
+
+  it("cancels the goal when the user declines the verifier commands (D3)", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal_launch", { goal: "Create done.txt", verifier_commands: ["rm -rf /tmp/x"], workdir: goalWorkdir(), harness: "codex" });
+    const prompt = await s.waitForMessage(/\$ rm -rf \/tmp\/x/);
+    const cancel = prompt.buttons.find((button) => button.label === "Cancel");
+    assert.ok(cancel);
+    const click = await s.click(cancel);
+    assert.match(click.replies.join("\n"), /cancelled; its verifier commands were not run/);
+    assert.equal(s.gc.listTasks()[0]?.status, "stopped");
+    assert.equal(s.backend.turns.length, turnsBefore);
+  });
+
+  it("puts the first iteration's plan through the normal plan gate (D3)", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const workdir = goalWorkdir();
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal_launch", { goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.backend.waitForTurns(turnsBefore + 1);
+    const task = s.gc.listTasks()[0]!;
+    assert.equal(task.permissionMode, "plan");
+    await s.backend.endTurn("Plan: create done.txt.");
+    await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+    assert.equal(s.backend.turns.length, turnsBefore + 1, "the loop does not approve its own plan");
   });
 
   it("fails the goal when the session waits for a user answer it cannot give itself", async () => {

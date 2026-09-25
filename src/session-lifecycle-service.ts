@@ -1,4 +1,4 @@
-import { removeWorktree, deleteBranch } from "./worktree";
+import { removeWorktree, deleteBranch, getCommitsAheadCount } from "./worktree";
 import { formatDuration, truncateText } from "./format";
 import { getPersistedMutationRefs } from "./session-backend-ref";
 import {
@@ -285,6 +285,9 @@ export class SessionLifecycleService {
     }
 
     if (session.goalTaskId) {
+      // Goal loops own their turn handling, except the plan gate of the first
+      // iteration: its plan is decided like any other plan.
+      if (session.pendingPlanApproval) await this.emitWaitingForInput(session);
       return;
     }
 
@@ -305,10 +308,22 @@ export class SessionLifecycleService {
     this.emitTurnComplete(session);
   }
 
+  /** True unless the branch is proven to have no commits beyond its parent branch. */
+  private async branchHasOwnCommits(repoDir: string, branchName: string, session: Session): Promise<boolean> {
+    const parent = session.worktreeParentBranch ?? session.worktreeBaseBranch;
+    if (!parent) return true;
+    try {
+      const ahead = await getCommitsAheadCount(repoDir, branchName, parent);
+      return ahead === undefined || ahead > 0;
+    } catch {
+      return true;
+    }
+  }
+
   async handleSessionTerminal(session: Session): Promise<void> {
     this.deps.persistSession(session);
     this.deps.clearWaitingTimestamp(session.id);
-    if (session.goalTaskId) {
+    if (session.goalTaskId && !session.pendingPlanApproval) {
       this.deps.clearRetryTimersForSession(session.id);
       return;
     }
@@ -340,7 +355,11 @@ export class SessionLifecycleService {
       session.originalWorkdir &&
       session.status === "failed" &&
       session.costUsd === 0 &&
-      session.duration < 30_000
+      session.duration < 30_000 &&
+      // Only a worktree this launch created: a resumed session's worktree and
+      // branch hold earlier work (for example after a usage-limit or auth
+      // failure on resume) and are never auto-cleaned.
+      session.launchedFresh !== false
     ) {
       const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
@@ -354,7 +373,8 @@ export class SessionLifecycleService {
         removedWorktree = await removeWorktree(repoDir, session.worktreePath);
       }
 
-      if (repoDir && branchName && removedWorktree) {
+      // Belt and braces: a branch with commits of its own is kept even then.
+      if (repoDir && branchName && removedWorktree && !(await this.branchHasOwnCommits(repoDir, branchName, session))) {
         await deleteBranch(repoDir, branchName);
       }
 

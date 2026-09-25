@@ -20,7 +20,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
+import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -219,6 +219,17 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           }],
         };
       }
+
+      const hookRefusal = await refuseHookChangesWithoutUser({
+        sessionManager: sm,
+        toolCallId: _id,
+        sessionRef: params.session,
+        repoDir: effectiveWorkdir,
+        branchName,
+        baseBranch,
+        action: "merge",
+      });
+      if (hookRefusal) return { content: [{ type: "text", text: hookRefusal }] };
 
       // Serialise against concurrent merges on the same repo directory
       let toolResult: { content: Array<{ type: string; text: string }>; meta?: { success: boolean; conflictResolverSessionId?: string } } = {

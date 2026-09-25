@@ -67,6 +67,92 @@ describe("SessionLifecycleService", () => {
     assert.deepEqual(clearedRetryTimers, ["session-1"]);
   });
 
+  describe("early startup failure auto-clean (B1)", () => {
+    function lifecycleFor(repoDir: string) {
+      return new SessionLifecycleService({
+        persistSession: () => {},
+        clearWaitingTimestamp: () => {},
+        handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+        resolveWorktreeRepoDir: () => repoDir,
+        updatePersistedSession: () => true,
+        dispatchSessionNotification: () => {},
+        notifySession: () => {},
+        clearRetryTimersForSession: () => {},
+        hasTurnCompleteWakeMarker: () => false,
+        shouldEmitTurnCompleteWake: () => true,
+        shouldEmitTerminalWake: () => false,
+        resolvePlanApprovalMode: () => "ask",
+        getPlanApprovalButtons: () => [],
+        getResumeButtons: () => [],
+        getQuestionButtons: () => undefined,
+        extractLastOutputLine: () => undefined,
+        getOutputPreview: () => "",
+        originThreadLine: () => "",
+        debounceWaitingEvent: () => true,
+        isAlreadyMerged: () => false,
+      });
+    }
+
+    async function repoWithWorktree(name: string, commitOnBranch: boolean) {
+      const repoDir = mkdtempSync(join(tmpdir(), "oca-early-fail-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      const worktreePath = await createWorktree(repoDir, name);
+      if (commitOnBranch) {
+        execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "earlier work"], { cwd: worktreePath, stdio: "ignore" });
+      }
+      const branchExists = () => execFileSync("git", ["branch", "--list", `agent/${name}`], { cwd: repoDir, encoding: "utf-8" }).trim() !== "";
+      return { repoDir, worktreePath, branchExists };
+    }
+
+    const failedSession = (overrides: Record<string, unknown>) => createStubSession({
+      status: "failed",
+      costUsd: 0,
+      duration: 4_000,
+      worktreeStrategy: "ask",
+      worktreeParentBranch: "main",
+      ...overrides,
+    });
+
+    it("keeps a resumed session's worktree and branch (for example a usage-limit failure on resume)", async () => {
+      const { repoDir, worktreePath, branchExists } = await repoWithWorktree("resumed-work", true);
+      try {
+        await lifecycleFor(repoDir).handleSessionTerminal(failedSession({
+          id: "resumed", name: "resumed-work", worktreePath, worktreeBranch: "agent/resumed-work", originalWorkdir: repoDir, launchedFresh: false,
+        }));
+        assert.equal(existsSync(worktreePath), true);
+        assert.equal(branchExists(), true, "the branch with earlier commits survives");
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it("never deletes a branch with commits of its own, even for a fresh launch", async () => {
+      const { repoDir, worktreePath, branchExists } = await repoWithWorktree("fresh-with-commit", true);
+      try {
+        await lifecycleFor(repoDir).handleSessionTerminal(failedSession({
+          id: "fresh-commit", name: "fresh-with-commit", worktreePath, worktreeBranch: "agent/fresh-with-commit", originalWorkdir: repoDir, launchedFresh: true,
+        }));
+        assert.equal(branchExists(), true);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it("still removes a fresh, empty worktree and branch after an early startup failure", async () => {
+      const { repoDir, worktreePath, branchExists } = await repoWithWorktree("fresh-empty", false);
+      try {
+        await lifecycleFor(repoDir).handleSessionTerminal(failedSession({
+          id: "fresh-empty", name: "fresh-empty", worktreePath, worktreeBranch: "agent/fresh-empty", originalWorkdir: repoDir, launchedFresh: true,
+        }));
+        assert.equal(existsSync(worktreePath), false);
+        assert.equal(branchExists(), false);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("keeps a manual-strategy worktree at completion and records a current lifecycle", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "oca-manual-worktree-"));
     try {

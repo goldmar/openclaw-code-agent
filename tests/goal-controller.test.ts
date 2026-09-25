@@ -746,132 +746,144 @@ describe("GoalController", () => {
     assert.doesNotMatch(notifications[0]?.text ?? "", /Last verifier:/);
   });
 
-  it("auto-approves goal-loop plan review even when the session requested ask approval", async () => {
-    const messages: string[] = [];
-    const permissionModes: string[] = [];
-    const session = createStubSession({
-      id: "session-1",
-      status: "running",
-      pendingPlanApproval: true,
-      planApproval: "ask",
-      currentPermissionMode: "plan",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
-      sendMessage: async (message: string) => {
-        messages.push(message);
-      },
-      switchPermissionMode: (mode: string) => {
-        permissionModes.push(mode);
-      },
+  for (const planApproval of ["ask", "delegate"] as const) {
+    it(`leaves the first plan to the normal plan gate (${planApproval}) instead of approving it (D3)`, async () => {
+      const messages: string[] = [];
+      const permissionModes: string[] = [];
+      const session = createStubSession({
+        id: "session-1",
+        status: "running",
+        pendingPlanApproval: true,
+        planApproval,
+        currentPermissionMode: "plan",
+        planDecisionVersion: 1,
+        actionablePlanDecisionVersion: 1,
+        sendMessage: async (message: string) => { messages.push(message); },
+        switchPermissionMode: (mode: string) => { permissionModes.push(mode); },
+      });
+      const controller = new GoalController({
+        resolve: (id: string) => (id === "session-1" ? session : undefined),
+        getPersistedSession: (): undefined => undefined,
+        notifySession: () => {},
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+      const task = buildTask({ sessionId: "session-1", permissionMode: "plan" });
+
+      await (controller as any).handleRunningSession(task, session);
+
+      assert.deepEqual(permissionModes, []);
+      assert.deepEqual(messages, []);
+      assert.equal(task.status, "waiting_for_plan_approval");
     });
+  }
+
+  it("continues later iterations within the approved scope (bypassPermissions after the plan was approved)", async () => {
+    const configs: any[] = [];
     const controller = new GoalController({
-      resolve: (id: string) => (id === "session-1" ? session : undefined),
-      getPersistedSession: (): undefined => undefined,
-      notifySession: () => {},
+      resolveBackendConversationId: (ref: string) => ref,
+      launchAndAwaitRunning: async (config: any) => {
+        configs.push(config);
+        return createStubSession({ id: "session-2", name: "goal-task", harnessName: "codex", on: (): undefined => undefined });
+      },
     } as any);
-    const store = createStore();
-    (controller as any).store = store;
-
-    await (controller as any).handleRunningSession(buildTask({ sessionId: "session-1" }), session);
-
-    assert.deepEqual(permissionModes, ["bypassPermissions"]);
-    assert.deepEqual(messages, ["Approved. Implement the plan."]);
+    const task = buildTask({ permissionMode: "plan" });
+    await (controller as any).spawnManagedTaskSession(task, "first");
+    task.planApproved = true;
+    await (controller as any).spawnManagedTaskSession(task, "repair", "hs-1");
+    assert.deepEqual(configs.map((config) => config.permissionMode), ["plan", "bypassPermissions"]);
   });
 
-  it("auto-approves goal-loop plan review even when the session requested delegate approval", async () => {
-    const messages: string[] = [];
-    const permissionModes: string[] = [];
-    const session = createStubSession({
-      id: "session-2",
-      status: "running",
-      pendingPlanApproval: true,
-      planApproval: "delegate",
-      currentPermissionMode: "plan",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
-      sendMessage: async (message: string) => {
-        messages.push(message);
-      },
-      switchPermissionMode: (mode: string) => {
-        permissionModes.push(mode);
-      },
-    });
-    const controller = new GoalController({
-      resolve: (id: string) => (id === "session-2" ? session : undefined),
-      getPersistedSession: (): undefined => undefined,
-      notifySession: () => {},
-    } as any);
-    const store = createStore();
-    (controller as any).store = store;
-
-    await (controller as any).handleRunningSession(buildTask({ sessionId: "session-2" }), session);
-
-    assert.deepEqual(permissionModes, ["bypassPermissions"]);
-    assert.deepEqual(messages, ["Approved. Implement the plan."]);
-  });
-
-  it("auto-approves idle-timeout plan review by resuming in bypassPermissions mode", async () => {
-    let capturedConfig: any;
-    const resumed = createStubSession({
-      id: "session-1",
-      name: "goal-task",
-      harnessSessionId: "hs-2",
-      route: undefined,
-      status: "running",
-      on: () => resumed,
-      getOutput: () => ["Implementing the approved plan."],
-    });
+  it("keeps an idle-suspended goal waiting for its plan decision instead of approving it", async () => {
+    let launched = false;
     const session = createStubSession({
       id: "session-1",
       name: "goal-task",
       status: "killed",
-      lifecycle: "terminal",
-      runtimeState: "stopped",
+      lifecycle: "suspended",
       killReason: "idle-timeout",
       pendingPlanApproval: true,
       currentPermissionMode: "plan",
-      requestedPermissionMode: "plan",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
       harnessSessionId: "hs-1",
-      backendRef: { kind: "claude-code", conversationId: "hs-1" },
-      route: undefined,
-      on: () => session,
       getOutput: () => ["Plan ready for review."],
     });
-    const sessions = new Map<string, any>([["session-1", session]]);
     const controller = new GoalController({
-      resolve: (id: string) => sessions.get(id),
+      resolve: () => session,
       getPersistedSession: (): undefined => undefined,
-      launchAndAwaitRunning: async (config: any) => {
-        capturedConfig = config;
-        sessions.set("session-1", resumed);
-        return resumed;
-      },
-      notifySession: () => {},
+      launchAndAwaitRunning: async () => { launched = true; return session; },
       emitGoalTaskUpdate: () => {},
     } as any);
     const store = createStore();
     (controller as any).store = store;
-
-    const task = buildTask({
-      sessionId: "session-1",
-      sessionName: "goal-task",
-      harnessSessionId: "hs-1",
-      permissionMode: "plan",
-    });
+    const task = buildTask({ sessionId: "session-1", permissionMode: "plan" });
 
     await (controller as any).handleTerminalSession(task, session);
 
+    assert.equal(launched, false);
+    assert.equal(task.status, "waiting_for_plan_approval");
+  });
+
+  it("waits for the user's confirmation before running orchestrator-supplied verifier commands", async () => {
+    const confirmations: string[] = [];
+    let spawned = 0;
+    const controller = new GoalController({
+      sendGoalVerifierConfirmation: (_task: GoalTaskState, text: string) => { confirmations.push(text); },
+      emitGoalTaskUpdate: () => {},
+      resolveBackendConversationId: (ref: string) => ref,
+      launchAndAwaitRunning: async () => {
+        spawned += 1;
+        return createStubSession({ id: "session-1", name: "goal-task", on: (): undefined => undefined });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = await controller.launchTask({
+      goal: "Make tests pass",
+      workdir: "/tmp/project",
+      verifierCommands: [{ label: "check-1", command: "pnpm test" }],
+      maxIterations: 100,
+      requireVerifierConfirmation: true,
+    });
+
+    assert.equal(task.status, "awaiting_verifier_confirmation");
+    assert.equal(task.maxIterations, 25, "max_iterations is capped");
+    assert.equal(task.permissionMode, "plan", "the first iteration uses the configured mode (default plan)");
+    assert.equal(spawned, 0);
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0]!, /\$ pnpm test/);
+
+    assert.equal(controller.declineVerifierCommands("missing"), undefined);
+    const started = await controller.confirmVerifierCommands(task.id);
+    assert.equal(started?.action, "started");
+    assert.equal(spawned, 1);
     assert.equal(task.status, "running");
-    assert.equal(task.sessionId, "session-1");
-    assert.equal(task.harnessSessionId, "hs-2");
-    assert.equal(capturedConfig.resumeSessionId, "hs-1");
-    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
-    assert.equal(capturedConfig.pendingPlanApproval, false);
-    assert.equal(capturedConfig.planModeApproved, true);
-    assert.match(capturedConfig.prompt, /approved your plan/i);
-    assert.doesNotMatch(capturedConfig.prompt, /Treat that plan as approved/i);
+    assert.equal((await controller.confirmVerifierCommands(task.id))?.action, "not_waiting");
+  });
+
+  it("stops after three identical verifier failures, counts restarts, and honors maxCostUsd", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const repeated = buildTask({ id: "g-repeat" });
+    assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), true);
+    assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), true);
+    assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), false);
+    assert.equal(repeated.status, "failed");
+    assert.match(repeated.failureReason ?? "", /repeated 3 times/);
+
+    const restarting = buildTask({ id: "g-restart", iteration: 7, maxIterations: 8 });
+    assert.equal((controller as any).consumeIteration(restarting, "Gateway restarted."), false);
+    assert.equal(restarting.status, "failed");
+
+    const costly = buildTask({ id: "g-cost", maxCostUsd: 1, totalCostUsd: 0 });
+    const run = { id: "s", startedAt: 1, costUsd: 0.6 };
+    assert.equal((controller as any).recordRunCost(costly, run), true);
+    assert.equal((controller as any).recordRunCost(costly, run), true, "the same run is counted once");
+    assert.equal((controller as any).recordRunCost(costly, { ...run, startedAt: 2 }), false);
+    assert.equal(costly.status, "failed");
+    assert.match(costly.failureReason ?? "", /cost limit/);
   });
 
   it("fails waiting_for_user tasks during restore", async () => {

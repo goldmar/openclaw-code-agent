@@ -1448,7 +1448,13 @@ export class SessionManager {
     ].join(" ");
   }
 
-  async requestWorktreeDecisionFromUser(ref: string, summary: string): Promise<string> {
+  /**
+   * Post the canonical Merge / Open PR / Later / Discard prompt to the user.
+   * With `hookWarning` (a branch that changes hook or worktree-setup files, so
+   * the orchestrator may not merge it) the prompt names those files and is
+   * sent whatever the worktree strategy.
+   */
+  async requestWorktreeDecisionFromUser(ref: string, summary: string, options: { hookWarning?: string } = {}): Promise<string> {
     const trimmedSummary = summary.trim();
     if (!trimmedSummary) return "Error: summary must not be empty.";
 
@@ -1456,7 +1462,7 @@ export class SessionManager {
     const persistedSession = this.getPersistedSession(ref);
     const session = activeSession ?? persistedSession;
     if (!session) return `Error: Session "${ref}" not found.`;
-    if (session.worktreeStrategy !== "delegate") {
+    if (!options.hookWarning && session.worktreeStrategy !== "delegate") {
       return `Error: Session "${ref}" already uses direct user worktree decisions. Do not send a duplicate decision prompt.`;
     }
     const pendingWorktreeDecisionSince = "pendingWorktreeDecisionSince" in session
@@ -1466,7 +1472,7 @@ export class SessionManager {
       Boolean(pendingWorktreeDecisionSince)
       || session.worktreeState === "pending_decision"
       || session.worktreeLifecycle?.state === "pending_decision";
-    if (!pendingDecision) {
+    if (!options.hookWarning && !pendingDecision) {
       return `Error: Session "${ref}" is not awaiting a delegated worktree decision.`;
     }
 
@@ -1523,6 +1529,7 @@ export class SessionManager {
         baseBranch,
         diffSummary,
         summaryLines,
+        hookWarning: options.hookWarning,
         buttons,
       }),
     );
@@ -1893,6 +1900,28 @@ export class SessionManager {
       userMessage: args.text,
       notifyUser: "always",
       buttons,
+    });
+  }
+
+  /** Ask the user to confirm the verifier commands of a goal task the orchestrator launched. */
+  sendGoalVerifierConfirmation(
+    task: Pick<GoalTaskState, "id" | "name" | "route" | "originChannel" | "originThreadId" | "originSessionKey">,
+    text: string,
+  ): void {
+    const routingProxy = this.buildRoutingProxy({ id: task.id, name: task.name, route: task.route }) as Session & {
+      originChannel?: string;
+      originThreadId?: string | number;
+      originSessionKey?: string;
+    };
+    routingProxy.originChannel = task.originChannel;
+    routingProxy.originThreadId = task.originThreadId;
+    routingProxy.originSessionKey = task.originSessionKey;
+    this.dispatchSessionNotification(routingProxy, {
+      label: "goal-verifier-confirmation",
+      idempotencyKey: `goal-verifier-confirmation:${task.id}`,
+      userMessage: text,
+      notifyUser: "always",
+      buttons: this.interactions.getGoalVerifierButtons(task.id, task.route),
     });
   }
 

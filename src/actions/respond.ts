@@ -12,7 +12,7 @@ import {
 } from "../session-resume";
 import type { SessionControlPatch } from "../session-state";
 import { resolvePendingInputAnswer } from "../pending-input-normalization";
-import type { PersistedSessionInfo, SessionConfig } from "../types";
+import type { PersistedSessionInfo, PlanApprovalMode, SessionConfig } from "../types";
 
 interface RespondParams {
   session: string;
@@ -153,6 +153,23 @@ function approvalBlockedReason(session: PlanApprovalTarget): string | undefined 
     return `Plan for session ${session.name} was already rejected.`;
   }
   return undefined;
+}
+
+/**
+ * With `planApproval: "ask"` only the user approves a plan: the plan-decision
+ * button (sent as a user-initiated approval) or the user's own words forwarded
+ * with `userInitiated: true`. An orchestrator-only `approve=true` is refused.
+ */
+function userOnlyApprovalReason(
+  session: Pick<PlanApprovalTarget, "name" | "pendingPlanApproval"> & { planApproval?: PlanApprovalMode },
+  params: Pick<RespondParams, "userInitiated">,
+): string | undefined {
+  if (params.userInitiated || !session.pendingPlanApproval) return undefined;
+  if ((session.planApproval ?? pluginConfig.planApproval) !== "ask") return undefined;
+  return [
+    `Plan approval for session ${session.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused.`,
+    `Wait for the user's Approve button, or forward the user's own reply with agent_respond(session='${session.name}', message='<their words>', userInitiated=true).`,
+  ].join(" ");
 }
 
 function hasLatestActionablePlan(session: Pick<PlanApprovalTarget, "approvalState" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion">): boolean {
@@ -355,6 +372,8 @@ async function tryAutoResume(
           }
         : {}),
       harness: "harnessName" in session ? session.harnessName : session.harness,
+      // A resumed goal session stays part of its goal loop.
+      goalTaskId: session.goalTaskId,
     };
     const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
@@ -445,7 +464,7 @@ export async function executeRespond(
   }
 
   if (params.approve) {
-    const blockedReason = approvalBlockedReason(target);
+    const blockedReason = approvalBlockedReason(target) ?? userOnlyApprovalReason(target, params);
     if (blockedReason) {
       return { text: blockedReason, isError: true };
     }

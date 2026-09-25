@@ -65,6 +65,11 @@ import { createLogger } from "./logger";
 const log = createLogger("session");
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+/**
+ * A turn in progress is not idle, but one that has sent nothing at all for this
+ * long is treated as stalled so the idle timeout can still suspend it.
+ */
+const MAX_SILENT_TURN_MS = 2 * 60 * 60 * 1000;
 /** Grace period after background tasks finish for Claude Code to start its report turn. */
 const BACKGROUND_TASK_SETTLE_MS = 5_000;
 
@@ -158,6 +163,11 @@ export class Session extends EventEmitter {
 
   // Resume/fork
   readonly resumeSessionId?: string;
+  /**
+   * True when this launch neither resumed a conversation nor reused a
+   * persisted worktree, so any worktree it has was created for it.
+   */
+  readonly launchedFresh: boolean;
   readonly resumedFromSessionName?: string;
   readonly forkSession?: boolean;
   private readonly forkBaselineUsage?: SessionConfig["forkBaselineUsage"];
@@ -312,6 +322,7 @@ export class Session extends EventEmitter {
     this.route = config.route ? { ...config.route } : undefined;
     this.backendRef = config.backendRef ? { ...config.backendRef } : undefined;
     this.resumeSessionId = config.resumeSessionId;
+    this.launchedFresh = !config.resumeSessionId && !config.resumeWorktreeFrom;
     this.resumedFromSessionName = config.resumedFromSessionName;
     this.forkSession = config.forkSession;
     this.forkBaselineUsage = config.forkBaselineUsage;
@@ -1163,11 +1174,29 @@ export class Session extends EventEmitter {
 
   // -- Internal --
 
+  /** When the harness last sent anything; a turn silent for longer than MAX_SILENT_TURN_MS is treated as stalled. */
+  private lastHarnessMessageAt = Date.now();
+
   private resetIdleTimer(): void {
     if (!this.multiTurn) return;
     const idleTimeoutMs = (pluginConfig.idleTimeoutMinutes ?? 15) * 60 * 1000;
     this.setTimer("idle", idleTimeoutMs, () => {
       if (this._status === "running") {
+        // A turn that is still working is not idle, even when its backend
+        // reports no progress (for example one long, silent shell command).
+        // Waiting for the user (a question or a plan decision) is idle.
+        if (
+          this.turnInProgress
+          && !this.pendingInputState
+          && !this.pendingPlanApproval
+          && Date.now() - this.lastHarnessMessageAt < MAX_SILENT_TURN_MS
+        ) {
+          this.logDiagnostic("idle_timeout.deferred_active_turn", {
+            idleTimeoutMinutes: pluginConfig.idleTimeoutMinutes ?? 15,
+          });
+          this.resetIdleTimer();
+          return;
+        }
         this.logDiagnostic("idle_timeout.fire", {
           idleTimeoutMinutes: pluginConfig.idleTimeoutMinutes ?? 15,
         });
@@ -1243,6 +1272,7 @@ export class Session extends EventEmitter {
         break;
       }
 
+      this.lastHarnessMessageAt = Date.now();
       this.resetIdleTimer();
       count += 1;
       if (msg.type === "run_completed") {
@@ -1264,6 +1294,14 @@ export class Session extends EventEmitter {
       lifecycle: this.lifecycle,
       runtimeState: this.runtimeState,
     });
+    if (this.isActive) {
+      // The backend is gone (its process exited or its stream closed) without
+      // reporting a result. A session that stayed "running" here could never
+      // receive another message; fail it so it can be resumed instead.
+      this.transitionToTerminal("failed", {
+        error: `The ${this.harnessName ?? "agent"} backend stopped without finishing${this.turnInProgress ? " the current turn" : ""} (its process exited or its event stream closed). Send a message to resume the session.`,
+      });
+    }
   }
 
   controlStateSnapshot(): SessionControlState {

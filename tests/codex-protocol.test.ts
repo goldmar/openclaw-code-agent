@@ -142,6 +142,7 @@ describe("codex protocol turn payloads", () => {
       input: [{ type: "text", text: "Plan it", text_elements: [] }],
       model: "gpt-6-sol",
       effort: "xhigh",
+      permissions: ":read-only",
       collaborationMode: {
         mode: "plan",
         settings: { model: "gpt-6-sol", reasoning_effort: "xhigh", developer_instructions: null },

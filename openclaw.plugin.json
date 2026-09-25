@@ -230,6 +230,17 @@
         "type": "string",
         "description": "Base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. Overridden by OPENCLAW_WORKTREE_DIR env var."
       },
+      "worktreeGitHooks": {
+        "type": "string",
+        "default": "run",
+        "enum": ["run", "skip"],
+        "description": "Repository git hooks during OCA's own git operations (merge, rebase, squash commit, push, and worktree creation). 'run' (default) runs them as git normally would; 'skip' runs those commands with core.hooksPath=/dev/null. Either way, a merge or PR whose branch changes hook locations (.husky/, .githooks/, the core.hooksPath directory, .openclaw/worktree-setup.sh, .worktreeinclude) is never automatic: the user is asked with a button that names the changed files."
+      },
+      "trustedVerifierCommands": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Goal verifier commands the operator pre-approves (exact strings). A goal launched by the orchestrator whose verifier commands are all in this list starts without the one-time user confirmation; any other model-supplied verifier command needs the user's confirmation button first."
+      },
       "autoUpdate": {
         "type": "boolean",
         "default": true,
@@ -287,6 +298,16 @@
     "autoUpdate": {
       "label": "Plugin self-update",
       "help": "On (default): check daily for a newer release and offer it with buttons. Installing and restarting the Gateway each need an explicit button press. Off: no update checks, installs, or restarts.",
+      "advanced": true
+    },
+    "worktreeGitHooks": {
+      "label": "Repository git hooks in OCA git operations",
+      "help": "'run' (default) or 'skip' repository hooks (for example husky) when OCA merges, rebases, commits, pushes, or creates worktrees. Merges and PRs that change hook files always ask the user first.",
+      "advanced": true
+    },
+    "trustedVerifierCommands": {
+      "label": "Pre-approved goal verifier commands",
+      "help": "Exact shell commands goal loops may run as verifiers without asking the user. Other commands suggested by the orchestrator need one confirmation button at goal launch.",
       "advanced": true
     },
     "worktreeDir": {

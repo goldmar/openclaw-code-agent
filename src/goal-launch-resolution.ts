@@ -42,6 +42,7 @@ export interface GoalLaunchRequest {
   harness?: string;
   goalMode?: GoalLoopMode;
   completionPromise?: string;
+  maxCostUsd?: number;
 }
 
 export type GoalLaunchResolution =
@@ -67,6 +68,7 @@ export type GoalLaunchResolution =
       originSessionKey?: string;
       route?: SessionRoute;
       verifierCommands: GoalVerifierSpec[];
+      maxCostUsd?: number;
     };
 
 function normalizeGoalVerifiers(commands: string[] = []): GoalVerifierSpec[] {
@@ -92,6 +94,9 @@ export function resolveGoalLaunchRequest(
     return { kind: "error", text: `Error: Working directory does not exist: ${workdir}` };
   }
 
+  if (request.maxCostUsd !== undefined && !(Number.isFinite(request.maxCostUsd) && request.maxCostUsd > 0)) {
+    return { kind: "error", text: "Error: max_cost_usd must be a positive number." };
+  }
   const verifierCommands = normalizeGoalVerifiers(request.verifierCommands);
   const loopMode = request.goalMode ?? (verifierCommands.length > 0 ? "verifier" : "ralph");
   if (loopMode === "verifier" && verifierCommands.length === 0) {
@@ -147,7 +152,9 @@ export function resolveGoalLaunchRequest(
     systemPrompt: request.systemPrompt,
     allowedTools: request.allowedTools,
     maxIterations: request.maxIterations,
-    permissionMode: request.permissionMode ?? "bypassPermissions",
+    // The first iteration follows the configured mode (default: plan), so its
+    // plan goes through the normal plan gate.
+    permissionMode: request.permissionMode ?? pluginConfig.permissionMode ?? "plan",
     harness,
     loopMode,
     completionPromise: request.completionPromise,
@@ -157,13 +164,39 @@ export function resolveGoalLaunchRequest(
     originSessionKey,
     route: resolvedRoute,
     verifierCommands,
+    ...(request.maxCostUsd !== undefined ? { maxCostUsd: request.maxCostUsd } : {}),
   };
+}
+
+/**
+ * True when goal verifier commands need the user's confirmation: they came
+ * from the orchestrator and are not all pre-approved in `trustedVerifierCommands`.
+ */
+export function verifierCommandsNeedConfirmation(commands: readonly GoalVerifierSpec[]): boolean {
+  const trusted = new Set((pluginConfig.trustedVerifierCommands ?? [])
+    .filter((command): command is string => typeof command === "string")
+    .map((command) => command.trim())
+    .filter((command) => command.length > 0));
+  return commands.some((command) => !trusted.has(command.command.trim()));
 }
 
 export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
   Extract<GoalLaunchResolution, { kind: "resolved" }>,
   "goal" | "harness" | "model" | "fastMode" | "verifierCommands"
->): string {
+> & { maxIterations?: number }): string {
+  if (task.status === "awaiting_verifier_confirmation") {
+    return [
+      `Goal task created and waiting for the user's confirmation. Nothing runs until they confirm.`,
+      `  Name: ${task.name}`,
+      `  ID: ${task.id}`,
+      `  Dir: ${task.workdir}`,
+      `  Max iterations: ${task.maxIterations}${resolution.maxIterations !== undefined && resolution.maxIterations > task.maxIterations ? ` (capped from ${resolution.maxIterations})` : ""}`,
+      `  Verifiers to confirm:`,
+      ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
+      ``,
+      `The user got a message listing these exact commands with Run / Cancel buttons. Do not start the task another way; tell the user it is waiting for their confirmation.`,
+    ].join("\n");
+  }
   const lines = [
     `Goal task launched.`,
     `  Name: ${task.name}`,
@@ -174,7 +207,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Model: ${resolution.model ?? "default"}`,
     ...(resolution.fastMode ? [`  Fast mode: enabled`] : []),
     `  Loop mode: ${task.loopMode}`,
-    `  Max controller iterations: ${task.maxIterations}`,
+    `  Max controller iterations: ${task.maxIterations}${resolution.maxIterations !== undefined && resolution.maxIterations > task.maxIterations ? ` (capped from ${resolution.maxIterations})` : ""}`,
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,
     ...(task.loopMode === "ralph"
       ? [`  Completion promise: ${task.completionPromise}`]

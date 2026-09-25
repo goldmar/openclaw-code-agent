@@ -912,6 +912,18 @@ describe("ClaudeCodeHarness", () => {
     assert.ok(messages.filter((message) => message.type === "activity").length >= 2);
   });
 
+  it("turns tool, subagent and hook progress into throttled activity heartbeats (B14)", async () => {
+    const { handle } = createQueryHandle([
+      { type: "tool_progress", tool_use_id: "t1", tool_name: "Bash", parent_tool_use_id: null, elapsed_time_seconds: 30 },
+      { type: "tool_progress", tool_use_id: "t1", tool_name: "Bash", parent_tool_use_id: null, elapsed_time_seconds: 31 },
+      { type: "system", subtype: "task_progress", task_id: "a", description: "subagent" },
+      OK_RESULT,
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" }));
+    const activity = messages.filter((message) => message.type === "activity");
+    assert.equal(activity.length, 1, "several progress messages within the interval make one heartbeat");
+  });
+
   it("builds user messages without a session id", () => {
     const message = new ClaudeCodeHarness().buildUserMessage("hello", "claude-session");
     assert.deepEqual(message, {

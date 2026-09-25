@@ -315,19 +315,34 @@ export function buildCollaborationMode(
   };
 }
 
+/**
+ * Codex's plan collaboration mode only instructs the model; the sandbox stays
+ * whatever the thread uses (by default `:danger-full-access`). While a plan is
+ * being written or reviewed, OCA therefore runs the turn with the read-only
+ * profile, and every other turn restores the configured profile (`permissions`
+ * is sticky for later turns, reviews and compactions of the thread).
+ */
+export const CODEX_PLAN_REVIEW_PERMISSION_PROFILE = ":read-only";
+
 export function buildTurnStartParams(options: {
   threadId: string;
   prompt: string;
   model: string;
   reasoningEffort?: string;
   permissionMode?: string;
+  /** The thread's configured permission profile, restored on non-plan turns. */
+  permissionProfile?: string;
 }): TurnStartParams {
   const effort = options.reasoningEffort?.trim();
+  const permissions = options.permissionMode === "plan"
+    ? CODEX_PLAN_REVIEW_PERMISSION_PROFILE
+    : options.permissionProfile;
   return {
     threadId: options.threadId,
     input: buildTurnInput(options.prompt),
     model: options.model,
     ...(effort ? { effort } : {}),
+    ...(permissions ? { permissions } : {}),
     // Takes precedence over model/effort, so it must repeat both.
     collaborationMode: buildCollaborationMode(
       collaborationModeKindForPermissionMode(options.permissionMode),

@@ -208,23 +208,17 @@ for (const name of BACKEND_NAMES) {
     }
 
     if (name === "claude-code") {
-      it("answers from the buttons of both Claude question prompts (question service and waiting notice)", async () => {
+      it("posts one prompt per Claude question, like Codex and OpenCode (B20)", async () => {
         fixture = await startInteractionFixture(name);
-        for (const label of ["ask-user-question", "waiting"]) {
-          const before = fixture.notifications.length;
-          const { answered } = await askAndWait([COLOR]);
-          const prompt = await (async () => {
-            await waitUntil(
-              () => fixture!.notifications.slice(before).some((entry) => entry.request.label === label && (entry.request.buttons?.length ?? 0) > 0),
-              `${label} buttons`,
-            );
-            return fixture!.notifications.slice(before).find((entry) => entry.request.label === label)!;
-          })();
-          const click = await clickButton(buttonNamed(prompt.request.buttons!.flat(), "Red"));
-          assert.deepEqual(click.replies, ["✅ Pending input request submitted."], label);
-          assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Red"] } });
-          await waitUntil(() => !fixture!.session.pendingInputState, "question cleared");
-        }
+        const before = fixture.notifications.length;
+        const { answered } = await askAndWait([COLOR]);
+        const buttons = await questionButtons(before);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const prompts = fixture.notifications.slice(before).filter((entry) => QUESTION_LABELS.test(entry.request.label));
+        assert.deepEqual(prompts.map((entry) => entry.request.label), ["waiting"], "no separate AskUserQuestion prompt");
+        const click = await clickButton(buttonNamed(buttons, "Red"));
+        assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+        assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Red"] } });
       });
     }
 
@@ -252,7 +246,7 @@ for (const name of BACKEND_NAMES) {
       const secondButtons = await questionButtons(before);
       assert.deepEqual(secondButtons.map((button) => button.label), ["Small", "Large"]);
 
-      // Every prompt of step 1 (Claude Code sends two) is outdated now.
+      // Every prompt of step 1 is outdated now.
       const stepOnePrompts = fixture.notifications.slice(0, before)
         .filter((entry) => QUESTION_LABELS.test(entry.request.label) && (entry.request.buttons?.length ?? 0) > 0);
       assert.ok(stepOnePrompts.length > 0);
@@ -267,30 +261,27 @@ for (const name of BACKEND_NAMES) {
     });
 
     if (name === "claude-code") {
-      it("tells the agent when the user does not answer within the question timeout", async () => {
+      it("keeps a Claude question open past 10 minutes; only the idle timeout suspends the session (B21)", async () => {
         fixture = await startInteractionFixture(name);
         mock.timers.enable({ apis: ["setTimeout"] });
         const outcome = fixture.backend.ask([COLOR]);
+        let settled = false;
+        void outcome.then(() => { settled = true; });
         while (fixture.session.pendingInputState?.kind !== "question") {
           await new Promise((resolve) => setImmediate(resolve));
         }
-        const buttons = await (async () => {
-          for (let attempt = 0; attempt < 200; attempt += 1) {
-            const entry = [...fixture!.notifications].reverse().find((candidate) => (candidate.request.buttons?.length ?? 0) > 0);
-            if (entry) return entry.request.buttons!.flat();
-            await new Promise((resolve) => setImmediate(resolve));
-          }
-          throw new Error("no question buttons");
-        })();
-        mock.timers.tick(10 * 60 * 1000);
-        const result = await outcome;
-        mock.timers.reset();
-        assert.equal(result.kind, "cancelled");
-        assert.match(result.kind === "cancelled" ? result.reason : "", /did not answer the question \(AskUserQuestion timed out after 600s/);
-        await waitUntil(() => !fixture!.session.pendingInputState, "question cleared");
+        mock.timers.tick(11 * 60 * 1000);
+        for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(settled, false, "the question did not expire");
+        assert.equal(fixture.session.pendingInputState?.kind, "question");
+        assert.equal(fixture.session.status, "running");
 
-        const late = await clickButton(buttonNamed(buttons, "Red"));
-        assert.match(late.replies.join("\n"), /no longer waiting for an answer/);
+        // The configured idle timeout (15 min) suspends a session that waits for the user.
+        mock.timers.tick(5 * 60 * 1000);
+        for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+        mock.timers.reset();
+        assert.equal(fixture.session.status, "killed");
+        assert.equal(fixture.session.killReason, "idle-timeout");
       });
     } else {
       it("clears the question when the backend resolves it without an answer", async () => {

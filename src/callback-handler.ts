@@ -1,8 +1,9 @@
-import { autoUpdateService, sessionManager } from "./singletons";
+import { autoUpdateService, goalController, sessionManager } from "./singletons";
 import { executeRespond, rejectPlanDecision, requestPlanDecisionChanges } from "./actions/respond";
 import { makeAgentMergeTool } from "./tools/agent-merge";
 import { makeAgentPrTool } from "./tools/agent-pr";
 import { makeAgentOutputTool } from "./tools/agent-output";
+import { USER_BUTTON_TOOL_CALL_ID } from "./tools/worktree-tool-context";
 import { hashDiagnosticToken, logButtonDiagnostic } from "./button-diagnostics";
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
 import type {
@@ -1054,7 +1055,8 @@ export function createCallbackHandler(
         if (!consumedToken) {
           await rejectStaleAction(ctx, () => clearInteractiveState(ctx, {
             alreadyAcknowledged: callbackAcknowledged,
-            forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss",
+            forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss"
+              || token.kind === "goal-verifiers-confirm" || token.kind === "goal-verifiers-decline",
           }));
           return { handled: true };
         }
@@ -1144,7 +1146,7 @@ export function createCallbackHandler(
           }
 
           case "worktree-merge": {
-            const result = await makeMergeTool().execute("callback", { session: sessionId });
+            const result = await makeMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
@@ -1188,7 +1190,7 @@ export function createCallbackHandler(
             // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
             // on success; if the PR creation fails the flag remains set so reminders
             // continue until the user tries again.
-            const result = await makePrTool().execute("callback", { session: sessionId });
+            const result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
@@ -1248,6 +1250,38 @@ export function createCallbackHandler(
               forceTelegramMarkupEdit: true,
             });
             await replyText(ctx, `✅ Dismissed.`);
+            break;
+          }
+
+          case "goal-verifiers-confirm":
+          case "goal-verifiers-decline": {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            if (!goalController) {
+              await replyText(ctx, "⚠️ Goal controller not running.");
+              break;
+            }
+            if (consumedToken.kind === "goal-verifiers-decline") {
+              const declined = goalController.declineVerifierCommands(sessionId);
+              await replyText(ctx, !declined
+                ? "⚠️ That goal task no longer exists."
+                : declined.action === "stopped"
+                  ? `⛔ Goal task [${declined.task.name}] cancelled; its verifier commands were not run.`
+                  : `⚠️ Goal task [${declined.task.name}] is no longer waiting for confirmation (${declined.task.status}).`);
+              break;
+            }
+            try {
+              const confirmed = await goalController.confirmVerifierCommands(sessionId);
+              await replyText(ctx, !confirmed
+                ? "⚠️ That goal task no longer exists."
+                : confirmed.action === "started"
+                  ? `▶️ Goal task [${confirmed.task.name}] started with the confirmed verifier commands.`
+                  : `⚠️ Goal task [${confirmed.task.name}] is no longer waiting for confirmation (${confirmed.task.status}).`);
+            } catch (err) {
+              await replyText(ctx, `⚠️ Failed to start the goal task: ${err instanceof Error ? err.message : String(err)}`);
+            }
             break;
           }
 

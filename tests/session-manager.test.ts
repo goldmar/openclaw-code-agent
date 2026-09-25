@@ -3325,7 +3325,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "waiting");
     assert.equal(request.buttons, undefined);
     assert.equal(request.wakeMessage, undefined);
-    assert.match(request.wakeMessageOnNotifyFailed, /Follow your auto-respond rules strictly/);
+    assert.match(request.wakeMessageOnNotifyFailed, /Do NOT answer it yourself/);
+    assert.doesNotMatch(request.wakeMessageOnNotifyFailed, /auto-respond/);
     assert.doesNotMatch(request.userMessage, /Plan ready for approval/);
   });
 

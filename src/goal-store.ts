@@ -10,8 +10,10 @@ import { createLogger } from "./logger";
 const log = createLogger("goal-store");
 
 const GOAL_TASK_STATUSES: ReadonlySet<GoalTaskState["status"]> = new Set([
+  "awaiting_verifier_confirmation",
   "running",
   "waiting_for_session",
+  "waiting_for_plan_approval",
   "waiting_for_user",
   "succeeded",
   "failed",
@@ -99,8 +101,10 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
   if (!GOAL_TASK_STATUSES.has(value.status as GoalTaskState["status"])) return undefined;
 
   const status = value.status;
+  // A running task, or one whose plan still waits for a decision, resumes its
+  // session after a restart (the resumed session presents its plan again).
   const resumedStatus =
-    status === "running" || status === "waiting_for_session"
+    status === "running" || status === "waiting_for_session" || status === "waiting_for_plan_approval"
       ? "waiting_for_session"
       : status;
 
@@ -147,6 +151,10 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
     repeatedFailureCount: typeof value.repeatedFailureCount === "number" ? value.repeatedFailureCount : 0,
     waitingForUserReason: typeof value.waitingForUserReason === "string" ? value.waitingForUserReason : undefined,
     failureReason: typeof value.failureReason === "string" ? value.failureReason : undefined,
+    planApproved: value.planApproved === true ? true : undefined,
+    maxCostUsd: typeof value.maxCostUsd === "number" && value.maxCostUsd > 0 ? value.maxCostUsd : undefined,
+    totalCostUsd: typeof value.totalCostUsd === "number" && value.totalCostUsd >= 0 ? value.totalCostUsd : undefined,
+    lastCostedRun: typeof value.lastCostedRun === "string" ? value.lastCostedRun : undefined,
   };
 }
 

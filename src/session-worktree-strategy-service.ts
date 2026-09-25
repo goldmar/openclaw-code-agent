@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { describeHookPathChanges, listHookPathChanges } from "./git-hooks";
 import type { NotificationButton } from "./session-interactions";
 import type { PersistedSessionInfo } from "./types";
 import type { RepoPolicyResolution } from "./repo-policy";
@@ -36,6 +37,9 @@ import {
   syncWorktreePRByUrl,
   worktreeExists,
 } from "./worktree";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-worktree-strategy-service");
 
 export type WorktreeStrategyResult = {
   notificationSent: boolean;
@@ -106,6 +110,8 @@ export class SessionWorktreeStrategyService {
         prompt: string;
       }) => Promise<SpawnedResolverSession>;
       runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean }>;
+      /** Changed hook / worktree-setup files on the branch (default: `listHookPathChanges`). */
+      listHookPathChanges?: (repoDir: string, branchName: string, baseBranch: string) => Awaitable<string[]>;
     },
   ) {
     this.actions = new SessionWorktreeActionService({
@@ -289,6 +295,17 @@ export class SessionWorktreeStrategyService {
       await deleteBranch(action.repoDir, action.branchName);
       this.markReleased(session, action.reasons);
       return { notificationSent: false, worktreeRemoved: removed };
+    }
+
+    // Hook or worktree-setup changes run code on later git operations: never
+    // merge or open a PR for them automatically. The user decides, with the
+    // changed files named in the prompt.
+    const hookWarning = await this.describeHookChanges(action.repoDir, action.branchName, action.baseBranch);
+    if (hookWarning) {
+      if (action.strategy === "delegate" && !action.policyBlocked) {
+        return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning);
+      }
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning);
     }
 
     if (action.policyBlocked) {
@@ -476,6 +493,18 @@ export class SessionWorktreeStrategyService {
       );
   }
 
+  /** The hook-change warning for a branch, or undefined when it changes no hook locations. */
+  private async describeHookChanges(repoDir: string, branchName: string, baseBranch: string): Promise<string | undefined> {
+    try {
+      const list = this.deps.listHookPathChanges ?? listHookPathChanges;
+      return describeHookPathChanges(await list(repoDir, branchName, baseBranch));
+    } catch (err) {
+      log.warn(`[worktree] Could not check ${branchName} for hook changes: ${err instanceof Error ? err.message : String(err)}`);
+      // Unknown is treated as changed: a person decides.
+      return "⚠️ Could not check this branch for git hook or worktree setup changes, so merging or opening a PR needs your confirmation.";
+    }
+  }
+
   private async handleAskStrategy(
     session: Session,
     branchName: string,
@@ -483,6 +512,7 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     allowedActions: AllowedWorktreeActions,
     policyReason?: string,
+    hookWarning?: string,
   ): Promise<WorktreeStrategyResult> {
     const summary = await buildWorktreeDecisionWorkSummary({
       sessionName: session.name,
@@ -498,6 +528,7 @@ export class SessionWorktreeStrategyService {
       diffSummary,
       summaryLines: summary.lines,
       policyReason,
+      hookWarning,
       buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
     }));
     this.markPendingDecision(session);
@@ -511,6 +542,7 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     allowedActions: AllowedWorktreeActions,
     policyReason?: string,
+    hookWarning?: string,
   ): WorktreeStrategyResult {
     this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildDelegateNotification({
       session,
@@ -518,6 +550,7 @@ export class SessionWorktreeStrategyService {
       baseBranch,
       diffSummary,
       policyReason,
+      hookWarning,
       allowedActions,
       originThreadLine: this.deps.originThreadLine(session),
     }));

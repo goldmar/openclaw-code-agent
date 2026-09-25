@@ -264,7 +264,9 @@ export type SessionActionKind =
   | "plugin-update-dismiss"
   | "plugin-update-restart"
   | "view-output"
-  | "question-answer";
+  | "question-answer"
+  | "goal-verifiers-confirm"
+  | "goal-verifiers-decline";
 
 export interface SessionRoute {
   provider?: string;
@@ -469,7 +471,19 @@ export interface PluginConfig {
    * (default true). `false` disables update checks, installs, and restarts.
    */
   autoUpdate: boolean;
+  /**
+   * Repository git hooks during OCA's own merge, rebase, commit, push and
+   * worktree git operations: "run" (default) or "skip" (`core.hooksPath=/dev/null`).
+   */
+  worktreeGitHooks: WorktreeGitHooksMode;
+  /**
+   * Goal verifier commands pre-approved by the operator. A goal launched by the
+   * orchestrator with only these commands needs no user confirmation.
+   */
+  trustedVerifierCommands?: string[];
 }
+
+export type WorktreeGitHooksMode = "run" | "skip";
 
 /** Raw plugin config as accepted from OpenClaw (validated against `openclaw.plugin.json` configSchema). */
 export interface RawPluginConfig {
@@ -491,6 +505,10 @@ export interface RawPluginConfig {
   worktreeDir?: string;
   /** Update check with button-confirmed install/restart; default true. */
   autoUpdate?: boolean;
+  /** Repository git hooks during OCA git operations; default "run". */
+  worktreeGitHooks?: WorktreeGitHooksMode;
+  /** Operator-approved goal verifier commands (exact strings). */
+  trustedVerifierCommands?: string[];
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */
@@ -640,8 +658,12 @@ export interface SessionMetrics {
 }
 
 export type GoalTaskStatus =
+  /** Created by the orchestrator; waits for the user to confirm its verifier commands. */
+  | "awaiting_verifier_confirmation"
   | "running"
   | "waiting_for_session"
+  /** The first iteration's plan waits for the normal plan decision. */
+  | "waiting_for_plan_approval"
   | "waiting_for_user"
   | "succeeded"
   | "failed"
@@ -675,6 +697,14 @@ export interface GoalTaskConfig {
   loopMode?: GoalLoopMode;
   completionPromise?: string;
   verifierCommands: GoalVerifierSpec[];
+  /** Optional spend limit: no further iteration starts once the task's sessions cost this much. */
+  maxCostUsd?: number;
+  /**
+   * True when the verifier commands came from the orchestrator (not from the
+   * user or the operator's config): the task then waits for one user
+   * confirmation that lists the exact commands before anything runs.
+   */
+  requireVerifierConfirmation?: boolean;
 }
 
 export interface GoalVerifierStepResult {
@@ -726,4 +756,11 @@ export interface GoalTaskState {
   repeatedFailureCount: number;
   waitingForUserReason?: string;
   failureReason?: string;
+  /** Set once the first iteration's plan was approved; later iterations continue within that scope. */
+  planApproved?: boolean;
+  maxCostUsd?: number;
+  /** Cost of the task's finished session runs so far. */
+  totalCostUsd?: number;
+  /** `<session id>:<start time>` of the last run whose cost was added to `totalCostUsd`. */
+  lastCostedRun?: string;
 }

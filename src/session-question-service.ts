@@ -3,6 +3,7 @@ import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { createLogger } from "./logger";
+import { fenceAgentOutput } from "./untrusted-output";
 
 const log = createLogger("session-question-service");
 
@@ -15,12 +16,16 @@ export interface AskUserQuestionInput {
   }>;
 }
 
-/** Pending AskUserQuestion state stored per session. */
+/**
+ * Pending AskUserQuestion state stored per session. A question has no timeout
+ * of its own (like Codex and OpenCode questions): it waits until it is
+ * answered, superseded, or the session is suspended by the idle timeout, after
+ * which an answer resumes the session.
+ */
 export interface PendingAskUserQuestion {
   resolve: (result: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void;
   reject: (err: Error) => void;
   questions: AskUserQuestionInput["questions"];
-  timeoutHandle: ReturnType<typeof setTimeout>;
   requestId: string;
   questionId?: string;
 }
@@ -59,7 +64,6 @@ export class SessionQuestionService {
     input: Record<string, unknown>,
     context: AskUserQuestionResolutionContext = {},
   ): Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }> {
-    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
     const typedInput = input as unknown as AskUserQuestionInput;
     const questions = typedInput?.questions ?? [];
     if (questions.length === 0) {
@@ -75,36 +79,36 @@ export class SessionQuestionService {
       ?? session.pendingInputState?.requestId
       ?? `legacy:${randomUUID()}`;
     const buttons = this.getQuestionButtons(session.id, options, { requestId, questionId });
+    const questionBlock = fenceAgentOutput([
+      `Question: ${firstQuestion.question}`,
+      ...(options.length > 0 ? [`Options:`, ...options.map((o, i) => `  ${i + 1}. ${o.label}`)] : []),
+    ].join("\n"), "question");
     const fallbackWakeText = [
       `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
       ``,
-      `Question: ${firstQuestion.question}`,
-      ...(options.length > 0 ? [`Options:`, ...options.map((o, i) => `  ${i + 1}. ${o.label}`)] : []),
+      questionBlock,
       ``,
-      `Send the question to the user and call agent_respond(session="${session.id}", message="<answer>") with their answer.`,
+      `Send the question to the user and call agent_respond(session="${session.id}", message="<answer>", userInitiated=true) with their answer. Do not answer it yourself.`,
     ].join("\n");
 
     return new Promise((resolve, reject) => {
       const existing = this.pendingQuestions.get(session.id);
       if (existing) {
-        clearTimeout(existing.timeoutHandle);
         existing.reject(new Error(`AskUserQuestion superseded by a newer question for session "${session.name}".`));
       }
-
-      const timeoutHandle = setTimeout(() => {
-        this.pendingQuestions.delete(session.id);
-        reject(new Error(`AskUserQuestion timed out after ${TIMEOUT_MS / 1000}s for session "${session.name}"`));
-      }, TIMEOUT_MS);
-      timeoutHandle.unref?.();
 
       this.pendingQuestions.set(session.id, {
         resolve,
         reject,
         questions,
-        timeoutHandle,
         requestId,
         questionId,
       });
+
+      // A harness that names the request has raised it as native pending input
+      // too; the session's waiting-for-input notice is then the one prompt the
+      // user sees (with the same buttons), so posting here would duplicate it.
+      if (context.requestId) return;
 
       this.dispatchSessionNotification(session, {
         label: "ask-user-question",
@@ -118,7 +122,7 @@ export class SessionQuestionService {
         wakeMessageOnNotifySuccess: [
           `AskUserQuestion delivered to the user.`,
           `Session: ${session.name} | ID: ${session.id}`,
-          `Question: ${firstQuestion.question}`,
+          questionBlock,
           `Await their selection — do NOT answer this question yourself.`,
         ].join("\n"),
         wakeMessageOnNotifyFailed: fallbackWakeText,
@@ -135,7 +139,6 @@ export class SessionQuestionService {
     const pending = this.pendingQuestions.get(sessionId);
     if (!pending) return false;
     if (requestId && pending.requestId !== requestId) return false;
-    clearTimeout(pending.timeoutHandle);
     this.pendingQuestions.delete(sessionId);
     return true;
   }
@@ -172,7 +175,6 @@ export class SessionQuestionService {
       return false;
     }
 
-    clearTimeout(pending.timeoutHandle);
     this.pendingQuestions.delete(sessionId);
 
     this.clearWaitingTimestamp(sessionId);
@@ -188,7 +190,6 @@ export class SessionQuestionService {
 
   dispose(): void {
     for (const pending of this.pendingQuestions.values()) {
-      clearTimeout(pending.timeoutHandle);
       pending.reject(new Error("SessionManager disposed before AskUserQuestion resolved."));
     }
     this.pendingQuestions.clear();

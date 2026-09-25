@@ -40,6 +40,7 @@ export let pluginConfig: PluginConfig = {
   planApproval: "delegate",
   defaultWorktreeStrategy: "delegate",
   autoUpdate: true,
+  worktreeGitHooks: "run",
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
     codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
@@ -95,6 +96,8 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     defaultWorktreeStrategy: config.defaultWorktreeStrategy ?? "delegate",
     worktreeDir: config.worktreeDir,
     autoUpdate: config.autoUpdate ?? true,
+    worktreeGitHooks: config.worktreeGitHooks === "skip" ? "skip" : "run",
+    trustedVerifierCommands: config.trustedVerifierCommands,
   };
 }
 
