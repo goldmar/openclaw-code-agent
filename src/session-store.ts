@@ -18,10 +18,14 @@ import {
   cleanupSessionOutputFiles,
   getNextSessionOutputCleanupAt,
   loadSessionStoreIndex,
+  backupUnmergeableSessionIndex,
+  isForeignLiveRunningRow,
   readSessionStoreSnapshot,
   resolveSessionIndexPath,
+  runtimeOwnerMarker,
   saveSessionStoreIndex,
   statSessionStoreIndex,
+  withSessionStoreLock,
   type SessionStoreDiskSnapshot,
 } from "./session-store-storage";
 import {
@@ -191,10 +195,16 @@ export class SessionStore {
     };
   }
 
-  /** True when another writer of the index reports this session as running. */
+  /** True when another live process runs this session (its row is carried, not adopted). */
   isSessionOwnedElsewhere(ref: string): boolean {
-    const carried = this.carriedSessions.get(ref);
-    return Boolean(carried && typeof carried === "object" && (carried as { status?: unknown }).status === "running");
+    this.syncFromDisk("ownership-check");
+    return isForeignLiveRunningRow(this.carriedSessions.get(ref));
+  }
+
+  /** True when this store's own row for the session is a running row it wrote. */
+  private isOwnRunningRow(key: string): boolean {
+    const entry = this.persisted.get(this.idIndex.get(key) ?? key);
+    return entry?.status === "running" && entry.runtimeOwner === runtimeOwnerMarker(this.instanceId);
   }
 
   private persistedRows(): unknown[] {
@@ -223,11 +233,15 @@ export class SessionStore {
     if (this.syncing) return false;
     const signature = statSessionStoreIndex(this.indexPath);
     if (signature === this.diskSignature || signature === "missing") return false;
-    const snapshot = readSessionStoreSnapshot(this.indexPath);
-    if (!snapshot) {
+    const read = readSessionStoreSnapshot(this.indexPath);
+    if (!read) return false;
+    if ("unreadable" in read) {
+      // Never replace another writer's data without a recoverable copy.
+      backupUnmergeableSessionIndex(this.indexPath, read.unreadable);
       this.diskSignature = signature;
       return false;
     }
+    const snapshot = read;
     this.syncing = true;
     try {
       const changed = this.mergeSnapshot(snapshot);
@@ -264,6 +278,16 @@ export class SessionStore {
     }
     const sessionChoices = mergeKeyedRows(this.base.sessions, local.sessions, toKeyedJson(snapshot.sessions, sessionRowKey));
     for (const [key, choice] of sessionChoices) {
+      // A session another live process runs belongs to that process: its row
+      // wins even over a local edit of this store's cached (stopped) copy.
+      if (choice === "local" && isForeignLiveRunningRow(diskSessions.get(key))
+        && diskSessions.get(key) !== undefined && !this.isOwnRunningRow(key)) {
+        changed += 1;
+        const existing = this.persisted.get(this.idIndex.get(key) ?? key);
+        if (existing) this.removePersistedIndexes(existing);
+        this.carriedSessions.set(key, diskSessions.get(key));
+        continue;
+      }
       if (choice === "local") continue;
       changed += 1;
       const existing = this.persisted.get(this.idIndex.get(key) ?? key);
@@ -271,8 +295,7 @@ export class SessionStore {
       this.carriedSessions.delete(key);
       if (choice === "drop") continue;
       const raw = diskSessions.get(key);
-      const rawStatus = raw && typeof raw === "object" ? (raw as { status?: unknown }).status : undefined;
-      const entry = rawStatus === "running" ? undefined : normalizePersistedEntry(raw);
+      const entry = isForeignLiveRunningRow(raw) ? undefined : normalizePersistedEntry(raw);
       if (entry) this.indexPersistedEntry(entry);
       else this.carriedSessions.set(key, raw);
     }
@@ -343,6 +366,10 @@ export class SessionStore {
       purgeExpiredActionTokens: () => this.actionTokenStore.purgeExpiredActionTokens(),
       saveIndex: () => this.saveIndex(),
       setRevision: (revision) => { this.revision = revision; },
+      carrySession: (raw) => {
+        const key = sessionRowKey(raw);
+        if (key) this.carriedSessions.set(key, raw);
+      },
     });
   }
 
@@ -352,20 +379,23 @@ export class SessionStore {
    * itself stays atomic (temp file + rename).
    */
   saveIndex(): void {
-    // Before load completes, the constructor has no base yet; write as loaded.
-    if (this.diskSignature !== undefined) this.syncFromDisk("save");
-    const revision = this.revision + 1;
-    const written = saveSessionStoreIndex(
-      this.indexPath,
-      this.persistedRows(),
-      this.actionTokenStore.listForPersistence(),
-      [...this.repoPolicies.values()],
-      revision,
-    );
-    if (!written || this.diskSignature === undefined) return;
-    this.revision = revision;
-    this.captureBase();
-    this.diskSignature = statSessionStoreIndex(this.indexPath);
+    // The lock makes read-merge-write one step across processes.
+    withSessionStoreLock(this.indexPath, () => {
+      // Before load completes, the constructor has no base yet; write as loaded.
+      if (this.diskSignature !== undefined) this.syncFromDisk("save");
+      const revision = this.revision + 1;
+      const written = saveSessionStoreIndex(
+        this.indexPath,
+        this.persistedRows(),
+        this.actionTokenStore.listForPersistence(),
+        [...this.repoPolicies.values()],
+        revision,
+      );
+      if (!written || this.diskSignature === undefined) return;
+      this.revision = revision;
+      this.captureBase();
+      this.diskSignature = statSessionStoreIndex(this.indexPath);
+    });
   }
 
   assertPersistedEntry(entry: PersistedSessionInfo): void {
@@ -514,6 +544,7 @@ export class SessionStore {
       fastMode: session.fastMode,
       createdAt: session.startedAt,
       status: "running",
+      runtimeOwner: runtimeOwnerMarker(this.instanceId),
       lifecycle: session.lifecycle,
       approvalState: session.approvalState,
       worktreeState: session.worktreeState,
@@ -699,10 +730,10 @@ export class SessionStore {
 
   /** Resolve persisted session metadata by session id, name, backend id, or compatibility key. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
-    const found = this.queries.getPersistedSession(ref);
-    if (found || this.syncing) return found;
-    // Another writer may have recorded it; re-read only when the file changed.
-    return this.syncFromDisk("session-miss") ? this.queries.getPersistedSession(ref) : undefined;
+    // Pick up another writer's changes first (a stat when nothing changed), so a
+    // session it resumed is never returned from this store's stale cache.
+    if (!this.syncing) this.syncFromDisk("session-lookup");
+    return this.queries.getPersistedSession(ref);
   }
 
   replacePersistedSession(entry: PersistedSessionInfo): void {

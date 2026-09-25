@@ -80,12 +80,14 @@ export class SessionActionTokenStore {
   }
 
   /**
-   * Look a token up. A miss re-reads the persisted index first, so a button minted
-   * by another writer of the same index is not reported as stale.
+   * Look a token up after re-reading the persisted index when another writer
+   * changed it, so a button minted elsewhere is not reported as stale and a
+   * token consumed elsewhere is seen as consumed.
    */
   getActionToken(tokenId: string): SessionActionToken | undefined {
-    if (!this.tokens.has(tokenId) && this.diskHooks) {
-      this.syncFromDisk("token-miss");
+    if (this.diskHooks) {
+      // Also for a cached token: another writer may have consumed it.
+      this.syncFromDisk("token-lookup");
       if (!this.tokens.has(tokenId)) this.diskHooks.onMiss?.({ reason: "token-miss" });
     }
     return this.peekActionToken(tokenId);

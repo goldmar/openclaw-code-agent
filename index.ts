@@ -111,6 +111,27 @@ type CodeAgentServices = {
 let hostBoundBySharedRuntime = false;
 
 /**
+ * Services of the shared runtime when this module graph created it. The
+ * runtime's own code (for example the automatic PR and merge paths, which call
+ * the tool implementations of this graph) reads this graph's singletons, so
+ * they keep pointing at the runtime until it stops, even after this graph's
+ * own registration detached.
+ */
+let servicesCreatedHere: CodeAgentServices | null = null;
+
+/** Stable identity of plugin settings: key order does not matter. */
+function stableConfigKey(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableConfigKey).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableConfigKey(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
  * Register plugin tools, commands, and the background session service.
  *
  * OpenClaw may call this once per plugin registry, each time in its own module
@@ -119,7 +140,7 @@ let hostBoundBySharedRuntime = false;
  * service all attach to it, so there is exactly one SessionManager per process.
  */
 export function register(api: OpenClawPluginApi): void {
-  const regSeq = allocateRuntimeOwnerSequence();
+  const regSeq = allocateRuntimeOwnerSequence(BUILD_ID);
   const ownerId = `${BUILD_ID.split("+")[1]?.slice(0, 8) ?? "build"}#${regSeq}`;
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
@@ -187,9 +208,9 @@ export function register(api: OpenClawPluginApi): void {
     gc = null;
     autoUpdate = null;
     attached = false;
-    setSessionManager(null);
-    setGoalController(null);
-    setAutoUpdateService(null);
+    setSessionManager(servicesCreatedHere?.sm ?? null);
+    setGoalController(servicesCreatedHere?.gc ?? null);
+    setAutoUpdateService(servicesCreatedHere?.autoUpdate ?? null);
   };
 
   const createServices = async (handles: RuntimeHostHandles, instanceId: string): Promise<RuntimeServices<CodeAgentServices>> => {
@@ -223,12 +244,23 @@ export function register(api: OpenClawPluginApi): void {
       // there is no age-based startup sweep of unmanaged worktree directories.
       // Reminder/retention deadlines need git evidence; they settle in the background.
       void createdSm.bootstrapMaintenanceSchedules();
+      const services: CodeAgentServices = { sm: createdSm, gc: createdGc, autoUpdate: createdAutoUpdate };
+      servicesCreatedHere = services;
       return {
-        services: { sm: createdSm, gc: createdGc, autoUpdate: createdAutoUpdate },
+        services,
         bindHost: bindLocalHost,
         stop: async () => {
           createdGc.stop();
-          await createdSm.shutdown();
+          try {
+            await createdSm.shutdown();
+          } finally {
+            if (servicesCreatedHere === services) {
+              servicesCreatedHere = null;
+              setSessionManager(null);
+              setGoalController(null);
+              setAutoUpdateService(null);
+            }
+          }
         },
       };
     } catch (err) {
@@ -259,6 +291,7 @@ export function register(api: OpenClawPluginApi): void {
         id: ownerId,
         regSeq,
         buildId: BUILD_ID,
+        configKey: stableConfigKey(api.pluginConfig ?? {}),
         handles: ownerHandles(),
         onDetached: detachLocal,
       }, createServices);

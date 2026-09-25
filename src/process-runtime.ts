@@ -39,6 +39,11 @@ export type RuntimeOwnerSpec = {
   /** Registration order across the process; later registrations are newer host generations. */
   regSeq: number;
   buildId: string;
+  /**
+   * Identity of the settings the runtime's services are built from (plugin
+   * config). A newer owner with different settings restarts the runtime.
+   */
+  configKey: string;
   handles: RuntimeHostHandles;
   /** Called when the owner loses its runtime (last-owner stop or a newer build taking over). */
   onDetached: (reason: RuntimeDetachReason) => void;
@@ -57,6 +62,7 @@ export type RuntimeServices<T> = {
 export type SharedRuntime<T = unknown> = {
   instanceId: string;
   buildId: string;
+  configKey: string;
   services: T;
   owners: Map<string, RuntimeOwnerSpec>;
   currentOwnerId?: string;
@@ -68,6 +74,8 @@ export type SharedRuntime<T = unknown> = {
 
 type RuntimeSlot = {
   nextRegSeq: number;
+  /** Build of the most recent registration; only it may create a runtime. */
+  newestBuildId?: string;
   runtime?: SharedRuntime;
   transition?: Promise<void>;
 };
@@ -87,11 +95,17 @@ function slot(): RuntimeSlot {
   return (host[SLOT_KEY] ??= { nextRegSeq: 1 });
 }
 
-/** Allocate a process-wide registration sequence for a new plugin instance. */
-export function allocateRuntimeOwnerSequence(): number {
+/**
+ * Allocate a process-wide registration sequence for a new plugin instance. The
+ * newest registration's build becomes the only build allowed to run the
+ * runtime: an older build is superseded even while no runtime is running, and
+ * a host recovery that re-registers previous code makes that build newest again.
+ */
+export function allocateRuntimeOwnerSequence(buildId: string): number {
   const state = slot();
   const regSeq = state.nextRegSeq;
   state.nextRegSeq += 1;
+  state.newestBuildId = buildId;
   return regSeq;
 }
 
@@ -147,12 +161,14 @@ async function stopRuntime(state: RuntimeSlot, runtime: SharedRuntime, reason: R
 /**
  * Attach an owner to the process runtime, creating it when none is running.
  *
- * - Same build: attach and share.
- * - Different build registered later than every current owner: the current
- *   runtime stops (sessions are persisted the same way a service stop persists
- *   them), then this build creates a fresh runtime from the persisted store.
- * - Different build registered earlier: it has been superseded and must not
- *   create a second writer; throws `SupersededRuntimeError`.
+ * - Only the newest registered build may attach or create; an older build
+ *   throws `SupersededRuntimeError` and never creates a second writer.
+ * - A runtime of another (older) build stops first (sessions are persisted the
+ *   same way a service stop persists them); this build then creates a fresh
+ *   runtime from the persisted store.
+ * - A newer registration of the same build with different settings restarts
+ *   the runtime so its services use those settings.
+ * - Otherwise the owner attaches and shares.
  */
 export async function acquireSharedRuntime<T>(
   owner: RuntimeOwnerSpec,
@@ -163,7 +179,23 @@ export async function acquireSharedRuntime<T>(
     while (state.transition) {
       await state.transition.catch(() => {});
     }
+    const newestBuildId = state.newestBuildId ?? owner.buildId;
     const runtime = state.runtime as SharedRuntime<T> | undefined;
+    if (owner.buildId !== newestBuildId) {
+      // An older build never runs again once a newer one registered.
+      throw new SupersededRuntimeError(owner.buildId, newestBuildId);
+    }
+    if (runtime && runtime.buildId !== owner.buildId) {
+      // A newer build takes over: the old runtime persists and stops first.
+      await runTransition(state, () => stopRuntime(state, runtime as SharedRuntime, "superseded"));
+      continue;
+    }
+    if (runtime && owner.regSeq > runtime.maxRegSeq && owner.configKey !== runtime.configKey) {
+      // A newer registration with different settings (a config reload) gets
+      // services built from those settings, as a host plugin reload would.
+      await runTransition(state, () => stopRuntime(state, runtime as SharedRuntime, "superseded"));
+      continue;
+    }
     if (runtime?.owners.has(owner.id)) {
       runtime.owners.set(owner.id, owner);
       if (runtime.currentOwnerId === owner.id) runtime.bindHost(owner.handles);
@@ -177,6 +209,7 @@ export async function acquireSharedRuntime<T>(
         created = {
           instanceId,
           buildId: owner.buildId,
+          configKey: owner.configKey,
           services: services.services,
           owners: new Map(),
           maxRegSeq: owner.regSeq,
@@ -188,17 +221,10 @@ export async function acquireSharedRuntime<T>(
       if (!created) throw new Error("OpenClaw Code Agent runtime creation did not complete");
       continue;
     }
-    if (runtime.buildId === owner.buildId) {
-      runtime.owners.set(owner.id, owner);
-      runtime.maxRegSeq = Math.max(runtime.maxRegSeq, owner.regSeq);
-      rebindToNewestOwner(runtime as SharedRuntime);
-      return runtime;
-    }
-    if (owner.regSeq > runtime.maxRegSeq) {
-      await runTransition(state, () => stopRuntime(state, runtime as SharedRuntime, "superseded"));
-      continue;
-    }
-    throw new SupersededRuntimeError(owner.buildId, runtime.buildId);
+    runtime.owners.set(owner.id, owner);
+    runtime.maxRegSeq = Math.max(runtime.maxRegSeq, owner.regSeq);
+    rebindToNewestOwner(runtime as SharedRuntime);
+    return runtime;
   }
 }
 

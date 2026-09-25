@@ -1,10 +1,11 @@
 import "./test-env";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore, mergeKeyedRows } from "../src/session-store";
+import { withSessionStoreLock } from "../src/session-store-storage";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { createCallbackHandler } from "../src/callback-handler";
@@ -44,6 +45,20 @@ function stubSession(id: string, overrides: Record<string, unknown> = {}): any {
 
 function readIndex(indexPath: string): any {
   return JSON.parse(readFileSync(indexPath, "utf-8"));
+}
+
+/**
+ * Make a running row look like it belongs to another live process (this test
+ * process's parent), the way a second Gateway or CLI process would write it.
+ */
+function handRowToOtherProcess(indexPath: string, sessionId: string): void {
+  const index = readIndex(indexPath);
+  const row = index.sessions.find((entry: { sessionId: string }) => entry.sessionId === sessionId);
+  assert.ok(row, `expected row ${sessionId}`);
+  row.status = "running";
+  row.runtimeOwner = `${process.ppid}/other-process`;
+  index.revision = (index.revision ?? 0) + 1;
+  writeFileSync(indexPath, JSON.stringify(index));
 }
 
 describe("mergeKeyedRows()", () => {
@@ -91,6 +106,7 @@ describe("SessionStore with two writers", () => {
     const writer = new SessionStore({ indexPath, env: {}, instanceId: "writer" });
     writer.persistTerminal(stubSession("done"));
     writer.markRunning(stubSession("live", { status: "running", completedAt: undefined }));
+    handRowToOtherProcess(indexPath, "live");
 
     assert.equal(reader.getPersistedSession("done")?.status, "completed");
     // The running row is carried for persistence only: this writer cannot resume it.
@@ -139,6 +155,94 @@ describe("SessionStore with two writers", () => {
   });
 });
 
+describe("SessionStore ownership and write safety", () => {
+  let dir: string;
+  let indexPath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "oca-store-ownership-"));
+    indexPath = join(dir, "sessions.json");
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not recover or overwrite a running row another live process owns when opening the index", () => {
+    const writer = new SessionStore({ indexPath, env: {}, instanceId: "writer" });
+    writer.markRunning(stubSession("live", { status: "running", completedAt: undefined }));
+    handRowToOtherProcess(indexPath, "live");
+
+    const opened = new SessionStore({ indexPath, env: {}, instanceId: "opened" });
+    assert.equal(opened.getPersistedSession("live"), undefined);
+    assert.equal(opened.isSessionOwnedElsewhere("live"), true);
+    opened.setRepoPolicy({ key: "k", repoRoot: "/repo", policy: "never-pr", createdAt: "2026-01-01T00:00:00.000Z" } as any);
+    const row = readIndex(indexPath).sessions.find((entry: { sessionId: string }) => entry.sessionId === "live");
+    assert.equal(row.status, "running");
+    assert.equal(row.runtimeOwner, `${process.ppid}/other-process`);
+  });
+
+  it("stops returning a cached session once another process runs it, even after a local edit", () => {
+    const reader = new SessionStore({ indexPath, env: {}, instanceId: "reader" });
+    reader.persistTerminal(stubSession("shared"));
+    assert.equal(reader.getPersistedSession("shared")?.status, "completed");
+
+    handRowToOtherProcess(indexPath, "shared");
+    assert.equal(reader.getPersistedSession("shared"), undefined, "the stale cached copy must not be resumable");
+    assert.equal(reader.isSessionOwnedElsewhere("shared"), true);
+
+    // A local edit of the cached copy made before this store noticed must not win either.
+    const writer = new SessionStore({ indexPath, env: {}, instanceId: "writer" });
+    writer.persistTerminal(stubSession("edited"));
+    const editor = new SessionStore({ indexPath, env: {}, instanceId: "editor" });
+    const cached = editor.getPersistedSession("edited")!;
+    handRowToOtherProcess(indexPath, "edited");
+    (editor as any).persisted.set(cached.harnessSessionId, { ...cached, name: "renamed-locally" });
+    editor.setRepoPolicy({ key: "k2", repoRoot: "/repo2", policy: "never-pr", createdAt: "2026-01-01T00:00:00.000Z" } as any);
+    const row = readIndex(indexPath).sessions.find((entry: { sessionId: string }) => entry.sessionId === "edited");
+    assert.equal(row.status, "running");
+    assert.equal(row.runtimeOwner, `${process.ppid}/other-process`);
+  });
+
+  it("sees a token consumed by another writer even when the token is cached", () => {
+    const first = new SessionStore({ indexPath, env: {}, instanceId: "first" });
+    const token = first.actionTokenStore.createActionToken("s1", "question-answer", {
+      expiresAt: Date.now() + 60_000,
+      optionIndex: 0,
+    });
+    assert.equal(first.getActionToken(token.id)?.consumedAt, undefined);
+    const second = new SessionStore({ indexPath, env: {}, instanceId: "second" });
+    assert.ok(second.consumeActionToken(token.id));
+    assert.equal(typeof first.getActionToken(token.id)?.consumedAt, "number");
+  });
+
+  it("backs up an index another writer left in a form this build cannot merge before replacing it", () => {
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("mine"));
+    writeFileSync(indexPath, "{ not json");
+    store.setRepoPolicy({ key: "k", repoRoot: "/repo", policy: "never-pr", createdAt: "2026-01-01T00:00:00.000Z" } as any);
+    const backups = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(backups.length, 1);
+    assert.equal(readFileSync(join(dir, backups[0]!), "utf-8"), "{ not json");
+    assert.deepEqual(readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId), ["mine"]);
+  });
+
+  it("serializes saves with a lock file and breaks a lock whose holder is gone", () => {
+    const lockPath = `${indexPath}.lock`;
+    // A lock left by a process that no longer exists (pid 0 is never a live process here).
+    writeFileSync(lockPath, `0 ${Date.now()}`);
+    let ranWhileLocked = false;
+    withSessionStoreLock(indexPath, () => {
+      ranWhileLocked = existsSync(lockPath) && readFileSync(lockPath, "utf-8").startsWith(`${process.pid} `);
+    });
+    assert.equal(ranWhileLocked, true);
+    assert.equal(existsSync(lockPath), false, "the lock is released after the write");
+
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("after-lock"));
+    assert.equal(existsSync(lockPath), false);
+    assert.deepEqual(readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId), ["after-lock"]);
+  });
+});
+
 describe("callbacks for a session another writer runs", () => {
   let dir: string;
   let indexPath: string;
@@ -158,6 +262,7 @@ describe("callbacks for a session another writer runs", () => {
     const token = elsewhere.actionTokenStore.createActionToken("owned", "session-resume", {
       expiresAt: Date.now() + 60_000,
     });
+    handRowToOtherProcess(indexPath, "owned");
     setSessionManager(here);
     let resumed = false;
     (here as any).launchSession = async () => { resumed = true; throw new Error("must not resume"); };

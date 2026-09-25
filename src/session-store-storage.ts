@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { saveJsonFile } from "openclaw/plugin-sdk/json-store";
@@ -132,15 +132,29 @@ export type SessionStoreDiskSnapshot = {
   repoPolicies: unknown[];
 };
 
-export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSnapshot | undefined {
+/** Schema versions whose rows the normalizers read (the same set startup loading accepts). */
+const READABLE_SCHEMA_VERSIONS = new Set<unknown>([STORE_SCHEMA_VERSION, 6, 4]);
+
+/**
+ * Read the current on-disk index for merging. `unreadable` carries the raw text
+ * of a file that exists but cannot be merged (corrupt, or an unknown schema), so
+ * the caller can back it up before replacing it.
+ */
+export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSnapshot | { unreadable: string } | undefined {
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(indexPath, "utf-8"));
-    if (!isRecord(parsed) || parsed.schemaVersion !== STORE_SCHEMA_VERSION) return undefined;
+    raw = readFileSync(indexPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || !READABLE_SCHEMA_VERSIONS.has(parsed.schemaVersion)) return { unreadable: raw };
     const list = (value: unknown): unknown[] | undefined => value === undefined ? [] : Array.isArray(value) ? value : undefined;
     const sessions = list(parsed.sessions);
     const actionTokens = list(parsed.actionTokens);
     const repoPolicies = list(parsed.repoPolicies);
-    if (!sessions || !actionTokens || !repoPolicies) return undefined;
+    if (!sessions || !actionTokens || !repoPolicies) return { unreadable: raw };
     return {
       revision: typeof parsed.revision === "number" && Number.isFinite(parsed.revision) ? parsed.revision : 0,
       sessions,
@@ -148,7 +162,100 @@ export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSna
       repoPolicies,
     };
   } catch {
-    return undefined;
+    return { unreadable: raw };
+  }
+}
+
+/** Keep a verbatim copy of an index another writer left in a form this build cannot merge. */
+export function backupUnmergeableSessionIndex(indexPath: string, raw: string): boolean {
+  return sessionStoreStorageInternals.backupSessionIndex(indexPath, raw, "another writer left a session store this build cannot merge");
+}
+
+/** `<pid>/<instance>` marker for running rows written by this process. */
+export function runtimeOwnerMarker(instanceId: string): string {
+  return `${process.pid}/${instanceId}`;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: the process exists but belongs to another user.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * True for a `running` row owned by another, still-alive process. Such a row is
+ * never normalized, adopted, or overwritten by this process. Rows from this
+ * process (an earlier runtime that already stopped) or from a dead process are
+ * recovered normally.
+ */
+export function isForeignLiveRunningRow(raw: unknown): boolean {
+  if (!isRecord(raw) || raw.status !== "running" || typeof raw.runtimeOwner !== "string") return false;
+  const pid = Number.parseInt(raw.runtimeOwner.split("/")[0] ?? "", 10);
+  return pid !== process.pid && isProcessAlive(pid);
+}
+
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 5_000;
+const lockSleepCell = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepSync(ms: number): void {
+  Atomics.wait(lockSleepCell, 0, 0, ms);
+}
+
+function lockHolderIsGone(lockPath: string): boolean {
+  try {
+    const [pidText, atText] = readFileSync(lockPath, "utf-8").split(" ");
+    const pid = Number.parseInt(pidText ?? "", 10);
+    const at = Number.parseInt(atText ?? "", 10);
+    if (!Number.isFinite(at) || Date.now() - at > LOCK_STALE_MS) return true;
+    return pid !== process.pid && !isProcessAlive(pid);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+/**
+ * Serialize the read-merge-write sequence across processes with an exclusive
+ * `<index>.lock` file (O_EXCL). Writes are short, so waits are brief; a lock
+ * whose holder died or that is older than 10 s is broken. After 5 s the write
+ * proceeds without the lock rather than failing, still merging first.
+ */
+export function withSessionStoreLock<T>(indexPath: string, fn: () => T): T {
+  assertTestSafeStatePath(indexPath, "lock the session store");
+  const lockPath = `${indexPath}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd: number | undefined;
+  for (;;) {
+    try {
+      fd = openSync(lockPath, "wx", 0o600);
+      writeSync(fd, `${process.pid} ${Date.now()}`);
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") break; // Directory missing or unwritable: the save reports it.
+      if (lockHolderIsGone(lockPath)) {
+        try { unlinkSync(lockPath); } catch { /* another writer broke it first */ }
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        log.warn("[SessionStore] Session store lock is still held after 5 s; saving with a merge but without the lock.");
+        break;
+      }
+      sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* best-effort */ }
+      try { unlinkSync(lockPath); } catch { /* best-effort */ }
+    }
   }
 }
 
@@ -262,6 +369,8 @@ type LoadIndexArgs = {
   purgeExpiredActionTokens: () => void;
   saveIndex: () => void;
   setRevision?: (revision: number) => void;
+  /** Keep a row another live process runs, verbatim and unindexed. */
+  carrySession?: (raw: unknown) => void;
 };
 
 export function loadSessionStoreIndex(args: LoadIndexArgs): void {
@@ -274,6 +383,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     purgeExpiredActionTokens,
     saveIndex,
     setRevision,
+    carrySession,
   } = args;
 
   const archiveAndReset = (reason: string): boolean => {
@@ -316,7 +426,13 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     const entries: PersistedSessionInfo[] = [];
     let recoveredRunningSession = false;
     let skippedInvalidEntries = 0;
+    const carried: unknown[] = [];
     for (const candidate of sessionsRaw) {
+      if (carrySession && isForeignLiveRunningRow(candidate)) {
+        // Another live process runs this session: never recover it as ours.
+        carried.push(candidate);
+        continue;
+      }
       if (isRecord(candidate) && candidate.harness === "codex") {
         // 5.0.0 dropped the pre-App-Server Codex SDK backend. Rows without an
         // App Server backend ref cannot be resumed, so they are not loaded.
@@ -392,6 +508,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     }
 
     for (const entry of entries) indexPersistedEntry(entry);
+    for (const raw of carried) carrySession?.(raw);
     for (const token of tokens) setActionToken(token);
     for (const policy of policies) setRepoPolicy(policy);
 
