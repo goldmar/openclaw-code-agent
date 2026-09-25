@@ -392,7 +392,7 @@ function pendingInputReplyError(session: Session, message: string): string | und
     problem = "The answer is empty.";
   } else if (question) {
     const resolved = resolvePendingInputAnswer(question, message);
-    if (!resolved.ok) problem = resolved.error;
+    if ("error" in resolved) problem = resolved.error;
   }
   if (!problem) return undefined;
   const prompt = state.promptText?.trim() || question?.question;
