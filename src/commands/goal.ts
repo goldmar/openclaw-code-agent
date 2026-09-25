@@ -3,7 +3,7 @@ import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
 import { tokenizeCommandArgs } from "./args";
 
-const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>";
+const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>";
 
 interface GoalCommandContext extends Partial<OpenClawPluginToolContext> {
   args?: string;

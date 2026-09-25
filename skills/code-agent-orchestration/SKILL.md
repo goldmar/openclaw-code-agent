@@ -20,7 +20,7 @@ Use `openclaw-code-agent` to run Claude Code, Codex, or experimental OpenCode se
 
 ## Launch
 
-- Do not pass `channel` manually. Routing comes from `agentChannels`, the current chat context, and `fallbackChannel`.
+- Routing comes from the current chat context, `agentChannels`, and `fallbackChannel`; `agent_launch` has no channel parameter.
 - Sessions are multi-turn. Continue existing work with `agent_respond` or `agent_launch(..., resume_session_id=...)`; do not start a fresh session for the same task.
 - Always set a short kebab-case `name` when you care about later follow-up.
 - Set `workdir` to the target repo.
@@ -28,7 +28,7 @@ Use `openclaw-code-agent` to run Claude Code, Codex, or experimental OpenCode se
 - Use `permission_mode: "bypassPermissions"` only for autonomous execution.
 - Treat `harness: "opencode"` as experimental. Use it only when requested or configured and local `opencode >= 1.16.2` has provider auth ready.
 - `defaultWorktreeStrategy` defaults to `delegate`, so new sessions normally use branch isolation and orchestrator-led follow-through. Use `worktree_strategy: "off"` only when the task must run in the main checkout or outside a git repo.
-- In `plan` mode, the plan belongs in normal session output. Do not ask the coding agent to write plan docs or transcript artifacts unless the user explicitly asked for a file.
+- In `plan` mode the agent submits its plan through the harness's native plan step (Claude Code `ExitPlanMode`, Codex plan mode, the OpenCode `plan` agent). Read it with `agent_output(session, full=true)`. Do not ask the coding agent to write plan docs or transcript artifacts unless the user explicitly asked for a file.
 
 Example:
 
@@ -45,13 +45,13 @@ agent_launch(
 When a session already exists for the task, keep using it.
 
 - Waiting for plan approval: `agent_respond(session, message, approve=true)` or `agent_request_plan_approval(...)` if delegated approval must escalate to the user
-- Waiting for a question answer: `agent_respond(session, message)`
-- Killed/stopped by restart: `agent_respond(session, message)`
+- Waiting for a question answer (Claude Code `AskUserQuestion`, OpenCode or Codex pending input): `agent_respond(session, message)` with the option number or label (several, comma-separated, for multi-select) or free text
+- Suspended after idle timeout, or stopped by a restart: `agent_respond(session, message)`
 - Completed but needs follow-up: `agent_respond(session, message)` resumes the same backend conversation (Claude Code, Codex, and OpenCode), or `agent_launch(resume_session_id=session_id, prompt="...")` when you need to change launch settings
 - Running Codex session needs a correction mid-turn: `agent_respond(session, message)` steers it into the current turn; add `interrupt=true` only to stop the turn and restart from your message
 - Codex went down a wrong path in its last turn(s): `agent_launch(resume_session_id=session_id, fork_session=true, rewind_turns=1, prompt="...")` forks from before those turns (omit `fork_session` to revert the thread in place). File changes are not undone; tell the agent to revert them if needed
 - Long Codex session near its context limit: `agent_session_action(session, action="compact")`
-- Want an independent code review before merge/PR (Codex): `agent_session_action(session, action="review")` reviews the worktree branch against its base; read the findings with `agent_output`
+- Want an independent code review before merge/PR (Codex): `agent_session_action(session, action="review")` reviews a worktree session's branch against its base, or uncommitted changes otherwise; pass `review_target` / `base_branch` / `commit_sha` / `instructions` to change the target, and read the findings with `agent_output`. Actions need a running Codex session; resume a stopped one with `agent_respond` first
 - Fresh `agent_launch` is only for genuinely independent work
 
 Do not launch a new coding session from a wake event for the same task.
@@ -90,6 +90,7 @@ Approval/execution meanings:
 - `approved_then_implemented`: normal approved execution
 - `implemented_without_required_approval`: actual approval bypass
 - `awaiting_approval`: still stopped at the approval gate
+- `awaiting_plan_output`: approved; waiting for the implementation turn
 - `not_plan_gated`: no plan gate applied
 
 Completion ownership:
@@ -134,7 +135,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 - Approval belongs to the user.
 - The plugin sends the canonical Approve / Revise / Reject prompt directly to the user.
-- Telegram and Discord buttons use the shared direct-message presentation path; if buttons are missing, plain-text `Approve`, `Revise`, or `Reject` in the same thread drives the same decision path.
+- Telegram and Discord buttons use the shared direct-message presentation path; if buttons are missing, a plain-text `approve` or `reject` in the same thread drives the same decision path, and any other reply is sent back as revision feedback.
 - If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - If the user rejects the plan or the session is killed, treat older plan prompts as stale and verify state with `agent_sessions` before acting.
 - Wait for the user's answer, then forward it with `agent_respond(...)`.
@@ -169,12 +170,15 @@ New worktrees receive the repository's `.worktreeinclude` files (for example `.e
 
 Lifecycle meanings:
 
+- `provisioned` (shown as `active`): sandbox still in use; a completed `manual` worktree stays here
 - `pending_decision`: still waiting for merge / PR / dismiss follow-through
+- `merge_conflict_resolving`: a conflict-resolver session is working on an auto-merge conflict
 - `pr_open`: PR exists; preserve the sandbox
 - `merged`: normal ancestry merge landed
 - `released`: content already landed on the base branch even though SHAs differ after rebase, squash, or cherry-pick
 - `dismissed`: sandbox intentionally discarded
 - `no_change`: no committed delta
+- `cleanup_failed`: removal failed; report it instead of retrying blindly
 
 If `agent_worktree_status` reports `released`, the sandbox content is already landed. Do not narrate it as "still unmerged" just because the branch appears ahead.
 
@@ -199,7 +203,17 @@ If `agent_worktree_status` reports `released`, the sandbox content is already la
 
 ### `manual`
 
+- The worktree is kept after the session completes (lifecycle `provisioned`) until it is merged, turned into a PR, or dismissed.
 - Wait for an explicit user request before calling `agent_merge` or `agent_pr`.
+
+### `auto-merge` / `auto-pr`
+
+- The plugin merges or opens/updates the PR itself when the session completes, subject to repo policy. An auto-merge rebase conflict starts a conflict-resolver session; a failed auto-PR falls back to a pending worktree decision.
+
+### Repo Policy
+
+- The repo integration policy (`pr-required`, `pr-allowed`, `never-pr`, `manual`) decides which follow-through is allowed. Set it with `agent_repo_policy(workdir, policy)` when a first launch asks for one.
+- `agent_repo_policy(workdir, reset=true)` also works after the repo directory was deleted (pass the stored path); `agent_repo_policy(list=true)` marks missing repos, and `agent_repo_policy(cleanup=true)` removes their policies.
 
 ### Cleanup
 
@@ -223,8 +237,7 @@ If `agent_worktree_status` reports `released`, the sandbox content is already la
 
 ## Anti-Patterns
 
-- Do not pass `multi_turn` or `multi_turn_disabled`; all sessions are multi-turn.
-- Do not pass `channel` manually unless you are debugging routing.
+- All sessions are multi-turn; there is no single-turn option.
 - Do not auto-answer design or scope questions.
 - Do not infer approval/completion ownership from old transcript snippets when deterministic fields are present.
 - Do not post duplicate completion or approval recaps when the plugin already sent the canonical message.

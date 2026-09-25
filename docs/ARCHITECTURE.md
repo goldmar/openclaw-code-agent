@@ -23,7 +23,7 @@ SessionManager
   -> api.runtime.system.enqueueSystemEvent (+ requestHeartbeat for wake fallbacks only)
 
 Interactive callbacks (Telegram / Discord)
-  -> CallbackHandler
+  -> createCallbackHandler (src/callback-handler.ts)
   -> agent_merge / agent_pr / agent_respond
 
 Plain-text approval fallback
@@ -36,7 +36,7 @@ Plain-text approval fallback
 This plugin sits beside, not inside, two OpenClaw core subsystems that are easy to conflate with it:
 
 - **ACPX**: OpenClaw's bundled ACP runtime backend. It exists to back ACP sessions and ACP control-plane behavior.
-- **OpenClaw bundled `codex` plugin**: OpenClaw's core Codex provider and native embedded harness for `codex/*` model refs.
+- **OpenClaw bundled `codex` plugin**: OpenClaw's official Codex plugin, which runs eligible embedded OpenAI agent turns (`openai/*` routes) through Codex App Server.
 
 `openclaw-code-agent` is neither of those:
 
@@ -56,12 +56,12 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 
 `index.ts` registers:
 
-- 18 tools
+- 19 tools
 - 11 chat commands
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service
 
-Service startup loads config, instantiates `SessionManager`, restores persisted state, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
+The service starts on Gateway startup or lazily on the first tool, command, or callback. Startup loads config, instantiates `SessionManager`, restores persisted state and reconciles the Task Flow mirror, starts the `GoalController` and (with `autoUpdate` on) the update service, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
 
 ### `SessionManager`
 
@@ -92,7 +92,7 @@ Key behavior:
 - buffers output
 - manages the idle timer
 - validates state transitions
-- emits `statusChange`, `output`, `toolUse`, and `turnEnd`
+- emits `statusChange`, `lifecycleChange`, `output`, `toolUse`, `turnEnd`, and `pendingInputAnswered`
 
 `Session` now uses an explicit control-state reducer for lifecycle, approval, runtime, and worktree transitions. Suspended sessions are explicitly resumable; terminal sessions stay terminal.
 
@@ -106,7 +106,7 @@ Sessions launched with a bound OpenClaw session key also mirror high-level lifec
 
 Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. The async managed-flow binding is part of the supported OpenClaw floor (2026.9.6), so OCA uses it directly; no synchronous or legacy mirror surface is consulted.
 
-The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual async SQLite mutations, delayed creation, terminal drainage, and persisted recovery against an independently installed OpenClaw source checkout. Candidate `b01c37d6692eb7ccec7a50c161b97a81e009a632` contains upstream #146495 (merge `5b792cf8f396ddc4c11f54d8d370d64a6354b2b2`). From the OCA checkout, set `OPENCLAW_TASKFLOW_CANDIDATE` to that source directory and `TSX_TSCONFIG_PATH` to its `tsconfig.json`, then run `node --import "$OPENCLAW_TASKFLOW_CANDIDATE/scripts/tsx.mjs" --test tests/session-task-lifecycle-candidate.test.ts` on each supported Node lane. The test uses temporary state and closes the candidate's workers; the regular verification suite skips this optional source gate.
+The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual async SQLite mutations, delayed creation, terminal drainage, and persisted recovery against an independently installed OpenClaw source checkout. From the OCA checkout, set `OPENCLAW_TASKFLOW_CANDIDATE` to an OpenClaw source checkout at `v2026.9.6` or later and `TSX_TSCONFIG_PATH` to its `tsconfig.json`, then run `node --import "$OPENCLAW_TASKFLOW_CANDIDATE/scripts/tsx.mjs" --test tests/session-task-lifecycle-candidate.test.ts` on each supported Node lane. The test uses temporary state and closes the candidate's workers; the regular verification suite skips this optional source gate.
 
 ### Harness Abstraction
 
@@ -119,11 +119,11 @@ The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual asy
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes. Plan approval leaves plan mode through the `ExitPlanMode` permission result (`setMode`), not through a prompt.
-- Codex runs through the Codex App Server transport. Plugin `plan` mode maps to Codex's `plan` collaboration mode and remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts; the session system prompt travels as thread `developerInstructions`. Codex's sandbox/approval settings come from `harnesses.codex` and do not change with the OCA permission mode. Codex worktree launches use the plugin-managed worktree as the thread cwd (the App Server has no worktree API).
-- Codex follow-ups during a running turn are steered into it; `compact` and `review` thread actions travel through the same ordered prompt stream as user messages so they never overlap a turn.
+- Codex runs through the Codex App Server transport. Plugin `plan` mode maps to Codex's `plan` collaboration mode and remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts; the session system prompt travels as thread `developerInstructions`. Codex's sandbox/approval settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`, or from the host `tools.exec.mode` when those are unset, and do not change with the OCA permission mode. Codex worktree launches use the plugin-managed worktree as the thread cwd (the App Server has no worktree API).
+- Codex follow-ups during a running turn are steered into it; `agent_launch(rewind_turns=N)` forks before or reverts the latest turns; `compact` and `review` thread actions (`agent_session_action`) travel through the same ordered prompt stream as user messages so they never overlap a turn.
 - OCA keeps its own verifier-driven goal loop for every harness instead of Codex's native `thread/goal/*`, which is Codex-only and model-judged.
 - OpenCode runs through one shared localhost OpenCode server. Fresh prompts use classic `prompt_async`; completion comes from the demultiplexed `/global/event` stream (`session.idle`), with session-status polling only while that stream is disconnected. Message/result fetches, permission/question replies, session create, fork, abort, and permission-rule updates use classic routes. Plan mode prompts the built-in `plan` agent; approved plans continue on the `build` agent. If the server dies, in-flight turns fail and the next turn starts a new server.
-- `agent_respond` is the only continuation primitive across built-in backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
+- `agent_respond` is the normal continuation path across built-in backends (it resumes stopped sessions that still have a backend conversation); fork and rewind flows go through `agent_launch(..., resume_session_id=..., fork_session=true)` / `rewind_turns`.
 
 Boundary note:
 
@@ -166,18 +166,21 @@ Notification delivery is at-least-once at the transport layer. Producers must ma
 
 The invariant is: if two code paths represent the same user-visible outcome in the same chat/topic, they must share the same semantic `idempotencyKey`. If the outcome is intentionally repeatable, include the natural version in the key, such as plan version, turn number, question request id, PR number plus update identity, or snooze timestamp.
 
-### `CallbackHandler`
+### Callback Handler
 
-`src/callback-handler.ts` handles interactive callbacks under the `code-agent` namespace for both Telegram and Discord.
+`createCallbackHandler(channel)` in `src/callback-handler.ts` handles interactive callbacks under the `code-agent` namespace for both Telegram and Discord.
 
 It dispatches:
 
-- plan approval actions
-- revision prompts
-- plain-text Approve / Revise / Reject fallback while a plan is awaiting review
-- reply prompts
-- retry/output shortcuts
-- worktree actions (`merge`, `pr`, `new-pr`)
+- plan decisions (approve / request changes / reject)
+- pending-input answers (questions and Codex approval requests)
+- plan offers (start / dismiss)
+- repo-policy choices
+- worktree actions (merge, create / update / view PR, decide later, dismiss)
+- session resume / restart and view output
+- plugin-update buttons (install, restart, dismiss, remind later)
+
+Plain-text Approve / Revise / Reject while a plan is awaiting review is not a callback: it arrives as an ordinary reply and is parsed by `agent_respond` (`src/actions/respond.ts`).
 
 This keeps plan approval and worktree decisions inside the plugin instead of leaking semantic callback payloads into chat. Buttons carry opaque action tokens, not `verb:session` strings. When a newer review state supersedes an older one, the plugin invalidates older plan-decision tokens and clears the prompt controls on transports that support edits. If an already-visible old control still sends a callback, the handler may report it as stale. When the transport cannot deliver or render buttons, the same review version can still be decided by plain text in the session thread.
 
@@ -187,12 +190,12 @@ This keeps plan approval and worktree decisions inside the plugin instead of lea
 - `src/session-notifications.ts`: delivery-state-aware notification wrapper over `WakeDispatcher`
 - `src/session-worktree-controller.ts`: worktree completion/retention rules
 - `src/session-store.ts`: persisted metadata and output index
-- `src/session-metrics.ts`: in-memory aggregate metrics
+- `src/session-metrics.ts`: aggregate metrics computed from persisted and active sessions
 - `src/worktree.ts`: worktree creation, merge, PR, cleanup, diff summaries
 - `src/worktree-lifecycle-resolver.ts`: authoritative lifecycle resolution from persisted state plus live repository evidence
 - `src/actions/respond.ts`: shared respond logic for tool and command callers
 - `src/application/*`: shared presentation and session-control helpers
-- `src/config.ts`: config defaults, migration logic, and routing utilities
+- `src/config.ts`: config defaults, per-harness model/effort resolution, and routing utilities
 
 ## Lifecycle Flows
 
@@ -203,7 +206,7 @@ agent_launch / /agent
   -> resolve model, harness, origin channel, origin thread
   -> resolve resume/fork metadata if present
   -> decide effective worktree strategy
-  -> create plugin-managed worktree only when the selected backend requires it
+  -> create a plugin-managed worktree when the effective strategy is not `off` (fails outside a git repository)
   -> SessionManager.launchSession()
   -> Session starts streaming output
 ```
@@ -220,7 +223,7 @@ Plan approval behavior depends on `planApproval`:
 
 - `ask`: notify the user directly and wait
 - `delegate`: wake the orchestrator with the full plan and decision criteria; it must review the full plan before approving or escalating back to the user
-- `approve`: wake the orchestrator with an immediate approval instruction
+- `approve`: wake the orchestrator, which reads the full plan, sends destructive, credential-touching, CI/release/production, or out-of-scope plans to the user (`agent_request_plan_approval`), and otherwise approves with a rationale
 
 For `ask`, Telegram and Discord plan buttons share OpenClaw's direct-message presentation contract. Plain text `Approve`, `Revise`, and `Reject` is accepted only while the session is awaiting a plan decision; `Approve`, `Revise`, `Reject`, or kill closes that review version, invalidates its plan-decision tokens, and clears old controls where the transport allows it. Stale callbacks can still be acknowledged as stale if a client surfaces an old prompt.
 
@@ -228,11 +231,11 @@ For `ask`, Telegram and Discord plan buttons share OpenClaw's direct-message pre
 
 When a session completes with worktree metadata:
 
-- `ask`: keep the branch local, notify the user, and attach `Merge` / `Open PR` buttons
+- `ask`: keep the branch local, notify the user, and attach state-aware `Merge` / `Open PR` / `Later` / `Discard` buttons
 - `delegate`: keep the branch local and wake the orchestrator with diff context
 - `auto-merge`: attempt merge automatically and spawn a conflict resolver on failure
 - `auto-pr`: attempt PR creation/update automatically; fall back to explicit pending decision state on failure
-- `manual`: keep the branch for explicit follow-up
+- `manual`: keep the branch and the worktree (lifecycle `provisioned`) for explicit follow-up
 
 `ask` and `delegate` suppress the normal turn-complete wake because the worktree decision message is the completion signal.
 
@@ -247,9 +250,10 @@ This avoids treating “ahead of main” as the only truth source for cleanup.
 ### Resume, Redirect, And Recovery
 
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
-- `agent_respond` is the only continuation primitive for active and explicitly suspended sessions
+- `agent_respond` continues active sessions and resumes stopped, completed, or suspended sessions that still have a backend conversation
 - sessions found in `running` state during startup recovery are normalized into resumable persisted entries instead of being implicitly restarted
 - persisted Codex and OpenCode resume state is restored through the backend thread ref; Codex resumes with `excludeTurns: true`, and `rewind_turns` forks before or reverts the latest turns
+- completed Claude Code sessions resume after their transcript is validated with the SDK's `getSessionInfo()`
 
 ## Persistence Model
 
@@ -283,7 +287,7 @@ The notification pipeline is intentionally centralized:
 2. `WakeDispatcher` decides whether it is notify-only, wake-only, or both.
 3. Direct user notifications go through the host durable outbound queue; Telegram and Discord interactive notifications attach buttons as a `presentation`.
 4. Wakes use `chat.send` because it targets the originating runtime session precisely.
-5. An in-process system event (targeting the origin session when known) is the recovery path when a wake fails or the session has no deliverable route. A text-only notification whose durable send definitively failed is also handed to the agent session as a system event; notifications with buttons or that require direct delivery are reported as failed instead, and a send with an unknown outcome (timeout) is never followed by a system event. The host has no lighter wake: a heartbeat for a generic system event runs the agent's configured heartbeat prompt and routine. So a notice fallback requests a heartbeat only when no OCA wake follows in the same dispatch; otherwise it is only enqueued and reaches the orchestrator in that wake's `chat.send` turn. Wake fallbacks always request a heartbeat.
+5. An in-process system event targeting the session's origin session key is the recovery path when a wake fails or the session has no deliverable route; if the session has no origin session key, the fallback is skipped with a warning and the delivery is reported as failed. A text-only notification whose durable send definitively failed is also handed to the agent session as a system event; notifications with buttons or that require direct delivery are reported as failed instead, and a send with an unknown outcome (timeout) is never followed by a system event. The host has no lighter wake: a heartbeat for a generic system event runs the agent's configured heartbeat prompt and routine. So a notice fallback requests a heartbeat only when no OCA wake follows in the same dispatch; otherwise it is only enqueued and reaches the orchestrator in that wake's `chat.send` turn. Wake fallbacks always request a heartbeat.
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 
@@ -293,12 +297,12 @@ Worktree terminal outcomes use a two-step UX contract. The plugin first delivers
 
 `src/worktree.ts` handles the plugin-owned worktree policy layer:
 
-- isolated plugin-managed worktree creation under `.worktrees` or `OPENCLAW_WORKTREE_DIR`
+- isolated plugin-managed worktree creation under `OPENCLAW_WORKTREE_DIR`, else `worktreeDir`, else `<repoRoot>/.worktrees`
 - branch naming and collision handling
 - default branch detection
 - merge and squash paths
 - PR creation and updates via `gh`
-- stale worktree cleanup
+- worktree and branch removal once the lifecycle allows it
 - diff summary generation for delegated decisions
 - new-worktree provisioning (`src/worktree-provisioning.ts`): `.worktreeinclude` gitignored-file copies and the repository's `.openclaw/worktree-setup.sh`, with rollback of the worktree and new branch on failure
 
@@ -331,7 +335,7 @@ Backend capabilities intentionally differ:
 1. The plugin treats coding sessions as managed background jobs, not as inline chat completions.
 2. Notification transport is gateway-owned. Direct notifications use the host durable outbound queue, wakes use `chat.send`, and fallbacks use runtime system events instead of a plugin-owned transport.
 3. `Session` is an event emitter, not a callback bucket. This keeps the lifecycle model explicit.
-4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, the `chat.send` wake (in-process gateway requests are trusted-only), plugin self-update, and explicit verifier commands.
+4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, the repository's `.openclaw/worktree-setup.sh` for new worktrees, the `chat.send` wake (in-process gateway requests are trusted-only), plugin self-update, and explicit verifier commands.
 5. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 6. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
 7. Codex, Claude Code, and experimental OpenCode share the same session-centric control plane even though their backend transports differ.
@@ -353,6 +357,7 @@ The architecture is most sensitive to these config settings:
 - `harnesses.*`
 
 See [REFERENCE.md](REFERENCE.md) for the operator-facing meaning of those settings.
+
 ## Breaking Schema Policy
 
 The persisted-session store is loaded row by row. A store with an older schema version (or a pre-schema array store, or a wrongly shaped collection) is archived whole to a timestamped `.legacy-*.json` backup and replaced with a fresh index. Within a current-schema store, rows or action tokens that no longer normalize are dropped individually after a verbatim `.legacy-*.json` backup is written, so valid sessions survive an upgrade; if the backup cannot be written, the whole store is archived instead. Unknown enum values normalize to `undefined`, and worktree rows without `worktreeLifecycle` get one synthesized from the older `worktreeMerged` / `worktreeDisposition` / `worktreeState` fields.

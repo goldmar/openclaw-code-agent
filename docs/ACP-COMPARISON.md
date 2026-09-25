@@ -54,7 +54,7 @@ Core managed worktrees live under the Gateway state directory on `openclaw/<name
 
 - It is not an ACP server or runtime backend and does not register providers or model runtimes.
 - It does not own `/codex`, `/acp`, or Control UI session placement.
-- It does not require the Codex or `acpx` plugins; it talks to `codex app-server`, the Claude Agent SDK, and `opencode serve` directly.
+- It does not require the Codex or `acpx` plugins; it talks to `codex app-server`, the Claude Agent SDK (which spawns its bundled `claude` executable), and `opencode serve` directly.
 
 ## Sources
 

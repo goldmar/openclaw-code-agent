@@ -6,7 +6,7 @@ Security notes for `openclaw-code-agent`: the subprocesses it runs, its network 
 
 This plugin is an orchestration layer around local developer tooling. It is expected to:
 
-- start local coding-agent backends (Claude Code in-process through its SDK; Codex and OpenCode as child processes)
+- start local coding-agent backends as child processes (Claude Code through the Claude Agent SDK, which spawns its bundled `claude` executable; Codex and OpenCode directly)
 - run local `git` / `gh` commands for worktree, merge, and PR flows
 - run a repository's own `.openclaw/worktree-setup.sh` when it creates a worktree
 - optionally run operator-provided verifier shell commands in explicit goal-task flows
@@ -27,9 +27,9 @@ These call sites name the executable as a string literal with an argument array 
 | Executable | Source | What runs |
 | --- | --- | --- |
 | `git` | `src/git-exec.ts` (`runGit`), used by `src/worktree*.ts`, `src/worktree-ref-validation.ts`, `src/repo-policy.ts`, `src/tools/agent-pr.ts` | Worktree add/remove, status, diff, merge, rebase, push, and `git check-ref-format` branch-name validation. Explicit per-call timeouts, closed stdin, the Gateway's environment. Mutating sequences are serialized per repository. |
-| `gh` | `src/git-exec.ts` (`runGh`), used by `src/worktree-repo.ts`, `src/worktree-pr.ts` | PR create, view, list, and edit when the GitHub CLI is installed and authenticated. |
-| `openclaw` | `src/wake-delivery-executor.ts` | `openclaw gateway call chat.send --params <json>` for session wakes. This is the only delivery path that still uses the CLI: the in-process `runtime.gateway.request` surface is reserved for trusted plugins. |
-| `openclaw` | `src/auto-update.ts` | `openclaw plugins inspect openclaw-code-agent --json` and, for ClawHub installs, `openclaw plugins search <package> --json` (update check); `openclaw plugins install <package>@<version> --force` (only after the user presses **Update now**); `openclaw gateway restart` (only after the user presses **Restart Gateway**). See [Self-update](#self-update). |
+| `gh` | `src/git-exec.ts` (`runGh`), used by `src/worktree-repo.ts`, `src/worktree-pr.ts` | PR create, view, list, edit, and comment when the GitHub CLI is installed and authenticated, plus a `gh --version` availability probe. |
+| `openclaw` | `src/wake-delivery-executor.ts` | `openclaw gateway call chat.send --expect-final --timeout 30000 --params <json>` for session wakes. This is the only delivery path that still uses the CLI: the in-process `runtime.gateway.request` surface is reserved for trusted plugins. |
+| `openclaw` | `src/auto-update.ts` | `openclaw plugins inspect openclaw-code-agent --json` and, for ClawHub installs, `openclaw plugins search <package> --limit 100 --json` (update check); `openclaw plugins install <package>@<version> --force` for npm installs or `openclaw plugins install clawhub:<package>@<version> --force` for ClawHub installs (only after the user presses **Update now**); `openclaw gateway restart` (only after the user presses **Restart Gateway**). See [Self-update](#self-update). |
 
 ### Dynamic executables
 
@@ -37,10 +37,11 @@ These run a configurable command or a repository-provided file, so the executabl
 
 | Command | Source | Notes |
 | --- | --- | --- |
+| Claude Code | `@anthropic-ai/claude-agent-sdk`, called from `src/harness/claude-code.ts` | The SDK spawns its bundled native `claude` executable for each session. The spawn happens inside the SDK dependency, not in OCA's own code. |
 | Codex App Server | `src/harness/codex-rpc.ts` | `codex app-server --listen stdio://` (override with `OPENCLAW_CODEX_APP_SERVER_COMMAND` / `OPENCLAW_CODEX_APP_SERVER_ARGS`). JSON-RPC over stdio; one process per Codex session. Its sandbox and approvals come from `harnesses.codex.*` or, when unset, the host `tools.exec.mode`; see [Codex sandbox](#codex-sandbox). |
 | OpenCode server | `src/harness/opencode.ts` | One shared `opencode serve --hostname 127.0.0.1 --port 0 --print-logs` (override the binary with `OPENCLAW_OPENCODE_COMMAND`). Started lazily for the first OpenCode session, addressed through the URL it prints, and shut down about 30 seconds after the last OpenCode session ends. Binds to localhost only. |
-| Worktree setup script | `src/worktree-provisioning.ts` | The repository's executable `.openclaw/worktree-setup.sh`, run directly (no shell, no stdin) in each new OCA worktree with a 120 s timeout and process-group termination. See [Worktree setup script](#worktree-setup-script). |
-| Goal verifier | `src/goal-controller.ts` | `bash -lc <command>` for operator-supplied verifier commands in `agent_goal_launch(verifier...)`. `BASH_ENV` and `ENV` are removed from its environment so shell bootstrap hooks cannot rewrite verifier execution. Verifier commands are trusted operator input; do not expose goal launches to untrusted users. |
+| Worktree setup script | `src/worktree-provisioning.ts` | The repository's executable `.openclaw/worktree-setup.sh`, run directly (no shell, no stdin) in each new OCA worktree with a 120 s timeout and process-group termination. It gets the Gateway environment plus `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`. See [Worktree setup script](#worktree-setup-script). |
+| Goal verifier | `src/goal-controller.ts` | `bash -lc <command>` for operator-supplied verifier commands in `agent_goal_launch(verifier_commands=...)`. `BASH_ENV` and `ENV` are removed from its environment; as a login shell, `-l` still sources the Gateway user's login profile files. Verifier commands are trusted operator input; do not expose goal launches to untrusted users. |
 
 ### In-process host surfaces (no subprocess)
 
@@ -58,15 +59,15 @@ Under `:workspace`, Codex may write only inside the workspace and has no network
 
 ## Network
 
-OCA makes one outbound request of its own: the npm update check, a bounded HTTPS `GET https://registry.npmjs.org/openclaw-code-agent/latest` with a 10 s timeout, sent only for npm installs and only while `autoUpdate` is on. It lives in its own bundle chunk (`dist/chunks/npm-release-client-*.js`), which reads no environment variables and sends no local data. ClawHub installs check through `openclaw plugins search` instead. Coding-agent backends make their own model-provider requests with their own credentials; OCA does not read or forward those credentials.
+OCA makes one outbound request of its own: the npm update check, a bounded HTTPS `GET https://registry.npmjs.org/openclaw-code-agent/latest` with a 10 s timeout, sent only for npm installs and only while `autoUpdate` is on. It lives in its own bundle chunk (`dist/chunks/npm-release-client-*.js`), which reads no environment variables and sends no local data. ClawHub installs check through `openclaw plugins search` instead. Apart from that, OCA talks only to local processes: stdio JSON-RPC to Codex, and HTTP to the shared `opencode serve` on 127.0.0.1, with Basic auth when `OPENCODE_SERVER_PASSWORD` is set. Coding-agent backends make their own model-provider requests with their own credentials; OCA does not read or forward those credentials.
 
-The environment variables OCA reads are local configuration: harness command overrides (`OPENCLAW_CODEX_APP_SERVER_*`, `OPENCLAW_OPENCODE_COMMAND`), OpenCode localhost server auth (`OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD`), worktree and state path overrides (`OPENCLAW_WORKTREE_DIR`, `OPENCLAW_STATE_DIR`, `OPENCLAW_HOME`, `OPENCLAW_CODE_AGENT_*_PATH`), and diagnostics switches. None are serialized into notifications, wakes, or the update check.
+The environment variables OCA reads are local configuration: harness command overrides (`OPENCLAW_CODEX_APP_SERVER_*`, `OPENCLAW_OPENCODE_COMMAND`), OpenCode localhost server auth (`OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD`), worktree and state path overrides (`OPENCLAW_WORKTREE_DIR`, `OPENCLAW_WORKTREE_BASE_BRANCH`, `OPENCLAW_CODE_AGENT_*_PATH`, and `OPENCLAW_STATE_DIR` / `OPENCLAW_HOME` through the host's `resolveStateDir`), the Claude Code plans directory (`CLAUDE_CONFIG_DIR`), the GitHub CLI host settings (`GH_HOST`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `APPDATA`, plus only the host names from `gh`'s `hosts.yml`), `PATH` for command resolution, and diagnostics switches (`OPENCLAW_CODE_AGENT_*_DIAGNOSTICS`, `OPENCLAW_DEBUG_SESSION_STORE`). None are serialized into notifications, wakes, or the update check.
 
 ## Self-Update
 
 The plugin config key `autoUpdate` (default `true`) controls the self-updater:
 
-- **On:** about once a day OCA checks for a newer stable release from the plugin's recorded install source and, if one exists, sends **Update now** / **Remind later** / **Dismiss** buttons. Nothing is installed until a user presses **Update now**. OCA then reinstalls exactly the approved version from the recorded npm or ClawHub source (`openclaw plugins install <package>@<version> --force`) and verifies the installed version and install record with `openclaw plugins inspect`. The Gateway is restarted only after a separate **Restart Gateway** press (`openclaw gateway restart`).
+- **On:** about once a day OCA checks for a newer stable release from the plugin's recorded install source and, if one exists, sends **Update now** / **Remind later** / **Dismiss** buttons. Nothing is installed until a user presses **Update now**. OCA then reinstalls exactly the approved version from the recorded npm or ClawHub source (`openclaw plugins install <package>@<version> --force`, or `clawhub:<package>@<version>` for ClawHub installs) and verifies the installed version and install record with `openclaw plugins inspect`. The Gateway is restarted only after a separate **Restart Gateway** press (`openclaw gateway restart`).
 - **Off (`autoUpdate: false`):** no update checks, installs, or restarts. Update buttons sent before the change reply that self-update is disabled.
 
 Update buttons are single-use action tokens bound to the approved version.
@@ -77,22 +78,25 @@ OpenClaw core runs `.openclaw/worktree-setup.sh` for its managed worktrees only 
 
 ## Data Locations
 
-State lives under the OpenClaw state directory (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`):
+State lives under the OpenClaw state directory (`$OPENCLAW_STATE_DIR`; otherwise `$OPENCLAW_HOME/.openclaw` or `~/.openclaw`, resolved by the host's `resolveStateDir`):
 
 | Path | Contents |
 | --- | --- |
-| `<stateDir>/code-agent-sessions.json` | Session index: prompts, routes, worktree metadata, costs, and action tokens (override with `OPENCLAW_CODE_AGENT_SESSIONS_PATH`) |
+| `<stateDir>/code-agent-sessions.json` | Session index: prompts, routes, worktree metadata, costs, action tokens, and repo policies (override with `OPENCLAW_CODE_AGENT_SESSIONS_PATH`) |
+| `<index>.legacy-<timestamp>.json` | Verbatim backup written before an upgrade drops rows that no longer load |
 | `<stateDir>/code-agent-goal-tasks.json` | Goal-task definitions and progress (override with `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) |
 | `<stateDir>/plugin-state/openclaw-code-agent/output/` | Session output transcripts (private directory and files) |
 | `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json` | Update-check state |
-| `<repoRoot>/.worktrees/` | OCA worktrees (override with `worktreeDir` or `OPENCLAW_WORKTREE_DIR`) |
+| `<repoRoot>/.worktrees/` | OCA worktrees (override with `worktreeDir` or `OPENCLAW_WORKTREE_DIR`); OCA adds the worktree directory to `<repoRoot>/.git/info/exclude` |
+| `/tmp/openclaw-agent-*.txt` | Pre-5.0 transcripts, readable through their stored paths until maintenance ages them out |
 
 JSON stores are written as private (`0600`) files. [REFERENCE.md](REFERENCE.md#openclaw-host-integration) lists every path.
 
 ## Release Gates
 
-- `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan, vendored from the ClawHub repository with its MIT license in `scripts/vendor/clawhub-moderation-engine.mjs`, over the exact packed file list. Any finding fails the gate. The release workflow repeats the scan on the exact tarball it publishes (`--tarball=<file>`), after `prepack` has rebuilt `dist/`. It also requires that `fetch(` appears only in the npm release-client chunk and that no packed file combines `process.env` with a network call. Refresh the vendored engine with `pnpm sync:clawhub-scan -- --clawhub <checkout>`.
+- `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan, vendored from the ClawHub repository with its MIT license in `scripts/vendor/clawhub-moderation-engine.mjs`, over the exact packed file list. Any finding fails the gate. The release workflow repeats the scan on the exact tarball it publishes (`--tarball=<file>`), after `prepack` has rebuilt `dist/`. It also requires that `fetch(` appears only in the npm release-client chunk and that no packed file combines `process.env` with a network call. Refresh the vendored engine with `pnpm sync:clawhub-scan --clawhub <checkout>`.
 - `pnpm check-plugin-security` packs and installs the plugin under an isolated temporary home and runs OpenClaw's deep static code-safety audit. It accepts only the reviewed `dangerous-exec` finding (`Shell command execution detected (child_process)`), which maps to the subprocess inventory above. Missing scans, scan errors, and any other finding fail the gate.
+- The release workflow also runs `pnpm validate:release-metadata`, `pnpm audit:prod`, `pnpm verify:npm-consumer`, the ClawHub package inspector (`clawhub package validate --runtime`), and an isolated-home install plus `openclaw plugins inspect --runtime` of the exact tarball. `pnpm check-plugin-security` runs in the release workflow, not in PR CI.
 
 OpenClaw no longer blocks dangerous code during plugin installation. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the inventory above.
 
