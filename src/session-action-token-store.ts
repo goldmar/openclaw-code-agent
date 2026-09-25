@@ -123,8 +123,24 @@ export class SessionActionTokenStore {
     const token = this.getActionToken(tokenId);
     if (!token || token.consumedAt != null) return undefined;
     token.consumedAt = Date.now();
+    token.consumptionId = randomUUID();
     this.notifyChanged();
     return token;
+  }
+
+  /**
+   * Whether the consumption `consumptionId` of this token is still the one this
+   * store holds. Call it once the consumption is persisted: when another writer
+   * of the index persisted a consumption of the same token first, the merge
+   * adopted that one and this click must not act.
+   */
+  confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    // Bulk consumptions (question and plan tokens) carry no id; their callbacks
+    // are serialized per session in-process instead.
+    if (!consumptionId) return true;
+    // A consumption another writer persisted first replaces ours in the merge,
+    // including one from an older build that records no consumption id.
+    return this.tokens.get(tokenId)?.consumptionId === consumptionId;
   }
 
   consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
@@ -174,6 +190,12 @@ export class SessionActionTokenStore {
       }
     }
     if (changed) this.notifyChanged();
+  }
+
+  deleteActionToken(tokenId: string): void {
+    if (!this.tokens.delete(tokenId)) return;
+    this.adoptedTokenIds.delete(tokenId);
+    this.notifyChanged();
   }
 
   deleteActionTokensForSessionByKind(sessionId: string, kind: SessionActionKind): void {

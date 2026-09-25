@@ -249,6 +249,9 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   /** How long a tool waits for a prompt's direct delivery result before reporting it as in progress. */
   userDeliveryResultWaitMs = 10_000;
+  /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
+  private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
+  private worktreeReofferGeneration = 0;
   private readonly worktrees: SessionWorktreeController;
   private readonly questions: SessionQuestionService;
   private readonly lifecycle: SessionLifecycleService;
@@ -1149,6 +1152,11 @@ export class SessionManager {
     return this.interactions.consumeActionToken(tokenId);
   }
 
+  /** False when another writer of the index persisted a consumption of this token first. */
+  confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    return this.store.confirmActionTokenConsumption(tokenId, consumptionId);
+  }
+
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.interactions.getActionToken(tokenId);
   }
@@ -1612,6 +1620,95 @@ export class SessionManager {
 
   snoozeWorktreeDecision(ref: string, options?: { notifyUser?: boolean }): string {
     return this.worktreeDecisions.snoozeWorktreeDecision(ref, options);
+  }
+
+  /**
+   * Re-offer an open worktree decision after a button action failed (merge, PR,
+   * or discard). A callback consumes its token before acting, so another writer
+   * of the index can never run the same button; the controls the user clicked
+   * are therefore spent. This sends the decision again with a fresh set of
+   * buttons and, once that message is delivered, retires the older decision
+   * buttons. If the new message cannot be delivered, its buttons are dropped and
+   * the older ones stay usable. Resolves true only when the new controls were
+   * delivered, so the caller may clear the spent ones.
+   */
+  async reofferWorktreeDecision(ref: string): Promise<boolean> {
+    const decisionIsOpen = (): boolean => {
+      const persisted = this.getPersistedSession(ref);
+      if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
+      const state = persisted.worktreeLifecycle?.state;
+      if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
+      if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
+      return Boolean(persisted.worktreePath || persisted.worktreeBranch);
+    };
+    if (!decisionIsOpen()) return false;
+    const active = this.resolve(ref);
+    const persisted = this.getPersistedSession(ref);
+    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
+    const fresh = new Set((buttons ?? []).flat().map((button) => button.callbackData));
+    if (fresh.size === 0) return false;
+    // Several re-offers of one decision can overlap (a second failed action
+    // while the first retry prompt is still being delivered). A delivered retry
+    // retires only older controls: never those of a newer retry or of one still
+    // in flight, so every delivered prompt keeps working buttons.
+    const reoffers = this.worktreeReoffers.get(ref) ?? new Map<number, { tokens: Set<string>; inFlight: boolean }>();
+    this.worktreeReoffers.set(ref, reoffers);
+    const generation = ++this.worktreeReofferGeneration;
+    const entry = { tokens: fresh, inFlight: true };
+    reoffers.set(generation, entry);
+    const settleEntry = (): void => {
+      entry.inFlight = false;
+    };
+    const retireOlder = (): void => {
+      const keep = new Set<string>();
+      for (const [otherGeneration, other] of reoffers) {
+        if (otherGeneration >= generation || other.inFlight) {
+          for (const tokenId of other.tokens) keep.add(tokenId);
+        } else {
+          reoffers.delete(otherGeneration);
+        }
+      }
+      this.interactions.clearWorktreeDecisionTokens(ref, keep);
+    };
+    const dropFresh = (): void => {
+      reoffers.delete(generation);
+      if (reoffers.size === 0) this.worktreeReoffers.delete(ref);
+      for (const tokenId of fresh) this.interactions.deleteActionToken(tokenId);
+    };
+    const name = active?.name ?? persisted?.name ?? ref;
+    const branch = active?.worktreeBranch ?? persisted?.worktreeBranch;
+    const target = active ?? this.buildRoutingProxy({
+      id: ref,
+      name,
+      sessionId: persisted?.sessionId,
+      harnessSessionId: persisted?.harnessSessionId,
+      backendRef: persisted?.backendRef,
+      route: persisted?.route,
+    });
+    const delivery = await this.dispatchAndAwaitUserDelivery(target, {
+      label: "worktree-decision-retry",
+      idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
+      userMessage: [
+        `🔁 [${name}] The worktree decision${branch ? ` for \`${branch}\`` : ""} is still open: the last action did not complete.`,
+        `Choose again below.`,
+      ].join("\n"),
+      notifyUser: "always",
+      requireDirectUserNotification: true,
+      buttons,
+      shouldDispatch: decisionIsOpen,
+      hooks: {
+        onNotifySucceeded: () => {
+          settleEntry();
+          retireOlder();
+        },
+        onNotifyFailed: () => {
+          settleEntry();
+          dropFresh();
+        },
+      },
+    });
+    if (delivery === "failed" || delivery === "skipped") dropFresh();
+    return delivery === "delivered";
   }
 
   /**

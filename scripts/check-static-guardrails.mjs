@@ -275,6 +275,59 @@ for (const path of testFiles) {
   }
 }
 
+// Privacy: the repository is public. Tests, docs, and fixtures use synthetic
+// identifiers only. A Telegram chat id must be one of the fakes below, and
+// token-shaped strings must be known fixture fakes (tests that check redaction
+// need a token-shaped input). This list names fakes only; it never names a real
+// value to look for.
+const FAKE_TELEGRAM_CHAT_IDS = new Set([
+  "-1001234567890",
+  "-1009876543210",
+]);
+const FAKE_TOKEN_FIXTURES = new Set([
+  "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+  "ghp_abcdefghijklmnopqrstuvwxyz123456",
+  "sk-abcdefghijklmnopqrstuvwxyz123456",
+  "sk-test-secret1234567890",
+]);
+const TELEGRAM_CHAT_ID_PATTERN = /(?<![\w-])-100\d{10}(?!\d)/g;
+const TOKEN_PATTERNS = [
+  ["Anthropic API key", /\bsk-ant-[A-Za-z0-9_-]{16,}/g],
+  ["OpenAI-style API key", /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{16,}/g],
+  ["GitHub token", /\bgh[pousr]_[A-Za-z0-9]{20,}/g],
+  ["GitHub fine-grained token", /\bgithub_pat_[A-Za-z0-9_]{20,}/g],
+  ["Slack token", /\bxox[abposr]-[A-Za-z0-9-]{10,}/g],
+  ["AWS access key id", /\bAKIA[0-9A-Z]{16}\b/g],
+  ["JWT", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}/g],
+  ["private key block", /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/g],
+  ["Telegram bot token", /\b\d{8,10}:AA[A-Za-z0-9_-]{30,}/g],
+];
+const PRIVACY_TEXT_FILE = /\.(?:[cm]?[jt]s|json|md|ya?ml|txt|sh|html)$/;
+const privacyFiles = [
+  ...collectFiles(srcDir, (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...collectFiles(testsDir, (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...collectFiles(join(root, "docs"), (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...collectFiles(scriptsDir, (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...collectFiles(join(root, "skills"), (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...collectFiles(join(root, ".github"), (path) => PRIVACY_TEXT_FILE.test(path)),
+  ...["README.md", "CHANGELOG.md", "openclaw.plugin.json", "package.json"]
+    .map((file) => join(root, file))
+    .filter((path) => existsSync(path)),
+];
+for (const path of privacyFiles) {
+  const source = readFileSync(path, "utf8");
+  for (const match of source.matchAll(TELEGRAM_CHAT_ID_PATTERN)) {
+    if (FAKE_TELEGRAM_CHAT_IDS.has(match[0])) continue;
+    failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} Telegram chat id that is not a known fake; use -1001234567890 (see scripts/check-static-guardrails.mjs)`);
+  }
+  for (const [kind, pattern] of TOKEN_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      if (FAKE_TOKEN_FIXTURES.has(match[0])) continue;
+      failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} ${kind}-shaped string; use a fixture fake listed in scripts/check-static-guardrails.mjs`);
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error("Static guardrail check failed:");
   for (const failure of failures) {

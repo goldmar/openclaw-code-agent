@@ -489,6 +489,68 @@ describe("Codex App Server RPC transport", () => {
     }
   });
 
+  it("fails pending requests, fires the close handler, and drops late replies when the app server dies mid-turn", async () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), "oca-codex-rpc-crash-"));
+    const fixturePath = join(fixtureDir, "crash-mid-turn.mjs");
+    // A minimal app server: answers initialize, then on turn/start asks the
+    // client a question and exits before the turn (or the question) completes.
+    writeFileSync(fixturePath, [
+      "#!/usr/bin/env node",
+      "import readline from 'node:readline';",
+      "const out = (frame) => process.stdout.write(JSON.stringify(frame) + '\\n');",
+      "readline.createInterface({ input: process.stdin }).on('line', (line) => {",
+      "  const frame = JSON.parse(line);",
+      "  if (frame.method === 'initialize') out({ jsonrpc: '2.0', id: frame.id, result: {} });",
+      "  if (frame.method === 'turn/start') {",
+      "    out({ jsonrpc: '2.0', id: 'srv-1', method: 'item/tool/requestUserInput', params: { questions: [] } });",
+      "    setTimeout(() => process.exit(3), 20);",
+      "  }",
+      "});",
+    ].join("\n"));
+    chmodSync(fixturePath, 0o755);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const logs: string[] = [];
+    const originalWarn = console.warn;
+    const originalDebug = console.debug;
+    console.warn = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+    console.debug = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+    try {
+      const client = new StdioJsonRpcClient(fixturePath, [], 5_000, 10);
+      let closed = 0;
+      client.setCloseHandler(() => { closed += 1; });
+      const question = Promise.withResolvers<void>();
+      const reply = Promise.withResolvers<Record<string, unknown>>();
+      // The user answers only after the server died: the late reply cannot be written.
+      client.setRequestHandler(async () => {
+        question.resolve();
+        return await reply.promise;
+      });
+      await client.connect();
+      assert.deepEqual(await client.request("initialize", {}), {});
+      const turn = client.request("turn/start", { threadId: VALID_THREAD_ID });
+      await question.promise;
+      await assert.rejects(turn, /codex app server stdio closed/);
+      assert.equal(closed, 1, "the close handler fires once");
+      await assert.rejects(() => client.request("turn/interrupt", {}), /stdio not connected/);
+      reply.resolve({ answers: {} });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      const events = logs.map((line) => JSON.parse(line) as { event?: string; code?: number; pendingRequests?: number });
+      assert.ok(events.some((entry) => entry.event === "line.failed"), "the late reply is logged, not thrown");
+      const close = events.find((entry) => entry.event === "process.close");
+      assert.equal(close?.code, 3);
+      assert.equal(close?.pendingRequests, 1);
+      await client.close();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      console.warn = originalWarn;
+      console.debug = originalDebug;
+      process.off("unhandledRejection", onUnhandled);
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it("redacts sensitive stderr details from Codex app-server timeout errors", () => {
     const client = new StdioJsonRpcClient("codex", DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS) as unknown as {
       stderrTail: string;

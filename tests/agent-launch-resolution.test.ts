@@ -62,10 +62,10 @@ describe("resolveAgentLaunchRequest", () => {
       { prompt: "Continue work" },
       {
         workspaceDir: "/tmp",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
         deliveryContext: {
           channel: "telegram",
-          to: "-1003863755361",
+          to: "-1001234567890",
           accountId: "bot1",
           threadId: 13832,
         },
@@ -76,7 +76,7 @@ describe("resolveAgentLaunchRequest", () => {
           name: "linked",
           status: "running",
           workdir: "/tmp",
-          originChannel: "telegram|bot1|-1003863755361",
+          originChannel: "telegram|bot1|-1001234567890",
           originThreadId: "13832",
         }],
         listPersistedSessions: () => [],
@@ -115,15 +115,15 @@ describe("resolveAgentLaunchRequest", () => {
         getPersistedSession: () => ({
           harness: "codex",
           backendRef: { kind: "codex-app-server", conversationId: "backend-saved" },
-          originChannel: "telegram|default|-1003863755361",
+          originChannel: "telegram|default|-1001234567890",
           originThreadId: 13832,
-          originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
           route: {
             provider: "telegram",
             accountId: "default",
-            target: "-1003863755361",
+            target: "-1001234567890",
             threadId: "13832",
-            sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+            sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
           },
         }),
       },
@@ -132,9 +132,9 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
       assert.equal(result.route?.provider, "telegram");
-      assert.equal(result.route?.target, "-1003863755361");
+      assert.equal(result.route?.target, "-1001234567890");
       assert.equal(result.route?.threadId, "13832");
-      assert.equal(result.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+      assert.equal(result.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
     }
   });
 

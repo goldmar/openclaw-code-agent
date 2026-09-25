@@ -438,6 +438,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
+      // Keep the manager this call started with: a Gateway stop can clear the
+      // shared reference while a merge or PR is still running, and the outcome
+      // must still be recorded on the manager (and store) that started it.
+      const sm = sessionManager;
       if (!isAgentPrParams(params)) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, title?, body?, update_body?, update_metadata?, base_branch?, force_new?, target_repo? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
@@ -453,7 +457,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Resolve session (active or persisted)
-      const target = resolveWorktreeToolTarget(sessionManager, params.session);
+      const target = resolveWorktreeToolTarget(sm, params.session);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
 
@@ -498,7 +502,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           },
         );
         for (const mutationRef of getPersistedTargetMutationRefs(target)) {
-          sessionManager.updatePersistedSession(mutationRef, patch);
+          sm.updatePersistedSession(mutationRef, patch);
         }
       };
 
@@ -553,7 +557,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         branchName = branchResolution.branchName;
         targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
       }
-      const repoPolicy = await sessionManager.resolveRepoPolicy(originalWorkdir);
+      const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
         effectiveTargetPrStatus?.exists
           ? effectiveTargetPrStatus
@@ -649,7 +653,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               insertions: diffSummary.insertions,
               deletions: diffSummary.deletions,
             });
-            sessionManager.notifyWorktreeOutcome(
+            sm.notifyWorktreeOutcome(
               target.notificationTarget!,
               updateOutcomeLine,
               {
@@ -729,7 +733,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           worktreeDecisionSnoozedUntil: undefined,
         };
         for (const mutationRef of getPersistedTargetMutationRefs(target)) {
-          sessionManager.updatePersistedSession(mutationRef, mergedPatch);
+          sm.updatePersistedSession(mutationRef, mergedPatch);
         }
         return {
           content: [{
@@ -813,7 +817,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             targetRepo,
             prUrl: prResult.prUrl,
           });
-          sessionManager.notifyWorktreeOutcome(
+          sm.notifyWorktreeOutcome(
             target.notificationTarget!,
             outcomeLine,
             {

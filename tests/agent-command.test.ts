@@ -49,10 +49,10 @@ describe("agent command", () => {
     const result = await handler({
       args: '--name "agent command" Fix the auth bug',
       workspaceDir: "/tmp",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       deliveryContext: {
         channel: "telegram",
-        to: "-1003863755361",
+        to: "-1001234567890",
         accountId: "bot1",
         threadId: 13832,
       },
@@ -62,7 +62,7 @@ describe("agent command", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.permissionMode, "plan");
     assert.equal(spawnConfig?.planApproval, "delegate");
-    assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
+    assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1001234567890");
     assert.equal(spawnConfig?.originThreadId, 13832);
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
   });

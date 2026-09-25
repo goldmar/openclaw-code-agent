@@ -1,5 +1,5 @@
 import type { DiffSummary } from "./worktree";
-import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete } from "./runtime-llm";
+import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-pr-metadata");
@@ -31,7 +31,7 @@ export interface PrMetadata {
 }
 
 export interface PrMetadataProvider {
-  generatePrMetadata(evidence: PrMetadataEvidence): Promise<unknown>;
+  generatePrMetadata(evidence: PrMetadataEvidence, signal?: AbortSignal): Promise<unknown>;
 }
 
 export type PrMetadataFallbackReason = "no-provider" | "provider-failed" | "provider-invalid";
@@ -473,6 +473,7 @@ export async function buildPrMetadata(args: {
   outputPreview?: string;
   diffSummary?: DiffSummary;
   provider?: PrMetadataProvider;
+  timeoutMs?: number;
 }): Promise<PrMetadataResult> {
   const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, outputPreview: args.outputPreview, diffSummary: args.diffSummary });
   if (!args.provider) {
@@ -481,7 +482,12 @@ export async function buildPrMetadata(args: {
   }
 
   try {
-    const generated = await args.provider.generatePrMetadata(evidence);
+    const provider = args.provider;
+    const generated = await withRuntimeLlmTimeout(
+      "pr-metadata",
+      args.timeoutMs ?? runtimeLlmTimeoutsMs.prMetadata,
+      (signal) => provider.generatePrMetadata(evidence, signal),
+    );
     const metadata = validateGeneratedPrMetadata(normalizeGeneratedPrMetadataPayload(generated), evidence, args.prompt);
     if (metadata) return { ok: true, metadata, evidence };
     log.warn("[agent_pr] PR metadata provider returned invalid or unsafe metadata; using deterministic fallback metadata.");
@@ -509,12 +515,13 @@ export function createRuntimePrMetadataProvider(): PrMetadataProvider | undefine
   if (!complete) return undefined;
 
   return {
-    async generatePrMetadata(evidence) {
+    async generatePrMetadata(evidence, signal) {
       return await completeRuntimeLlmText(complete, {
         purpose: "openclaw-code-agent.pr-metadata",
         systemPrompt: PR_METADATA_SYSTEM_PROMPT,
         prompt: buildPrMetadataPrompt(evidence),
         maxTokens: PR_METADATA_MAX_TOKENS,
+        signal,
       });
     },
   };

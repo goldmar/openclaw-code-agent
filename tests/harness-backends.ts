@@ -111,6 +111,11 @@ export interface BackendDriver {
   endTurn(text?: string): Promise<void>;
   /** The backend resolves the pending request itself (expiry, turn interrupted). */
   expirePendingRequest(): Promise<void>;
+  /**
+   * The backend dies in the middle of the running turn: the Codex app-server
+   * stdio closes, the Claude SDK query throws, the OpenCode server exits.
+   */
+  crashMidTurn(): Promise<void>;
 }
 
 export async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
@@ -136,9 +141,18 @@ class Pushable<T> implements AsyncIterable<T> {
     this.wake?.();
   }
 
+  /** Make the consumer's iteration throw once the queued items are drained. */
+  fail(error: Error): void {
+    this.failure = error;
+    this.wake?.();
+  }
+
+  private failure: Error | undefined;
+
   async *[Symbol.asyncIterator](): AsyncGenerator<T> {
     while (true) {
       while (this.items.length > 0) yield this.items.shift()!;
+      if (this.failure) throw this.failure;
       if (this.ended) return;
       await new Promise<void>((resolve) => { this.wake = resolve; });
       this.wake = undefined;
@@ -311,6 +325,10 @@ export class ClaudeBackend implements BackendDriver {
   async expirePendingRequest(): Promise<void> {
     throw new Error("Claude questions expire through OCA's question timeout, not the backend");
   }
+
+  async crashMidTurn(): Promise<void> {
+    this.output.fail(new Error("Claude Code process exited with code 1"));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +360,7 @@ export class CodexBackend implements BackendDriver {
   private turnCounter = 0;
   private requestCounter = 0;
   private pendingRequest: CodexServerRequest | undefined;
+  private closeHandler: (() => void) | undefined;
 
   constructor() {
     this.harness = new CodexHarness({ createClient: () => this.client() });
@@ -358,7 +377,7 @@ export class CodexBackend implements BackendDriver {
       notify: async () => undefined,
       setNotificationHandler: (handler) => { this.notificationHandler = handler; },
       setRequestHandler: (handler) => { this.requestHandler = handler; },
-      setCloseHandler: () => undefined,
+      setCloseHandler: (handler) => { this.closeHandler = handler; },
       request: async (method, params) => {
         this.protocol.clientRequest(method, params);
         return this.protocol.clientResult(method, this.handle(method, (params ?? {}) as Record<string, unknown>));
@@ -527,6 +546,14 @@ export class CodexBackend implements BackendDriver {
     if (!pending) throw new Error("no pending Codex server request");
     await this.notify("serverRequest/resolved", { threadId: CODEX_THREAD_ID, requestId: pending.id } satisfies ServerRequestResolvedNotification);
   }
+
+  async crashMidTurn(): Promise<void> {
+    if (!this.activeTurnId) throw new Error("no active Codex turn");
+    this.activeTurnId = undefined;
+    const close = this.closeHandler;
+    if (!close) throw new Error("the Codex harness registered no close handler");
+    close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +591,7 @@ export class OpenCodeBackend implements BackendDriver {
     this.harness = new OpenCodeHarness({
       createServer: async () => ({
         baseUrl: "http://opencode.test",
+        onExit: (listener: (reason: string) => void) => { this.serverExit = listener; },
         close: async () => {
           for (const stream of this.streams.splice(0)) {
             try { stream.close(); } catch { /* already closed */ }
@@ -765,6 +793,28 @@ export class OpenCodeBackend implements BackendDriver {
     this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "idle" } } });
     this.emit({ type: "session.idle", properties: { sessionID: id } });
   }
+
+  /** Drop every open `/global/event` stream (a network blip); the harness reconnects. */
+  dropEventStreams(): void {
+    for (const stream of this.streams.splice(0)) {
+      try { stream.error(new Error("socket hang up")); } catch { /* already closed */ }
+    }
+  }
+
+  /** Number of `/global/event` streams currently open. */
+  get openEventStreams(): number {
+    return this.streams.length;
+  }
+
+  async crashMidTurn(): Promise<void> {
+    if (!this.busy) throw new Error("no running OpenCode turn");
+    this.busy = false;
+    const onExit = this.serverExit;
+    if (!onExit) throw new Error("the OpenCode harness registered no server-exit handler");
+    onExit("opencode serve exited with code 1");
+  }
+
+  private serverExit: ((reason: string) => void) | undefined;
 
   async expirePendingRequest(): Promise<void> {
     const requestId = this.pendingRequestId;

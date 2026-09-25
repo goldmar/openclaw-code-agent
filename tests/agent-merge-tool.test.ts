@@ -89,13 +89,13 @@ function installPersistedSessionWithNotificationService(args: {
     costUsd: 0,
     route: {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     },
-    originChannel: "telegram|-1003863755361",
+    originChannel: "telegram|-1001234567890",
     originThreadId: 13832,
-    originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
   };
 
   const matchesRef = (ref: string): boolean => [
@@ -347,6 +347,31 @@ describe("agent_merge push behavior", () => {
     }
   });
 
+  it("records the merge on the manager it started with when a Gateway stop clears the shared one mid-merge", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-gateway-stop");
+    try {
+      const sessionName = "merge-gateway-stop";
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
+      const persisted = installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      const { sessionManager: started } = await import("../src/singletons");
+      assert.ok(started);
+      // The Gateway stops while the merge waits in the queue: the shared reference is cleared.
+      (started as unknown as { enqueueMerge: (repo: string, fn: () => Promise<void>) => Promise<void> }).enqueueMerge = async (_repo, fn) => {
+        setSessionManager(null);
+        await fn();
+      };
+
+      const result = await makeAgentMergeTool().execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.equal((persisted.worktreeLifecycle as { state?: string } | undefined)?.state, "merged");
+      assert.ok(existsSync(join(repoDir, "feature.txt")));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports already-absent worktrees without claiming cleanup was skipped", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-cleanup-missing-worktree");
     try {
@@ -393,9 +418,9 @@ describe("agent_merge push behavior", () => {
       assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
       assert.equal(capturedRequests[0].request.completionWakeSummaryRequired, true);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1003863755361"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1001234567890"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1003863755361:topic:13832"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
       assert.equal(persistedSession.worktreeMerged, true);
       assert.equal(persistedSession.worktreeState, "merged");
       assert.equal(persistedSession.pendingWorktreeDecisionSince, undefined);

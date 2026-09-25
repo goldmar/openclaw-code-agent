@@ -192,6 +192,35 @@ function worktreeActionTextSucceeded(text: string): boolean {
   return !/^\s*(?:Error\b:?|❌|⚠️)/.test(text);
 }
 
+/** A merge that handed its conflicts to a resolver session is in progress, not failed. */
+function toolResultStartedConflictResolver(result: unknown): boolean {
+  if (!result || typeof result !== "object" || !("meta" in result)) return false;
+  const meta = (result as { meta?: { conflictResolverSessionId?: unknown } }).meta;
+  return typeof meta?.conflictResolverSessionId === "string";
+}
+
+/**
+ * After a failed worktree action the clicked token is spent (it is consumed
+ * before acting). Re-offer the still-open decision with fresh buttons and clear
+ * the spent controls, so a retry is not answered with "stale".
+ */
+async function reofferWorktreeDecisionAfterFailure(
+  ctx: InteractiveCallbackContext,
+  sessionId: string,
+  result: unknown,
+  callbackAcknowledged: boolean,
+): Promise<void> {
+  if (!sessionManager || toolResultStartedConflictResolver(result)) return;
+  let reoffered = false;
+  try {
+    reoffered = (await sessionManager.reofferWorktreeDecision?.(sessionId)) ?? false;
+  } catch (err) {
+    log.warn(`[callback-handler] Could not re-offer the worktree decision after a failed action: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  if (reoffered) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+}
+
 function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
@@ -1004,10 +1033,15 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
-        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        let consumedToken = sessionManager.consumeActionToken(tokenId);
+        const consumptionId = consumedToken?.consumptionId;
         // The consumption must be on disk before acting, so another writer of the
-        // index cannot treat this button as unused.
-        if (consumedToken) await sessionManager.whenStorePersisted?.();
+        // index cannot treat this button as unused. When another writer persisted
+        // a consumption of the same button first, its click acts and this one is stale.
+        if (consumedToken) {
+          await sessionManager.whenStorePersisted?.();
+          if (sessionManager.confirmActionTokenConsumption?.(tokenId, consumptionId) === false) consumedToken = undefined;
+        }
         logButtonDiagnostic("callback_token_consume_completed", {
           channel: ctx.channel,
           namespace: CALLBACK_NAMESPACE,
@@ -1117,6 +1151,7 @@ export function createCallbackHandler(
               break;
             }
             await replyText(ctx, text);
+            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
             break;
           }
 
@@ -1140,6 +1175,7 @@ export function createCallbackHandler(
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
             }
             await replyText(ctx, succeeded ? "✅ Discarded" : result);
+            if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, undefined, callbackAcknowledged);
             break;
           }
 
@@ -1159,6 +1195,7 @@ export function createCallbackHandler(
               break;
             }
             await replyText(ctx, text);
+            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
             break;
           }
 

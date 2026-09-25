@@ -28,9 +28,9 @@ describe("agent_send_plan_offer tool", () => {
     const tool = makeAgentSendPlanOfferTool({
       workspaceDir: "/tmp",
       messageChannel: "telegram",
-      chatId: "-1003863755361",
+      chatId: "-1001234567890",
       messageThreadId: 13832,
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     } as any);
     const result = await tool.execute("tool-id", {
       offer_id: "plugin-readiness-v2026.5.18",
@@ -45,7 +45,7 @@ describe("agent_send_plan_offer tool", () => {
     assert.equal(calls[0]?.offerId, "plugin-readiness-v2026.5.18");
     assert.equal(calls[0]?.planWorktreeStrategy, "auto-pr");
     assert.equal((calls[0]?.route as { provider?: string })?.provider, "telegram");
-    assert.equal((calls[0]?.route as { target?: string })?.target, "-1003863755361");
+    assert.equal((calls[0]?.route as { target?: string })?.target, "-1001234567890");
     assert.equal((calls[0]?.route as { threadId?: string })?.threadId, "13832");
     assert.match((result as any).content?.[0]?.text ?? "", /Interactive plan offer queued/);
   });
@@ -60,10 +60,10 @@ describe("agent_send_plan_offer tool", () => {
 
     const tool = makeAgentSendPlanOfferTool({
       workspaceDir: "/tmp",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       deliveryContext: {
         channel: "telegram",
-        to: "-1003863755361",
+        to: "-1001234567890",
         accountId: "bot1",
         threadId: 13832,
       },
@@ -79,7 +79,7 @@ describe("agent_send_plan_offer tool", () => {
     assert.equal(calls.length, 1);
     assert.equal((calls[0]?.route as { provider?: string })?.provider, "telegram");
     assert.equal((calls[0]?.route as { accountId?: string })?.accountId, "bot1");
-    assert.equal((calls[0]?.route as { target?: string })?.target, "-1003863755361");
+    assert.equal((calls[0]?.route as { target?: string })?.target, "-1001234567890");
     assert.equal((calls[0]?.route as { threadId?: string })?.threadId, "13832");
   });
 

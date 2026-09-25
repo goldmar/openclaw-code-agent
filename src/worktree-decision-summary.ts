@@ -1,5 +1,5 @@
 import type { getDiffSummary } from "./worktree";
-import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete } from "./runtime-llm";
+import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-decision-summary");
@@ -21,7 +21,7 @@ export interface WorktreeDecisionSummaryEvidence {
 }
 
 export interface WorktreeDecisionSummaryProvider {
-  generateWorktreeDecisionSummary(evidence: WorktreeDecisionSummaryEvidence): Promise<unknown>;
+  generateWorktreeDecisionSummary(evidence: WorktreeDecisionSummaryEvidence, signal?: AbortSignal): Promise<unknown>;
 }
 
 export type WorktreeDecisionSummaryResult =
@@ -40,12 +40,13 @@ export function createRuntimeWorktreeDecisionSummaryProvider(): WorktreeDecision
   if (!complete) return undefined;
 
   return {
-    async generateWorktreeDecisionSummary(evidence) {
+    async generateWorktreeDecisionSummary(evidence, signal) {
       return await completeRuntimeLlmText(complete, {
         purpose: "openclaw-code-agent.worktree-decision-summary",
         systemPrompt: WORKTREE_DECISION_SUMMARY_SYSTEM_PROMPT,
         prompt: buildWorktreeDecisionSummaryPrompt(evidence),
         maxTokens: SUMMARY_MAX_TOKENS,
+        signal,
       });
     },
   };
@@ -174,6 +175,7 @@ export async function buildWorktreeDecisionWorkSummary(args: {
   diffSummary?: DiffSummary;
   outputPreview?: string;
   provider?: WorktreeDecisionSummaryProvider;
+  timeoutMs?: number;
 }): Promise<WorktreeDecisionSummaryResult> {
   const evidence = buildWorktreeDecisionSummaryEvidence(args);
   const fallback = buildFallbackWorktreeDecisionSummary(args.diffSummary ?? {
@@ -186,7 +188,12 @@ export async function buildWorktreeDecisionWorkSummary(args: {
   }
 
   try {
-    const generated = await args.provider.generateWorktreeDecisionSummary(evidence);
+    const provider = args.provider;
+    const generated = await withRuntimeLlmTimeout(
+      "worktree-decision-summary",
+      args.timeoutMs ?? runtimeLlmTimeoutsMs.worktreeDecisionSummary,
+      (signal) => provider.generateWorktreeDecisionSummary(evidence, signal),
+    );
     const lines = validateGeneratedWorktreeDecisionSummary(generated);
     if (lines.length > 0) return { source: "llm", lines, evidence };
     return {

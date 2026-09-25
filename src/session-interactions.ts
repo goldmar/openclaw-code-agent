@@ -35,6 +35,15 @@ function shortenQuestionButtonLabel(label: string): string {
   return `${codePoints.slice(0, QUESTION_BUTTON_LABEL_MAX_LENGTH - QUESTION_BUTTON_LABEL_ELLIPSIS.length).join("")}${QUESTION_BUTTON_LABEL_ELLIPSIS}`;
 }
 
+const WORKTREE_DECISION_TOKEN_KINDS: readonly SessionActionKind[] = [
+  "worktree-merge",
+  "worktree-create-pr",
+  "worktree-update-pr",
+  "worktree-view-pr",
+  "worktree-decide-later",
+  "worktree-dismiss",
+];
+
 export class SessionInteractionService {
   constructor(
     private readonly actionTokens: SessionActionTokenStore,
@@ -78,6 +87,18 @@ export class SessionInteractionService {
 
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
     this.actionTokens.deletePlanDecisionTokensForSession(sessionId, keepVersion);
+  }
+
+  deleteActionToken(tokenId: string): void {
+    this.actionTokens.deleteActionToken(tokenId);
+  }
+
+  /** Drop the worktree-decision buttons of a session, except the token ids in `keep`. */
+  clearWorktreeDecisionTokens(sessionId: string, keep: ReadonlySet<string> = new Set()): void {
+    const kinds = new Set<SessionActionKind>(WORKTREE_DECISION_TOKEN_KINDS);
+    const doomed = this.actionTokens.listActiveActionTokens()
+      .filter((token) => token.sessionId === sessionId && kinds.has(token.kind) && !keep.has(token.id));
+    for (const token of doomed) this.actionTokens.deleteActionToken(token.id);
   }
 
   makeActionButton(

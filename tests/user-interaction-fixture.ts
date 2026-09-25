@@ -155,56 +155,86 @@ export async function startInteractionFixture(
 }
 
 export type CallbackResult = { replies: string[]; cleared: number };
+export type CallbackChannel = "telegram" | "discord";
+
+export type CallbackContextOptions = {
+  target?: string;
+  threadId?: string | number;
+  accountId?: string;
+  onReply: (text: string) => void;
+  onClear: () => void;
+};
+
+/**
+ * A button callback as the Telegram or Discord channel plugin hands it to an
+ * interactive handler (see api.ts for the channel context shapes).
+ */
+export function buildCallbackContext(
+  channel: CallbackChannel,
+  payload: string,
+  options: CallbackContextOptions,
+): Record<string, unknown> {
+  const target = options.target ?? TEST_ROUTE.target;
+  const threadId = options.threadId ?? TEST_ROUTE.threadId;
+  if (channel === "telegram") {
+    return {
+      channel,
+      accountId: options.accountId ?? "bot",
+      callbackId: `callback-${payload}`,
+      conversationId: `${target}:topic:${threadId}`,
+      parentConversationId: target,
+      senderId: "12345",
+      senderUsername: "user",
+      threadId: Number(threadId),
+      isGroup: true,
+      isForum: true,
+      auth: { isAuthorizedSender: true },
+      callback: {
+        data: `code-agent:${payload}`,
+        namespace: "code-agent",
+        payload,
+        messageId: 99,
+        chatId: target,
+        messageText: "prompt",
+      },
+      respond: {
+        acknowledge: async (): Promise<undefined> => undefined,
+        reply: async ({ text }: { text: string }) => { options.onReply(text); },
+        clearButtons: async () => { options.onClear(); },
+        editButtons: async () => { options.onClear(); },
+        editMessage: async (): Promise<undefined> => undefined,
+      },
+    };
+  }
+  return {
+    channel,
+    accountId: options.accountId ?? "default",
+    conversationId: String(threadId),
+    parentConversationId: target,
+    threadId: String(threadId),
+    auth: { isAuthorizedSender: true },
+    interaction: { payload },
+    respond: {
+      acknowledge: async (): Promise<undefined> => undefined,
+      reply: async ({ text }: { text: string }) => { options.onReply(text); },
+      followUp: async ({ text }: { text: string }) => { options.onReply(text); },
+      editMessage: async (): Promise<undefined> => undefined,
+      clearComponents: async () => { options.onClear(); },
+    },
+  };
+}
 
 /** Click a button through the real callback handler, as Telegram or Discord delivers it. */
 export async function clickButton(
   button: Pick<NotificationButton, "callbackData">,
-  channel: "telegram" | "discord" = "telegram",
+  channel: CallbackChannel = "telegram",
 ): Promise<CallbackResult> {
   const replies: string[] = [];
   let cleared = 0;
-  const payload = button.callbackData;
-  const ctx = channel === "telegram"
-    ? {
-        channel,
-        accountId: "bot",
-        callbackId: `callback-${payload}`,
-        conversationId: `${TEST_ROUTE.target}:topic:${TEST_ROUTE.threadId}`,
-        parentConversationId: TEST_ROUTE.target,
-        senderId: "12345",
-        senderUsername: "user",
-        threadId: Number(TEST_ROUTE.threadId),
-        isGroup: true,
-        isForum: true,
-        auth: { isAuthorizedSender: true },
-        callback: {
-          data: `code-agent:${payload}`,
-          namespace: "code-agent",
-          payload,
-          messageId: 99,
-          chatId: TEST_ROUTE.target,
-          messageText: "prompt",
-        },
-        respond: {
-          acknowledge: async (): Promise<undefined> => undefined,
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-          clearButtons: async () => { cleared += 1; },
-          editButtons: async () => { cleared += 1; },
-          editMessage: async (): Promise<undefined> => undefined,
-        },
-      }
-    : {
-        channel,
-        auth: { isAuthorizedSender: true },
-        interaction: { payload },
-        respond: {
-          acknowledge: async (): Promise<undefined> => undefined,
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-          followUp: async ({ text }: { text: string }) => { replies.push(text); },
-          editMessage: async (): Promise<undefined> => undefined,
-          clearComponents: async () => { cleared += 1; },
-        },
-      };
+  const ctx = buildCallbackContext(channel, button.callbackData, {
+    onReply: (text) => { replies.push(text); },
+    onClear: () => { cleared += 1; },
+  });
   await createCallbackHandler(channel).handler(ctx as never);
   return { replies, cleared };
 }

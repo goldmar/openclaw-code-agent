@@ -137,7 +137,7 @@ describe("resolveOriginChannel", () => {
   });
 
   it("builds from tool-style messageChannel + chatId", () => {
-    assert.equal(resolveOriginChannel({ messageChannel: "telegram", chatId: "-1003863755361" }), "telegram|-1003863755361");
+    assert.equal(resolveOriginChannel({ messageChannel: "telegram", chatId: "-1001234567890" }), "telegram|-1001234567890");
   });
 
   it("prefers deliveryContext routing from the current SDK surface", () => {
@@ -145,12 +145,12 @@ describe("resolveOriginChannel", () => {
       resolveOriginChannel({
         deliveryContext: {
           channel: "telegram",
-          to: "-1003863755361",
+          to: "-1001234567890",
           accountId: "bot1",
         },
         messageChannel: "telegram",
       }),
-      "telegram|bot1|-1003863755361",
+      "telegram|bot1|-1001234567890",
     );
   });
 
@@ -159,7 +159,7 @@ describe("resolveOriginChannel", () => {
       resolveOriginChannel({
         messageChannel: "telegram",
         senderId: "5551234",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       }),
       "unknown",
     );
@@ -225,11 +225,11 @@ describe("resolveOriginChannel", () => {
 describe("resolveSessionRoute", () => {
   it("builds a direct Telegram route from chat context", () => {
     assert.deepEqual(
-      resolveSessionRoute({ messageChannel: "telegram", chatId: "-1003863755361", messageThreadId: 28 }),
+      resolveSessionRoute({ messageChannel: "telegram", chatId: "-1001234567890", messageThreadId: 28 }),
       {
         provider: "telegram",
         accountId: undefined,
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "28",
         sessionKey: undefined,
       },
@@ -241,7 +241,7 @@ describe("resolveSessionRoute", () => {
       resolveSessionRoute({
         deliveryContext: {
           channel: "telegram",
-          to: "-1003863755361",
+          to: "-1001234567890",
           accountId: "bot1",
           threadId: 28,
         },
@@ -249,7 +249,7 @@ describe("resolveSessionRoute", () => {
       {
         provider: "telegram",
         accountId: "bot1",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "28",
         sessionKey: undefined,
       },
@@ -260,13 +260,13 @@ describe("resolveSessionRoute", () => {
     assert.deepEqual(
       resolveSessionRoute({
         messageChannel: "telegram",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
       }),
       {
         provider: "telegram",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "28",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
       },
     );
   });
@@ -276,13 +276,13 @@ describe("resolveSessionRoute", () => {
       resolveSessionRoute({
         messageChannel: "telegram",
         senderId: "5551234",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       }),
       {
         provider: "telegram",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
     );
   });
@@ -383,28 +383,28 @@ describe("resolveToolChannel", () => {
   });
 
   it("builds from provider-only messageChannel + chatId", () => {
-    const ctx = { messageChannel: "telegram", chatId: "-1003863755361" };
-    assert.equal(resolveToolChannel(ctx), "telegram|-1003863755361");
+    const ctx = { messageChannel: "telegram", chatId: "-1001234567890" };
+    assert.equal(resolveToolChannel(ctx), "telegram|-1001234567890");
   });
 
   it("prefers deliveryContext when present", () => {
     const ctx = {
       deliveryContext: {
         channel: "telegram",
-        to: "-1003863755361",
+        to: "-1001234567890",
         accountId: "bot1",
       },
       messageChannel: "telegram",
       agentAccountId: "bot2",
     };
-    assert.equal(resolveToolChannel(ctx), "telegram|bot1|-1003863755361");
+    assert.equal(resolveToolChannel(ctx), "telegram|bot1|-1001234567890");
   });
 
   it("does not derive Telegram topic routes from senderId", () => {
     const ctx = {
       messageChannel: "telegram",
       senderId: "5551234",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
     assert.equal(resolveToolChannel(ctx), undefined);
   });

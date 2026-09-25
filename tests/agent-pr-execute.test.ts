@@ -237,6 +237,21 @@ describe("agent_pr execute(): new PRs", () => {
     ]);
   });
 
+  it("records the PR on the manager it started with when a Gateway stop clears the shared one mid-call", async () => {
+    const f = await setup();
+    // The Gateway stops while the PR metadata is generated: the shared reference is cleared.
+    f.host.setLlmReplies([() => {
+      setSessionManager(null);
+      return LLM_METADATA;
+    }]);
+
+    const result = await f.run();
+
+    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.equal(f.persisted()?.worktreeLifecycle?.state, "pr_open");
+    assert.equal(f.persisted()?.worktreePrNumber, 101);
+  });
+
   it("falls back to deterministic metadata when runtime.llm fails", async () => {
     const f = await setup();
 

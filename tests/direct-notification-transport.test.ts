@@ -15,9 +15,9 @@ type SendCall = Record<string, any>;
 const TOPIC_ROUTE = {
   channel: "telegram",
   accountId: "default",
-  target: "-1003863755361",
+  target: "-1001234567890",
   threadId: "28",
-  sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+  sessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
 };
 
 function sentResult(): DurableMessageBatchSendResult {
@@ -52,7 +52,7 @@ describe("RuntimeDirectNotificationTransport", () => {
     assert.deepEqual(calls[0], {
       cfg,
       channel: "telegram",
-      to: "-1003863755361",
+      to: "-1001234567890",
       accountId: "default",
       threadId: "28",
       payloads: [{ text: "🚀 launched" }],

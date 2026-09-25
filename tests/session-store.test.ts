@@ -837,11 +837,11 @@ describe("SessionStore path resolution", () => {
       costUsd: 0,
       originChannel: "telegram",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       route: {
         provider: "system",
         target: "system",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
     }]);
 
@@ -853,9 +853,9 @@ describe("SessionStore path resolution", () => {
     const persisted = store.getPersistedSession("route-repair");
     assert.deepEqual(persisted?.route, {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     });
   });
 
@@ -873,12 +873,12 @@ describe("SessionStore path resolution", () => {
       costUsd: 0,
       originChannel: "telegram",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       route: {
         provider: "telegram",
         target: "5551234",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
     }]);
 
@@ -891,9 +891,9 @@ describe("SessionStore path resolution", () => {
     assert.deepEqual(persisted?.route, {
       provider: "telegram",
       accountId: undefined,
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     });
   });
 

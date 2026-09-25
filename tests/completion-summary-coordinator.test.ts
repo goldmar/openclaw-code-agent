@@ -440,9 +440,9 @@ describe("CompletionSummaryCoordinator", () => {
       route: {
         provider: "telegram",
         accountId: "default",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
     };
     const opened = coordinator.decide(session, {

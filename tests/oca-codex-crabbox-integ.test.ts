@@ -187,7 +187,7 @@ describe("OCA Codex Crabbox integration harness", () => {
           return {
             credentialId: "credential-123456789",
             desktopWorkdir: join(sessionDir, "desktop"),
-            groupId: "-1003863755361",
+            groupId: "-1001234567890",
             leaseFile,
             ownerId: "telegram-user-owner",
             sutUsername: "sut_bot_secret",
@@ -208,7 +208,7 @@ describe("OCA Codex Crabbox integration harness", () => {
           events.push("capture");
           const logPath = join(absoluteOutputDir, "telegram-desktop.log");
           const pngPath = join(absoluteOutputDir, "telegram-desktop.png");
-          writeFileSync(logPath, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 path /tmp/proof password=hunter2");
+          writeFileSync(logPath, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1001234567890 path /tmp/proof password=hunter2");
           writeFileSync(pngPath, "private rendered Telegram pixels");
           return [
             { kind: "log", path: logPath, public: true },
@@ -233,7 +233,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       assert.equal(existsSync(join(staged, "telegram-desktop.log")), true);
       assert.equal(existsSync(join(staged, "telegram-desktop.png")), false);
       const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
-      assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE|qa_secret_user|-1003863755361|hunter2|\/tmp\/proof/u);
+      assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE|qa_secret_user|-1001234567890|hunter2|\/tmp\/proof/u);
     } finally {
       rmSync(artifactDir, { recursive: true, force: true });
     }
@@ -246,7 +246,7 @@ describe("OCA Codex Crabbox integration harness", () => {
     try {
       mkdirSync(artifactDir, { recursive: true });
       writeFileSync(join(artifactDir, "summary.json"), '{"token":"sk-private-token","outputDir":"/tmp/private-proof"}');
-      writeFileSync(join(artifactDir, "telegram-desktop.log"), "bot 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361");
+      writeFileSync(join(artifactDir, "telegram-desktop.log"), "bot 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1001234567890");
       writeFileSync(join(artifactDir, "session.json"), '{"credential":"private"}');
       writeFileSync(join(artifactDir, "telegram-desktop.png"), "private pixels");
 

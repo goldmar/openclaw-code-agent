@@ -33,6 +33,15 @@ async function loadSendDurableMessageBatch(): Promise<SendDurableMessageBatch> {
 }
 
 /**
+ * The host outbound boundary. Full-stack tests point it at a fake host's
+ * `sendDurableMessageBatch`, as `wakeDeliveryExecutorInternals.execFile` is for
+ * the `openclaw` CLI.
+ */
+export const directNotificationTransportInternals = {
+  loadSendDurableMessageBatch,
+};
+
+/**
  * Direct user notifications through the host's durable outbound queue
  * (`openclaw/plugin-sdk/channel-outbound` `sendDurableMessageBatch`).
  *
@@ -43,7 +52,7 @@ async function loadSendDurableMessageBatch(): Promise<SendDurableMessageBatch> {
  */
 export class RuntimeDirectNotificationTransport implements DirectNotificationTransport {
   constructor(
-    private readonly loadSender: () => Promise<SendDurableMessageBatch> = loadSendDurableMessageBatch,
+    private readonly loadSender: () => Promise<SendDurableMessageBatch> = () => directNotificationTransportInternals.loadSendDurableMessageBatch(),
   ) {}
 
   async send(
