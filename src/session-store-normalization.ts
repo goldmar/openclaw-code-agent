@@ -412,11 +412,17 @@ function normalizeWorktreeLifecycle(raw: unknown): PersistedWorktreeLifecycle | 
   };
 }
 
-/** ISO timestamp from an ISO string or epoch milliseconds. */
+/**
+ * ISO timestamp from an ISO string or epoch milliseconds. Values outside the
+ * Date range yield undefined: `toISOString` would throw, and one corrupt row
+ * must not fail the whole store load.
+ */
 function toIsoTimestamp(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return new Date(value).toISOString();
-  if (typeof value === "string" && value.trim() && Number.isFinite(Date.parse(value))) return new Date(Date.parse(value)).toISOString();
-  return undefined;
+  const millis = typeof value === "number" && value > 0
+    ? value
+    : (typeof value === "string" && value.trim() ? Date.parse(value) : Number.NaN);
+  const date = new Date(millis);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): PersistedWorktreeLifecycle | undefined {

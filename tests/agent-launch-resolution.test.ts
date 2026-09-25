@@ -86,6 +86,25 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "blocked");
   });
 
+  it("records the Discord thread named by the session key as the origin thread", () => {
+    const threadId = "1234567890123456789";
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Start work", workdir: "/tmp" },
+      {
+        workspaceDir: "/tmp",
+        sessionKey: `agent:main:discord:channel:998877665544332211:thread:${threadId}`,
+        deliveryContext: { channel: "discord", to: "channel:998877665544332211", accountId: "bot" },
+      },
+      { list: () => [], listPersistedSessions: () => [] },
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.originThreadId, threadId, "the snowflake stays an exact string");
+      assert.equal(result.route.threadId, threadId);
+    }
+  });
+
   it("recovers a trustworthy direct route from the persisted resume target", () => {
     const result = resolveAgentLaunchRequest(
       { prompt: "Resume from a nested bridge", workdir: "/tmp", resume_session_id: "saved" },

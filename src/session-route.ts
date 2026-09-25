@@ -25,6 +25,9 @@ const KNOWN_SESSION_ROUTE_PROVIDERS = new Set([
   "msteams",
 ]);
 
+/** Peer kinds of host session keys (`buildAgentSessionKey`). */
+const PEER_KINDS = new Set(["direct", "dm", "group", "channel"]);
+
 type ParsedTelegramTopicConversation = {
   chatId: string;
   topicId: string;
@@ -89,11 +92,9 @@ function parseTelegramTopicConversation(params: {
 }
 
 function parseDiscordTargetKind(sessionKey?: string): "channel" | "user" | undefined {
-  if (!sessionKey) return undefined;
-  const match = sessionKey.match(/^agent:[^:]+:discord:(direct|dm|channel|group):/i);
-  if (!match?.[1]) return undefined;
-  const kind = match[1].toLowerCase();
-  return kind === "direct" || kind === "dm" ? "user" : "channel";
+  const ref = parseSessionConversationRef(sessionKey);
+  if (ref?.provider !== "discord" || !ref.kind || !PEER_KINDS.has(ref.kind)) return undefined;
+  return ref.kind === "direct" || ref.kind === "dm" ? "user" : "channel";
 }
 
 function normalizeDiscordTarget(target: string, sessionKey?: string): string {
@@ -137,7 +138,7 @@ function parseThreadSuffix(value: string): { id: string; threadId?: string } {
 
 function parseSessionConversationRef(
   originSessionKey?: string,
-): { provider: string; kind: string; rawId: string } | undefined {
+): { provider: string; kind: string; rawId: string; accountId?: string } | undefined {
   const raw = originSessionKey?.trim();
   if (!raw) return undefined;
 
@@ -149,6 +150,19 @@ function parseSessionConversationRef(
     const provider = rawParts[index]?.trim().toLowerCase();
     if (!provider || !KNOWN_SESSION_ROUTE_PROVIDERS.has(provider)) continue;
     const kind = rawParts[index + 1]?.trim().toLowerCase();
+    // The `per-account-channel-peer` DM scope puts the account between the
+    // channel and the peer kind: `agent:<id>:<channel>:<account>:direct:<peer>`.
+    // Like the host's `parseSessionDeliveryRoute`, that shape wins whenever the
+    // third segment is `direct`/`dm`, even for an account named like a kind.
+    const accountScopedKind = rawParts[index + 2]?.trim().toLowerCase();
+    if (
+      kind
+      && (accountScopedKind === "direct" || accountScopedKind === "dm")
+      && rawParts.length - index >= 4
+    ) {
+      const rawId = rawParts.slice(index + 3).join(":").trim();
+      if (rawId) return { provider, kind: accountScopedKind, rawId, accountId: rawParts[index + 1].trim() };
+    }
     const rawId = rawParts.slice(index + 2).join(":").trim();
     if (!kind || !rawId) continue;
     return { provider, kind, rawId };
@@ -204,7 +218,7 @@ function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefine
   const parsed = parseSessionConversationRef(trimmed);
   if (!parsed) return undefined;
 
-  const { provider, kind, rawId } = parsed;
+  const { provider, kind, rawId, accountId } = parsed;
   const genericConversation = parseThreadSuffix(rawId);
   let telegramConversation = null;
   if (provider === "telegram") {
@@ -222,15 +236,25 @@ function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefine
 
   return {
     provider,
+    ...(accountId ? { accountId } : {}),
     target,
     threadId,
     sessionKey: trimmed,
   };
 }
 
-export function parseThreadIdFromSessionKey(sessionKey?: string): number | undefined {
-  const match = sessionKey?.match(/:topic:(\d+)$/i);
-  return match ? parseInt(match[1], 10) : undefined;
+/**
+ * The thread a session key names: a Telegram forum `:topic:<id>` suffix (as a
+ * number, like Telegram's `message_thread_id`) or the host's `:thread:<id>`
+ * suffix (Discord, Slack, and other channels), read with the same grammar as
+ * `routeFromSessionKey`. `:thread:` ids stay strings: Discord snowflakes exceed
+ * `Number.MAX_SAFE_INTEGER` and Slack thread ids are timestamps.
+ */
+export function parseThreadIdFromSessionKey(sessionKey?: string): number | string | undefined {
+  const topic = sessionKey?.match(/:topic:(\d+)$/i);
+  if (topic) return parseInt(topic[1], 10);
+  if (!sessionKey?.trim()) return undefined;
+  return parseThreadSessionSuffix(sessionKey).threadId;
 }
 
 export function isDirectSessionRoute(route?: SessionRoute): boolean {
@@ -294,7 +318,8 @@ export function canonicalizeSessionRoute(source: SessionRouteSource): SessionRou
   return routeFromOriginMetadata(
     routeToChannelString(source.route) ?? source.originChannel,
     source.route?.threadId ?? source.originThreadId,
-    source.route?.sessionKey ?? source.originSessionKey,
+    // A blank route key is no key: the origin key applies, as on the next load.
+    source.route?.sessionKey?.trim() || source.originSessionKey,
   ) ?? source.route;
 }
 
