@@ -133,10 +133,10 @@ describe("restart from every saved store snapshot", () => {
         }
       }
 
-      // Every unused button of a stopped session is still usable after the restart.
+      // Every unused button survives the restart, including the buttons of a
+      // pending question (they resume the suspended session with the answer).
       for (const token of saved.actionTokens) {
         if (token.consumedAt != null || (token.expiresAt != null && token.expiresAt <= Date.now())) continue;
-        if (token.kind === "question-answer") continue; // bound to the backend request the restart ended
         assert.ok(s.sm.getActionToken(token.id), `${label}: live ${token.kind} button survives the restart`);
       }
 

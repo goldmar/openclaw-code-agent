@@ -221,9 +221,23 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
   };
   wakeDeliveryExecutorInternals.execFile = fakeExecFile as unknown as typeof wakeDeliveryExecutorInternals.execFile;
 
-  register(host.api);
-  await host.startServices(GATEWAY_CONFIG);
-  if (!sessionManager) throw new Error("full-stack fixture: the service did not start a SessionManager");
+  const restoreBoundaries = (): void => {
+    resetSharedRuntimeSlotForTests();
+    setPluginConfig({});
+    directNotificationTransportInternals.loadSendDurableMessageBatch = originalLoadSender;
+    wakeDeliveryExecutorInternals.execFile = originalExecFile;
+    Object.assign(runtimeLlmTimeoutsMs, originalTimeouts);
+    stores.restore();
+  };
+  try {
+    register(host.api);
+    await host.startServices(GATEWAY_CONFIG);
+    if (!sessionManager) throw new Error("full-stack fixture: the service did not start a SessionManager");
+  } catch (err) {
+    await host.dispose().catch((): undefined => undefined);
+    restoreBoundaries();
+    throw err;
+  }
 
   const messages = (): SentMessage[] => host.durableSends.flatMap((params, index) => decodeMessage(params, index));
 
@@ -320,12 +334,7 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
       try {
         await host.dispose();
       } finally {
-        resetSharedRuntimeSlotForTests();
-        setPluginConfig({});
-        directNotificationTransportInternals.loadSendDurableMessageBatch = originalLoadSender;
-        wakeDeliveryExecutorInternals.execFile = originalExecFile;
-        Object.assign(runtimeLlmTimeoutsMs, originalTimeouts);
-        stores.restore();
+        restoreBoundaries();
       }
       if (backend.protocolViolations.length > 0) {
         throw new Error(`${options.backend} fake backend saw protocol violations:\n${backend.protocolViolations.join("\n")}`);

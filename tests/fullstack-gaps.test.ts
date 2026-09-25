@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { Session } from "../src/session";
 import { waitUntil } from "./harness-backends";
-import { sessionsIndexPath, startFullStack, TELEGRAM_TOPIC, type FullStack, type SentButton } from "./fullstack-fixture";
+import { DISCORD_THREAD, sessionsIndexPath, startFullStack, TELEGRAM_TOPIC, type FullStack, type SentButton } from "./fullstack-fixture";
 
 /**
  * End-to-end paths that had no coverage: failed worktree actions, the
@@ -75,36 +75,37 @@ function buttonIn(message: { buttons: SentButton[] }, label: string): SentButton
 }
 
 describe("failed worktree actions", () => {
-  it("re-offers fresh controls after a failed Merge, and the retry merges", async () => {
-    const surface = TELEGRAM_TOPIC;
-    const s = stack = await startFullStack({ backend: "codex", surface });
-    const { repo, session } = await finishConflictingSession(s, "ask");
-    const merge = await s.waitForButton("Merge");
-    const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
+  for (const surface of [TELEGRAM_TOPIC, DISCORD_THREAD]) {
+    it(`re-offers fresh controls after a failed Merge on ${surface.channel}, and the retry merges`, async () => {
+      const s = stack = await startFullStack({ backend: "codex", surface });
+      const { repo, session } = await finishConflictingSession(s, "ask");
+      const merge = await s.waitForButton("Merge");
+      const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
 
-    const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /Rebase conflicts/);
-    assert.ok(failed.cleared > 0, "the spent controls are cleared");
-    const retry = await s.waitForMessage(/still open/, prompt.index + 1);
-    assert.equal(retry.to, surface.to);
-    assert.equal(String(retry.threadId), String(surface.threadId));
-    assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
-    assert.notEqual(buttonIn(retry, "Merge").payload, merge.payload, "a fresh token");
+      const failed = await s.click(merge);
+      assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+      assert.ok(failed.cleared > 0, "the spent controls are cleared");
+      const retry = await s.waitForMessage(/still open/, prompt.index + 1);
+      assert.equal(retry.to, surface.to);
+      assert.equal(String(retry.threadId), String(surface.threadId));
+      assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
+      assert.notEqual(buttonIn(retry, "Merge").payload, merge.payload, "a fresh token");
 
-    // The spent prompt's siblings were replaced too: only the new controls act.
-    const oldLater = await s.click(buttonIn(prompt, "Later"));
-    assert.match(oldLater.replies.join("\n"), /stale or has already been used/);
-    assert.equal(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil, undefined);
+      // The spent prompt's siblings were replaced too: only the new controls act.
+      const oldLater = await s.click(buttonIn(prompt, "Later"));
+      assert.match(oldLater.replies.join("\n"), /stale or has already been used/);
+      assert.equal(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil, undefined);
 
-    // The user resolves the conflict (here: drops the conflicting main commit) and retries.
-    git(repo, "reset", "--hard", "HEAD~1");
-    const retried = await s.click(buttonIn(retry, "Merge"));
-    assert.doesNotMatch(retried.replies.join("\n"), /stale/);
-    await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
-    assert.ok(existsSync(join(repo, "feature.txt")), "branch merged into main");
-    // A settled decision is never re-offered.
-    assert.equal(await s.sm.reofferWorktreeDecision(session.id), false);
-  });
+      // The user resolves the conflict (here: drops the conflicting main commit) and retries.
+      git(repo, "reset", "--hard", "HEAD~1");
+      const retried = await s.click(buttonIn(retry, "Merge"));
+      assert.doesNotMatch(retried.replies.join("\n"), /stale/);
+      await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
+      assert.ok(existsSync(join(repo, "feature.txt")), "branch merged into main");
+      // A settled decision is never re-offered.
+      assert.equal(await s.sm.reofferWorktreeDecision(session.id), false);
+    });
+  }
 });
 
 describe("auto-merge conflicts", () => {

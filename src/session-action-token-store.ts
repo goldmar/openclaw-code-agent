@@ -135,6 +135,8 @@ export class SessionActionTokenStore {
    * adopted that one and this click must not act.
    */
   confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    // Bulk consumptions (question and plan tokens) carry no id; their callbacks
+    // are serialized per session in-process instead.
     if (!consumptionId) return true;
     const token = this.tokens.get(tokenId);
     return !token || token.consumptionId === undefined || token.consumptionId === consumptionId;
