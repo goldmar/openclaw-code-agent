@@ -463,6 +463,9 @@ export class SessionStore {
       }
     }
     this.persisted.set(storageKey, entry);
+    // This store now owns the row: drop any copy carried from another writer.
+    if (entry.sessionId) this.carriedSessions.delete(entry.sessionId);
+    this.carriedSessions.delete(entry.harnessSessionId);
     if (entry.sessionId) this.idIndex.set(entry.sessionId, storageKey);
     if (entry.name) this.nameIndex.set(entry.name, storageKey);
     const backendConversationId = getBackendConversationId(entry);
