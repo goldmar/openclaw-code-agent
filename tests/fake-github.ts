@@ -40,6 +40,8 @@ export type FakeGhCall = { args: string[]; cwd: string };
 export type FakeGhFailures = {
   /** `pr create` fails with this stderr text. */
   create?: string;
+  /** `pr create` exits 1 without writing anything to stderr. */
+  createSilent?: boolean;
   /** `pr create --draft` fails as on a repository without draft PRs; the retry without `--draft` succeeds. */
   draftUnsupported?: boolean;
   /** `pr comment` fails. */
@@ -119,6 +121,7 @@ if (command === "view") {
 }
 if (command === "create") {
   if (state.failures.create) fail(state.failures.create);
+  if (state.failures.createSilent) { save(); process.exit(1); }
   const draft = has("--draft");
   if (draft && state.failures.draftUnsupported) fail("pull request create failed: GraphQL: Draft pull requests are not supported in this repository. (createPullRequest)");
   const base = flag("--base");

@@ -68,7 +68,7 @@ export class SchemaDocument {
     let node: unknown = this.root;
     for (const segment of ref.slice(2).split("/")) {
       const key = segment.replace(/~1/g, "/").replace(/~0/g, "~");
-      if (!isRecord(node) || !(key in node)) throw new Error(`protocol-schema: unresolved $ref ${ref}`);
+      if (!isRecord(node) || !Object.hasOwn(node, key)) throw new Error(`protocol-schema: unresolved $ref ${ref}`);
       node = node[key];
     }
     return node as JsonSchema;
@@ -114,7 +114,7 @@ export class SchemaDocument {
     if (Array.isArray(schema.enum) && !schema.enum.some((entry) => deepEqual(entry, value))) {
       errors.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`);
     }
-    if ("const" in schema && !deepEqual(schema.const, value)) {
+    if (Object.hasOwn(schema, "const") && !deepEqual(schema.const, value)) {
       errors.push(`${path}: expected ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`);
     }
 
@@ -155,12 +155,13 @@ export class SchemaDocument {
       const properties = isRecord(schema.properties) ? schema.properties as Record<string, JsonSchema> : {};
       const patternProperties = isRecord(schema.patternProperties) ? schema.patternProperties as Record<string, JsonSchema> : {};
       for (const key of Array.isArray(schema.required) ? schema.required as string[] : []) {
-        if (!(key in value)) errors.push(`${path}: missing required property "${key}"`);
+        if (!Object.hasOwn(value, key)) errors.push(`${path}: missing required property "${key}"`);
       }
       for (const [key, child] of Object.entries(value)) {
         const childPath = `${path}.${key}`;
         let matched = false;
-        if (key in properties) {
+        // Own keys only: `constructor`, `toString`, ... are not declared properties.
+        if (Object.hasOwn(properties, key)) {
           matched = true;
           this.check(child, properties[key]!, childPath, errors);
         }
@@ -221,7 +222,7 @@ type CodexMethodEntry = { params: JsonSchema; paramsRequired: boolean; result?: 
 
 function codexEntry(section: "clientRequests" | "serverNotifications" | "serverRequests", method: string): CodexMethodEntry {
   const entries = codex().root[section] as Record<string, CodexMethodEntry>;
-  const entry = entries[method];
+  const entry = Object.hasOwn(entries, method) ? entries[method] : undefined;
   if (!entry) {
     throw new Error(`protocol-schema: ${method} is not in the vendored Codex ${section}; add it to scripts/sync-codex-protocol.mjs and run pnpm sync:codex-protocol`);
   }
@@ -276,7 +277,7 @@ function openCodeOperation(method: string, path: string): { template: string; op
       pattern = new RegExp(`^${source}$`);
       operationPatterns.set(template, pattern);
     }
-    if (pattern.test(path) && operations[verb]) return { template, operation: operations[verb]! };
+    if (pattern.test(path) && Object.hasOwn(operations, verb)) return { template, operation: operations[verb]! };
   }
   throw new Error(`protocol-schema: ${method} ${path} is not in the vendored OpenCode OpenAPI; add it to scripts/sync-opencode-openapi.mjs and run pnpm sync:opencode-openapi`);
 }

@@ -42,6 +42,10 @@ const report = spawnSync("pnpm", [
 ], { cwd, stdio: "inherit" });
 rmSync(rawDir, { recursive: true, force: true });
 
-if (tests.status !== 0) console.error(`\nSome tests failed (exit ${tests.status}); coverage covers the tests that ran.`);
 console.log(`\nCoverage report: ${reportDir}/coverage-summary.json, ${reportDir}/lcov.info`);
+if (tests.status !== 0) {
+  // The report still covers the tests that ran, but a failing suite must not look like a pass.
+  console.error(`Some tests failed (exit ${tests.status ?? "signal"}).`);
+  process.exit(tests.status || 1);
+}
 process.exit(report.status ?? 1);

@@ -1,5 +1,5 @@
 import "./test-env";
-import { after, afterEach, before, beforeEach, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +57,9 @@ type Fixture = {
   run(params?: Record<string, unknown>): Promise<AgentPrResult>;
 };
 
-let fixture: Fixture | undefined;
+// Teardown steps, registered as each resource is created so a setup that
+// fails halfway still cleans up what it made.
+const cleanups: Array<() => unknown> = [];
 // One fake GitHub (bare remote, checkout, `gh`) per file; each test gets a fresh
 // worktree branch, session store, and `gh` state.
 let github: FakeGitHub;
@@ -71,18 +73,25 @@ after(() => {
   github.dispose();
 });
 
-async function setup(options: {
-  llmReplies?: string[];
-  commit?: boolean;
-  persisted?: Partial<PersistedSessionInfo>;
-  outputReport?: boolean;
-} = {}): Promise<Fixture> {
-  const gh = github;
-  gh.resetState();
-  const host = createFakeHost({ llmReplies: options.llmReplies ?? [] });
+type ManagerFixture = {
+  host: FakeHost;
+  sm: SessionManager;
+  storeDir: string;
+  outcomes: Outcome[];
+  dispatches: SessionNotificationRequest[];
+};
+
+/** Fake host plus a SessionManager on a fresh store, installed as the plugin singletons. */
+function createManagerFixture(llmReplies: string[]): ManagerFixture {
+  github.resetState();
+  const host = createFakeHost({ llmReplies });
+  cleanups.push(() => host.dispose());
   setPluginRuntime(host.runtime);
+  cleanups.push(() => setPluginRuntime(undefined));
   const storeDir = mkdtempSync(join(tmpdir(), "oca-agent-pr-store-"));
+  cleanups.push(() => rmSync(storeDir, { recursive: true, force: true }));
   const sm = new SessionManager(5, 50, { store: { env: {}, indexPath: join(storeDir, "sessions.json") } });
+  cleanups.push(() => sm.shutdown());
   const outcomes: Outcome[] = [];
   const dispatches: SessionNotificationRequest[] = [];
   // Capture user-facing output instead of delivering it through the Gateway.
@@ -96,6 +105,18 @@ async function setup(options: {
     },
   });
   setSessionManager(sm);
+  cleanups.push(() => setSessionManager(null));
+  return { host, sm, storeDir, outcomes, dispatches };
+}
+
+async function setup(options: {
+  llmReplies?: string[];
+  commit?: boolean;
+  persisted?: Partial<PersistedSessionInfo>;
+  outputReport?: boolean;
+} = {}): Promise<Fixture> {
+  const gh = github;
+  const { host, sm, storeDir, outcomes, dispatches } = createManagerFixture(options.llmReplies ?? []);
 
   worktreeCounter += 1;
   const worktreePath = await createWorktree(gh.repoDir, `${SESSION_NAME}-${worktreeCounter}`);
@@ -134,7 +155,7 @@ async function setup(options: {
   };
   sm["store"].replacePersistedSession(entry);
 
-  const created: Fixture = {
+  return {
     gh,
     host,
     sm,
@@ -149,8 +170,6 @@ async function setup(options: {
       return await makeAgentPrTool().execute("call-1", { session: SESSION_NAME, ...params }) as AgentPrResult;
     },
   };
-  fixture = created;
-  return created;
 }
 
 function textOf(result: AgentPrResult): string {
@@ -162,18 +181,8 @@ function argAfter(args: string[], flag: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
-beforeEach(() => {
-  fixture = undefined;
-});
-
 afterEach(async () => {
-  if (!fixture) return;
-  await fixture.sm.shutdown();
-  setSessionManager(null);
-  setPluginRuntime(undefined);
-  await fixture.host.dispose();
-  rmSync(fixture.storeDir, { recursive: true, force: true });
-  fixture = undefined;
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 describe("agent_pr execute(): new PRs", () => {
@@ -269,6 +278,17 @@ describe("agent_pr execute(): new PRs", () => {
     assert.equal(f.gh.ghCalls("create").length, 1);
     assert.equal(f.persisted()?.worktreePrUrl, undefined);
     assert.equal(f.outcomes.length, 0);
+  });
+
+  it("describes a gh failure without stderr and never echoes the command or PR body", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    f.gh.updateState((state) => { state.failures.createSilent = true; });
+
+    const result = await f.run();
+
+    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.equal(textOf(result), "❌ Failed to create PR: gh exited with code 1 without an error message");
+    assert.equal(f.gh.ghCalls("create").length, 1, "no draft retry without a draft-related gh error");
   });
 
   it("refuses to open a PR when the repo policy forbids PRs", async () => {
@@ -487,31 +507,9 @@ describe("gh PR helpers", () => {
 describe("auto-pr worktree strategy", () => {
   it("opens a draft PR through runAutoPr when an auto-pr session completes", async () => {
     const gh = github;
-    gh.resetState();
-    const host = createFakeHost({ llmReplies: [LLM_METADATA] });
-    setPluginRuntime(host.runtime);
-    const storeDir = mkdtempSync(join(tmpdir(), "oca-auto-pr-store-"));
-    const sm = new SessionManager(5, 50, { store: { env: {}, indexPath: join(storeDir, "sessions.json") } });
-    const dispatches: SessionNotificationRequest[] = [];
-    const outcomes: Outcome[] = [];
-    Object.assign(sm["notifications"], {
-      dispatch: (_session: unknown, request: SessionNotificationRequest) => {
-        dispatches.push(request);
-        request.hooks?.onNotifySucceeded?.();
-      },
-      notifyWorktreeOutcome: (_session: unknown, line: string, extra?: Omit<Outcome, "line">) => {
-        outcomes.push({ line, ...extra });
-      },
-    });
-    setSessionManager(sm);
+    const { sm, outcomes, dispatches } = createManagerFixture([LLM_METADATA]);
     const harness = createFakeHarness("fake-auto-pr");
     registerHarness(harness);
-    fixture = {
-      gh, host, sm, worktreePath: "", branch: "", outcomes, dispatches, storeDir,
-      persisted: () => undefined,
-      commit: () => "",
-      run: async () => { throw new Error("not used"); },
-    };
 
     await sm.setRepoPolicy(gh.repoDir, "pr-required");
     const session = await sm.launchSession({

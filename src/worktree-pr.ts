@@ -68,15 +68,20 @@ function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" |
 }
 
 /**
- * What gh reported for a failed command: its stderr when there is any. The
- * thrown message starts with the full command line (`Command failed: gh pr
- * create ... --draft ... --body <PR body>`), so matching on it would find
- * `draft` or `already exists` in OCA's own arguments.
+ * What gh reported for a failed command: its stderr, or a description of how
+ * it failed. Never the thrown message: it contains the full command line
+ * (`gh pr create ... --draft ... --body <PR body>`), so heuristics would match
+ * `draft` or `already exists` in OCA's own arguments, and the PR body would
+ * leak into the tool result.
  */
 function ghFailureReason(err: unknown): string {
-  const stderr = (err as CommandError | undefined)?.stderr?.trim();
+  const failure = err as CommandError | undefined;
+  const stderr = failure?.stderr?.trim();
   if (stderr) return stderr;
-  return err instanceof Error ? err.message : String(err);
+  if (failure?.killed) return "gh did not finish before its timeout";
+  if (typeof failure?.code === "number") return `gh exited with code ${failure.code} without an error message`;
+  if (typeof failure?.code === "string") return `gh could not run (${failure.code})`;
+  return "gh failed without an error message";
 }
 
 function isExistingPullRequestError(message: string): boolean {
