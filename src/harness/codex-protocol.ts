@@ -127,16 +127,23 @@ export function codexVersionFromUserAgent(userAgent: unknown): string | undefine
   return match?.[1];
 }
 
-/** Negative, zero, or positive as `a` is older than, equal to, or newer than `b` (numeric core only). */
-function compareVersionCores(a: string, b: string): number {
-  const parts = (version: string): number[] => version.split("-")[0]!.split(".").map(Number);
-  const left = parts(a);
-  const right = parts(b);
+/**
+ * Negative, zero, or positive as `a` is older than, equal to, or newer than
+ * `b`. A pre-release sorts before its release (`0.156.1-rc.1` < `0.156.1`);
+ * two pre-releases of the same version compare as equal.
+ */
+function compareCodexVersions(a: string, b: string): number {
+  const split = (version: string): { core: number[]; prerelease: boolean } => {
+    const [core = "", ...rest] = version.split("-");
+    return { core: core.split(".").map(Number), prerelease: rest.length > 0 };
+  };
+  const left = split(a);
+  const right = split(b);
   for (let index = 0; index < 3; index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    const difference = (left.core[index] ?? 0) - (right.core[index] ?? 0);
     if (difference !== 0) return difference;
   }
-  return 0;
+  return Number(right.prerelease) - Number(left.prerelease);
 }
 
 /**
@@ -150,7 +157,7 @@ export function codexVersionError(userAgent: unknown): string | undefined {
     + "Update the `codex` command (for example `npm install -g @openai/codex@latest`), "
     + "or point OPENCLAW_CODEX_APP_SERVER_COMMAND at a newer Codex.";
   if (!version) return `Could not read the Codex CLI version from the App Server. ${upgrade}`;
-  if (compareVersionCores(version, MIN_CODEX_CLI_VERSION) < 0) return `Codex CLI ${version} is too old. ${upgrade}`;
+  if (compareCodexVersions(version, MIN_CODEX_CLI_VERSION) < 0) return `Codex CLI ${version} is too old. ${upgrade}`;
   return undefined;
 }
 

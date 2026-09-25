@@ -124,6 +124,18 @@ describe("release workflow", () => {
     assert.match(release, /gh release create "\$TAG" "artifact\/\$TARBALL" --verify-tag/u);
   });
 
+  it("checks out only the dispatch ref and moves to the selected commit after proving it is on main", () => {
+    assert.doesNotMatch(workflow, /ref: \$\{\{ inputs\.commit \}\}/u);
+    assert.match(
+      job("verify"),
+      /git merge-base --is-ancestor "\$COMMIT" origin\/main\n\s+git switch --detach "\$COMMIT"\n\s+test "\$\(git rev-parse HEAD\)" = "\$COMMIT"/u,
+    );
+    assert.match(
+      job("github-release"),
+      /git merge-base --is-ancestor "\$COMMIT" origin\/main\n\s+git show "\$COMMIT:CHANGELOG\.md"/u,
+    );
+  });
+
   it("never persists checkout credentials", () => {
     const checkouts = workflow.match(/uses: actions\/checkout@[\s\S]*?(?=\n\s+- name:|\n {2}[a-z])/gu) ?? [];
     assert.ok(checkouts.length >= 3);

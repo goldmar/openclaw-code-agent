@@ -45,18 +45,20 @@ jobs:
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
           [[ "$VERSION" =~ $semver ]] || { echo "version must be a semantic version without a leading v or build metadata"; exit 1; }
 
-      - name: Checkout selected commit
+      # Check out the dispatch ref, then move to the selected commit only after
+      # proving it is on main: the release never runs code from another branch.
+      - name: Checkout main history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
           submodules: false
 
-      - name: Require selected commit on main
+      - name: Switch to the selected main commit
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$COMMIT" origin/main
+          git switch --detach "$COMMIT"
           test "$(git rev-parse HEAD)" = "$COMMIT"
 
       - name: Set up pnpm
@@ -215,10 +217,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The release tools come from the dispatch ref (main), like the workflow itself.
       - name: Checkout release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.commit }}
           persist-credentials: false
           submodules: false
           sparse-checkout: .github/release-tools
@@ -299,10 +301,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout selected commit
+      - name: Checkout main history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.commit }}
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
 
@@ -324,7 +326,10 @@ jobs:
           TAG: v${{ inputs.version }}
           TARBALL: ${{ needs.verify.outputs.tarball }}
         run: |
-          awk -v version="$VERSION" '$0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {found=1; next} found && /^## /{exit} found{print}' CHANGELOG.md > /tmp/release-notes.md
+          git fetch origin main
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          git show "$COMMIT:CHANGELOG.md" > /tmp/release-changelog.md
+          awk -v version="$VERSION" '$0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {found=1; next} found && /^## /{exit} found{print}' /tmp/release-changelog.md > /tmp/release-notes.md
           test -s /tmp/release-notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "$TAG" --notes-file /tmp/release-notes.md

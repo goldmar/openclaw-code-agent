@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateNpmShrinkwrap } from "../scripts/check-npm-shrinkwrap.mjs";
 import {
+  compareReleases,
   overridePackageName,
+  PINNED_RUNTIME_DEPENDENCIES,
+  RUNTIME_SECURITY_FLOORS,
   pinnedOverrideErrors,
   pinnedRuntimeVersions,
   readPnpmWorkspaceOverrides,
@@ -51,6 +54,22 @@ describe("dependency artifact policy", () => {
       () => pinnedRuntimeVersions({ dependencies: { ...packageJson.dependencies, hono: "^4.13.9" } }),
       /exact runtime dependency hono/u,
     );
+  });
+
+  it("rejects a pinned runtime dependency below its independent security floor", () => {
+    const packageJson = JSON.parse(read("package.json")) as { dependencies?: Record<string, string> };
+    for (const [name, floor] of Object.entries(RUNTIME_SECURITY_FLOORS)) {
+      assert.ok(compareReleases(packageJson.dependencies?.[name] ?? "0.0.0", floor) >= 0, `${name} is below ${floor}`);
+    }
+    // Lock files that agree with a downgraded pin do not make it acceptable.
+    assert.throws(
+      () => pinnedRuntimeVersions({ dependencies: { ...packageJson.dependencies, "fast-uri": "3.1.5" } }),
+      /pins fast-uri@3\.1\.5, below its security floor 3\.1\.8/u,
+    );
+    assert.equal(RUNTIME_SECURITY_FLOORS["fast-uri"], "3.1.8");
+    assert.deepEqual([...PINNED_RUNTIME_DEPENDENCIES], Object.keys(RUNTIME_SECURITY_FLOORS));
+    assert.ok(compareReleases("4.13.10", "4.13.9") > 0);
+    assert.ok(compareReleases("4.9.0", "4.13.0") < 0);
   });
 
   it("rejects a pnpm override that keeps a pinned runtime dependency below package.json", (t) => {

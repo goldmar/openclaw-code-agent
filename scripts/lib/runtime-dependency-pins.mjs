@@ -3,38 +3,64 @@
 // direct, exact `dependencies` in package.json and resolve to exactly that
 // version in npm-shrinkwrap.json.
 //
-// package.json `dependencies` is the single source of truth for the versions.
-// This module only names the packages; every check reads the versions from
-// package.json:
+// Two values per package, each in one place:
+// - the pinned version: package.json `dependencies` (bumped freely);
+// - the security floor: RUNTIME_SECURITY_FLOORS below, the lowest release that
+//   carries the relevant advisory fixes. Raise it only for a new advisory; a
+//   pin below its floor fails the checks even if the lock files agree.
+// Every check reads these through this module:
 // - scripts/check-npm-shrinkwrap.mjs (the manifest, the shrinkwrap, and the
 //   matching pnpm-workspace.yaml overrides for the development graph)
 // - scripts/verify-npm-consumer-install.mjs (the packed consumer install)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const PINNED_RUNTIME_DEPENDENCIES = Object.freeze([
-  "@hono/node-server",
-  "express-rate-limit",
-  "fast-uri",
-  "hono",
-  "ip-address",
-  "qs",
-]);
+/** Lowest acceptable release per pinned runtime dependency. */
+export const RUNTIME_SECURITY_FLOORS = Object.freeze({
+  "@hono/node-server": "2.1.1",
+  "express-rate-limit": "8.7.0",
+  "fast-uri": "3.1.8",
+  hono: "4.13.7",
+  "ip-address": "10.7.2",
+  qs: "6.16.0",
+});
 
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+export const PINNED_RUNTIME_DEPENDENCIES = Object.freeze(Object.keys(RUNTIME_SECURITY_FLOORS));
+
+const EXACT_VERSION = /^\d+\.\d+\.\d+$/u;
+
+/**
+ * Negative, zero, or positive as release `a` is older than, equal to, or newer than `b`.
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+export function compareReleases(a, b) {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
 
 /**
  * `{ name: version }` for every pinned runtime dependency, read from package.json.
+ * Throws when a pin is missing, not an exact release, or below its security floor.
  * @param {{ dependencies?: Record<string, string> }} packageJson
  * @returns {Record<string, string>}
  */
 export function pinnedRuntimeVersions(packageJson) {
   /** @type {Record<string, string>} */
   const versions = {};
-  for (const name of PINNED_RUNTIME_DEPENDENCIES) {
+  for (const [name, floor] of Object.entries(RUNTIME_SECURITY_FLOORS)) {
     const version = packageJson.dependencies?.[name];
     if (typeof version !== "string" || !EXACT_VERSION.test(version)) {
       throw new Error(`package.json must declare exact runtime dependency ${name}, got ${version ?? "nothing"}`);
+    }
+    if (compareReleases(version, floor) < 0) {
+      throw new Error(`package.json pins ${name}@${version}, below its security floor ${floor}`);
     }
     versions[name] = version;
   }

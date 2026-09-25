@@ -986,6 +986,7 @@ describe("CodexHarness minimum Codex CLI version (B23)", () => {
   for (const [label, userAgent, reported] of [
     ["an older Codex CLI", codexUserAgent("0.155.9"), /Codex CLI 0\.155\.9 is too old/],
     ["an older pre-release", codexUserAgent("0.156.0-alpha.3"), /Codex CLI 0\.156\.0-alpha\.3 is too old/],
+    ["a pre-release of the minimum", codexUserAgent(`${MIN_CODEX_CLI_VERSION}-rc.1`), /Codex CLI 0\.156\.1-rc\.1 is too old/],
     ["an agent string without a version", "codex_cli_rs (linux; x86_64)", /Could not read the Codex CLI version/],
   ] as const) {
     it(`fails closed on ${label} before any thread exists`, async () => {
@@ -1003,7 +1004,7 @@ describe("CodexHarness minimum Codex CLI version (B23)", () => {
   }
 
   it("accepts the minimum and newer Codex CLIs", async () => {
-    for (const version of [MIN_CODEX_CLI_VERSION, "0.157.0", "1.0.0"]) {
+    for (const version of [MIN_CODEX_CLI_VERSION, "0.156.2-alpha.1", "0.157.0", "1.0.0"]) {
       const client = new MockCodexClient({ userAgent: codexUserAgent(version) });
       const result = runCompleted(await collectMessages(launch(client)));
       assert.equal(result?.data.success, true, version);
