@@ -35,6 +35,13 @@ if (files.length === 0) {
   process.exit(1);
 }
 
+// Test worktrees and repos live under each file's temp home (tests/test-env.ts).
+// Anything a run leaves in the shared temp dir under these names is a leak.
+const LEAK_PATTERN = /^openclaw-(?:worktree|auto-merge)-/;
+const sharedTempDir = tmpdir();
+const listLeakCandidates = () => new Set(readdirSync(sharedTempDir).filter((name) => LEAK_PATTERN.test(name)));
+const tempEntriesBefore = listLeakCandidates();
+
 const failures = [];
 for (const file of files) {
   console.log(`\n==> ${file}`);
@@ -47,6 +54,9 @@ for (const file of files) {
     // tests/test-env.ts reuses only a home named here (see src/test-state-guard.ts).
     OPENCLAW_CODE_AGENT_TEST_HOME: testHome,
   };
+  // An inherited worktree base dir (for example /tmp) would put test worktrees
+  // outside the test home; tests/test-env.ts clears it too.
+  delete env.OPENCLAW_WORKTREE_DIR;
 
   let result;
   try {
@@ -62,6 +72,11 @@ for (const file of files) {
   if (result.status !== 0) {
     failures.push({ file, status: result.status ?? 1 });
   }
+}
+
+const leaked = [...listLeakCandidates()].filter((name) => !tempEntriesBefore.has(name));
+if (leaked.length > 0) {
+  failures.push({ file: `${sharedTempDir} (left behind: ${leaked.sort().join(", ")})`, status: 1 });
 }
 
 console.log(`\nTest files run: ${files.length}`);

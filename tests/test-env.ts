@@ -59,6 +59,11 @@ for (const name of ["OPENCLAW_CODE_AGENT_SESSIONS_PATH", "OPENCLAW_CODE_AGENT_GO
   if (value && !isPathInside(canonicalizePath(testHome), canonicalizePath(value))) delete env[name];
 }
 
+// A worktree base dir inherited from the caller's environment (for example a
+// Gateway that sets OPENCLAW_WORKTREE_DIR=/tmp) would put test worktrees
+// outside the test home, where nothing removes them. Tests that need it set it.
+delete env.OPENCLAW_WORKTREE_DIR;
+
 // Output cleanup also scans the OS temp dir for pre-5.0 output files, which
 // can belong to a real Gateway. Give each test process its own temp dir.
 const hermeticTempDir = join(testHome, "tmp");

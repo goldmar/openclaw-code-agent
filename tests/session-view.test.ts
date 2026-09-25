@@ -419,7 +419,7 @@ describe("session-view app layer", () => {
   });
 
   it("reports recovered persisted sessions when the stored output file is missing", () => {
-    const missingOutputPath = "/tmp/openclaw-code-agent-missing-output.log";
+    const missingOutputPath = "/nonexistent/openclaw-code-agent-missing-output.log";
     const sm: any = {
       resolve: (): undefined => undefined,
       getPersistedSession: () => ({

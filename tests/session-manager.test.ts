@@ -1882,7 +1882,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       { label: "dismissed lifecycle", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeLifecycle: { state: "dismissed", updatedAt: new Date(now).toISOString() } },
       { label: "terminal session lifecycle", lifecycle: "terminal", worktreeState: "pending_decision", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
       { label: "cleaned lifecycle", lifecycle: "terminal", worktreeState: "none", worktreeLifecycle: { state: "none", updatedAt: new Date(now).toISOString() } },
-      { label: "missing branch cleanup failure", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/missing", worktreePath: "/tmp/openclaw-missing-worktree", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
+      { label: "missing branch cleanup failure", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/missing", worktreePath: "/nonexistent/openclaw-missing-worktree", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
     ];
 
     for (const entry of cases) {
