@@ -9,6 +9,9 @@ const WAKE_RETRY_BASE_DELAY_MS = 2_000;
 const WAKE_RETRY_MAX_DELAY_MS = 20_000;
 const WAKE_MAX_ATTEMPTS = 4;
 
+/** What a promise delivery task reports: nothing (sent) or that it skipped sending. */
+export type PromiseDeliveryResult = void | "skipped";
+
 export type DispatchTarget = "chat.send" | "message.send" | "system.event";
 export type DispatchPhase = "notify" | "wake";
 export type DispatchSuccessValidationResult =
@@ -104,7 +107,12 @@ export class WakeDeliveryExecutor {
     this.executeNow(args, opts, undefined, attempt);
   }
 
-  executePromise(task: () => Promise<void>, opts: ExecuteOptions, attempt: number = 1): void {
+  /**
+   * Run a delivery task. A task that resolves to `"skipped"` decided not to send
+   * (for example its prompt became obsolete); that is logged as skipped, not as
+   * a successful delivery, and no success or failure handler runs.
+   */
+  executePromise(task: () => Promise<PromiseDeliveryResult>, opts: ExecuteOptions, attempt: number = 1): void {
     if (this.disposed) return;
     if (attempt === 1 && opts.orderingKey) {
       this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executePromiseNow(task, opts, onSettled, attempt));
@@ -274,7 +282,7 @@ export class WakeDeliveryExecutor {
   }
 
   private executePromiseNow(
-    task: () => Promise<void>,
+    task: () => Promise<PromiseDeliveryResult>,
     opts: ExecuteOptions,
     onSettled?: () => void,
     attempt: number = 1,
@@ -298,12 +306,29 @@ export class WakeDeliveryExecutor {
     });
 
     this.executePromiseWithTimeout(task)
-      .then(() => {
+      .then((result) => {
         if (this.disposed) {
           onSettled?.();
           return;
         }
         const elapsedMs = Date.now() - startedAt;
+        if (result === "skipped") {
+          this.log("info", "dispatch_skipped", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+            reason: "delivery no longer applicable",
+          });
+          onSettled?.();
+          return;
+        }
         this.log("info", "dispatch_succeeded", {
           label: opts.label,
           sessionId: opts.sessionId,
@@ -410,7 +435,7 @@ export class WakeDeliveryExecutor {
       });
   }
 
-  private executePromiseWithTimeout(task: () => Promise<void>): Promise<void> {
+  private executePromiseWithTimeout(task: () => Promise<PromiseDeliveryResult>): Promise<PromiseDeliveryResult> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -422,11 +447,11 @@ export class WakeDeliveryExecutor {
 
       Promise.resolve()
         .then(task)
-        .then(() => {
+        .then((result) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolve();
+          resolve(result);
         })
         .catch((err: unknown) => {
           if (settled) return;

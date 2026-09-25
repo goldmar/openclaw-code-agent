@@ -43,7 +43,8 @@ const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Retry interval and budget for a save deferred because another writer holds the index lock. */
 const LOCKED_SAVE_RETRY_MS = 25;
 const LOCKED_SAVE_MAX_DEFER_MS = 5_000;
-const LOCKED_SAVE_FAILED_RETRY_MS = 30_000;
+const LOCKED_SAVE_FAILED_RETRY_MS = 1_000;
+const LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS = 30_000;
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -386,7 +387,8 @@ export class SessionStore {
    * itself stays atomic (temp file + rename).
    */
   saveIndex(): void {
-    if (this.writeIndex({ force: false }) === "written") return;
+    const first = this.writeIndex({ force: false });
+    if (first === "written") return;
     // Another writer holds the lock (or the write failed): keep the change in
     // memory and retry off the event loop. Local changes stay the merge winner.
     if (this.deferredSave) return;
@@ -405,10 +407,15 @@ export class SessionStore {
         log.warn("[SessionStore] Session index write keeps failing; releasing waiters and retrying in the background.");
         this.resolvePersistWaiters();
       }
-      this.deferredSave = { timer: setTimeout(retry, force ? LOCKED_SAVE_FAILED_RETRY_MS : LOCKED_SAVE_RETRY_MS), since };
+      // Lock contention clears within milliseconds; a failing disk does not, so
+      // failed writes retry every second, then every 30 s after the 5 s budget.
+      const delay = result === "failed"
+        ? (force ? LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS : LOCKED_SAVE_FAILED_RETRY_MS)
+        : LOCKED_SAVE_RETRY_MS;
+      this.deferredSave = { timer: setTimeout(retry, delay), since };
       this.deferredSave.timer.unref?.();
     };
-    this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
+    this.deferredSave = { timer: setTimeout(retry, first === "failed" ? LOCKED_SAVE_FAILED_RETRY_MS : LOCKED_SAVE_RETRY_MS), since };
     this.deferredSave.timer.unref?.();
   }
 

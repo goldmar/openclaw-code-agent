@@ -426,7 +426,7 @@ export class WakeDispatcher {
           await this.beforeInteractiveSend();
           // The runtime may have stopped (or the prompt been superseded) while
           // the tokens were being persisted: never show buttons that are stale.
-          if (this.disposed || shouldDispatch?.() === false) return;
+          if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
         await this.directNotifications.send(route, text, buttons);
       },

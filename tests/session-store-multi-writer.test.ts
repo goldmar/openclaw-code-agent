@@ -280,7 +280,9 @@ describe("SessionStore ownership and write safety", () => {
     assert.ok(readIndex(indexPath).actionTokens.some((row: { id: string }) => row.id === token.id));
   });
 
-  it("keeps persistence waiters waiting while a write fails, then persists once it succeeds", async () => {
+  // A privileged process ignores directory permissions, so the write would not fail.
+  const runsAsRoot = process.getuid?.() === 0;
+  it("keeps persistence waiters waiting while a write fails, then persists once it succeeds", { skip: runsAsRoot && "directory permissions do not apply to root" }, async () => {
     const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
     store.persistTerminal(stubSession("first"));
     chmodSync(dir, 0o500);
