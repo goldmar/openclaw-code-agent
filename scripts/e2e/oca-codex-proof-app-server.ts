@@ -223,7 +223,7 @@ class ProofServer {
     switch (method) {
       case "initialize":
         this.initialized = true;
-        return { userAgent: "oca-codex-proof", codexHome: "/tmp/oca-codex-proof", platformFamily: "unix", platformOs: "linux" };
+        return { userAgent: "oca-codex-proof/0.156.1 (linux; x86_64)", codexHome: "/tmp/oca-codex-proof", platformFamily: "unix", platformOs: "linux" };
       case "account/read":
         return { account: null, requiresOpenaiAuth: false, workspaceRouting: null };
       case "model/list":

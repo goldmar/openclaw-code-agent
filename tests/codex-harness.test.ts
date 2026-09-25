@@ -8,6 +8,7 @@ import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
 import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
+import { MIN_CODEX_CLI_VERSION, codexVersionError, codexVersionFromUserAgent } from "../src/harness/codex-protocol";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
@@ -37,6 +38,7 @@ import {
   codexThreadResumeResponse,
   codexThreadStartResponse,
   codexTurn,
+  codexUserAgent,
   type CodexThreadResponseOptions,
   type GetAccountResponse,
   type ModelListResponse,
@@ -79,6 +81,8 @@ type MockOptions = {
   /** Turns returned by thread/turns/list pages (newest first), chunked per page. */
   turnsPages?: Array<Array<{ id: string; status?: TurnStatus }>>;
   steerError?: string;
+  /** `initialize` userAgent; defaults to a supported Codex version. */
+  userAgent?: string;
 };
 
 function breakdown(input: number, cached: number, write: number, output: number, reasoning: number, total = input + output): TokenUsageBreakdown {
@@ -147,7 +151,7 @@ class MockCodexClient {
   private respond(method: string, record: Record<string, unknown>): unknown {
     switch (method) {
       case "initialize":
-        return codexInitializeResponse("mock");
+        return codexInitializeResponse(this.options.userAgent);
       case "account/read":
         return {
           account: this.options.accountType === "chatgpt"
@@ -975,6 +979,48 @@ describe("CodexHarness resume and fork", () => {
     assert.equal(result?.data.num_turns, 0);
     assert.equal(result?.data.result, error);
     assert.equal(client.closeCalls, 1);
+  });
+});
+
+describe("CodexHarness minimum Codex CLI version (B23)", () => {
+  for (const [label, userAgent, reported] of [
+    ["an older Codex CLI", codexUserAgent("0.155.9"), /Codex CLI 0\.155\.9 is too old/],
+    ["an older pre-release", codexUserAgent("0.156.0-alpha.3"), /Codex CLI 0\.156\.0-alpha\.3 is too old/],
+    ["an agent string without a version", "codex_cli_rs (linux; x86_64)", /Could not read the Codex CLI version/],
+  ] as const) {
+    it(`fails closed on ${label} before any thread exists`, async () => {
+      const client = new MockCodexClient({ userAgent });
+      const messages = await collectMessages(launch(client));
+      const result = runCompleted(messages);
+      assert.equal(result?.data.success, false);
+      assert.match(result?.data.result ?? "", reported);
+      assert.match(result?.data.result ?? "", new RegExp(`needs Codex CLI ${MIN_CODEX_CLI_VERSION.replaceAll(".", "\\.")} or newer`));
+      assert.match(result?.data.result ?? "", /npm install -g @openai\/codex@latest/);
+      assert.deepEqual(client.requests.map((request) => request.method), ["initialize"]);
+      assert.equal(messages.some((message) => message.type === "run_started"), false);
+      assert.equal(client.closeCalls, 1);
+    });
+  }
+
+  it("accepts the minimum and newer Codex CLIs", async () => {
+    for (const version of [MIN_CODEX_CLI_VERSION, "0.157.0", "1.0.0"]) {
+      const client = new MockCodexClient({ userAgent: codexUserAgent(version) });
+      const result = runCompleted(await collectMessages(launch(client)));
+      assert.equal(result?.data.success, true, version);
+      assert.ok(client.requestsFor("thread/start").length === 1, version);
+    }
+  });
+
+  it("reads the version from Codex user agents", () => {
+    assert.equal(MIN_CODEX_CLI_VERSION, "0.156.1");
+    assert.equal(codexVersionFromUserAgent(codexUserAgent("0.157.0")), "0.157.0");
+    assert.equal(codexVersionFromUserAgent("codex_cli_rs/0.156.1 (Mac OS 15.1.0; arm64) iTerm.app/3.5.0"), "0.156.1");
+    assert.equal(codexVersionFromUserAgent("codex_cli_rs/0.157.0-alpha.2"), "0.157.0-alpha.2");
+    assert.equal(codexVersionFromUserAgent("codex_cli_rs/dev (linux)"), undefined);
+    assert.equal(codexVersionFromUserAgent(undefined), undefined);
+    assert.equal(codexVersionError(codexUserAgent("0.156.1")), undefined);
+    assert.equal(codexVersionError(codexUserAgent("0.156.2")), undefined);
+    assert.match(codexVersionError(codexUserAgent("0.99.0")) ?? "", /0\.99\.0 is too old/);
   });
 });
 

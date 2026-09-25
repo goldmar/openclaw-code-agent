@@ -105,6 +105,56 @@ export async function codexRequest<M extends CodexClientMethod>(
 }
 
 // ---------------------------------------------------------------------------
+// Minimum Codex CLI version
+// ---------------------------------------------------------------------------
+
+/**
+ * Oldest Codex CLI the harness supports. 5.0 relies on `turn/steer`,
+ * `thread/fork` `beforeTurnId`, `thread/revert`, `model/list`, the account
+ * rate-limit methods, and thread permission profiles; 0.156.1 is the release
+ * the vendored protocol was generated from and live-tested with.
+ */
+export const MIN_CODEX_CLI_VERSION = "0.156.1";
+
+/**
+ * The Codex CLI version from the `initialize` response's `userAgent`, which
+ * Codex formats as `<originator>/<version> (<os>; <arch>) ...`. Returns
+ * undefined when the agent string carries no version.
+ */
+export function codexVersionFromUserAgent(userAgent: unknown): string | undefined {
+  if (typeof userAgent !== "string") return undefined;
+  const match = /^[^/\s]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:[\s(]|$)/u.exec(userAgent.trim());
+  return match?.[1];
+}
+
+/** Negative, zero, or positive as `a` is older than, equal to, or newer than `b` (numeric core only). */
+function compareVersionCores(a: string, b: string): number {
+  const parts = (version: string): number[] => version.split("-")[0]!.split(".").map(Number);
+  const left = parts(a);
+  const right = parts(b);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * Why this Codex App Server cannot be used, or undefined when its version is
+ * at least {@link MIN_CODEX_CLI_VERSION}. Fails closed: an agent string
+ * without a readable version is refused too.
+ */
+export function codexVersionError(userAgent: unknown): string | undefined {
+  const version = codexVersionFromUserAgent(userAgent);
+  const upgrade = `OpenClaw Code Agent needs Codex CLI ${MIN_CODEX_CLI_VERSION} or newer. `
+    + "Update the `codex` command (for example `npm install -g @openai/codex@latest`), "
+    + "or point OPENCLAW_CODEX_APP_SERVER_COMMAND at a newer Codex.";
+  if (!version) return `Could not read the Codex CLI version from the App Server. ${upgrade}`;
+  if (compareVersionCores(version, MIN_CODEX_CLI_VERSION) < 0) return `Codex CLI ${version} is too old. ${upgrade}`;
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Execution settings (B5)
 // ---------------------------------------------------------------------------
 
