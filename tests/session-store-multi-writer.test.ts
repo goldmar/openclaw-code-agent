@@ -1,7 +1,7 @@
 import "./test-env";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore, mergeKeyedRows } from "../src/session-store";
@@ -278,6 +278,25 @@ describe("SessionStore ownership and write safety", () => {
     rmSync(lockPath);
     await waiting;
     assert.ok(readIndex(indexPath).actionTokens.some((row: { id: string }) => row.id === token.id));
+  });
+
+  it("keeps persistence waiters waiting while a write fails, then persists once it succeeds", async () => {
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("first"));
+    chmodSync(dir, 0o500);
+    try {
+      store.persistTerminal(stubSession("while-unwritable"));
+      let persisted = false;
+      const waiting = store.whenPersisted().then(() => { persisted = true; });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(persisted, false, "a failed write must not satisfy the wait");
+      chmodSync(dir, 0o700);
+      await waiting;
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    const rows = readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId).sort();
+    assert.deepEqual(rows, ["first", "while-unwritable"]);
   });
 
   it("flushes a deferred save at shutdown", () => {

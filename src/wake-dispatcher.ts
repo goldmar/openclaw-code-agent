@@ -133,6 +133,7 @@ export class WakeDispatcher {
   private readonly systemEvents: SystemEventTransport;
   private readonly executor = new WakeDeliveryExecutor();
   private readonly beforeInteractiveSend?: () => Promise<void>;
+  private disposed = false;
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.beforeInteractiveSend = options.beforeInteractiveSend;
@@ -150,6 +151,7 @@ export class WakeDispatcher {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.executor.dispose();
   }
 
@@ -420,7 +422,12 @@ export class WakeDispatcher {
     });
     this.executor.executePromise(
       async () => {
-        if (hasInteractiveButtons && this.beforeInteractiveSend) await this.beforeInteractiveSend();
+        if (hasInteractiveButtons && this.beforeInteractiveSend) {
+          await this.beforeInteractiveSend();
+          // The runtime may have stopped (or the prompt been superseded) while
+          // the tokens were being persisted: never show buttons that are stale.
+          if (this.disposed || shouldDispatch?.() === false) return;
+        }
         await this.directNotifications.send(route, text, buttons);
       },
       options,

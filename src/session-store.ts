@@ -43,6 +43,7 @@ const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** Retry interval and budget for a save deferred because another writer holds the index lock. */
 const LOCKED_SAVE_RETRY_MS = 25;
 const LOCKED_SAVE_MAX_DEFER_MS = 5_000;
+const LOCKED_SAVE_FAILED_RETRY_MS = 30_000;
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -385,20 +386,26 @@ export class SessionStore {
    * itself stays atomic (temp file + rename).
    */
   saveIndex(): void {
-    if (this.writeIndex({ force: false })) return;
-    // Another writer holds the lock: keep the change in memory and retry shortly
-    // instead of blocking the Gateway thread. Local changes stay the merge winner.
+    if (this.writeIndex({ force: false }) === "written") return;
+    // Another writer holds the lock (or the write failed): keep the change in
+    // memory and retry off the event loop. Local changes stay the merge winner.
     if (this.deferredSave) return;
     const since = Date.now();
     const retry = (): void => {
       const force = Date.now() - since >= LOCKED_SAVE_MAX_DEFER_MS;
-      if (force) log.warn("[SessionStore] Session store lock still held after 5 s; breaking it to save (with a merge).");
-      if (this.writeIndex({ force })) {
+      const result = this.writeIndex({ force });
+      if (result === "written") {
         this.deferredSave = undefined;
         this.resolvePersistWaiters();
         return;
       }
-      this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
+      if (force && result === "failed" && this.persistWaiters.length > 0) {
+        // The disk refuses the write (the lock is no longer the problem). Do not
+        // hold prompts back indefinitely; keep retrying in the background.
+        log.warn("[SessionStore] Session index write keeps failing; releasing waiters and retrying in the background.");
+        this.resolvePersistWaiters();
+      }
+      this.deferredSave = { timer: setTimeout(retry, force ? LOCKED_SAVE_FAILED_RETRY_MS : LOCKED_SAVE_RETRY_MS), since };
       this.deferredSave.timer.unref?.();
     };
     this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
@@ -406,9 +413,10 @@ export class SessionStore {
   }
 
   /**
-   * Resolves once no save is deferred behind another writer's lock. Callers
-   * await it before showing buttons (their tokens must be on disk first) and
-   * before acting on a consumed token.
+   * Resolves once no save is deferred: the change is on disk. Callers await it
+   * before showing buttons (their tokens must be persisted first) and before
+   * acting on a consumed token. Only a write the disk keeps refusing past the
+   * 5 s budget releases waiters without persisting.
    */
   whenPersisted(): Promise<void> {
     if (!this.deferredSave) return Promise.resolve();
@@ -430,21 +438,25 @@ export class SessionStore {
     if (!this.deferredSave) return;
     clearTimeout(this.deferredSave.timer);
     this.deferredSave = undefined;
-    let written = false;
-    for (let attempt = 0; attempt < 5 && !written; attempt += 1) {
-      written = this.writeIndex({ force: true });
+    let result: "written" | "busy" | "failed" = "busy";
+    for (let attempt = 0; attempt < 5 && result === "busy"; attempt += 1) {
+      result = this.writeIndex({ force: true });
     }
-    if (!written) this.writeIndex({ force: true, unlocked: true });
+    if (result === "busy") result = this.writeIndex({ force: true, unlocked: true });
+    if (result !== "written") log.warn("[SessionStore] Could not persist the session index at shutdown; the last saved index stays on disk.");
+    // Shutdown: waiters are released either way; their senders check that the
+    // runtime is still live before showing anything.
     this.resolvePersistWaiters();
   }
 
   /**
-   * Read-merge-write under the index lock. Returns false when another live
-   * writer holds the lock (nothing written). The write itself is atomic.
+   * Read-merge-write under the index lock: "busy" when another live writer
+   * holds the lock, "failed" when the write itself failed (nothing persisted in
+   * either case). The write itself is atomic.
    */
-  private writeIndex(options: { force: boolean; unlocked?: boolean }): boolean {
+  private writeIndex(options: { force: boolean; unlocked?: boolean }): "written" | "busy" | "failed" {
     const lock = options.unlocked ? "unavailable" : tryAcquireSessionStoreLock(this.indexPath, options);
-    if (lock === "busy") return false;
+    if (lock === "busy") return "busy";
     try {
       // Before load completes, the constructor has no base yet; write as loaded.
       if (this.diskSignature !== undefined) this.syncFromDisk("save");
@@ -456,12 +468,13 @@ export class SessionStore {
         [...this.repoPolicies.values()],
         revision,
       );
-      if (written && this.diskSignature !== undefined) {
+      if (!written) return "failed";
+      if (this.diskSignature !== undefined) {
         this.revision = revision;
         this.captureBase();
         this.diskSignature = statSessionStoreIndex(this.indexPath);
       }
-      return true;
+      return "written";
     } finally {
       if (lock !== "unavailable") lock.release();
     }
