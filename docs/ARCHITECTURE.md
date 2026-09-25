@@ -63,6 +63,18 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 
 Service startup loads config, instantiates `SessionManager`, restores persisted state, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
 
+### Runtime Model: One Runtime Per Gateway Process
+
+OpenClaw can load OCA more than once in one Gateway process: the active registry (which dispatches Telegram and Discord callbacks and starts the service), prepared agent-runtime registries (which may serve the orchestrator's tools), inspection registries, and hot-reload generations. Each load of a non-bundled plugin is its own captured module graph, so every module-level variable exists once per registry. Before 5.0.0 each registry built its own `SessionManager` over the same session index: a button minted by the tool registry was "stale" in the callback registry, and both registries rewrote the index from their own memory.
+
+`src/process-runtime.ts` keeps one runtime per process in a `globalThis` slot keyed by `Symbol.for("openclaw-code-agent.process-runtime.v1")`, which every module graph shares:
+
+- Every `register()` call is an owner. Tools, commands, interactive handlers, and the service attach to the shared runtime on first use, and the last owner to stop (service stop, `api.lifecycle.onDispose`, or the lifecycle abort signal) shuts it down.
+- The runtime holds the `SessionManager` (with its task-flow mirror, timers, and maintenance), the `GoalController`, and the auto-updater.
+- The runtime runs with the host handles (`api.runtime`, the service config, the plugin config, and the logger derived from `api.runtime`) of the newest live owner. When that owner retires, the runtime switches to the next newest owner before the retire returns, and clears the handles when the last owner stops.
+- The slot records a build identity (package version plus a digest of the entry module). A build registered later than every current owner takes over by stopping the old runtime first (the same persist-and-stop as a service stop) and then loading the store. An older build that finds a newer runtime refuses to start instead of creating a second writer.
+- Per-repository git locks, callback de-duplication locks, and Codex rate-limit snapshots are also process-wide (`processShared`).
+
 ### `SessionManager`
 
 `src/session-manager.ts` is the control plane:
@@ -272,6 +284,8 @@ Stored data includes:
 - origin routing metadata
 - backend conversation ID for diagnostics and recovery
 - output stubs and persisted stream references
+
+Writers merge instead of overwriting. Each save stats the index first; if another writer changed it since this store last read or wrote it, the store reloads the file and runs a three-way merge per row (sessions by id, action tokens by id, repo policies by key) against the rows it last saw: its own changes win, the other writer's changes and deletions are adopted, and a token consumption recorded by either side is final. The write itself stays atomic, and the file carries a `revision` counter for diagnostics. A token or session lookup miss re-reads the index the same way before the callback handler reports "stale". Rows another writer reports as `running` are kept on disk but never adopted, so a runtime cannot resume, answer, or approve a session it does not own; callbacks for such a session are refused.
 
 `backendRef` is required for all new-schema sessions. Pre-App-Server Codex SDK rows (Codex sessions without a `codex-app-server` backend ref) are dropped on load; there is no legacy migration path.
 

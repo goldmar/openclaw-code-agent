@@ -9,6 +9,7 @@
 import type { GetAccountRateLimitsResponse } from "./codex-app-server-protocol";
 import type { RateLimitSnapshot } from "./codex-app-server-protocol/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "./codex-app-server-protocol/v2/RateLimitWindow";
+import { processShared } from "../process-runtime";
 
 export interface CodexRateLimitState {
   snapshot: RateLimitSnapshot;
@@ -16,7 +17,8 @@ export interface CodexRateLimitState {
   observedAt: number;
 }
 
-let unreportedAccountCounter = 0;
+// Process-wide: the runtime records snapshots and `agent_stats` may run in another plugin registry.
+const unreportedAccounts = processShared("codex-unreported-accounts.v1", () => ({ counter: 0 }));
 const UNREPORTED_PREFIX = "unreported-account-";
 
 /**
@@ -24,8 +26,8 @@ const UNREPORTED_PREFIX = "unreported-account-";
  * backend omitted it). Unique per connection so unknown accounts never merge.
  */
 export function unreportedCodexAccountKey(): string {
-  unreportedAccountCounter += 1;
-  return `${UNREPORTED_PREFIX}${unreportedAccountCounter}`;
+  unreportedAccounts.counter += 1;
+  return `${UNREPORTED_PREFIX}${unreportedAccounts.counter}`;
 }
 
 /**
@@ -33,7 +35,7 @@ export function unreportedCodexAccountKey(): string {
  * ChatGPT accounts, so updates never merge across accounts. Account ids stay
  * in memory only and are never rendered.
  */
-const byAccount = new Map<string, CodexRateLimitState>();
+const byAccount = processShared("codex-rate-limits.v1", () => new Map<string, CodexRateLimitState>());
 
 /**
  * Record a full `account/rateLimits/read` response; returns the account key

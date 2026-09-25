@@ -1,4 +1,7 @@
+import { createHash } from "crypto";
+import { readFileSync } from "fs";
 import { join } from "path";
+import { fileURLToPath } from "url";
 // Named import: the bundler keeps only `version`, not the whole package.json.
 import { version as packageVersion } from "./package.json";
 
@@ -37,7 +40,16 @@ import { registerGoalEditCommand } from "./src/commands/goal-edit";
 import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setAutoUpdateService, setGoalController, setSessionManager } from "./src/singletons";
-import { setPluginRuntime } from "./src/runtime-store";
+import { getPluginRuntime, setPluginRuntime } from "./src/runtime-store";
+import {
+  acquireSharedRuntime,
+  allocateRuntimeOwnerSequence,
+  getSharedRuntime,
+  releaseSharedRuntime,
+  updateSharedRuntimeOwnerHandles,
+  type RuntimeHostHandles,
+  type RuntimeServices,
+} from "./src/process-runtime";
 import { createRuntimeWorktreeDecisionSummaryProvider } from "./src/worktree-decision-summary";
 import { setPluginConfig, pluginConfig } from "./src/config";
 import { resolveCodeAgentStateDir, resolveOpenClawStateDir } from "./src/state-paths";
@@ -69,18 +81,57 @@ export function routeFromInteractiveContext(ctx: unknown): SessionRoute | undefi
   );
 }
 
-/** Register plugin tools, commands, and the background session service. */
+/**
+ * Identity of this build: package version plus a digest of the entry module.
+ * Every captured copy of one build shares it; a hot-reloaded build differs even
+ * when the version label did not change.
+ */
+function resolveBuildId(): string {
+  try {
+    const digest = createHash("sha256").update(readFileSync(fileURLToPath(import.meta.url))).digest("hex");
+    return `${packageVersion ?? "0.0.0"}+${digest.slice(0, 16)}`;
+  } catch {
+    return `${packageVersion ?? "0.0.0"}+unknown`;
+  }
+}
+
+const BUILD_ID = resolveBuildId();
+
+type CodeAgentServices = {
+  sm: SessionManager;
+  gc: GoalController;
+  autoUpdate: AutoUpdateService | null;
+};
+
+/**
+ * True while this module graph's runtime store is driven by the shared runtime
+ * (this graph created it). Registration must then not overwrite the handles the
+ * shared runtime selected.
+ */
+let hostBoundBySharedRuntime = false;
+
+/**
+ * Register plugin tools, commands, and the background session service.
+ *
+ * OpenClaw may call this once per plugin registry, each time in its own module
+ * graph. Every registration is an owner of the one process-wide runtime in
+ * `src/process-runtime.ts`: tools, commands, interactive handlers, and the
+ * service all attach to it, so there is exactly one SessionManager per process.
+ */
 export function register(api: OpenClawPluginApi): void {
+  const regSeq = allocateRuntimeOwnerSequence();
+  const ownerId = `${BUILD_ID.split("+")[1]?.slice(0, 8) ?? "build"}#${regSeq}`;
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
   let autoUpdate: AutoUpdateService | null = null;
-  let started = false;
-  let startedWithServiceContext = false;
+  let attached = false;
+  let retired = false;
+  let serviceContext: OpenClawPluginServiceContext | undefined;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
     options?: { optional?: boolean; name?: string },
   ) => void;
-  setPluginRuntime(api.runtime);
+  if (!hostBoundBySharedRuntime) setPluginRuntime(api.runtime);
 
   const autoUpdateStateOptions = (ctx?: OpenClawPluginServiceContext) => {
     const openclawStateDir = ctx?.stateDir ?? resolveOpenClawStateDir(process.env);
@@ -113,72 +164,122 @@ export function register(api: OpenClawPluginApi): void {
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
 
-  const startCodeAgentService = async (ctx?: OpenClawPluginServiceContext): Promise<void> => {
-    while (stopping || starting) {
-      await (stopping ?? starting);
-    }
-    if (started) {
-      if (ctx && !startedWithServiceContext) {
-        setPluginRuntime(api.runtime, ctx.config);
-        startedWithServiceContext = true;
-      }
-      return;
-    }
+  const ownerHandles = (): RuntimeHostHandles => ({
+    runtime: api.runtime,
+    runtimeConfig: serviceContext?.config,
+    hasRuntimeConfig: serviceContext != null,
+    pluginConfig: api.pluginConfig ?? {},
+  });
 
-    starting = Promise.resolve().then(async () => {
-      const config = api.pluginConfig ?? {};
-      setPluginConfig(config);
-      if (ctx) {
-        setPluginRuntime(api.runtime, ctx.config);
-        startedWithServiceContext = true;
-      } else {
-        setPluginRuntime(api.runtime);
-        startedWithServiceContext = false;
-      }
+  /** Point this graph's config and runtime store at the given owner's handles. */
+  const bindLocalHost = (handles: RuntimeHostHandles | undefined): void => {
+    // Reset first so a switch without service config reloads it from the new runtime.
+    setPluginRuntime(undefined);
+    hostBoundBySharedRuntime = handles != null;
+    if (!handles) return;
+    setPluginConfig(handles.pluginConfig);
+    if (handles.hasRuntimeConfig) setPluginRuntime(handles.runtime, handles.runtimeConfig);
+    else setPluginRuntime(handles.runtime);
+  };
 
-      sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions, {
+  const detachLocal = (): void => {
+    sm = null;
+    gc = null;
+    autoUpdate = null;
+    attached = false;
+    setSessionManager(null);
+    setGoalController(null);
+    setAutoUpdateService(null);
+  };
+
+  const createServices = async (handles: RuntimeHostHandles, instanceId: string): Promise<RuntimeServices<CodeAgentServices>> => {
+    bindLocalHost(handles);
+    try {
+      const createdSm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions, {
         worktreeSummaryProvider: createRuntimeWorktreeDecisionSummaryProvider(),
+        store: { instanceId: `${instanceId}/${BUILD_ID}` },
       });
-      await sm.ready;
-      gc = new GoalController(sm);
+      try {
+        await createdSm.ready;
+      } catch (err) {
+        createdSm.dispose();
+        throw err;
+      }
+      const createdGc = new GoalController(createdSm);
       // `autoUpdate: false` disables the self-updater entirely: no update checks,
       // no installs, no Gateway restarts. When enabled, installs and restarts
       // run only after the user presses the matching update button.
-      autoUpdate = pluginConfig.autoUpdate
+      const createdAutoUpdate = pluginConfig.autoUpdate
         ? new AutoUpdateService({
-            ...autoUpdateStateOptions(ctx),
+            ...autoUpdateStateOptions(serviceContext),
             currentVersion: api.version ?? packageVersion ?? "0.0.0",
             actionButtonFactory: (sessionId, kind, label, options) =>
-              sm!.makePluginActionButton(sessionId, kind, label, options),
+              createdSm.makePluginActionButton(sessionId, kind, label, options),
           })
         : null;
-      setSessionManager(sm);
-      setGoalController(gc);
-      setAutoUpdateService(autoUpdate);
-      gc.start();
-
+      createdGc.start();
       // Worktree cleanup is owned by the maintenance schedules (resolved/merged
       // worktrees after their retention window) and `agent_worktree_cleanup`;
       // there is no age-based startup sweep of unmanaged worktree directories.
       // Reminder/retention deadlines need git evidence; they settle in the background.
-      void sm.bootstrapMaintenanceSchedules();
-      started = true;
+      void createdSm.bootstrapMaintenanceSchedules();
+      return {
+        services: { sm: createdSm, gc: createdGc, autoUpdate: createdAutoUpdate },
+        bindHost: bindLocalHost,
+        stop: async () => {
+          createdGc.stop();
+          await createdSm.shutdown();
+        },
+      };
+    } catch (err) {
+      bindLocalHost(undefined);
+      throw err;
+    }
+  };
+
+  const startCodeAgentService = async (ctx?: OpenClawPluginServiceContext): Promise<void> => {
+    while (stopping || starting) {
+      await (stopping ?? starting);
+    }
+    if (retired) {
+      throw new Error("This OpenClaw Code Agent plugin instance was retired by the host.");
+    }
+    const contextChanged = ctx != null && ctx !== serviceContext;
+    if (ctx) serviceContext = ctx;
+    if (attached && getSharedRuntime()?.owners.has(ownerId)) {
+      if (contextChanged) {
+        updateSharedRuntimeOwnerHandles(ownerId, ownerHandles());
+        if (!hostBoundBySharedRuntime) setPluginRuntime(api.runtime, serviceContext?.config);
+      }
+      return;
+    }
+
+    starting = (async () => {
+      const runtime = await acquireSharedRuntime<CodeAgentServices>({
+        id: ownerId,
+        regSeq,
+        buildId: BUILD_ID,
+        handles: ownerHandles(),
+        onDetached: detachLocal,
+      }, createServices);
+      // A graph that did not create the runtime still runs its own tool and
+      // command code; give that code this live instance's handles.
+      if (runtime.bindHost !== bindLocalHost && !hostBoundBySharedRuntime) {
+        setPluginConfig(api.pluginConfig ?? {});
+        if (serviceContext) setPluginRuntime(api.runtime, serviceContext.config);
+        else if (!getPluginRuntime()) setPluginRuntime(api.runtime);
+      }
+      ({ sm, gc, autoUpdate } = runtime.services);
+      attached = true;
+      setSessionManager(sm);
+      setGoalController(gc);
+      setAutoUpdateService(autoUpdate);
       maybeCheckForAutoUpdate();
-    });
+    })();
     try {
       await starting;
     } catch (err) {
-      gc?.stop();
-      sm?.dispose();
-      sm = null;
-      gc = null;
-      autoUpdate = null;
-      started = false;
-      startedWithServiceContext = false;
-      setPluginRuntime(undefined);
-      setSessionManager(null);
-      setGoalController(null);
-      setAutoUpdateService(null);
+      detachLocal();
       throw err;
     } finally {
       starting = undefined;
@@ -187,27 +288,30 @@ export function register(api: OpenClawPluginApi): void {
 
   const stopCodeAgentService = (): Promise<void> => {
     if (stopping) return stopping;
-    stopping = Promise.resolve().then(async () => {
+    stopping = (async () => {
       await starting?.catch(() => {});
-      if (gc) gc.stop();
       try {
-        await sm?.shutdown();
+        // The last owner drains the runtime here; singletons keep pointing at it
+        // until the drain finishes, as a single-registry stop always did.
+        await releaseSharedRuntime(ownerId);
       } finally {
-        gc = null;
-        sm = null;
-        autoUpdate = null;
-        started = false;
-        startedWithServiceContext = false;
-        setPluginRuntime(undefined);
-        setGoalController(null);
-        setSessionManager(null);
-        setAutoUpdateService(null);
+        detachLocal();
+        if (!hostBoundBySharedRuntime) setPluginRuntime(undefined);
       }
-    }).finally(() => {
+    })().finally(() => {
       stopping = undefined;
     });
     return stopping;
   };
+
+  // A retired instance detaches immediately and never re-attaches; its handles
+  // stop being used as soon as the runtime switches to another live owner.
+  const retire = (): Promise<void> => {
+    retired = true;
+    return stopCodeAgentService();
+  };
+  api.lifecycle?.onDispose?.(retire);
+  api.lifecycle?.signal?.addEventListener("abort", () => { void retire(); }, { once: true });
 
   const registerCodeAgentTool = (
     tool: (ctx: OpenClawPluginToolContext) => unknown,

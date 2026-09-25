@@ -85,24 +85,70 @@ export function resolveSessionIndexPath(env: NodeJS.ProcessEnv): string {
   return join(resolveOpenClawStateDir(env), "code-agent-sessions.json");
 }
 
+/** Returns true when the index was written. */
 export function saveSessionStoreIndex(
   indexPath: string,
-  sessions: PersistedSessionInfo[],
+  sessions: unknown[],
   actionTokens: SessionActionToken[],
   repoPolicies: RepoPolicyRecord[] = [],
-): void {
+  revision?: number,
+): boolean {
   assertTestSafeStatePath(indexPath, "write the session store");
   try {
     const payload: SessionStoreSchema = {
       schemaVersion: STORE_SCHEMA_VERSION,
-      sessions,
+      ...(revision != null ? { revision } : {}),
+      sessions: sessions as PersistedSessionInfo[],
       actionTokens,
       repoPolicies,
     };
     // Host json-store: private (0600) file, fsync'd temp write, atomic rename.
     saveJsonFile(indexPath, payload);
+    return true;
   } catch (err: unknown) {
     log.warn(`[SessionStore] Failed to save session index: ${errorMessage(err)}`);
+    return false;
+  }
+}
+
+/**
+ * Identity of the index file on disk. Atomic renames change the inode, so any
+ * write by another writer changes the signature; "missing" when absent.
+ */
+export function statSessionStoreIndex(indexPath: string): string {
+  try {
+    const stats = statSync(indexPath);
+    return `${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return "missing";
+  }
+}
+
+/** Raw rows of the current on-disk index, for merging; undefined when unreadable or incompatible. */
+export type SessionStoreDiskSnapshot = {
+  revision: number;
+  sessions: unknown[];
+  actionTokens: unknown[];
+  repoPolicies: unknown[];
+};
+
+export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSnapshot | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(indexPath, "utf-8"));
+    if (!isRecord(parsed) || parsed.schemaVersion !== STORE_SCHEMA_VERSION) return undefined;
+    const list = (value: unknown): unknown[] | undefined => value === undefined ? [] : Array.isArray(value) ? value : undefined;
+    const sessions = list(parsed.sessions);
+    const actionTokens = list(parsed.actionTokens);
+    const repoPolicies = list(parsed.repoPolicies);
+    if (!sessions || !actionTokens || !repoPolicies) return undefined;
+    return {
+      revision: typeof parsed.revision === "number" && Number.isFinite(parsed.revision) ? parsed.revision : 0,
+      sessions,
+      actionTokens,
+      repoPolicies,
+    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -215,6 +261,7 @@ type LoadIndexArgs = {
   setRepoPolicy: (policy: RepoPolicyRecord) => void;
   purgeExpiredActionTokens: () => void;
   saveIndex: () => void;
+  setRevision?: (revision: number) => void;
 };
 
 export function loadSessionStoreIndex(args: LoadIndexArgs): void {
@@ -226,6 +273,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     setRepoPolicy,
     purgeExpiredActionTokens,
     saveIndex,
+    setRevision,
   } = args;
 
   const archiveAndReset = (reason: string): boolean => {
@@ -259,6 +307,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       saveIndex();
       return undefined;
     };
+
+    if (typeof parsed.revision === "number" && Number.isFinite(parsed.revision)) setRevision?.(parsed.revision);
 
     const sessionsRaw = readCollection("sessions", "invalid sessions collection");
     if (sessionsRaw === undefined) return;

@@ -1152,6 +1152,26 @@ export class SessionManager {
     return this.interactions.getActionToken(tokenId);
   }
 
+  /** True when the token was minted by another writer of the index and adopted from disk. */
+  isAdoptedActionToken(tokenId: string): boolean {
+    return this.store.actionTokenStore.isAdopted(tokenId);
+  }
+
+  /**
+   * True when another writer of the session index reports this session as running
+   * and it is not live here. Only the owning runtime may act on a live session, so
+   * callers must not resume, approve, or answer it from this runtime.
+   */
+  isSessionOwnedElsewhere(ref: string): boolean {
+    if (this.resolve(ref)) return false;
+    return this.store.isSessionOwnedElsewhere(ref);
+  }
+
+  /** Runtime and store identity for diagnostics (never token values). */
+  getStoreDiagnostics(): ReturnType<SessionStore["getDiagnostics"]> {
+    return this.store.getDiagnostics();
+  }
+
   clearRepoPolicyChoiceTokens(sessionId: string): void {
     this.interactions.clearRepoPolicyChoiceTokens(sessionId);
   }

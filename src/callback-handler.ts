@@ -17,6 +17,7 @@ import { assessResumeCandidate } from "./session-resume";
 import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } from "./plan-decision-state";
 import { createLogger } from "./logger";
 import { pluginConfig } from "./config";
+import { processShared } from "./process-runtime";
 
 const log = createLogger("callback-handler");
 
@@ -54,10 +55,17 @@ type InteractiveResponder = {
   acknowledge?: () => Promise<void>;
 };
 
-const inFlightQuestionAnswers = new Set<string>();
+// Process-wide: every plugin registry's handler shares one set of in-flight locks.
+const inFlightQuestionAnswers = processShared("callback-question-answer-locks.v1", () => new Set<string>());
 const retryableQuestionAnswerFailureMessage =
   "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
-const planDecisionInFlight = new Map<string, { operation: Promise<unknown>; tokenId?: string }>();
+const planDecisionInFlight = processShared(
+  "callback-plan-decision-locks.v1",
+  () => new Map<string, { operation: Promise<unknown>; tokenId?: string }>(),
+);
+
+const ownedElsewhereMessage =
+  "⚠️ This session is running in another OpenClaw Code Agent runtime. Use the buttons from its latest message.";
 
 function questionAnswerLockKey(token: SessionActionToken): string {
   return `${token.sessionId}:${token.pendingInputRequestId ?? token.id}`;
@@ -597,8 +605,40 @@ export function createCallbackHandler(
         planDecisionVersion: token?.planDecisionVersion,
       });
       if (!token) {
+        // Debug-level and always on: which runtime and store revision missed, never the token value.
+        log.debug(JSON.stringify({
+          event: "callback_token_miss",
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          payloadByteLength: Buffer.byteLength(tokenId, "utf8"),
+          ...(sessionManager.getStoreDiagnostics?.() ?? {}),
+        }));
         await rejectStaleAction(ctx, () =>
           clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged }));
+        return { handled: true };
+      }
+
+      if (sessionManager.isAdoptedActionToken?.(tokenId)) {
+        log.debug(JSON.stringify({
+          event: "callback_token_adopted_from_store",
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          actionKind: token.kind,
+          ...(sessionManager.getStoreDiagnostics?.() ?? {}),
+        }));
+      }
+
+      // Only the runtime that owns a live session acts on it: never resume or
+      // answer a session another writer of the index reports as running.
+      if (sessionManager.isSessionOwnedElsewhere?.(token.sessionId)) {
+        log.debug(JSON.stringify({
+          event: "callback_session_owned_elsewhere",
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          actionKind: token.kind,
+          ...(sessionManager.getStoreDiagnostics?.() ?? {}),
+        }));
+        await replyText(ctx, ownedElsewhereMessage);
         return { handled: true };
       }
 

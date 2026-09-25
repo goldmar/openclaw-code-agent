@@ -13,6 +13,7 @@ import { autoUpdateService, goalController, sessionManager, setGoalController, s
 import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
 import { GoalController } from "../src/goal-controller";
+import { resetSharedRuntimeSlotForTests } from "../src/process-runtime";
 import { TEST_RUNTIME_LLM } from "./helpers";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 
@@ -111,6 +112,8 @@ describe("plugin entry source", () => {
     }
     setGoalController(null);
     setSessionManager(null);
+    // Registrations that were never stopped must not leak their runtime into the next test.
+    resetSharedRuntimeSlotForTests();
   });
 
   it("keeps package and plugin manifest versions in sync", () => {
@@ -691,8 +694,11 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalEditCommand\(commandApi\)/);
-    assert.match(indexSource, /gc = new GoalController\(sm\)/);
-    assert.match(indexSource, /gc\.start\(\)/);
+    assert.match(indexSource, /const createdGc = new GoalController\(createdSm\)/);
+    assert.match(indexSource, /createdGc\.start\(\)/);
+    // Every registration attaches to the one process-wide runtime.
+    assert.match(indexSource, /acquireSharedRuntime<CodeAgentServices>\(/);
+    assert.match(indexSource, /releaseSharedRuntime\(ownerId\)/);
   });
 
   it("keeps tool construction side-effect free and starts before execution", async () => {

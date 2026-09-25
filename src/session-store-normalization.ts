@@ -38,6 +38,12 @@ export const STORE_SCHEMA_VERSION = 7;
 
 export interface SessionStoreSchema {
   schemaVersion: number;
+  /**
+   * Monotonic write counter. Writers merge with the on-disk index when it changed
+   * since they last read or wrote it; the counter makes that visible in logs.
+   * Absent in stores written before it existed (treated as 0).
+   */
+  revision?: number;
   sessions: PersistedSessionInfo[];
   actionTokens: SessionActionToken[];
   repoPolicies: RepoPolicyRecord[];
