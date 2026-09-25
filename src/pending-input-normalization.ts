@@ -151,12 +151,41 @@ export type PendingInputAnswerResolution =
   | { ok: false; error: string };
 
 /**
+ * Split a multi-select reply at commas and newlines, but keep an option label
+ * that itself contains a separator ("Yes, continue") whole: at each position
+ * the longest run of pieces that spells a label (case-insensitive) wins.
+ */
+function splitMultiSelectEntries(text: string, options: PendingInputOption[]): string[] {
+  const labels = new Set(options.map((option) => option.label.toLowerCase()));
+  // Even indexes are pieces, odd indexes the separators between them.
+  const parts = text.split(/([,\n])/);
+  const entries: string[] = [];
+  let start = 0;
+  while (start < parts.length) {
+    let next = start + 2;
+    let entry = parts[start].trim();
+    for (let end = parts.length - 1; end > start; end -= 2) {
+      const joined = parts.slice(start, end + 1).join("").trim();
+      if (labels.has(joined.toLowerCase())) {
+        entry = joined;
+        next = end + 2;
+        break;
+      }
+    }
+    if (entry) entries.push(entry);
+    start = next;
+  }
+  return entries;
+}
+
+/**
  * Map a text reply onto a structured question, the same way for every harness.
  * An option label (case-insensitive) or option number selects that option and
  * yields its value; anything else is a free-text answer unless the question
  * forbids free text. Multi-select questions take comma- or newline-separated
- * entries. Empty replies and option numbers outside the list are rejected so
- * the caller can re-prompt instead of sending a wrong answer.
+ * entries (a label containing a comma still selects its option). Empty
+ * replies and option numbers outside the list are rejected so the caller can
+ * re-prompt instead of sending a wrong answer.
  */
 export function resolvePendingInputAnswer(question: PendingInputQuestion, text: string): PendingInputAnswerResolution {
   const trimmed = text.trim();
@@ -164,7 +193,7 @@ export function resolvePendingInputAnswer(question: PendingInputQuestion, text: 
   const options = question.options;
   if (options.length === 0) return { ok: true, answers: [trimmed] };
   const entries = question.multiSelect
-    ? trimmed.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean)
+    ? splitMultiSelectEntries(trimmed, options)
     : [trimmed];
   if (entries.length === 0) return { ok: false, error: "The answer is empty." };
   const answers: string[] = [];

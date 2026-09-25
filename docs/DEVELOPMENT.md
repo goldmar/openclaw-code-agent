@@ -81,6 +81,25 @@ pnpm coverage tests/agent-pr-execute.test.ts  # selected files
 
 `scripts/coverage.mjs` runs `scripts/run-tests.mjs` with `NODE_V8_COVERAGE` set and renders the result with c8 (pinned in the script and fetched through `pnpm dlx`, so it is not a project dependency). It prints a per-file table and totals for `src/` (excluding the generated Codex protocol types) and writes `coverage/coverage-summary.json` and `coverage/lcov.info` (gitignored). Coverage is for review only; CI does not gate on it. The full suite is CPU-heavy, so on a shared host run it remotely like `pnpm verify`.
 
+### Property And Model-Based Tests
+
+Some invariants are checked with generated inputs ([fast-check](https://fast-check.dev/), a dev dependency only):
+
+- `tests/session-state-model.test.ts`: random event and control-patch sequences against the session control reducer (terminal statuses absorb, plan versions only increase, a closed or rejected plan version is never approved, `approvalExecutionState` follows the other fields, worktree states change only through worktree events).
+- `tests/action-token-model.test.ts`: random mint / click / double-click / expire / consume / purge / delete / settle sequences through a real `SessionActionTokenStore` and the real callback handler (a stale, consumed, or expired token never acts, a token acts at most once, a worktree button never acts on a settled decision).
+- `tests/session-route-properties.test.ts`: session keys built with the host's `buildAgentSessionKey` / `resolveThreadSessionKeys` (Telegram topics, Discord and Slack threads, account-scoped DMs) round-trip through OCA's route parsing, and `canonicalizeSessionRoute` is idempotent.
+- `tests/pending-input-properties.test.ts`, `tests/store-normalization-properties.test.ts`, `tests/config-callback-properties.test.ts`: answer parsing, persisted-row normalization (seeded from `tests/fixtures/session-store-4.7.20.json`), config defaults, and callback payloads.
+
+CI runs each property with a fixed seed and a small run budget (`tests/property-harness.ts`), so a failure reproduces exactly and the files add only seconds. On failure fast-check prints the seed, the shrink path, and the shrunk counterexample. For a deeper search, for example nightly or through `remote-heavy-run`, raise the budget and vary the seed:
+
+```bash
+OCA_PROPERTY_RUNS=5000 pnpm test:file tests/session-route-properties.test.ts   # 5000 runs per property
+OCA_PROPERTY_RUNS=5000 OCA_PROPERTY_SEED=random pnpm test                      # fresh seed per property
+OCA_PROPERTY_SEED=<seed from the failure> pnpm test:file tests/<file>.test.ts   # replay a failure
+```
+
+Keep a found counterexample as a plain regression test next to the fix.
+
 ### Test Fakes
 
 - `tests/fake-host.ts`: a fake OpenClaw host. `createFakeHost()` returns an `OpenClawPluginApi` whose members OCA uses are typed as the SDK members: `runtime.llm.complete` (scripted replies; fails like a host without a model by default), `runtime.system.enqueueSystemEvent` / `requestHeartbeat`, `runtime.tasks.async.managedFlows` (an in-memory managed Task Flow store with revisions), `runtime.logging`, `runtime.config.current`, `runtime.state.resolveStateDir`, a `sendDurableMessageBatch` stand-in (`directNotificationTransport()` wires it into `RuntimeDirectNotificationTransport`), and tool, command, service, and interactive-handler registration with `runTool`, `runCommand`, `runInteractive`, `startServices`, and `stopServices`. Every call is recorded. `tests/host-sdk-contract.test.ts` pins OCA's payloads to the SDK types with `satisfies`.
