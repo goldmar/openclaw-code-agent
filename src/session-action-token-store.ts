@@ -10,17 +10,43 @@ function isPlanDecisionKind(kind: SessionActionKind): boolean {
  * SessionStore composes this into the shared index file without mixing token
  * CRUD and session CRUD logic in one class.
  */
+/**
+ * Hooks into the persisted index. `sync` reloads changes another writer made to
+ * the index (cheap when nothing changed); `onMiss` reports a lookup miss after
+ * that reload for diagnostics.
+ */
+export type SessionActionTokenStoreDiskHooks = {
+  sync: (reason: string) => void;
+  onMiss?: (details: { reason: string }) => void;
+};
+
 export class SessionActionTokenStore {
   readonly tokens: Map<string, SessionActionToken> = new Map();
+  /** Tokens adopted from the persisted index after load (minted by another writer). */
+  readonly adoptedTokenIds: Set<string> = new Set();
   private afterChange?: () => void;
+  private diskHooks?: SessionActionTokenStoreDiskHooks;
 
   constructor(
     private readonly onChange: () => void,
     private readonly retentionMs: number,
   ) {}
 
+  setDiskHooks(hooks: SessionActionTokenStoreDiskHooks | undefined): void {
+    this.diskHooks = hooks;
+  }
+
+  private syncFromDisk(reason: string): void {
+    this.diskHooks?.sync(reason);
+  }
+
+  isAdopted(tokenId: string): boolean {
+    return this.adoptedTokenIds.has(tokenId);
+  }
+
   replaceAll(tokens: Iterable<SessionActionToken>): void {
     this.tokens.clear();
+    this.adoptedTokenIds.clear();
     for (const token of tokens) {
       this.tokens.set(token.id, token);
     }
@@ -28,6 +54,7 @@ export class SessionActionTokenStore {
 
   clear(): void {
     this.tokens.clear();
+    this.adoptedTokenIds.clear();
     this.notifyChanged();
   }
 
@@ -52,11 +79,26 @@ export class SessionActionTokenStore {
     return token;
   }
 
+  /**
+   * Look a token up after re-reading the persisted index when another writer
+   * changed it, so a button minted elsewhere is not reported as stale and a
+   * token consumed elsewhere is seen as consumed.
+   */
   getActionToken(tokenId: string): SessionActionToken | undefined {
+    if (this.diskHooks) {
+      // Also for a cached token: another writer may have consumed it.
+      this.syncFromDisk("token-lookup");
+      if (!this.tokens.has(tokenId)) this.diskHooks.onMiss?.({ reason: "token-miss" });
+    }
+    return this.peekActionToken(tokenId);
+  }
+
+  private peekActionToken(tokenId: string): SessionActionToken | undefined {
     const token = this.tokens.get(tokenId);
     if (!token) return undefined;
     if (token.expiresAt != null && token.expiresAt <= Date.now()) {
       this.tokens.delete(tokenId);
+      this.adoptedTokenIds.delete(tokenId);
       this.notifyChanged();
       return undefined;
     }
@@ -64,9 +106,10 @@ export class SessionActionTokenStore {
   }
 
   listActiveActionTokens(kind?: SessionActionKind): SessionActionToken[] {
+    this.syncFromDisk("token-list");
     const result: SessionActionToken[] = [];
     for (const tokenId of [...this.tokens.keys()]) {
-      const token = this.getActionToken(tokenId);
+      const token = this.peekActionToken(tokenId);
       if (!token || token.consumedAt != null) continue;
       if (kind && token.kind !== kind) continue;
       result.push(token);
@@ -75,6 +118,8 @@ export class SessionActionTokenStore {
   }
 
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
+    // Pick up a consumption another writer already persisted before consuming here.
+    this.syncFromDisk("token-consume");
     const token = this.getActionToken(tokenId);
     if (!token || token.consumedAt != null) return undefined;
     token.consumedAt = Date.now();
@@ -83,6 +128,7 @@ export class SessionActionTokenStore {
   }
 
   consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
+    this.syncFromDisk("token-consume");
     const consumed: SessionActionToken[] = [];
     const consumedAt = Date.now();
     for (const token of this.tokens.values()) {
@@ -101,6 +147,7 @@ export class SessionActionTokenStore {
   }
 
   consumePlanDecisionTokens(sessionId: string, planDecisionVersion: number): SessionActionToken[] {
+    this.syncFromDisk("token-consume");
     const consumed: SessionActionToken[] = [];
     const consumedAt = Date.now();
     for (const token of this.tokens.values()) {
@@ -122,6 +169,7 @@ export class SessionActionTokenStore {
     for (const [tokenId, token] of this.tokens) {
       if (token.sessionId === sessionId) {
         this.tokens.delete(tokenId);
+        this.adoptedTokenIds.delete(tokenId);
         changed = true;
       }
     }
@@ -133,6 +181,7 @@ export class SessionActionTokenStore {
     for (const [tokenId, token] of this.tokens) {
       if (token.sessionId === sessionId && token.kind === kind) {
         this.tokens.delete(tokenId);
+        this.adoptedTokenIds.delete(tokenId);
         changed = true;
       }
     }
@@ -145,6 +194,7 @@ export class SessionActionTokenStore {
       if (token.sessionId !== sessionId || !isPlanDecisionKind(token.kind)) continue;
       if (keepVersion != null && token.planDecisionVersion === keepVersion) continue;
       this.tokens.delete(tokenId);
+      this.adoptedTokenIds.delete(tokenId);
       changed = true;
     }
     if (changed) this.notifyChanged();
@@ -157,6 +207,7 @@ export class SessionActionTokenStore {
       const consumedTooOld = token.consumedAt != null && now - token.consumedAt >= this.retentionMs;
       if (expired || consumedTooOld) {
         this.tokens.delete(tokenId);
+        this.adoptedTokenIds.delete(tokenId);
         changed = true;
       }
     }

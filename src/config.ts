@@ -98,6 +98,23 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
   };
 }
 
+/**
+ * Effective settings fixed when the shared runtime is built (SessionManager
+ * limits and whether the auto-updater exists). Every other setting is read
+ * live from `pluginConfig`, which follows the newest plugin registration.
+ */
+export function resolveRuntimeBuildSettings(config: Partial<RawPluginConfig>): {
+  maxSessions: number;
+  maxPersistedSessions: number;
+  autoUpdate: boolean;
+} {
+  return {
+    maxSessions: config.maxSessions ?? 20,
+    maxPersistedSessions: config.maxPersistedSessions ?? 10000,
+    autoUpdate: config.autoUpdate ?? true,
+  };
+}
+
 export function getDefaultHarnessName(): string {
   return pluginConfig.defaultHarness ?? DEFAULT_HARNESS;
 }

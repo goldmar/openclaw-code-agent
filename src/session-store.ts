@@ -18,11 +18,21 @@ import {
   cleanupSessionOutputFiles,
   getNextSessionOutputCleanupAt,
   loadSessionStoreIndex,
+  backupUnmergeableSessionIndex,
+  isForeignLiveRunningRow,
+  readSessionStoreSnapshot,
   resolveSessionIndexPath,
+  runtimeOwnerMarker,
   saveSessionStoreIndex,
+  statSessionStoreIndex,
+  tryAcquireSessionStoreLock,
+  type SessionStoreDiskSnapshot,
 } from "./session-store-storage";
 import {
   assertNewSchemaEntry,
+  normalizeActionToken,
+  normalizePersistedEntry,
+  normalizeRepoPolicyRecord,
 } from "./session-store-normalization";
 import { createLogger } from "./logger";
 
@@ -30,10 +40,70 @@ const log = createLogger("session-store");
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Retry interval and budget for a save deferred because another writer holds the index lock. */
+const LOCKED_SAVE_RETRY_MS = 25;
+const LOCKED_SAVE_MAX_DEFER_MS = 5_000;
+const LOCKED_SAVE_FAILED_RETRY_MS = 1_000;
+const LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS = 30_000;
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
   indexPath?: string;
+  /** Runtime identity for diagnostics (shared runtime id and build). */
+  instanceId?: string;
+}
+
+type MergeChoice = "local" | "disk" | "drop";
+
+/**
+ * Three-way merge of one keyed collection. `base` is what this writer last read
+ * or wrote, `local` its memory, `disk` the current file. A side that changed
+ * relative to base wins; local wins a conflict. Deleting an unchanged row on one
+ * side deletes it; a row changed on the other side survives the delete.
+ */
+export function mergeKeyedRows(
+  base: ReadonlyMap<string, string>,
+  local: ReadonlyMap<string, string>,
+  disk: ReadonlyMap<string, string>,
+): Map<string, MergeChoice> {
+  const choices = new Map<string, MergeChoice>();
+  for (const key of new Set([...local.keys(), ...disk.keys()])) {
+    const b = base.get(key);
+    const l = local.get(key);
+    const d = disk.get(key);
+    if (l !== undefined && d !== undefined) {
+      choices.set(key, l === d || l !== b ? "local" : "disk");
+    } else if (l !== undefined) {
+      choices.set(key, b === undefined || l !== b ? "local" : "drop");
+    } else if (d !== undefined) {
+      choices.set(key, b === undefined || d !== b ? "disk" : "drop");
+    }
+  }
+  return choices;
+}
+
+function sessionRowKey(row: unknown): string | undefined {
+  if (!row || typeof row !== "object") return undefined;
+  const record = row as { sessionId?: unknown; harnessSessionId?: unknown };
+  if (typeof record.sessionId === "string" && record.sessionId) return record.sessionId;
+  return typeof record.harnessSessionId === "string" && record.harnessSessionId ? record.harnessSessionId : undefined;
+}
+
+function idRowKey(field: "id" | "key") {
+  return (row: unknown): string | undefined => {
+    if (!row || typeof row !== "object") return undefined;
+    const value = (row as Record<string, unknown>)[field];
+    return typeof value === "string" && value ? value : undefined;
+  };
+}
+
+function toKeyedJson(rows: Iterable<unknown>, keyOf: (row: unknown) => string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (key) map.set(key, JSON.stringify(row));
+  }
+  return map;
 }
 
 function errorMessage(err: unknown): string {
@@ -66,10 +136,32 @@ export class SessionStore {
   readonly actionTokenStore: SessionActionTokenStore;
   private readonly indexPath: string;
   private readonly queries: SessionStoreQueries;
+  readonly instanceId: string;
+  /** Write counter of the index this store last read or wrote. */
+  private revision = 0;
+  /** `statSessionStoreIndex` after this store's last read or write. */
+  private diskSignature: string | undefined;
+  /** Rows (as JSON) this store last read from or wrote to disk: the merge base. */
+  private base = {
+    sessions: new Map<string, string>(),
+    tokens: new Map<string, string>(),
+    policies: new Map<string, string>(),
+  };
+  /**
+   * Rows another writer persisted that this store must keep on disk but must not
+   * act on: sessions that writer reports as running (it owns them), and rows this
+   * build cannot normalize. Keyed by session id.
+   */
+  private readonly carriedSessions = new Map<string, unknown>();
+  private syncing = false;
+  /** A save deferred because another writer held the lock (never blocks the event loop). */
+  private deferredSave: { timer: ReturnType<typeof setTimeout>; since: number } | undefined;
+  private persistWaiters: Array<() => void> = [];
 
   constructor(options: SessionStoreOptions = {}) {
     const env = options.env ?? process.env;
     this.indexPath = options.indexPath ?? resolveSessionIndexPath(env);
+    this.instanceId = options.instanceId ?? "standalone";
     this.actionTokenStore = new SessionActionTokenStore(() => this.saveIndex(), SESSION_OUTPUT_MAX_AGE_MS);
     this.actionTokens = this.actionTokenStore.tokens;
     this.queries = new SessionStoreQueries({
@@ -83,6 +175,186 @@ export class SessionStore {
       log.info(`[SessionStore] index path: ${this.indexPath}`);
     }
     this.loadIndex();
+    this.captureBase();
+    this.diskSignature = statSessionStoreIndex(this.indexPath);
+    this.actionTokenStore.setDiskHooks({
+      sync: (reason) => { this.syncFromDisk(reason); },
+      onMiss: ({ reason }) => {
+        log.debug(JSON.stringify({
+          component: "SessionStore",
+          event: "action_token_lookup_miss",
+          reason,
+          instanceId: this.instanceId,
+          storeRevision: this.revision,
+          tokensInMemory: this.actionTokens.size,
+          adoptedTokens: this.actionTokenStore.adoptedTokenIds.size,
+        }));
+      },
+    });
+  }
+
+  /** Store revision and identity, for diagnostics. */
+  getDiagnostics(): { instanceId: string; storeRevision: number; tokensInMemory: number; carriedSessions: number } {
+    return {
+      instanceId: this.instanceId,
+      storeRevision: this.revision,
+      tokensInMemory: this.actionTokens.size,
+      carriedSessions: this.carriedSessions.size,
+    };
+  }
+
+  /** True when another live process runs this session (its row is carried, not adopted). */
+  isSessionOwnedElsewhere(ref: string): boolean {
+    this.syncFromDisk("ownership-check");
+    return isForeignLiveRunningRow(this.carriedSessions.get(ref));
+  }
+
+  /** True when this store's own row for the session is a running row it wrote. */
+  private isOwnRunningRow(key: string): boolean {
+    const entry = this.persisted.get(this.idIndex.get(key) ?? key);
+    return entry?.status === "running" && entry.runtimeOwner === runtimeOwnerMarker(this.instanceId);
+  }
+
+  private persistedRows(): unknown[] {
+    return [...this.persisted.values(), ...this.carriedSessions.values()];
+  }
+
+  private localKeyedRows() {
+    return {
+      sessions: toKeyedJson(this.persistedRows(), sessionRowKey),
+      tokens: toKeyedJson(this.actionTokenStore.listForPersistence(), idRowKey("id")),
+      policies: toKeyedJson(this.repoPolicies.values(), idRowKey("key")),
+    };
+  }
+
+  private captureBase(): void {
+    this.base = this.localKeyedRows();
+  }
+
+  /**
+   * Reload rows another writer changed since this store last read or wrote the
+   * index (a no-op stat when nothing changed). Adoption never makes this runtime
+   * act on another writer's live session: rows it reports as running are carried
+   * for persistence only.
+   */
+  syncFromDisk(reason: string): boolean {
+    if (this.syncing) return false;
+    const signature = statSessionStoreIndex(this.indexPath);
+    if (signature === this.diskSignature || signature === "missing") return false;
+    const read = readSessionStoreSnapshot(this.indexPath);
+    if (!read) return false;
+    if ("unreadable" in read) {
+      // Never replace another writer's data without a recoverable copy.
+      backupUnmergeableSessionIndex(this.indexPath, read.unreadable);
+      this.diskSignature = signature;
+      return false;
+    }
+    const snapshot = read;
+    this.syncing = true;
+    try {
+      const changed = this.mergeSnapshot(snapshot);
+      this.revision = Math.max(this.revision, snapshot.revision);
+      this.diskSignature = signature;
+      this.base = {
+        sessions: toKeyedJson(snapshot.sessions, sessionRowKey),
+        tokens: toKeyedJson(snapshot.actionTokens, idRowKey("id")),
+        policies: toKeyedJson(snapshot.repoPolicies, idRowKey("key")),
+      };
+      log.debug(JSON.stringify({
+        component: "SessionStore",
+        event: "index_reloaded_after_external_write",
+        reason,
+        instanceId: this.instanceId,
+        storeRevision: this.revision,
+        changedRows: changed,
+      }));
+      return changed > 0;
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  /** Apply another writer's changes to memory; returns the number of rows taken from disk or dropped. */
+  private mergeSnapshot(snapshot: SessionStoreDiskSnapshot): number {
+    const local = this.localKeyedRows();
+    let changed = 0;
+
+    const diskSessions = new Map<string, unknown>();
+    for (const row of snapshot.sessions) {
+      const key = sessionRowKey(row);
+      if (key) diskSessions.set(key, row);
+    }
+    const sessionChoices = mergeKeyedRows(this.base.sessions, local.sessions, toKeyedJson(snapshot.sessions, sessionRowKey));
+    for (const [key, choice] of sessionChoices) {
+      // A session another live process runs belongs to that process: its row
+      // wins even over a local edit of this store's cached (stopped) copy.
+      if (choice === "local" && isForeignLiveRunningRow(diskSessions.get(key))
+        && diskSessions.get(key) !== undefined && !this.isOwnRunningRow(key)) {
+        changed += 1;
+        const existing = this.persisted.get(this.idIndex.get(key) ?? key);
+        if (existing) this.removePersistedIndexes(existing);
+        this.carriedSessions.set(key, diskSessions.get(key));
+        continue;
+      }
+      if (choice === "local") continue;
+      changed += 1;
+      const existing = this.persisted.get(this.idIndex.get(key) ?? key);
+      if (existing) this.removePersistedIndexes(existing);
+      this.carriedSessions.delete(key);
+      if (choice === "drop") continue;
+      const raw = diskSessions.get(key);
+      const entry = isForeignLiveRunningRow(raw) ? undefined : normalizePersistedEntry(raw);
+      if (entry) this.indexPersistedEntry(entry);
+      else this.carriedSessions.set(key, raw);
+    }
+
+    const diskTokens = new Map<string, unknown>();
+    for (const row of snapshot.actionTokens) {
+      const key = idRowKey("id")(row);
+      if (key) diskTokens.set(key, row);
+    }
+    const tokenChoices = mergeKeyedRows(this.base.tokens, local.tokens, toKeyedJson(snapshot.actionTokens, idRowKey("id")));
+    for (const [key, choice] of tokenChoices) {
+      const localToken = this.actionTokens.get(key);
+      if (choice === "local") {
+        // A consumption recorded on either side is final.
+        const diskToken = normalizeActionToken(diskTokens.get(key));
+        if (localToken && localToken.consumedAt == null && diskToken?.consumedAt != null) {
+          localToken.consumedAt = diskToken.consumedAt;
+          changed += 1;
+        }
+        continue;
+      }
+      changed += 1;
+      if (choice === "drop") {
+        this.actionTokens.delete(key);
+        this.actionTokenStore.adoptedTokenIds.delete(key);
+        continue;
+      }
+      const token = normalizeActionToken(diskTokens.get(key));
+      if (!token) continue;
+      if (localToken?.consumedAt != null && token.consumedAt == null) token.consumedAt = localToken.consumedAt;
+      if (!localToken) this.actionTokenStore.adoptedTokenIds.add(key);
+      this.actionTokens.set(key, token);
+    }
+
+    const diskPolicies = new Map<string, unknown>();
+    for (const row of snapshot.repoPolicies) {
+      const key = idRowKey("key")(row);
+      if (key) diskPolicies.set(key, row);
+    }
+    const policyChoices = mergeKeyedRows(this.base.policies, local.policies, toKeyedJson(snapshot.repoPolicies, idRowKey("key")));
+    for (const [key, choice] of policyChoices) {
+      if (choice === "local") continue;
+      changed += 1;
+      if (choice === "drop") {
+        this.repoPolicies.delete(key);
+        continue;
+      }
+      const policy = normalizeRepoPolicyRecord(diskPolicies.get(key));
+      if (policy) this.repoPolicies.set(policy.key, policy);
+    }
+    return changed;
   }
 
   private loadIndex(): void {
@@ -101,16 +373,118 @@ export class SessionStore {
       setRepoPolicy: (policy) => { this.repoPolicies.set(policy.key, policy); },
       purgeExpiredActionTokens: () => this.actionTokenStore.purgeExpiredActionTokens(),
       saveIndex: () => this.saveIndex(),
+      setRevision: (revision) => { this.revision = revision; },
+      carrySession: (raw) => {
+        const key = sessionRowKey(raw);
+        if (key) this.carriedSessions.set(key, raw);
+      },
     });
   }
 
+  /**
+   * Persist the index. When another writer changed the file since this store last
+   * read or wrote it, merge its rows first instead of overwriting them. The write
+   * itself stays atomic (temp file + rename).
+   */
   saveIndex(): void {
-    saveSessionStoreIndex(
-      this.indexPath,
-      [...this.persisted.values()],
-      this.actionTokenStore.listForPersistence(),
-      [...this.repoPolicies.values()],
-    );
+    const first = this.writeIndex({ force: false });
+    if (first === "written") return;
+    // Another writer holds the lock (or the write failed): keep the change in
+    // memory and retry off the event loop. Local changes stay the merge winner.
+    if (this.deferredSave) return;
+    const since = Date.now();
+    const retry = (): void => {
+      const force = Date.now() - since >= LOCKED_SAVE_MAX_DEFER_MS;
+      const result = this.writeIndex({ force });
+      if (result === "written") {
+        this.deferredSave = undefined;
+        this.resolvePersistWaiters();
+        return;
+      }
+      if (force && result === "failed" && this.persistWaiters.length > 0) {
+        // The disk refuses the write (the lock is no longer the problem). Do not
+        // hold prompts back indefinitely; keep retrying in the background.
+        log.warn("[SessionStore] Session index write keeps failing; releasing waiters and retrying in the background.");
+        this.resolvePersistWaiters();
+      }
+      // Lock contention clears within milliseconds; a failing disk does not, so
+      // failed writes retry every second, then every 30 s after the 5 s budget.
+      const delay = result === "failed"
+        ? (force ? LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS : LOCKED_SAVE_FAILED_RETRY_MS)
+        : LOCKED_SAVE_RETRY_MS;
+      this.deferredSave = { timer: setTimeout(retry, delay), since };
+      this.deferredSave.timer.unref?.();
+    };
+    this.deferredSave = { timer: setTimeout(retry, first === "failed" ? LOCKED_SAVE_FAILED_RETRY_MS : LOCKED_SAVE_RETRY_MS), since };
+    this.deferredSave.timer.unref?.();
+  }
+
+  /**
+   * Resolves once no save is deferred: the change is on disk. Callers await it
+   * before showing buttons (their tokens must be persisted first) and before
+   * acting on a consumed token. Only a write the disk keeps refusing past the
+   * 5 s budget releases waiters without persisting.
+   */
+  whenPersisted(): Promise<void> {
+    if (!this.deferredSave) return Promise.resolve();
+    return new Promise((resolve) => { this.persistWaiters.push(resolve); });
+  }
+
+  private resolvePersistWaiters(): void {
+    const waiters = this.persistWaiters;
+    this.persistWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * Write a deferred save now (shutdown). Breaks a held lock; if another writer
+   * keeps recreating it, writes without the lock (still merging first) rather
+   * than leaving changes only in memory.
+   */
+  flushPendingSave(): void {
+    if (!this.deferredSave) return;
+    clearTimeout(this.deferredSave.timer);
+    this.deferredSave = undefined;
+    let result: "written" | "busy" | "failed" = "busy";
+    for (let attempt = 0; attempt < 5 && result === "busy"; attempt += 1) {
+      result = this.writeIndex({ force: true });
+    }
+    if (result === "busy") result = this.writeIndex({ force: true, unlocked: true });
+    if (result !== "written") log.warn("[SessionStore] Could not persist the session index at shutdown; the last saved index stays on disk.");
+    // Shutdown: waiters are released either way; their senders check that the
+    // runtime is still live before showing anything.
+    this.resolvePersistWaiters();
+  }
+
+  /**
+   * Read-merge-write under the index lock: "busy" when another live writer
+   * holds the lock, "failed" when the write itself failed (nothing persisted in
+   * either case). The write itself is atomic.
+   */
+  private writeIndex(options: { force: boolean; unlocked?: boolean }): "written" | "busy" | "failed" {
+    const lock = options.unlocked ? "unavailable" : tryAcquireSessionStoreLock(this.indexPath, options);
+    if (lock === "busy") return "busy";
+    try {
+      // Before load completes, the constructor has no base yet; write as loaded.
+      if (this.diskSignature !== undefined) this.syncFromDisk("save");
+      const revision = this.revision + 1;
+      const written = saveSessionStoreIndex(
+        this.indexPath,
+        this.persistedRows(),
+        this.actionTokenStore.listForPersistence(),
+        [...this.repoPolicies.values()],
+        revision,
+      );
+      if (!written) return "failed";
+      if (this.diskSignature !== undefined) {
+        this.revision = revision;
+        this.captureBase();
+        this.diskSignature = statSessionStoreIndex(this.indexPath);
+      }
+      return "written";
+    } finally {
+      if (lock !== "unavailable") lock.release();
+    }
   }
 
   assertPersistedEntry(entry: PersistedSessionInfo): void {
@@ -208,6 +582,9 @@ export class SessionStore {
       }
     }
     this.persisted.set(storageKey, entry);
+    // This store now owns the row: drop any copy carried from another writer.
+    if (entry.sessionId) this.carriedSessions.delete(entry.sessionId);
+    this.carriedSessions.delete(entry.harnessSessionId);
     if (entry.sessionId) this.idIndex.set(entry.sessionId, storageKey);
     if (entry.name) this.nameIndex.set(entry.name, storageKey);
     const backendConversationId = getBackendConversationId(entry);
@@ -256,6 +633,7 @@ export class SessionStore {
       fastMode: session.fastMode,
       createdAt: session.startedAt,
       status: "running",
+      runtimeOwner: runtimeOwnerMarker(this.instanceId),
       lifecycle: session.lifecycle,
       approvalState: session.approvalState,
       worktreeState: session.worktreeState,
@@ -441,6 +819,9 @@ export class SessionStore {
 
   /** Resolve persisted session metadata by session id, name, backend id, or compatibility key. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
+    // Pick up another writer's changes first (a stat when nothing changed), so a
+    // session it resumed is never returned from this store's stale cache.
+    if (!this.syncing) this.syncFromDisk("session-lookup");
     return this.queries.getPersistedSession(ref);
   }
 

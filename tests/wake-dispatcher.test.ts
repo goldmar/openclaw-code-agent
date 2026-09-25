@@ -292,6 +292,48 @@ describe("WakeDispatcher", () => {
     assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|-1003863755361#11239\"")));
   });
 
+  it("sends buttons only after their tokens are persisted, and never after dispose", async () => {
+    const session: FakeSession = {
+      id: "session-buttons",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    const buttons = [[{ label: "Merge", callbackData: "token-1" }]];
+
+    let releasePersist!: () => void;
+    const persisted = new Promise<void>((resolve) => { releasePersist = resolve; });
+    const dispatcher = createDispatcher({ beforeInteractiveSend: () => persisted });
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-decision",
+      userMessage: "Choose",
+      notifyUser: "always",
+      buttons,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(calls.length, 0, "no send while the tokens are not persisted");
+    releasePersist();
+    await waitForCalls(1);
+    dispatcher.dispose();
+
+    calls = [];
+    let releaseLate!: () => void;
+    const late = new Promise<void>((resolve) => { releaseLate = resolve; });
+    const stopping = createDispatcher({ beforeInteractiveSend: () => late });
+    stopping.dispatchSessionNotification(session as any, {
+      label: "worktree-decision",
+      userMessage: "Choose again",
+      notifyUser: "always",
+      buttons,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    stopping.dispose();
+    releaseLate();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(calls.length, 0, "a stopped runtime never shows its buttons");
+  });
+
   it("keeps direct notification order when an earlier delivery falls back", async () => {
     rules.push({
       match: (call) => call.kind === "durable-send" && call.text === "🚀 launched",

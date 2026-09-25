@@ -118,6 +118,12 @@ export interface WakeDispatcherOptions {
   transportOptions?: WakeTransportOptions;
   directNotifications?: DirectNotificationTransport;
   systemEvents?: SystemEventTransport;
+  /**
+   * Awaited before a message with buttons is sent, so the action tokens behind
+   * the buttons are persisted before a user can press them (a save can be
+   * deferred briefly while another writer holds the session-index lock).
+   */
+  beforeInteractiveSend?: () => Promise<void>;
 }
 
 export class WakeDispatcher {
@@ -126,8 +132,11 @@ export class WakeDispatcher {
   private readonly directNotifications: DirectNotificationTransport;
   private readonly systemEvents: SystemEventTransport;
   private readonly executor = new WakeDeliveryExecutor();
+  private readonly beforeInteractiveSend?: () => Promise<void>;
+  private disposed = false;
 
   constructor(options: WakeDispatcherOptions = {}) {
+    this.beforeInteractiveSend = options.beforeInteractiveSend;
     this.transport = options.transport ?? new WakeTransport(options.transportOptions);
     this.directNotifications = options.directNotifications ?? new RuntimeDirectNotificationTransport();
     this.systemEvents = options.systemEvents ?? new RuntimeSystemEventTransport();
@@ -142,6 +151,7 @@ export class WakeDispatcher {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.executor.dispose();
   }
 
@@ -411,7 +421,15 @@ export class WakeDispatcher {
       ...summarizeButtons(buttons),
     });
     this.executor.executePromise(
-      () => this.directNotifications.send(route, text, buttons),
+      async () => {
+        if (hasInteractiveButtons && this.beforeInteractiveSend) {
+          await this.beforeInteractiveSend();
+          // The runtime may have stopped (or the prompt been superseded) while
+          // the tokens were being persisted: never show buttons that are stale.
+          if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
+        }
+        await this.directNotifications.send(route, text, buttons);
+      },
       options,
     );
   }

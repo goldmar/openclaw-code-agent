@@ -1,4 +1,5 @@
 import { execFile, type ChildProcess } from "node:child_process";
+import { processShared } from "./process-runtime";
 
 /**
  * Async `git` / `gh` execution for the worktree layer.
@@ -79,7 +80,8 @@ export function runGh(args: readonly string[], options: CommandOptions): Promise
   });
 }
 
-const repoTails = new Map<string, Promise<void>>();
+// Process-wide so every plugin registry's module graph serializes on the same lock.
+const repoTails = processShared("git-repo-locks.v1", () => new Map<string, Promise<void>>());
 
 /**
  * Serialize mutating git sequences (worktree add/remove, checkout, merge,

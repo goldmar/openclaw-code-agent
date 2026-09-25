@@ -491,6 +491,12 @@ export interface RawPluginConfig {
 /** Persisted session metadata retained for resume/list/output after GC/restart. */
 export interface PersistedSessionInfo {
   sessionId?: string;
+  /**
+   * `<pid>/<runtime instance>` of the runtime that runs this session; written
+   * on `running` rows only. Another writer never adopts or overwrites a running
+   * row whose owner process is still alive.
+   */
+  runtimeOwner?: string;
   harnessSessionId: string;
   backendRef?: SessionBackendRef;
   name: string;

@@ -307,7 +307,8 @@ export class SessionManager {
     const registry = new SessionRuntimeRegistry();
     const sessions = registry.sessions;
     const store = new SessionStore(options.store);
-    const wakeDispatcher = new WakeDispatcher();
+    // Buttons go out only after their action tokens are on disk.
+    const wakeDispatcher = new WakeDispatcher({ beforeInteractiveSend: () => store.whenPersisted() });
     const interactions = new SessionInteractionService(store.actionTokenStore, isGitHubCLIAvailable);
     const references = new SessionReferenceService(sessions, store);
     const stateSync = new SessionStateSyncService({
@@ -1150,6 +1151,31 @@ export class SessionManager {
 
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.interactions.getActionToken(tokenId);
+  }
+
+  /** True when the token was minted by another writer of the index and adopted from disk. */
+  isAdoptedActionToken(tokenId: string): boolean {
+    return this.store.actionTokenStore.isAdopted(tokenId);
+  }
+
+  /**
+   * True when another writer of the session index reports this session as running
+   * and it is not live here. Only the owning runtime may act on a live session, so
+   * callers must not resume, approve, or answer it from this runtime.
+   */
+  isSessionOwnedElsewhere(ref: string): boolean {
+    if (this.resolve(ref)) return false;
+    return this.store.isSessionOwnedElsewhere(ref);
+  }
+
+  /** Resolves once no session-index save is deferred behind another writer's lock. */
+  whenStorePersisted(): Promise<void> {
+    return this.store.whenPersisted();
+  }
+
+  /** Runtime and store identity for diagnostics (never token values). */
+  getStoreDiagnostics(): ReturnType<SessionStore["getDiagnostics"]> {
+    return this.store.getDiagnostics();
   }
 
   clearRepoPolicyChoiceTokens(sessionId: string): void {
@@ -2100,6 +2126,8 @@ export class SessionManager {
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
+    // A save deferred behind another writer's index lock must not be lost.
+    this.store.flushPendingSave();
   }
 
   async drainTaskLifecycle(): Promise<void> {

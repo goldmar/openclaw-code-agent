@@ -35,3 +35,6 @@ Thumbs.db
 # Environment
 .env
 .env.*
+
+# Plugin-copy fixtures created by tests/plugin-multi-instance.test.ts
+.instance-*/
