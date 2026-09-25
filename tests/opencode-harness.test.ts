@@ -7,13 +7,13 @@ import { dirname, join } from "node:path";
 import {
   OpenCodeHarness,
   openCodeAgentForMode,
-  parseMultiSelectAnswer,
   permissionRulesForMode,
   resolveCommandPath,
   startOpenCodeServer,
   type OpenCodeServerHandle,
 } from "../src/harness/opencode";
 import type { HarnessLaunchOptions, HarnessMessage, HarnessSession } from "../src/harness/types";
+import { resolvePendingInputAnswer } from "../src/pending-input-normalization";
 
 type RequestRecord = {
   method: string;
@@ -349,7 +349,7 @@ describe("OpenCodeHarness static properties", () => {
       multiSelect: true,
       options: [{ label: "Small", value: "S" }, { label: "Medium" }, { label: "Large", value: "L" }],
     };
-    assert.deepEqual(parseMultiSelectAnswer(question, "1, large\nMedium, custom"), ["S", "L", "Medium", "custom"]);
+    assert.deepEqual(resolvePendingInputAnswer(question, "1, large\nMedium, custom"), { ok: true, answers: ["S", "L", "Medium", "custom"] });
   });
 });
 

@@ -222,7 +222,7 @@ Revisions stay attached to the same session, so the newest plan is the actionabl
 
 ### Questions, Steering, And Rewind
 
-When an agent asks a question (Claude Code `AskUserQuestion`, or an OpenCode question), answer in the thread or with `agent_respond`: option numbers, labels, several options for multi-select questions, or free text. A question answered after a Gateway restart resumes the session.
+When an agent asks a question (Claude Code `AskUserQuestion`, Codex `request_user_input`, or an OpenCode question), answer in the thread or with `agent_respond`: option numbers, labels, several options for multi-select questions, or free text. An empty answer or an option number outside the list is rejected with the question shown again. A question answered, or a plan approved, after a Gateway restart resumes the session.
 
 Messages sent while a Codex turn is running steer that turn instead of waiting in a queue; `agent_respond(..., interrupt=true)` still interrupts. To go back, launch with `resume_session_id` and `rewind_turns=N`: Codex drops the latest N turns in place, or forks a new session from before them with `fork_session: true`. Rewind covers conversation history only; files are not reverted. For a running Codex session, `agent_session_action` can compact the context or run an inline review of the worktree branch diff, uncommitted changes, a commit, or custom instructions.
 
@@ -282,7 +282,7 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_launch` | Start a background coding session, or resume, fork, or rewind an earlier one |
 | `agent_respond` | Reply, steer, answer a question, redirect, approve a plan, or escalate permissions |
 | `agent_session_action` | Compact context or run an inline review in a running Codex session |
-| `agent_request_plan_approval` | Escalate a delegated plan review to the user |
+| `agent_request_plan_approval` | Escalate a delegated (`delegate` or `approve` mode) plan review to the user |
 | `agent_request_worktree_decision` | Escalate a delegated worktree decision to the user with decision buttons |
 | `agent_send_plan_offer` | Send a message with Start Plan / Dismiss buttons for a plan-gated follow-up |
 | `agent_output` | Read buffered session output |

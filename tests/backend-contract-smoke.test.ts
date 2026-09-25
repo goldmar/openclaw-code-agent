@@ -18,6 +18,8 @@ describe("backend contract smoke", () => {
     assert.equal(codex.capabilities.nativePendingInput, true);
     assert.equal(codex.capabilities.nativePlanArtifacts, true);
     assert.deepEqual([...(codex.capabilities.threadActions ?? [])], ["compact", "review"]);
+    // Codex has no native plan decision channel: approvals and revisions travel as [SYSTEM:] prompts.
+    assert.notEqual(codex.capabilities.nativePlanDecisions, true);
 
     assert.equal(claude.backendKind, "claude-code");
     assert.equal(claude.capabilities.nativePendingInput, false);

@@ -57,6 +57,7 @@ export class SessionQuestionService {
   async handleAskUserQuestion(
     session: Session,
     input: Record<string, unknown>,
+    context: AskUserQuestionResolutionContext = {},
   ): Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }> {
     const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
     const typedInput = input as unknown as AskUserQuestionInput;
@@ -68,8 +69,10 @@ export class SessionQuestionService {
     const firstQuestion = questions[0];
     const options = firstQuestion.options ?? [];
     const userMessage = `❓ [${session.name}] ${firstQuestion.question}`;
-    const questionId = activePendingInputQuestionIdentity(session);
-    const requestId = session.pendingInputState?.requestId
+    // The harness names the request it raised; the session may not show it yet.
+    const questionId = context.requestId ? context.questionId : activePendingInputQuestionIdentity(session);
+    const requestId = context.requestId
+      ?? session.pendingInputState?.requestId
       ?? `legacy:${randomUUID()}`;
     const buttons = this.getQuestionButtons(session.id, options, { requestId, questionId });
     const fallbackWakeText = [

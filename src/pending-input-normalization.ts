@@ -122,8 +122,10 @@ function formatPendingInputQuestion(question: PendingInputQuestion, index: numbe
       }),
     );
   }
-  if (question.allowsFreeText && !question.options.some((option) => option.isOther)) {
-    lines.push(question.multiSelect ? "Reply with one or more option labels." : "Free-form answer is allowed.");
+  if (question.multiSelect && question.options.length > 0) {
+    lines.push("Reply with one or more option numbers or labels, separated by commas.");
+  } else if (question.allowsFreeText && !question.options.some((option) => option.isOther)) {
+    lines.push("Free-form answer is allowed.");
   }
   return lines;
 }
@@ -142,4 +144,84 @@ export function formatPendingInputQuestions(questions: PendingInputQuestion[]): 
 
 export function formatPendingInputWizardQuestion(question: PendingInputQuestion, index: number, count: number): string {
   return formatPendingInputQuestion(question, index, count).join("\n");
+}
+
+export type PendingInputAnswerResolution =
+  | { ok: true; answers: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Map a text reply onto a structured question, the same way for every harness.
+ * An option label (case-insensitive) or option number selects that option and
+ * yields its value; anything else is a free-text answer unless the question
+ * forbids free text. Multi-select questions take comma- or newline-separated
+ * entries. Empty replies and option numbers outside the list are rejected so
+ * the caller can re-prompt instead of sending a wrong answer.
+ */
+export function resolvePendingInputAnswer(question: PendingInputQuestion, text: string): PendingInputAnswerResolution {
+  const trimmed = text.trim();
+  if (!trimmed) return { ok: false, error: "The answer is empty." };
+  const options = question.options;
+  if (options.length === 0) return { ok: true, answers: [trimmed] };
+  const entries = question.multiSelect
+    ? trimmed.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean)
+    : [trimmed];
+  if (entries.length === 0) return { ok: false, error: "The answer is empty." };
+  const answers: string[] = [];
+  for (const entry of entries) {
+    const byLabel = options.find((option) => option.label.toLowerCase() === entry.toLowerCase());
+    if (byLabel) {
+      answers.push(byLabel.value ?? byLabel.label);
+      continue;
+    }
+    if (/^\d+$/.test(entry)) {
+      const option = options[Number.parseInt(entry, 10) - 1];
+      if (!option) {
+        return {
+          ok: false,
+          error: `"${entry}" is not an option number. Choose 1-${options.length}, reply with an option label${question.allowsFreeText === false ? "" : ", or write the answer in words"}.`,
+        };
+      }
+      answers.push(option.value ?? option.label);
+      continue;
+    }
+    if (question.allowsFreeText === false) {
+      return {
+        ok: false,
+        error: `"${entry}" is not one of the options. Reply with an option number (1-${options.length}) or label.`,
+      };
+    }
+    answers.push(entry);
+  }
+  return { ok: true, answers: [...new Set(answers)] };
+}
+
+/** An approval answer a pending permission request offers. */
+export type ApprovalChoiceLike = {
+  label: string;
+  decision: "accept" | "acceptForSession" | "decline" | "cancel";
+  /** Choices that also persist a policy change; free text never selects them implicitly. */
+  amendment?: true;
+};
+
+/**
+ * Map a free-text reply onto an approval choice: an exact label, a choice
+ * number, or a plain yes/no/always/cancel word. Returns `undefined` when the
+ * text is not a recognizable decision.
+ */
+export function matchApprovalChoiceText<T extends ApprovalChoiceLike>(choices: T[], text: string): T | undefined {
+  const normalized = text.trim().toLowerCase().replace(/[.!]+$/g, "");
+  if (!normalized) return undefined;
+  const byLabel = choices.find((choice) => choice.label.toLowerCase() === normalized);
+  if (byLabel) return byLabel;
+  const index = /^\d+$/.test(normalized) ? Number(normalized) - 1 : -1;
+  if (index >= 0 && index < choices.length) return choices[index];
+  let wanted: ApprovalChoiceLike["decision"] | undefined;
+  if (/^(?:approve|approved|allow|accept|yes|y|ok)(?: once)?$/.test(normalized)) wanted = "accept";
+  else if (/^(?:approve|allow|accept|yes)(?: for)?(?: this)? session$|^always(?: allow)?$/.test(normalized)) wanted = "acceptForSession";
+  else if (/^(?:deny|denied|decline|declined|reject|rejected|no|n|block)$/.test(normalized)) wanted = "decline";
+  else if (/^(?:cancel|abort|stop)$/.test(normalized)) wanted = "cancel";
+  // Plain decisions only: "no" must never select a persistent deny rule and
+  // "always" must never select a persistent allow amendment by accident.
+  return wanted ? choices.find((choice) => choice.decision === wanted && !choice.amendment) : undefined;
 }

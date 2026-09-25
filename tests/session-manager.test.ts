@@ -635,9 +635,40 @@ describe("SessionManager.kill()", () => {
     assert.ok(patches.length >= 1);
   });
 
-  it("rejects pending plan approval state before non-user kills", () => {
+  for (const reason of ["user", "idle-timeout", "startup-timeout", "done"] as const) {
+    it(`rejects pending plan approval state before a ${reason} kill`, () => {
+      let killCalled: string | undefined;
+      const patches: Record<string, unknown>[] = [];
+      const s = fakeSession({
+        id: "s1",
+        name: "pending-plan",
+        status: "running",
+        pendingPlanApproval: true,
+        approvalState: "pending",
+        planDecisionVersion: 1,
+        applyControlPatch(patch: Record<string, unknown>) {
+          patches.push(patch);
+          Object.assign(this, patch);
+        },
+        kill(reason: string) { killCalled = reason; },
+      });
+      (sm as any).sessions.set("s1", s);
+
+      const result = sm.kill("s1", reason);
+
+      assert.equal(result, true);
+      assert.equal(killCalled, reason);
+      assert.equal(s.pendingPlanApproval, false);
+      assert.equal(s.approvalState, "rejected");
+      assert.equal(s.lifecycle, "terminal");
+      assert.equal(s.runtimeState, "stopped");
+      assert.equal(s.planDecisionVersion, 2);
+      assert.equal(patches[0].approvalState, "rejected");
+    });
+  }
+
+  it("keeps a pending plan decision when the Gateway shuts down, so it can be approved after the restart", () => {
     let killCalled: string | undefined;
-    const patches: Record<string, unknown>[] = [];
     const s = fakeSession({
       id: "s1",
       name: "pending-plan",
@@ -645,24 +676,16 @@ describe("SessionManager.kill()", () => {
       pendingPlanApproval: true,
       approvalState: "pending",
       planDecisionVersion: 1,
-      applyControlPatch(patch: Record<string, unknown>) {
-        patches.push(patch);
-        Object.assign(this, patch);
-      },
+      applyControlPatch() { throw new Error("a shutdown must not patch the plan decision"); },
       kill(reason: string) { killCalled = reason; },
     });
     (sm as any).sessions.set("s1", s);
 
-    const result = sm.kill("s1", "shutdown");
-
-    assert.equal(result, true);
+    assert.equal(sm.kill("s1", "shutdown"), true);
     assert.equal(killCalled, "shutdown");
-    assert.equal(s.pendingPlanApproval, false);
-    assert.equal(s.approvalState, "rejected");
-    assert.equal(s.lifecycle, "terminal");
-    assert.equal(s.runtimeState, "stopped");
-    assert.equal(s.planDecisionVersion, 2);
-    assert.equal(patches[0].approvalState, "rejected");
+    assert.equal(s.pendingPlanApproval, true);
+    assert.equal(s.approvalState, "pending");
+    assert.equal(s.planDecisionVersion, 1);
   });
 });
 

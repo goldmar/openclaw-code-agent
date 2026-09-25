@@ -30,6 +30,7 @@ import {
   extractPendingInputQuestions,
   formatPendingInputQuestions,
   formatPendingInputWizardQuestion,
+  resolvePendingInputAnswer,
 } from "../pending-input-normalization";
 import type {
   AgentHarness,
@@ -253,26 +254,15 @@ function updateClaudeWizardState(
 }
 
 /**
- * Map a text answer onto a question's options: option numbers ("2") and labels
- * (case-insensitive) select that option; anything else is a free-text answer.
- * Multi-select questions take comma- or newline-separated entries.
+ * Map a text answer onto a question's options (see `resolvePendingInputAnswer`).
+ * Claude's AskUserQuestion takes one string per question, so multi-select
+ * picks are joined with ", ". Returns undefined for an invalid answer.
  */
-function resolveClaudeQuestionAnswer(question: PendingInputQuestion | undefined, text: string): string {
-  const trimmed = text.trim();
-  if (!question || question.options.length === 0) return trimmed;
-  const match = (entry: string): string => {
-    const index = /^\d+$/.test(entry) ? Number.parseInt(entry, 10) - 1 : -1;
-    const option = (index >= 0 ? question.options[index] : undefined)
-      ?? question.options.find((candidate) => candidate.label.toLowerCase() === entry.toLowerCase());
-    return option?.label ?? entry;
-  };
-  if (!question.multiSelect) return match(trimmed);
-  return trimmed
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map(match)
-    .join(", ");
+function resolveClaudeQuestionAnswer(question: PendingInputQuestion | undefined, text: string): string | undefined {
+  if (!question) return text.trim() || undefined;
+  const resolved = resolvePendingInputAnswer(question, text);
+  if (!resolved.ok) return undefined;
+  return resolved.answers.join(", ");
 }
 
 /** Subtract a fork's inherited usage so the fork reports only its own spend. */
@@ -480,7 +470,12 @@ export class ClaudeCodeHarness implements AgentHarness {
           pendingQuestion = { state, input, answers: {}, resolve };
         });
         queue.enqueue(createPendingInputEvent(state));
-        const viaService = askUserQuestion(toolName, input);
+        // The session may not have applied the pending-input event yet, so name
+        // the request explicitly: the prompt's buttons must target it.
+        const viaService = askUserQuestion(toolName, input, {
+          requestId: state.requestId,
+          questionId: state.questions?.[state.activeQuestionIndex ?? 0]?.id,
+        });
         const onAbort = (): void => {
           if (pendingQuestion?.state.requestId !== state.requestId) return;
           const pending = pendingQuestion;
@@ -492,6 +487,11 @@ export class ClaudeCodeHarness implements AgentHarness {
           // Promise.race observes both: a later rejection of the losing side
           // (for example the service timeout) is never unhandled.
           return await Promise.race([viaService, direct]);
+        } catch (error) {
+          // The question service gave up (timeout, superseded, shutdown): tell
+          // the agent plainly instead of failing the permission request.
+          const reason = error instanceof Error ? error.message : String(error);
+          return { behavior: "deny", message: `The user did not answer the question (${reason}). Continue with your best judgment, or ask again if the answer is essential.` };
         } finally {
           toolOptions.signal.removeEventListener("abort", onAbort);
           if (pendingQuestion?.state.requestId === state.requestId) pendingQuestion = undefined;
@@ -821,7 +821,8 @@ export class ClaudeCodeHarness implements AgentHarness {
         const pending = pendingQuestion;
         if (!pending) return false;
         const question = pending.state.questions?.[pending.state.activeQuestionIndex ?? 0];
-        return answerPendingQuestion(resolveClaudeQuestionAnswer(question, text));
+        const answer = resolveClaudeQuestionAnswer(question, text);
+        return answer !== undefined && answerPendingQuestion(answer);
       },
 
       async submitPendingInputOption(

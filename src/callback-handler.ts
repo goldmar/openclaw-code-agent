@@ -57,6 +57,8 @@ type InteractiveResponder = {
 
 // Process-wide: every plugin registry's handler shares one set of in-flight locks.
 const inFlightQuestionAnswers = processShared("callback-question-answer-locks.v1", () => new Set<string>());
+// Worktrees with a decision (merge, PR, snooze, discard) currently being carried out.
+const inFlightWorktreeDecisions = processShared("callback-worktree-decision-locks.v1", () => new Set<string>());
 const retryableQuestionAnswerFailureMessage =
   "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
 const planDecisionInFlight = processShared(
@@ -192,6 +194,32 @@ function worktreeActionTextSucceeded(text: string): boolean {
 
 function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
+}
+
+const WORKTREE_DECISION_ACTIONS: ReadonlySet<SessionActionKind> = new Set([
+  "worktree-merge",
+  "worktree-create-pr",
+  "worktree-update-pr",
+  "worktree-decide-later",
+  "worktree-dismiss",
+]);
+
+/** How a worktree decision was already settled, or undefined while it is still open. */
+function resolvedWorktreeDecision(session: PersistedSessionInfo | undefined): string | undefined {
+  if (!session) return undefined;
+  switch (session.worktreeLifecycle?.state) {
+    case "merged":
+    case "released":
+      return "merged";
+    case "dismissed":
+      return "discarded";
+    case "no_change":
+      return "no changes to keep";
+    default:
+      if (session.worktreeMerged) return "merged";
+      if (session.worktreeDismissedAt) return "discarded";
+      return undefined;
+  }
 }
 
 function planDecisionLockKey(token: SessionActionToken): string | undefined {
@@ -686,6 +714,22 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
+        // A button for a question the live session no longer shows (answered
+        // another way, timed out, or cancelled) must not answer anything else.
+        if (sessionManager.isQuestionAnswerTokenCurrent?.(
+          sessionId,
+          token.pendingInputRequestId,
+          token.pendingInputQuestionId,
+        ) === false) {
+          if (token.pendingInputRequestId) {
+            sessionManager.consumeQuestionAnswerTokens(sessionId, token.pendingInputRequestId, token.pendingInputQuestionId);
+          }
+          sessionManager.consumeActionToken(tokenId);
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await replyText(ctx, "⚠️ That question is no longer waiting for an answer.");
+          return { handled: true };
+        }
+
         const answerLockKey = questionAnswerLockKey(token);
         if (inFlightQuestionAnswers.has(answerLockKey)) {
           await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
@@ -939,335 +983,359 @@ export function createCallbackHandler(
         });
       }
 
-      const consumedToken = sessionManager.consumeActionToken(tokenId);
-      // The consumption must be on disk before acting, so another writer of the
-      // index cannot treat this button as unused.
-      if (consumedToken) await sessionManager.whenStorePersisted?.();
-      logButtonDiagnostic("callback_token_consume_completed", {
-        channel: ctx.channel,
-        namespace: CALLBACK_NAMESPACE,
-        tokenHash: hashDiagnosticToken(tokenId),
-        consumed: Boolean(consumedToken),
-        actionKind: consumedToken?.kind,
-        sessionId: consumedToken?.sessionId,
-        planDecisionVersion: consumedToken?.planDecisionVersion,
-      });
-      if (!consumedToken) {
-        await rejectStaleAction(ctx, () => clearInteractiveState(ctx, {
-          alreadyAcknowledged: callbackAcknowledged,
-          forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss",
-        }));
+      // Merge, PR, Later, and Discard on one worktree must not run concurrently:
+      // Discard could delete the branch a Merge is working on.
+      const worktreeLockKey = WORKTREE_DECISION_ACTIONS.has(token.kind) ? sessionId : undefined;
+      if (worktreeLockKey && inFlightWorktreeDecisions.has(worktreeLockKey)) {
+        await replyText(ctx, `⚠️ Another decision for [${actionSessionName}]'s worktree is still being processed. Try again when it finishes.`);
         return { handled: true };
       }
+      if (worktreeLockKey) inFlightWorktreeDecisions.add(worktreeLockKey);
+      try {
+        // A button from a worktree prompt that was already settled (for example
+        // Discard after Merge) must not act on the finished worktree.
+        const settledWorktree = WORKTREE_DECISION_ACTIONS.has(token.kind)
+          ? resolvedWorktreeDecision(sessionManager.getPersistedSession?.(sessionId))
+          : undefined;
+        if (settledWorktree) {
+          sessionManager.consumeActionToken(tokenId);
+          await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+          await replyText(ctx, `⚠️ This worktree decision was already resolved (${settledWorktree}) for [${actionSessionName}]. No action taken.`);
+          return { handled: true };
+        }
 
-      // Route action
-      switch (consumedToken.kind) {
-        case "plugin-update-install": {
-          await clearUpdateActionButtons(ctx, callbackAcknowledged);
-          logButtonDiagnostic("callback_update_action_started", {
-            channel: ctx.channel,
-            tokenHash: hashDiagnosticToken(tokenId),
-            actionKind: consumedToken.kind,
-            approvedVersion: consumedToken.pluginUpdateVersion,
-          });
-          if (!autoUpdateService) {
-            logButtonDiagnostic("callback_update_action_failed", {
+        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        // The consumption must be on disk before acting, so another writer of the
+        // index cannot treat this button as unused.
+        if (consumedToken) await sessionManager.whenStorePersisted?.();
+        logButtonDiagnostic("callback_token_consume_completed", {
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          tokenHash: hashDiagnosticToken(tokenId),
+          consumed: Boolean(consumedToken),
+          actionKind: consumedToken?.kind,
+          sessionId: consumedToken?.sessionId,
+          planDecisionVersion: consumedToken?.planDecisionVersion,
+        });
+        if (!consumedToken) {
+          await rejectStaleAction(ctx, () => clearInteractiveState(ctx, {
+            alreadyAcknowledged: callbackAcknowledged,
+            forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss",
+          }));
+          return { handled: true };
+        }
+
+        // Route action
+        switch (consumedToken.kind) {
+          case "plugin-update-install": {
+            await clearUpdateActionButtons(ctx, callbackAcknowledged);
+            logButtonDiagnostic("callback_update_action_started", {
               channel: ctx.channel,
               tokenHash: hashDiagnosticToken(tokenId),
-              reason: pluginConfig.autoUpdate ? "service_unavailable" : "auto_update_disabled",
+              actionKind: consumedToken.kind,
+              approvedVersion: consumedToken.pluginUpdateVersion,
             });
-            await replyText(ctx, updateServiceUnavailableText());
-            break;
-          }
-          let text: string;
-          try {
-            text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
-              route: consumedToken.route,
-            });
-          } catch (err) {
-            logButtonDiagnostic("callback_update_action_failed", {
+            if (!autoUpdateService) {
+              logButtonDiagnostic("callback_update_action_failed", {
+                channel: ctx.channel,
+                tokenHash: hashDiagnosticToken(tokenId),
+                reason: pluginConfig.autoUpdate ? "service_unavailable" : "auto_update_disabled",
+              });
+              await replyText(ctx, updateServiceUnavailableText());
+              break;
+            }
+            let text: string;
+            try {
+              text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
+                route: consumedToken.route,
+              });
+            } catch (err) {
+              logButtonDiagnostic("callback_update_action_failed", {
+                channel: ctx.channel,
+                tokenHash: hashDiagnosticToken(tokenId),
+                reason: "install_failed",
+              });
+              await replyText(ctx, `⚠️ OpenClaw Code Agent update failed: ${err instanceof Error ? err.message : String(err)}`);
+              break;
+            }
+            logButtonDiagnostic("callback_update_action_completed", {
               channel: ctx.channel,
               tokenHash: hashDiagnosticToken(tokenId),
-              reason: "install_failed",
+              approvedVersion: consumedToken.pluginUpdateVersion,
             });
-            await replyText(ctx, `⚠️ OpenClaw Code Agent update failed: ${err instanceof Error ? err.message : String(err)}`);
+            try {
+              await replyText(ctx, `✅ ${text}`);
+            } catch (err) {
+              logButtonDiagnostic("callback_update_confirmation_failed", {
+                channel: ctx.channel,
+                tokenHash: hashDiagnosticToken(tokenId),
+                reason: "reply_failed",
+              });
+              log.warn(`[callback-handler] OpenClaw Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
             break;
           }
-          logButtonDiagnostic("callback_update_action_completed", {
-            channel: ctx.channel,
-            tokenHash: hashDiagnosticToken(tokenId),
-            approvedVersion: consumedToken.pluginUpdateVersion,
-          });
-          try {
+
+          case "plugin-update-restart": {
+            await clearUpdateActionButtons(ctx, callbackAcknowledged);
+            if (!autoUpdateService) {
+              await replyText(ctx, updateServiceUnavailableText());
+              break;
+            }
+            try {
+              const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
+              await replyText(ctx, `▶️ ${text}`);
+            } catch (err) {
+              await replyText(ctx, `⚠️ Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            break;
+          }
+
+          case "plugin-update-dismiss": {
+            await clearUpdateActionButtons(ctx, callbackAcknowledged);
+            const text = autoUpdateService
+              ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
+              : "Dismissed OpenClaw Code Agent update reminder.";
             await replyText(ctx, `✅ ${text}`);
-          } catch (err) {
-            logButtonDiagnostic("callback_update_confirmation_failed", {
-              channel: ctx.channel,
-              tokenHash: hashDiagnosticToken(tokenId),
-              reason: "reply_failed",
-            });
-            log.warn(`[callback-handler] OpenClaw Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-          break;
-        }
-
-        case "plugin-update-restart": {
-          await clearUpdateActionButtons(ctx, callbackAcknowledged);
-          if (!autoUpdateService) {
-            await replyText(ctx, updateServiceUnavailableText());
             break;
           }
-          try {
-            const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
-            await replyText(ctx, `▶️ ${text}`);
-          } catch (err) {
-            await replyText(ctx, `⚠️ Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-          break;
-        }
 
-        case "plugin-update-dismiss": {
-          await clearUpdateActionButtons(ctx, callbackAcknowledged);
-          const text = autoUpdateService
-            ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
-            : "Dismissed OpenClaw Code Agent update reminder.";
-          await replyText(ctx, `✅ ${text}`);
-          break;
-        }
-
-        case "plugin-update-remind-later": {
-          await clearUpdateActionButtons(ctx, callbackAcknowledged);
-          const text = autoUpdateService
-            ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
-            : "Will remind later about OpenClaw Code Agent update reminder.";
-          await replyText(ctx, `✅ ${text}`);
-          break;
-        }
-
-        case "worktree-merge": {
-          const result = await makeMergeTool().execute("callback", { session: sessionId });
-          const text = toolResultText(result);
-          if (toolResultSucceeded(result)) {
-            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+          case "plugin-update-remind-later": {
+            await clearUpdateActionButtons(ctx, callbackAcknowledged);
+            const text = autoUpdateService
+              ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
+              : "Will remind later about OpenClaw Code Agent update reminder.";
+            await replyText(ctx, `✅ ${text}`);
             break;
           }
-          await replyText(ctx, text);
-          break;
-        }
 
-        case "worktree-decide-later": {
-          const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
-          const succeeded = worktreeActionTextSucceeded(result);
-          if (succeeded) {
-            const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
-            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, confirmation);
-          } else {
-            await replyText(ctx, result);
-          }
-          break;
-        }
-
-        case "worktree-dismiss": {
-          const result = await sessionManager.dismissWorktree(sessionId);
-          const succeeded = worktreeActionTextSucceeded(result);
-          if (succeeded) {
-            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-          }
-          await replyText(ctx, succeeded ? "✅ Discarded" : result);
-          break;
-        }
-
-        case "worktree-create-pr":
-        case "worktree-update-pr": {
-          // Do NOT pre-clear pendingWorktreeDecisionSince here.
-          // For the PR path the worktree directory must stay alive indefinitely so the
-          // user can push follow-up commits for PR review.  The worktree directory was
-          // already preserved by onSessionTerminal (which skips removeWorktree when
-          // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
-          // on success; if the PR creation fails the flag remains set so reminders
-          // continue until the user tries again.
-          const result = await makePrTool().execute("callback", { session: sessionId });
-          const text = toolResultText(result);
-          if (toolResultSucceeded(result)) {
-            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+          case "worktree-merge": {
+            const result = await makeMergeTool().execute("callback", { session: sessionId });
+            const text = toolResultText(result);
+            if (toolResultSucceeded(result)) {
+              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              break;
+            }
+            await replyText(ctx, text);
             break;
           }
-          await replyText(ctx, text);
-          break;
-        }
 
-        case "worktree-view-pr": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          const persisted = sessionManager.getPersistedSession?.(sessionId);
-          const url = token.targetUrl ?? persisted?.worktreePrUrl;
-          await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
-          break;
-        }
+          case "worktree-decide-later": {
+            const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
+            const succeeded = worktreeActionTextSucceeded(result);
+            if (succeeded) {
+              const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
+              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              await replyText(ctx, confirmation);
+            } else {
+              await replyText(ctx, result);
+            }
+            break;
+          }
 
-        case "plan-offer-start": {
-          if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+          case "worktree-dismiss": {
+            const result = await sessionManager.dismissWorktree(sessionId);
+            const succeeded = worktreeActionTextSucceeded(result);
+            if (succeeded) {
+              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+            }
+            await replyText(ctx, succeeded ? "✅ Discarded" : result);
+            break;
+          }
+
+          case "worktree-create-pr":
+          case "worktree-update-pr": {
+            // Do NOT pre-clear pendingWorktreeDecisionSince here.
+            // For the PR path the worktree directory must stay alive indefinitely so the
+            // user can push follow-up commits for PR review.  The worktree directory was
+            // already preserved by onSessionTerminal (which skips removeWorktree when
+            // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
+            // on success; if the PR creation fails the flag remains set so reminders
+            // continue until the user tries again.
+            const result = await makePrTool().execute("callback", { session: sessionId });
+            const text = toolResultText(result);
+            if (toolResultSucceeded(result)) {
+              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              break;
+            }
+            await replyText(ctx, text);
+            break;
+          }
+
+          case "worktree-view-pr": {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            const persisted = sessionManager.getPersistedSession?.(sessionId);
+            const url = token.targetUrl ?? persisted?.worktreePrUrl;
+            await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
+            break;
+          }
+
+          case "plan-offer-start": {
+            if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, "⚠️ This action is missing the plan launch context.");
+              break;
+            }
+            let session: { id: string; name: string };
+            try {
+              session = await sessionManager.launchPlanOffer({
+                route: consumedToken.route,
+                prompt: consumedToken.launchPrompt,
+                workdir: consumedToken.launchWorkdir,
+                name: consumedToken.launchName,
+                worktreeStrategy: consumedToken.launchWorktreeStrategy,
+              });
+            } catch (err) {
+              const errText = err instanceof Error ? err.message : String(err);
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, `⚠️ Failed to start planning session: ${errText}`);
+              break;
+            }
             await clearInteractiveState(ctx, {
               alreadyAcknowledged: callbackAcknowledged,
               forceTelegramMarkupEdit: true,
             });
-            await replyText(ctx, "⚠️ This action is missing the plan launch context.");
+            await replyText(ctx, `▶️ Planning session started: ${session.name} [${session.id}]`);
             break;
           }
-          let session: { id: string; name: string };
-          try {
-            session = await sessionManager.launchPlanOffer({
-              route: consumedToken.route,
-              prompt: consumedToken.launchPrompt,
-              workdir: consumedToken.launchWorkdir,
-              name: consumedToken.launchName,
-              worktreeStrategy: consumedToken.launchWorktreeStrategy,
-            });
-          } catch (err) {
-            const errText = err instanceof Error ? err.message : String(err);
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            await replyText(ctx, `⚠️ Failed to start planning session: ${errText}`);
-            break;
-          }
-          await clearInteractiveState(ctx, {
-            alreadyAcknowledged: callbackAcknowledged,
-            forceTelegramMarkupEdit: true,
-          });
-          await replyText(ctx, `▶️ Planning session started: ${session.name} [${session.id}]`);
-          break;
-        }
 
-        case "plan-offer-dismiss": {
-          await clearInteractiveState(ctx, {
-            alreadyAcknowledged: callbackAcknowledged,
-            forceTelegramMarkupEdit: true,
-          });
-          await replyText(ctx, `✅ Dismissed.`);
-          break;
-        }
+          case "plan-offer-dismiss": {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            await replyText(ctx, `✅ Dismissed.`);
+            break;
+          }
 
-        case "repo-policy-set": {
-          if (!consumedToken.repoPolicy || !consumedToken.repoPolicyWorkdir) {
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            await replyText(ctx, "⚠️ This action is missing the repo policy context.");
-            break;
-          }
-          if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            await replyText(ctx, "⚠️ This action is missing the launch context.");
-            break;
-          }
-          if (typeof sessionManager.resolveRepoPolicy === "function") {
-            const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
-            if (resolution.identity) {
-              const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
-              if (validationError) {
-                await clearInteractiveState(ctx, {
-                  alreadyAcknowledged: callbackAcknowledged,
-                  forceTelegramMarkupEdit: true,
-                });
-                await replyText(ctx, `⚠️ ${validationError}`);
-                break;
+          case "repo-policy-set": {
+            if (!consumedToken.repoPolicy || !consumedToken.repoPolicyWorkdir) {
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, "⚠️ This action is missing the repo policy context.");
+              break;
+            }
+            if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, "⚠️ This action is missing the launch context.");
+              break;
+            }
+            if (typeof sessionManager.resolveRepoPolicy === "function") {
+              const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
+              if (resolution.identity) {
+                const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
+                if (validationError) {
+                  await clearInteractiveState(ctx, {
+                    alreadyAcknowledged: callbackAcknowledged,
+                    forceTelegramMarkupEdit: true,
+                  });
+                  await replyText(ctx, `⚠️ ${validationError}`);
+                  break;
+                }
               }
             }
-          }
-          const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
-          if (!record) {
+            const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
+            if (!record) {
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
+              break;
+            }
+            sessionManager.clearRepoPolicyChoiceTokens(consumedToken.sessionId);
+
+            let launchText: string;
+            try {
+              const result = await sessionManager.launchAfterRepoPolicyChoice({
+                route: consumedToken.route,
+                prompt: consumedToken.launchPrompt,
+                workdir: consumedToken.launchWorkdir,
+                name: consumedToken.launchName,
+                model: consumedToken.launchModel,
+                reasoningEffort: consumedToken.launchReasoningEffort,
+                fastMode: consumedToken.launchFastMode,
+                systemPrompt: consumedToken.launchSystemPrompt,
+                allowedTools: consumedToken.launchAllowedTools,
+                resumeSessionId: consumedToken.launchResumeSessionId,
+                resumedFromSessionName: consumedToken.launchResumedFromSessionName,
+                resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
+                sessionIdOverride: consumedToken.launchSessionIdOverride,
+                rewindTurns: consumedToken.launchRewindTurns,
+                forkSession: consumedToken.launchForkSession,
+                forceNewSession: consumedToken.launchForceNewSession,
+                permissionMode: consumedToken.launchPermissionMode,
+                planApproval: consumedToken.launchPlanApproval,
+                harness: consumedToken.launchHarness,
+                worktreeStrategy: consumedToken.launchWorktreeStrategy,
+                worktreeBaseBranch: consumedToken.launchWorktreeBaseBranch,
+                worktreePrTargetRepo: consumedToken.launchWorktreePrTargetRepo,
+                originAgentId: consumedToken.launchOriginAgentId,
+              });
+              launchText = result.text;
+            } catch (err) {
+              const errText = err instanceof Error ? err.message : String(err);
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              await replyText(ctx, `⚠️ Repo policy saved, but launch failed: ${errText}`);
+              break;
+            }
+
             await clearInteractiveState(ctx, {
               alreadyAcknowledged: callbackAcknowledged,
               forceTelegramMarkupEdit: true,
             });
-            await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
-            break;
-          }
-          sessionManager.clearRepoPolicyChoiceTokens(consumedToken.sessionId);
-
-          let launchText: string;
-          try {
-            const result = await sessionManager.launchAfterRepoPolicyChoice({
-              route: consumedToken.route,
-              prompt: consumedToken.launchPrompt,
-              workdir: consumedToken.launchWorkdir,
-              name: consumedToken.launchName,
-              model: consumedToken.launchModel,
-              reasoningEffort: consumedToken.launchReasoningEffort,
-              fastMode: consumedToken.launchFastMode,
-              systemPrompt: consumedToken.launchSystemPrompt,
-              allowedTools: consumedToken.launchAllowedTools,
-              resumeSessionId: consumedToken.launchResumeSessionId,
-              resumedFromSessionName: consumedToken.launchResumedFromSessionName,
-              resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
-              sessionIdOverride: consumedToken.launchSessionIdOverride,
-              rewindTurns: consumedToken.launchRewindTurns,
-              forkSession: consumedToken.launchForkSession,
-              forceNewSession: consumedToken.launchForceNewSession,
-              permissionMode: consumedToken.launchPermissionMode,
-              planApproval: consumedToken.launchPlanApproval,
-              harness: consumedToken.launchHarness,
-              worktreeStrategy: consumedToken.launchWorktreeStrategy,
-              worktreeBaseBranch: consumedToken.launchWorktreeBaseBranch,
-              worktreePrTargetRepo: consumedToken.launchWorktreePrTargetRepo,
-              originAgentId: consumedToken.launchOriginAgentId,
-            });
-            launchText = result.text;
-          } catch (err) {
-            const errText = err instanceof Error ? err.message : String(err);
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            await replyText(ctx, `⚠️ Repo policy saved, but launch failed: ${errText}`);
+            await replyText(ctx, [
+              `✅ Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`,
+              ``,
+              launchText,
+            ].join("\n"));
             break;
           }
 
-          await clearInteractiveState(ctx, {
-            alreadyAcknowledged: callbackAcknowledged,
-            forceTelegramMarkupEdit: true,
-          });
-          await replyText(ctx, [
-            `✅ Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`,
-            ``,
-            launchText,
-          ].join("\n"));
-          break;
+          case "session-restart":
+          case "session-resume": {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            const result = await executeRespond(sessionManager, {
+              session: sessionId,
+              message: "Continue where you left off.",
+              userInitiated: true,
+            });
+            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ ${result.text}`);
+            break;
+          }
+
+          case "view-output": {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
+            await replyText(ctx, toolResultText(result));
+            break;
+          }
+
+          default: {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            await replyText(ctx, `⚠️ Unknown callback action.`);
+            break;
+          }
         }
 
-        case "session-restart":
-        case "session-resume": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          const result = await executeRespond(sessionManager, {
-            session: sessionId,
-            message: "Continue where you left off.",
-            userInitiated: true,
-          });
-          await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ ${result.text}`);
-          break;
-        }
-
-        case "view-output": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
-          await replyText(ctx, toolResultText(result));
-          break;
-        }
-
-        default: {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          await replyText(ctx, `⚠️ Unknown callback action.`);
-          break;
-        }
+        return { handled: true };
+      } finally {
+        if (worktreeLockKey) inFlightWorktreeDecisions.delete(worktreeLockKey);
       }
-
-      return { handled: true };
     },
   };
 }

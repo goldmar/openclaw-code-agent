@@ -141,6 +141,31 @@ Additional smoke entry points:
 - `pnpm smoke:codex-release` for the opt-in release check covering structured plan delivery and resume after a plan turn
 - `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` is available. Add `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` to run a real prompt (needs provider auth), `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model` to pick its model, and `OPENCLAW_OPENCODE_COMMAND` to test a different `opencode` binary
 
+### User-Interaction Flow Tests
+
+Questions, permission requests, plan reviews, and worktree decisions are tested end to end for every harness, in `pnpm verify`:
+
+- `tests/cross-harness-questions.test.ts`: answers by option number and label, multi-select picks, free text, multi-question requests, rejected answers (empty, option number outside the list), Telegram and Discord buttons, repeated and outdated button clicks, question timeouts, and answers after idle suspension or a Gateway restart.
+- `tests/cross-harness-permission-requests.test.ts`: Codex approvals under the `on-request` policy and OpenCode `permission.asked` (once / always / reject), from buttons and from text replies.
+- `tests/cross-harness-plan-approval.test.ts`: `planApproval` `ask`, `delegate`, and `approve`; Approve, Revise, and Reject from buttons and from plain-text replies; plan versions and stale buttons; approval after idle suspension or a Gateway restart; and how each harness receives the decision (Claude Code's held `ExitPlanMode`, Codex's `plan` collaboration mode with `[SYSTEM:]` prompts, OpenCode's `plan` → `build` agent switch).
+- `tests/worktree-decision-flows.test.ts`: `ask` and `delegate` worktree decisions, the Merge / Later / Discard buttons, buttons from a decision that was already settled, and the repo-policy prompt before launch.
+
+Each suite runs its scenarios once per harness through the real `SessionManager`, `agent_respond` (`executeRespond`), and button callback handler. The harness adapters are the production classes with fake backends from `tests/harness-backends.ts`: a scripted Claude SDK query, a Codex app-server JSON-RPC client, and an OpenCode HTTP/SSE server. `tests/user-interaction-fixture.ts` launches the session, captures notifications, and clicks buttons as Telegram or Discord deliver them. A scenario that a backend cannot produce (Codex has no multi-select questions; Claude Code raises no permission requests) is listed as an empty test whose title gives the reason. When a backend protocol changes, update its fake in `tests/harness-backends.ts` and check the change against the live smoke below.
+
+### Live User-Interaction Smoke
+
+The deterministic suites above use fake backends. To check the same flows against a real backend, run a short session per harness through a Gateway with a Telegram or Discord route. This uses model quota, so run it before a release or after a harness protocol change, not on every change. Use a cheap model and low effort, a scratch git repository as `workdir`, and `worktree_strategy: "off"` except for the worktree step.
+
+For each harness (`claude-code`, `codex`, `opencode`):
+
+1. Questions: `agent_launch(harness=..., permission_mode="default", prompt="Use your structured question tool to ask me two questions at once: which color (Red, Green, Blue) and which sizes (Small, Medium, Large, several allowed). Then repeat my answers and stop.")`. Codex has no multi-select questions and may offer `request_user_input` only in its `plan` collaboration mode; if the question arrives as plain text, rerun with `permission_mode="plan"`. Answer the first question with an option button, then send `7` and an empty reply with `agent_respond` (both must be rejected with the question shown again), then answer `1, 3`. Click the first button again: it must say the question is no longer active.
+2. Permission requests (Codex and OpenCode): with `harnesses.codex.permissionProfile: ":workspace"`, `approvalPolicy: "on-request"`, and `approvalsReviewer: "user"` for Codex, and `permission_mode="default"` for OpenCode, ask for a command that needs approval (for example a network call). Answer once with a button and once with a text reply (`yes`, `no`, or feedback text).
+3. Plan review: `agent_launch(harness=..., permission_mode="plan", plan_approval="ask", prompt="Plan a one-line README change.")`. Press Revise and send feedback, check that the Approve button of the first version reports stale, then approve the revised plan. Repeat with `plan_approval="delegate"` (the orchestrator approves or asks the user) and with `plan_approval="approve"`.
+4. Restart and suspension: while a question or a plan waits, restart the Gateway (or wait for the idle timeout) and then press the pending button. The session must resume with the answer or the approval.
+5. Worktree decision: launch with `worktree_strategy="ask"` in a repository whose policy is `never-pr`, let the session commit a change, press Merge, then press Discard on the same prompt: it must report the decision as already resolved.
+
+Stop the sessions with `agent_kill` and delete the scratch repository afterwards. The opt-in automated smokes (`pnpm smoke:codex-live`, `pnpm smoke:codex-release`, `pnpm smoke:opencode-live`) cover protocol shapes but not these interactive flows.
+
 ### Codex App Server Protocol Types
 
 `src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.

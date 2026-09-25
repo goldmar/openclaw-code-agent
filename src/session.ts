@@ -1075,7 +1075,8 @@ export class Session extends EventEmitter {
     optionIndex: number,
     context?: { requestId?: string; questionId?: string },
   ): Promise<boolean> {
-    if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
+    // A stopped session's backend is gone: an answer must not be reported as delivered.
+    if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
@@ -1087,7 +1088,7 @@ export class Session extends EventEmitter {
   }
 
   canSubmitPendingInputOption(): boolean {
-    return Boolean(this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
+    return Boolean(this._status === "running" && this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
   }
 
   private setPendingInputState(state: PendingInputState | undefined): void {
@@ -1102,7 +1103,7 @@ export class Session extends EventEmitter {
   }
 
   async submitPendingInputText(text: string): Promise<boolean> {
-    if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
+    if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;
     }
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;

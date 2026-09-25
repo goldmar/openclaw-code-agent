@@ -514,11 +514,15 @@ export class SessionLifecycleService {
           pendingInputQuestionIdentity,
         ].filter(Boolean).join(":")
       : undefined;
-    const pendingInputDebounceKey = pendingInputNotificationKey
-      ? `pending-input:${pendingInputNotificationKey}`
-      : undefined;
+    // Each plan version is its own decision: a quick revision must not be
+    // swallowed as a repeat of the previous version's prompt.
+    const waitingDebounceKey = session.pendingPlanApproval
+      ? `plan-approval:v${session.actionablePlanDecisionVersion ?? session.planDecisionVersion ?? "unknown"}`
+      : pendingInputNotificationKey
+        ? `pending-input:${pendingInputNotificationKey}`
+        : undefined;
 
-    if (!this.deps.debounceWaitingEvent(session.id, pendingInputDebounceKey)) return;
+    if (!this.deps.debounceWaitingEvent(session.id, waitingDebounceKey)) return;
 
     const planApprovalMode = session.pendingPlanApproval
       ? this.deps.resolvePlanApprovalMode(session)

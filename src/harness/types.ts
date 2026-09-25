@@ -114,6 +114,8 @@ export type HarnessMessage =
 export type CanUseToolCallback = (
   toolName: string,
   input: Record<string, unknown>,
+  /** The pending-input request the call raised, so answer buttons target it. */
+  context?: { requestId?: string; questionId?: string },
 ) => Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>;
 
 export interface HarnessLaunchOptions {
