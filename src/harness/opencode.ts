@@ -11,6 +11,8 @@ import {
   extractPendingInputOptions,
   extractPendingInputQuestions,
   formatPendingInputWizardQuestion,
+  matchApprovalChoiceText,
+  resolvePendingInputAnswer,
 } from "../pending-input-normalization";
 import type {
   AgentHarness,
@@ -850,6 +852,8 @@ function buildPermissionPendingInput(request: Record<string, unknown>): PendingI
     promptText,
     options: actions.map((action) => action.label),
     actions,
+    // Text replies map onto a decision; other text rejects with it as feedback.
+    allowsFreeText: true,
     responseMode: "structured",
   };
 }
@@ -861,11 +865,11 @@ function applyOpenCodeQuestionFlags(questions: PendingInputQuestion[], request: 
     const raw = isRecord(rawQuestions[index]) ? rawQuestions[index] : undefined;
     if (!raw) return question;
     const multiSelect = question.multiSelect === true || raw.multiple === true;
-    const allowsFreeText = raw.custom === false ? multiSelect : true;
     return {
       ...question,
       ...(multiSelect ? { multiSelect: true } : {}),
-      ...(allowsFreeText ? { allowsFreeText: true } : {}),
+      // `custom: false` restricts answers to the listed options.
+      allowsFreeText: raw.custom !== false,
     };
   });
 }
@@ -920,24 +924,6 @@ function updateOpenCodeWizardState(
     activeQuestionIndex,
     answers,
   };
-}
-
-/**
- * Parse a free-text answer for a multi-select question into option labels:
- * comma/newline separated, accepting option numbers or labels.
- */
-export function parseMultiSelectAnswer(question: PendingInputQuestion, text: string): string[] {
-  return text
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const index = /^\d+$/.test(entry) ? Number.parseInt(entry, 10) - 1 : -1;
-      const byIndex = index >= 0 ? question.options[index] : undefined;
-      const byLabel = question.options.find((option) => option.label.toLowerCase() === entry.toLowerCase());
-      const option = byIndex ?? byLabel;
-      return option ? (option.value ?? option.label) : entry;
-    });
 }
 
 type AssistantRecord = {
@@ -1162,10 +1148,11 @@ export class OpenCodeHarness implements AgentHarness {
       return lease.client;
     };
 
-    const replyPermission = async (requestId: string, response: string): Promise<void> => {
+    const replyPermission = async (requestId: string, response: string, message?: string): Promise<void> => {
       if (!lease || !sessionId) return;
       await client().request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
         reply: response,
+        ...(message ? { message } : {}),
       });
     };
 
@@ -1568,11 +1555,15 @@ export class OpenCodeHarness implements AgentHarness {
       const question = questions[activeQuestionIndex];
       if (!question) return false;
       if (context.questionId && context.questionId !== question.id) return false;
-      const selected = context.optionValue !== undefined
-        ? [context.optionValue]
-        : question.multiSelect
-          ? parseMultiSelectAnswer(question, trimmed)
-          : [trimmed];
+      let selected: string[];
+      if (context.optionValue !== undefined) {
+        selected = [context.optionValue];
+      } else {
+        // OpenCode expects the selected option labels; numbers select options too.
+        const resolved = resolvePendingInputAnswer(question, trimmed);
+        if (!resolved.ok) return false;
+        selected = resolved.answers;
+      }
       pending.answers = {
         ...pending.answers,
         [question.id]: { answers: selected },
@@ -1689,6 +1680,21 @@ export class OpenCodeHarness implements AgentHarness {
       },
 
       async submitPendingInputText(text: string): Promise<boolean> {
+        const pending = currentPendingInput;
+        if (pending?.kind === "approval") {
+          const answer = text.trim();
+          if (!answer) return false;
+          const choices = pending.actions.flatMap((action) => (
+            action.kind === "approval"
+              ? [{ label: action.label, decision: action.decision, response: action.responseDecision }]
+              : []
+          ));
+          const choice = matchApprovalChoiceText(choices, answer);
+          // Not a decision: reject and hand the text to the agent as feedback.
+          await replyPermission(pending.requestId, choice?.response ?? "reject", choice ? undefined : answer);
+          resolvePendingInput(pending.requestId);
+          return true;
+        }
         return await answerPendingQuestion(text);
       },
 

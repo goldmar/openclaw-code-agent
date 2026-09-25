@@ -25,7 +25,7 @@ import type {
   PendingInputState,
   PlanArtifactStep,
 } from "../types";
-import { formatPendingInputWizardQuestion } from "../pending-input-normalization";
+import { formatPendingInputWizardQuestion, matchApprovalChoiceText } from "../pending-input-normalization";
 import type { JsonRpcClient } from "./codex-rpc";
 import type {
   GetAccountParams,
@@ -560,18 +560,5 @@ export function buildUserInputRequest(requestId: string, params: ToolRequestUser
  * text to the agent as feedback.
  */
 export function matchApprovalChoiceFromText(choices: CodexApprovalChoice[], text: string): CodexApprovalChoice | undefined {
-  const normalized = text.trim().toLowerCase().replace(/[.!]+$/g, "");
-  if (!normalized) return undefined;
-  const byLabel = choices.find((choice) => choice.label.toLowerCase() === normalized);
-  if (byLabel) return byLabel;
-  const index = /^\d+$/.test(normalized) ? Number(normalized) - 1 : -1;
-  if (index >= 0 && index < choices.length) return choices[index];
-  let wanted: PendingInputDecision | undefined;
-  if (/^(?:approve|approved|allow|accept|yes|y|ok)(?: once)?$/.test(normalized)) wanted = "accept";
-  else if (/^(?:approve|allow|accept|yes)(?: for)?(?: this)? session$|^always(?: allow)?$/.test(normalized)) wanted = "acceptForSession";
-  else if (/^(?:deny|denied|decline|declined|reject|rejected|no|n|block)$/.test(normalized)) wanted = "decline";
-  else if (/^(?:cancel|abort|stop)$/.test(normalized)) wanted = "cancel";
-  // Plain decisions only: "no" must never select a persistent deny rule and
-  // "always" must never select a persistent allow amendment by accident.
-  return wanted ? choices.find((choice) => choice.decision === wanted && !choice.amendment) : undefined;
+  return matchApprovalChoiceText(choices, text);
 }

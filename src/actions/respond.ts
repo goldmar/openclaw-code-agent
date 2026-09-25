@@ -11,6 +11,7 @@ import {
   type ResumableSessionLike,
 } from "../session-resume";
 import type { SessionControlPatch } from "../session-state";
+import { resolvePendingInputAnswer } from "../pending-input-normalization";
 import type { PersistedSessionInfo, SessionConfig } from "../types";
 
 interface RespondParams {
@@ -376,6 +377,32 @@ async function tryAutoResume(
 
 
 /**
+ * Why a reply cannot answer the session's pending input, if it cannot. Replies
+ * are checked before submission so an empty reply or an option number outside
+ * the list re-prompts the user instead of reaching the agent as a wrong answer.
+ */
+function pendingInputReplyError(session: Session, message: string): string | undefined {
+  const state = session.pendingInputState;
+  if (!state) return undefined;
+  const question = state.kind === "question"
+    ? state.questions?.[state.activeQuestionIndex ?? 0]
+    : undefined;
+  let problem: string | undefined;
+  if (!message.trim()) {
+    problem = "The answer is empty.";
+  } else if (question) {
+    const resolved = resolvePendingInputAnswer(question, message);
+    if (!resolved.ok) problem = resolved.error;
+  }
+  if (!problem) return undefined;
+  const prompt = state.promptText?.trim() || question?.question;
+  return [
+    `Answer not submitted to session ${session.name} [${session.id}]: ${problem}`,
+    ...(prompt ? ["", `The ${state.kind === "approval" ? "request" : "question"} is still waiting:`, prompt] : []),
+  ].join("\n");
+}
+
+/**
  * Shared respond logic used by both tool and command.
  * Handles: auto-resume, permission mode switch, auto-respond cap, interrupt.
  */
@@ -476,6 +503,11 @@ export async function executeRespond(
       if (blockedReason) {
         return { text: blockedReason, isError: true };
       }
+    }
+
+    const replyError = params.approve ? undefined : pendingInputReplyError(session, params.message);
+    if (replyError) {
+      return { text: replyError, isError: true };
     }
 
     const pendingQuestionIndex = session.pendingInputState?.activeQuestionIndex;

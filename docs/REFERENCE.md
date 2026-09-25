@@ -71,6 +71,9 @@ The current `openclaw-code-agent` package requires, is built against, and is val
 
 - Telegram topic routes are ordinary code-agent route metadata. Start Plan, plan decisions, questions, completion, merge, and PR callbacks and wakes route through stored delivery context and single-use action tokens; keep fully routable channel strings and topic/thread ids such as `telegram|<chat-id>` with thread `<topic-id>`. Host callback acknowledgement is not proof that the requested state transition or routed follow-up completed.
 - Buttons carry `code-agent:<token>` data. OpenClaw's interactive dispatcher hands OCA the part after the namespace as `ctx.callback.payload` (Telegram) or `ctx.interaction.payload` (Discord); that payload is the only callback field OCA reads.
+- Text answers to a question work the same way for every harness: an option label (case-insensitive, preferred over a number) or option number selects that option, a multi-select question takes several comma-separated entries, and any other text is a free-text answer unless the question accepts only its options (OpenCode `custom: false`). An empty reply or an option number outside the list is not sent to the agent: `agent_respond` returns an error with the question shown again, and the question stays open.
+- A question button for a question the session no longer shows (answered in text, timed out, or cancelled) replies that the question is no longer waiting and does nothing. When the session was suspended or stopped by a Gateway restart, the button resumes it with the selected answer instead. A worktree decision button (Merge, Open PR, Sync PR, Later, Discard) on a decision that was already settled (merged or discarded) replies that it was already resolved and does nothing.
+- A Gateway restart keeps a pending plan decision: pressing Approve, Revise, or Reject after the restart resumes the session the same way as after an idle suspension. Stopping the session any other way (`agent_kill`) rejects the plan.
 - Plan approval and pending-input question callbacks use apply-then-consume token semantics. If a decision fails before state is applied, the token remains retryable and the buttons stay active; once approval state is applied, a later delivery failure leaves the token treated as terminal so it cannot replay a completed decision. Approve, reject, and request-changes callbacks are serialized per session/version, so sibling clicks re-validate and report stale or already handled.
 - Completion wakes deliver the canonical plugin status first and request at most one orchestrator follow-up when `completionWakeSummaryRequired=true`; `NO_REPLY` or an empty response is not delivery proof. PR update completion summaries are deduplicated by material outcome, so later updates with new commits still produce a fresh summary.
 
@@ -231,7 +234,7 @@ Claude Code harness details:
 - MCP servers come from Claude Code's own settings sources; OCA does not re-inject `~/.claude.json` servers.
 - Completed Claude Code sessions can be resumed with `agent_respond` or `agent_launch(resume_session_id=...)`. OCA first checks that the transcript still exists (`getSessionInfo()`) and fails with a clear message if it does not. Forks use the SDK `resume` + `forkSession` options, which report the new session id at startup.
 - Turn outcomes come from structured SDK fields: `is_error`, the assistant `error` code (for example `authentication_failed`), `startup_failure_reason`, and `terminal_reason` (aborted turns become interrupted turns). Results are deferred while `queued_turn_count` says more queued user turns follow, and empty background-task notification results (`origin.kind: "task-notification"`, zero turns) are skipped.
-- `AskUserQuestion` can be answered through `agent_respond` as well as with buttons: reply with an option number, an option label, several comma-separated numbers or labels for multi-select questions, or free text. Multi-question requests are answered one question at a time.
+- `AskUserQuestion` can be answered through `agent_respond` as well as with buttons: reply with an option number, an option label, several comma-separated numbers or labels for multi-select questions, or free text. Multi-question requests are answered one question at a time. A question that is not answered within 10 minutes ends, and Claude is told to continue without the answer.
 - A turn that ends while SDK background tasks (for example background shells) are still running keeps the session running until the tasks finish; the follow-up turn Claude Code starts to report them ends the session normally.
 - If `ExitPlanMode` carries neither `plan` nor `planFilePath`, the pending plan is read from the last file this session wrote to a Claude plans directory (never another session's plan), so `agent_output` and the approval prompt still show it.
 - A forked session reports only its own cost: the parent's usage at fork time is subtracted from the SDK totals. When the parent is no longer live, only its total cost is known, so the fork's per-model breakdown is omitted rather than showing the parent's tokens.
@@ -246,7 +249,8 @@ OpenCode harness details:
 - If the server process dies, every in-flight turn fails with the exit reason, and the next turn starts a fresh server. OpenCode persists sessions, so they continue.
 - Fresh launches create sessions through OpenCode's classic session-create route. Prompts use classic `prompt_async`; message, permission reply, and question reply flows use the classic routes. Responses that are not JSON (for example the web UI's HTML shell) are rejected with a diagnostic.
 - Plan mode prompts OpenCode's built-in `plan` agent, which denies edits except its own plan files. OCA adds a session overlay that also denies `bash` and access outside the project, because the plan agent otherwise relies on instructions to keep shell commands read-only. After approval, prompts use the `build` agent; OpenCode then adds its own build-switch reminder. The plugin still owns the plan approval gate. (OpenCode's own `plan_exit` tool is only available in the OpenCode CLI.)
-- Multi-question requests are answered with one answer list per question. Multi-select questions accept several comma-separated labels or option numbers in a text reply.
+- Multi-question requests are answered with one answer list per question. Text replies send the selected option labels (an option number selects that option), and multi-select questions accept several comma-separated labels or option numbers.
+- Permission requests (`permission.asked`) show Allow once / Always allow / Reject buttons. Text replies also work: `yes` or `allow` (once), `always` (always), `no` or `reject`, or the option number; any other text rejects the request and passes the text to the agent as the rejection message.
 - The session's reasoning effort is sent as the prompt's `variant`. OpenCode ignores variant names that the model does not define.
 - Turn duration, per-model tokens, and cost come from OpenCode's assistant message records; the session record's cost is used when available. The running cost is refreshed after each finished step and when a question or permission request opens, so `agent_output` shows the spend so far mid-turn. OpenCode prices a step only when it finishes: a step that is blocked on a question (for example the first step of a turn that opens with a question) adds its cost after the answer.
 - `OPENCLAW_OPENCODE_COMMAND` can override the `opencode` executable. If `OPENCODE_SERVER_PASSWORD` is set, the plugin sends Basic Auth using `OPENCODE_SERVER_USERNAME` or `opencode` as the default username.
@@ -511,11 +515,11 @@ A pre-PR review is an explicit orchestrator step: call `agent_session_action(ses
 
 ### `agent_request_plan_approval`
 
-Escalate a delegated plan review to the user with the normal Approve / Revise / Reject buttons.
+Escalate a `delegate` or `approve` mode plan review to the user with the normal Approve / Revise / Reject buttons. In `ask` mode the user already has the prompt, so the call is refused.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Session waiting on a delegated plan review |
+| `session` | `string` | Yes | Session waiting on a `delegate` or `approve` mode plan review |
 | `summary` | `string` | Yes | Concise scope/risk summary shown with the approval prompt |
 
 ### `agent_request_worktree_decision`

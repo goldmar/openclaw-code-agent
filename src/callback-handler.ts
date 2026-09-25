@@ -194,6 +194,32 @@ function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
 
+const WORKTREE_DECISION_ACTIONS: ReadonlySet<SessionActionKind> = new Set([
+  "worktree-merge",
+  "worktree-create-pr",
+  "worktree-update-pr",
+  "worktree-decide-later",
+  "worktree-dismiss",
+]);
+
+/** How a worktree decision was already settled, or undefined while it is still open. */
+function resolvedWorktreeDecision(session: PersistedSessionInfo | undefined): string | undefined {
+  if (!session) return undefined;
+  switch (session.worktreeLifecycle?.state) {
+    case "merged":
+    case "released":
+      return "merged";
+    case "dismissed":
+      return "discarded";
+    case "no_change":
+      return "no changes to keep";
+    default:
+      if (session.worktreeMerged) return "merged";
+      if (session.worktreeDismissedAt) return "discarded";
+      return undefined;
+  }
+}
+
 function planDecisionLockKey(token: SessionActionToken): string | undefined {
   if (!isPlanDecisionAction(token.kind)) return undefined;
   return `${token.sessionId}:v${token.planDecisionVersion ?? "unknown"}`;
@@ -686,6 +712,22 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
+        // A button for a question the live session no longer shows (answered
+        // another way, timed out, or cancelled) must not answer anything else.
+        if (sessionManager.isQuestionAnswerTokenCurrent?.(
+          sessionId,
+          token.pendingInputRequestId,
+          token.pendingInputQuestionId,
+        ) === false) {
+          if (token.pendingInputRequestId) {
+            sessionManager.consumeQuestionAnswerTokens(sessionId, token.pendingInputRequestId, token.pendingInputQuestionId);
+          }
+          sessionManager.consumeActionToken(tokenId);
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await replyText(ctx, "⚠️ That question is no longer waiting for an answer.");
+          return { handled: true };
+        }
+
         const answerLockKey = questionAnswerLockKey(token);
         if (inFlightQuestionAnswers.has(answerLockKey)) {
           await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
@@ -937,6 +979,18 @@ export function createCallbackHandler(
           }
           return { handled: true };
         });
+      }
+
+      // A button from a worktree prompt that was already settled (for example
+      // Discard after Merge) must not act on the finished worktree.
+      const settledWorktree = WORKTREE_DECISION_ACTIONS.has(token.kind)
+        ? resolvedWorktreeDecision(sessionManager.getPersistedSession?.(sessionId))
+        : undefined;
+      if (settledWorktree) {
+        sessionManager.consumeActionToken(tokenId);
+        await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+        await replyText(ctx, `⚠️ This worktree decision was already resolved (${settledWorktree}) for [${actionSessionName}]. No action taken.`);
+        return { handled: true };
       }
 
       const consumedToken = sessionManager.consumeActionToken(tokenId);

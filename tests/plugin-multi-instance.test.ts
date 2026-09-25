@@ -140,59 +140,62 @@ describe("one OCA runtime per Gateway process", () => {
     for (const root of scratchRoots) rmSync(root, { recursive: true, force: true });
   });
 
-  it("resolves a repo-policy button minted by the tool registry from the callback registry", async () => {
-    const a = await loadPluginCopy("a");
-    const b = await loadPluginCopy("b");
-    assert.notEqual(a.singletons, b.singletons, "each capture must be its own module graph");
+  for (const choice of ["No PR", "Manual"] as const) {
+    it(`resolves a repo-policy "${choice}" button minted by the tool registry from the callback registry`, async () => {
+      const a = await loadPluginCopy(`a-${choice === "No PR" ? "nopr" : "manual"}`);
+      const b = await loadPluginCopy(`b-${choice === "No PR" ? "nopr" : "manual"}`);
+      assert.notEqual(a.singletons, b.singletons, "each capture must be its own module graph");
 
-    const pluginA = createPluginApi("A");
-    const pluginB = createPluginApi("B");
-    a.index.register(pluginA.api);
-    b.index.register(pluginB.api);
-    try {
-      // Gateway boot: the active registry's service starts first.
-      await pluginA.captured.services[0]!.start({ config: {} });
-      // The orchestrator's first tool call runs in the agent-runtime registry.
-      await runTool(pluginB.captured, "agent_sessions");
-      const sm = a.singletons.sessionManager;
-      assert.ok(sm);
-      assert.equal(b.singletons.sessionManager, sm, "both registries must share one SessionManager");
+      const pluginA = createPluginApi("A");
+      const pluginB = createPluginApi("B");
+      a.index.register(pluginA.api);
+      b.index.register(pluginB.api);
+      try {
+        // Gateway boot: the active registry's service starts first.
+        await pluginA.captured.services[0]!.start({ config: {} });
+        // The orchestrator's first tool call runs in the agent-runtime registry.
+        await runTool(pluginB.captured, "agent_sessions");
+        const sm = a.singletons.sessionManager;
+        assert.ok(sm);
+        assert.equal(b.singletons.sessionManager, sm, "both registries must share one SessionManager");
 
-      let buttons: Array<Array<{ label: string; callbackData: string }>> = [];
-      sm.notifications = {
-        dispatch: (_session: unknown, request: any) => {
-          if (request?.label === "repo-policy-choice") {
-            buttons = request.buttons;
-            request.hooks?.onNotifySucceeded?.();
-          }
-        },
-        notifyWorktreeOutcome: () => {},
-        dispose: () => {},
-      };
-      const prompt = await b.singletons.sessionManager.requestRepoPolicyForLaunch({
-        route: { provider: "telegram", target: "-1001", threadId: "13832", sessionKey: "agent:main:telegram:group:-1001:topic:13832" },
-        prompt: "Make one small change",
-        workdir: repoDir,
-        harness: "codex",
-        worktreeStrategy: "auto-merge",
-      });
-      assert.match(prompt, /Repo policy choice prompt sent/);
-      const noPr = buttons.flat().find((button) => button.label === "No PR");
-      assert.ok(noPr, "expected a No PR button");
+        let buttons: Array<Array<{ label: string; callbackData: string }>> = [];
+        sm.notifications = {
+          dispatch: (_session: unknown, request: any) => {
+            if (request?.label === "repo-policy-choice") {
+              buttons = request.buttons;
+              request.hooks?.onNotifySucceeded?.();
+            }
+          },
+          notifyWorktreeOutcome: () => {},
+          dispose: () => {},
+        };
+        const prompt = await b.singletons.sessionManager.requestRepoPolicyForLaunch({
+          route: { provider: "telegram", target: "-1001", threadId: "13832", sessionKey: "agent:main:telegram:group:-1001:topic:13832" },
+          prompt: "Make one small change",
+          workdir: repoDir,
+          harness: "codex",
+          worktreeStrategy: "auto-merge",
+        });
+        assert.match(prompt, /Repo policy choice prompt sent/);
+        const button = buttons.flat().find((candidate) => candidate.label === choice);
+        assert.ok(button, `expected a ${choice} button`);
 
-      // The user presses "No PR"; Telegram callbacks dispatch through the active registry (A).
-      sm.launchAfterRepoPolicyChoice = async () => ({ text: "launched" });
-      const telegramHandler = pluginA.captured.interactiveHandlers.find((entry) => entry.channel === "telegram")!;
-      const { ctx, replies } = telegramCallbackCtx(noPr.callbackData);
-      await telegramHandler.handler(ctx);
+        // The user presses the button; Telegram callbacks dispatch through the active registry (A).
+        sm.launchAfterRepoPolicyChoice = async () => ({ text: "launched" });
+        const telegramHandler = pluginA.captured.interactiveHandlers.find((entry) => entry.channel === "telegram")!;
+        const { ctx, replies } = telegramCallbackCtx(button.callbackData);
+        await telegramHandler.handler(ctx);
 
-      assert.doesNotMatch(replies.join("\n"), /stale or has already been used/);
-      assert.match(replies.join("\n"), /Repo policy saved/);
-    } finally {
-      await stopAll(pluginB, pluginA);
-    }
-    assert.equal(getSharedRuntime(), undefined, "the last owner stops the runtime");
-  });
+        assert.doesNotMatch(replies.join("\n"), /stale or has already been used/);
+        assert.match(replies.join("\n"), /Repo policy saved/);
+        assert.equal((await sm.resolveRepoPolicy(repoDir)).policy, choice === "No PR" ? "never-pr" : "manual");
+      } finally {
+        await stopAll(pluginB, pluginA);
+      }
+      assert.equal(getSharedRuntime(), undefined, "the last owner stops the runtime");
+    });
+  }
 
   it("switches host handles to the newest live owner and never keeps a retired owner's", async () => {
     const a = await loadPluginCopy("handles-a");

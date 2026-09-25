@@ -678,9 +678,9 @@ export class SessionManager {
     const selfRef = this;
     let sessionIdRef: string | undefined;
     const canUseTool = (harnessName === "claude-code" && !config.canUseTool)
-      ? async (_toolName: string, input: Record<string, unknown>) => {
+      ? async (_toolName: string, input: Record<string, unknown>, context?: AskUserQuestionResolutionContext) => {
           if (!sessionIdRef) throw new Error("canUseTool called before session ID was set");
-          return selfRef.handleAskUserQuestion(sessionIdRef, input);
+          return selfRef.handleAskUserQuestion(sessionIdRef, input, context);
         }
       : config.canUseTool;
 
@@ -1324,7 +1324,9 @@ export class SessionManager {
       return `Error: Session "${ref}" is not awaiting plan approval.`;
     }
     const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
-    if (this.resolvePlanApprovalMode(session) !== "delegate") {
+    // `delegate` and `approve` leave the decision to the orchestrator, which
+    // escalates here; `ask` already sent the user the canonical prompt.
+    if (this.resolvePlanApprovalMode(session) === "ask") {
       return `Error: Session "${ref}" already uses direct user plan approval. Do not send a duplicate approval prompt.`;
     }
     const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
@@ -1621,6 +1623,8 @@ export class SessionManager {
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
+    // The backend that asked is gone; a late button must not "answer" it.
+    this.questions.discardAskUserQuestion(session.id);
     if (session.autoMergeParentSessionId) {
       await this.handleAutoMergeResolverTerminal(session);
       return;
@@ -1977,7 +1981,10 @@ export class SessionManager {
   kill(id: string, reason?: KillReason): boolean {
     const session = this.registry.get(id);
     if (!session) return false;
-    if (session.pendingPlanApproval) {
+    // Killing a session with a pending plan rejects the plan, except when the
+    // Gateway shuts down: the plan decision survives the restart, and the
+    // user's Approve / Revise / Reject resumes the session like an idle-suspended one.
+    if (session.pendingPlanApproval && reason !== "shutdown") {
       this.clearPlanDecisionTokens(session.id);
       const patch: Partial<PersistedSessionInfo> = {
         lifecycle: "terminal",
@@ -2071,12 +2078,13 @@ export class SessionManager {
   async handleAskUserQuestion(
     sessionId: string,
     input: Record<string, unknown>,
+    context?: AskUserQuestionResolutionContext,
   ): Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    return this.questions.handleAskUserQuestion(session, input);
+    return this.questions.handleAskUserQuestion(session, input, context);
   }
 
   /**
@@ -2096,6 +2104,8 @@ export class SessionManager {
     context: AskUserQuestionResolutionContext = {},
   ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
+    // A stopped session cannot take the answer; callers resume it instead.
+    if (session && session.status !== "running") return false;
     if (session?.canSubmitPendingInputOption?.()) {
       if (await session.submitPendingInputOption(optionIndex, context)) {
         this.clearWaitingTimestampsForSession(sessionId);
@@ -2104,6 +2114,25 @@ export class SessionManager {
       return false;
     }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
+  }
+
+  /**
+   * Whether a question button still targets the live session's open question.
+   * `undefined` when the session is not running here (the caller then decides,
+   * for example by resuming a suspended session with the answer).
+   */
+  isQuestionAnswerTokenCurrent(sessionId: string, requestId?: string, questionId?: string): boolean | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== "running") return undefined;
+    if (!requestId) return true;
+    if (this.pendingAskUserQuestions.get(sessionId)?.requestId === requestId) return true;
+    const state = session.pendingInputState;
+    if (!state || state.requestId !== requestId) return false;
+    if (!questionId) return true;
+    const activeIndex = state.activeQuestionIndex ?? 0;
+    const activeQuestionId = state.questions?.[activeIndex]?.id
+      ?? (state.activeQuestionIndex != null ? `q${state.activeQuestionIndex}` : undefined);
+    return !activeQuestionId || activeQuestionId === questionId;
   }
 
   canSubmitPendingInputOption(sessionId: string): boolean {

@@ -41,7 +41,7 @@ import {
   HarnessMessageQueue,
   PromptReader,
 } from "./harness-events";
-import { formatPendingInputWizardQuestion } from "../pending-input-normalization";
+import { formatPendingInputWizardQuestion, resolvePendingInputAnswer } from "../pending-input-normalization";
 import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from "../harness-models";
 import {
   buildCommandApprovalRequest,
@@ -876,10 +876,10 @@ export class CodexHarness implements AgentHarness {
       }
     };
 
-    const answerQuestion = (pending: CodexPendingInput, questionId: string, answer: string): boolean => {
+    const answerQuestion = (pending: CodexPendingInput, questionId: string, answers: string[]): boolean => {
       const questions = pending.state.questions ?? [];
       const activeIndex = pending.state.activeQuestionIndex ?? 0;
-      pending.answers = { ...pending.answers, [questionId]: { answers: [answer] } };
+      pending.answers = { ...pending.answers, [questionId]: { answers } };
       const nextIndex = activeIndex + 1;
       if (nextIndex < questions.length) {
         pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
@@ -898,6 +898,8 @@ export class CodexHarness implements AgentHarness {
       const pending = currentPendingInput;
       if (!pending) return false;
       const answer = text.trim();
+      // An empty reply never decides anything, least of all a decline.
+      if (!answer) return false;
       if (pending.request.kind === "approval") {
         const choice = matchApprovalChoiceFromText(pending.request.choices, answer);
         if (choice) {
@@ -906,13 +908,15 @@ export class CodexHarness implements AgentHarness {
         }
         // Not a decision: decline and hand the text to the agent as feedback.
         resolvePendingInput(pending.request.declineResponse);
-        return answer ? await steer(answer) : true;
+        return await steer(answer);
       }
-      if (!answer) return false;
       const questions = pending.state.questions ?? [];
       const question = questions[pending.state.activeQuestionIndex ?? 0];
       if (!question) return false;
-      return answerQuestion(pending, question.id, answer);
+      // Option numbers and labels select the option, as in Codex's own TUI.
+      const resolved = resolvePendingInputAnswer(question, answer);
+      if (!resolved.ok) return false;
+      return answerQuestion(pending, question.id, resolved.answers);
     };
 
     const submitPendingInputOption = async (
@@ -934,7 +938,7 @@ export class CodexHarness implements AgentHarness {
       if (context.questionId && context.questionId !== question.id) return false;
       const option = question.options[index];
       if (!option) return false;
-      return answerQuestion(pending, question.id, option.value ?? option.label);
+      return answerQuestion(pending, question.id, [option.value ?? option.label]);
     };
 
     // The session loop owns every failure: it reports errors as a failed run and
