@@ -1623,9 +1623,11 @@ export class SessionManager {
    * Re-offer an open worktree decision after a button action failed (merge, PR,
    * or discard). A callback consumes its token before acting, so another writer
    * of the index can never run the same button; the controls the user clicked
-   * are therefore spent. This replaces every worktree-decision button of the
-   * session with a fresh set in a new message, so the user can retry.
-   * Returns false (and sends nothing) when the decision is no longer open.
+   * are therefore spent. This sends the decision again with a fresh set of
+   * buttons and, once that message is delivered, retires the older decision
+   * buttons. If the new message cannot be delivered, its buttons are dropped and
+   * the older ones stay usable. Resolves true only when the new controls were
+   * delivered, so the caller may clear the spent ones.
    */
   async reofferWorktreeDecision(ref: string): Promise<boolean> {
     const decisionIsOpen = (): boolean => {
@@ -1639,9 +1641,12 @@ export class SessionManager {
     if (!decisionIsOpen()) return false;
     const active = this.resolve(ref);
     const persisted = this.getPersistedSession(ref);
-    this.interactions.clearWorktreeDecisionTokens(ref);
     const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
-    if (!buttons?.some((row) => row.length > 0)) return false;
+    const fresh = new Set((buttons ?? []).flat().map((button) => button.callbackData));
+    if (fresh.size === 0) return false;
+    const dropFresh = (): void => {
+      for (const tokenId of fresh) this.interactions.deleteActionToken(tokenId);
+    };
     const name = active?.name ?? persisted?.name ?? ref;
     const branch = active?.worktreeBranch ?? persisted?.worktreeBranch;
     const target = active ?? this.buildRoutingProxy({
@@ -1652,7 +1657,7 @@ export class SessionManager {
       backendRef: persisted?.backendRef,
       route: persisted?.route,
     });
-    this.notifications.dispatch(target, {
+    const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
       userMessage: [
@@ -1660,10 +1665,16 @@ export class SessionManager {
         `Choose again below.`,
       ].join("\n"),
       notifyUser: "always",
+      requireDirectUserNotification: true,
       buttons,
       shouldDispatch: decisionIsOpen,
+      hooks: {
+        onNotifySucceeded: () => { this.interactions.clearWorktreeDecisionTokens(ref, fresh); },
+        onNotifyFailed: dropFresh,
+      },
     });
-    return true;
+    if (delivery === "failed" || delivery === "skipped") dropFresh();
+    return delivery === "delivered";
   }
 
   /**

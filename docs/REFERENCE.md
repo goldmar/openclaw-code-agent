@@ -403,7 +403,7 @@ When a session completes with changes under `ask` or `delegate`, users receive e
 | **Later** | Snooze reminders for 24h |
 | **Discard** | Permanently delete branch and worktree (irreversible) |
 
-Each button acts once: its token is used before the action runs, so a second click (or a click in another runtime) never repeats it. When Merge, Open PR / Sync PR, or Discard fails (for example on a rebase conflict), OCA clears the used controls and sends the still-open decision again with fresh buttons, so the user can fix the cause and retry. A merge that started a conflict-resolver session is in progress and is not re-offered.
+Each button acts once: its token is used before the action runs, so a second click (or a click in another runtime) never repeats it. When Merge, Open PR / Sync PR, or Discard fails (for example on a rebase conflict), OCA sends the still-open decision again with fresh buttons and, once that message is delivered, clears the used controls and retires the older buttons, so the user can fix the cause and retry. If the new message cannot be delivered, the original buttons stay usable. A merge that started a conflict-resolver session is in progress and is not re-offered.
 
 ### Worktree Lifecycle
 

@@ -89,11 +89,16 @@ export class SessionInteractionService {
     this.actionTokens.deletePlanDecisionTokensForSession(sessionId, keepVersion);
   }
 
-  /** Drop every worktree-decision button of a session (before a replacement set is minted). */
-  clearWorktreeDecisionTokens(sessionId: string): void {
-    for (const kind of WORKTREE_DECISION_TOKEN_KINDS) {
-      this.actionTokens.deleteActionTokensForSessionByKind(sessionId, kind);
-    }
+  deleteActionToken(tokenId: string): void {
+    this.actionTokens.deleteActionToken(tokenId);
+  }
+
+  /** Drop the worktree-decision buttons of a session, except the token ids in `keep`. */
+  clearWorktreeDecisionTokens(sessionId: string, keep: ReadonlySet<string> = new Set()): void {
+    const kinds = new Set<SessionActionKind>(WORKTREE_DECISION_TOKEN_KINDS);
+    const doomed = this.actionTokens.listActiveActionTokens()
+      .filter((token) => token.sessionId === sessionId && kinds.has(token.kind) && !keep.has(token.id));
+    for (const token of doomed) this.actionTokens.deleteActionToken(token.id);
   }
 
   makeActionButton(

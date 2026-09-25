@@ -191,6 +191,12 @@ export class SessionActionTokenStore {
     if (changed) this.notifyChanged();
   }
 
+  deleteActionToken(tokenId: string): void {
+    if (!this.tokens.delete(tokenId)) return;
+    this.adoptedTokenIds.delete(tokenId);
+    this.notifyChanged();
+  }
+
   deleteActionTokensForSessionByKind(sessionId: string, kind: SessionActionKind): void {
     let changed = false;
     for (const [tokenId, token] of this.tokens) {

@@ -108,6 +108,27 @@ describe("failed worktree actions", () => {
   }
 });
 
+describe("failed worktree actions when the retry prompt cannot be delivered", () => {
+  it("keeps the original sibling buttons usable", async () => {
+    const s = stack = await startFullStack({
+      backend: "codex",
+      // The host refuses the replacement prompt only.
+      sendResult: (params) => (params.payloads.some((payload) => /still open/.test(payload.text ?? ""))
+        ? { status: "failed", error: new Error("fake telegram: chat not found"), stage: "platform_send" } as never
+        : { status: "sent", results: params.payloads.map((_, index) => ({ channel: params.channel, messageId: `m-${index}` })) } as never),
+    });
+    const { session } = await finishConflictingSession(s, "ask");
+    const merge = await s.waitForButton("Merge");
+    const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
+    const failed = await s.click(merge);
+    assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+    assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
+    const later = await s.click(buttonIn(prompt, "Later"));
+    assert.match(later.replies.join("\n"), /Snoozed 24h/);
+    assert.ok(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil);
+  });
+});
+
 describe("auto-merge conflicts", () => {
   it("starts a conflict resolver session on a real rebase conflict and merges once it finishes", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
