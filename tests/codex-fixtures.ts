@@ -51,7 +51,12 @@ export type CodexServerRequestParams<M extends ServerRequest["method"]> = Extrac
 
 export const CODEX_FIXTURE_CWD = "/tmp";
 
-export function codexInitializeResponse(userAgent = "fake"): InitializeResponse {
+/** A Codex App Server `userAgent` as Codex formats it (`<originator>/<version> (<os>; <arch>) ...`). */
+export function codexUserAgent(version = "0.156.1"): string {
+  return `openclaw-code-agent/${version} (Ubuntu 24.4.0; x86_64) xterm-256color (openclaw-code-agent; 5.0.0)`;
+}
+
+export function codexInitializeResponse(userAgent = codexUserAgent()): InitializeResponse {
   return { userAgent, codexHome: CODEX_FIXTURE_CWD, platformFamily: "unix", platformOs: "linux" };
 }
 

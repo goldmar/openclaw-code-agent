@@ -18,9 +18,16 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  CLAWHUB_INSPECTOR_VERSION: "0.23.1"
-  CLAWHUB_CLI_VERSION: "0.23.3"
   PACKAGE_NAME: openclaw-code-agent
+  # Workflow inputs reach shell steps only through these variables, never
+  # through ${{ }} interpolation inside `run:`. The verify job validates both
+  # before anything else runs.
+  VERSION: ${{ inputs.version }}
+  COMMIT: ${{ inputs.commit }}
+  # The ClawHub CLI (inspector, dry run, and publish) is installed from the
+  # committed lockfile in this directory, with integrity hashes, never from a
+  # floating registry spec.
+  RELEASE_TOOLS_DIR: .github/release-tools
 
 jobs:
   verify:
@@ -32,25 +39,26 @@ jobs:
       sha256: ${{ steps.pack.outputs.sha256 }}
       tarball: ${{ steps.pack.outputs.tarball }}
     steps:
-      - name: Validate commit input
-        env:
-          COMMIT: ${{ inputs.commit }}
-        run: '[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Validate inputs
+        run: |
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "commit must be a full 40-character lowercase SHA"; exit 1; }
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          [[ "$VERSION" =~ $semver ]] || { echo "version must be a semantic version without a leading v or build metadata"; exit 1; }
 
-      - name: Checkout selected commit
+      # Check out the dispatch ref, then move to the selected commit only after
+      # proving it is on main: the release never runs code from another branch.
+      - name: Checkout main history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
           submodules: false
 
-      - name: Require selected commit on main
-        env:
-          COMMIT: ${{ inputs.commit }}
+      - name: Switch to the selected main commit
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$COMMIT" origin/main
+          git switch --detach "$COMMIT"
           test "$(git rev-parse HEAD)" = "$COMMIT"
 
       - name: Set up pnpm
@@ -58,31 +66,30 @@ jobs:
         with:
           version: 11.15.1
 
+      # No dependency cache: a release must not restore state that another
+      # workflow run could have written.
       - name: Set up verification Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.16.0
-          cache: pnpm
 
       - name: Install and verify
         run: |
           pnpm install --frozen-lockfile
           pnpm verify
           pnpm check-plugin-security
-          pnpm validate:release-metadata -- "${{ inputs.version }}"
+          pnpm validate:release-metadata -- "$VERSION"
           pnpm audit:prod
           pnpm verify:npm-consumer
 
+      - name: Install pinned ClawHub CLI
+        run: npm ci --prefix "$RELEASE_TOOLS_DIR" --ignore-scripts --no-audit --no-fund
+
       - name: Run ClawHub inspector
         run: |
-          pnpm dlx "clawhub@$CLAWHUB_INSPECTOR_VERSION" package validate "$PWD" --runtime --allow-execute --out .reports/clawhub --json | tee /tmp/clawhub-validation.json
+          "$RELEASE_TOOLS_DIR/node_modules/.bin/clawhub" package validate "$PWD" --runtime --allow-execute --out .reports/clawhub --json | tee /tmp/clawhub-validation.json
           test "$(jq -r '.status' /tmp/clawhub-validation.json)" = pass
           test "$(jq -r '.summary.issueCount' /tmp/clawhub-validation.json)" -eq 0
-
-      - name: Set up packaging Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.16.0
 
       - name: Pack exact artifact once
         id: pack
@@ -117,12 +124,12 @@ jobs:
 
       - name: ClawHub dry run with exact source attribution
         run: |
-          pnpm dlx "clawhub@$CLAWHUB_CLI_VERSION" package publish "$PWD" \
+          "$RELEASE_TOOLS_DIR/node_modules/.bin/clawhub" package publish "$PWD" \
             --family code-plugin \
             --name "$PACKAGE_NAME" \
-            --version "${{ inputs.version }}" \
+            --version "$VERSION" \
             --source-repo "$GITHUB_REPOSITORY" \
-            --source-commit "${{ inputs.commit }}" \
+            --source-commit "$COMMIT" \
             --dry-run --json
 
       - name: Upload verified artifact
@@ -133,21 +140,41 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  publish:
-    name: Publish release
+  # The tag exists before ClawHub records `--source-ref`. It is created only
+  # after an approval of the protected `release` environment, so a rejected
+  # run leaves no tag behind.
+  tag:
+    name: Create release tag
     needs: verify
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
+    steps:
+      - name: Create or verify immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+        run: |
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" --jq ".[] | select(.ref == \"refs/tags/$TAG\") | .object.sha")"
+          if [[ -n "$existing" ]]; then
+            test "$existing" = "$COMMIT"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$COMMIT" >/dev/null
+          fi
+
+  # npm Trusted Publishing: the OIDC token is this job's only credential. The
+  # job checks out nothing and installs nothing; it publishes the verified
+  # tarball with the npm CLI that ships with Node.js.
+  publish-npm:
+    name: Publish to npm
+    needs: [verify, tag]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
       id-token: write
     steps:
-      - name: Checkout selected commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ inputs.commit }}
-          fetch-depth: 0
-
       - name: Set up publishing Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -166,21 +193,66 @@ jobs:
           TARBALL: ${{ needs.verify.outputs.tarball }}
         run: test "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)" = "$EXPECTED_SHA256"
 
-      - name: Create or verify immutable tag
+      - name: Publish or verify npm artifact
         env:
-          COMMIT: ${{ inputs.commit }}
-          TAG: v${{ inputs.version }}
+          TARBALL: ${{ needs.verify.outputs.tarball }}
         run: |
-          existing="$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)"
-          if [[ -n "$existing" ]]; then
-            test "$existing" = "$COMMIT"
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            mkdir "$RUNNER_TEMP/npm-existing"
+            npm pack "$PACKAGE_NAME@$VERSION" --pack-destination "$RUNNER_TEMP/npm-existing" >/dev/null
+            existing="$(find "$RUNNER_TEMP/npm-existing" -name '*.tgz' -type f -print -quit)"
+            test "$(sha256sum "$existing" | cut -d' ' -f1)" = "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)"
+            echo "Matching npm artifact already exists."
           else
-            git tag "$TAG" "$COMMIT"
-            git push origin "refs/tags/$TAG"
+            npm publish "./artifact/$TARBALL" --access public --provenance
           fi
 
-      - name: Install ClawHub CLI
-        run: npm install --global "clawhub@$CLAWHUB_CLI_VERSION"
+  # ClawHub publishing: CLAWHUB_TOKEN is a secret of the protected `release`
+  # environment. No OIDC token and no write access to the repository.
+  publish-clawhub:
+    name: Publish to ClawHub
+    needs: [verify, tag]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      # The same release tools the verify job used: those of the selected main commit.
+      - name: Checkout release tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          sparse-checkout: .github/release-tools
+          sparse-checkout-cone-mode: false
+
+      - name: Switch to the selected main commit
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          git switch --detach "$COMMIT"
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.16.0
+
+      - name: Install pinned ClawHub CLI
+        run: npm ci --prefix "$RELEASE_TOOLS_DIR" --ignore-scripts --no-audit --no-fund
+
+      - name: Download verified artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ inputs.version }}
+          path: artifact
+
+      - name: Reverify artifact digest
+        env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.sha256 }}
+          TARBALL: ${{ needs.verify.outputs.tarball }}
+        run: test "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)" = "$EXPECTED_SHA256"
 
       - name: Configure ClawHub token
         env:
@@ -194,7 +266,7 @@ jobs:
 
           token = os.environ["CLAWHUB_TOKEN"].strip()
           if not token:
-              raise SystemExit("CLAWHUB_TOKEN is not configured")
+              raise SystemExit("CLAWHUB_TOKEN is not configured in the release environment")
           path = Path(os.environ["RUNNER_TEMP"]) / "clawhub-config.json"
           descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
           with os.fdopen(descriptor, "w", encoding="utf-8") as config:
@@ -207,50 +279,65 @@ jobs:
         env:
           TARBALL: ${{ needs.verify.outputs.tarball }}
         run: |
+          clawhub="$GITHUB_WORKSPACE/$RELEASE_TOOLS_DIR/node_modules/.bin/clawhub"
           artifact="$GITHUB_WORKSPACE/artifact/$TARBALL"
-          if clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json; then
+          if "$clawhub" package verify "$artifact" --package "$PACKAGE_NAME" --version "$VERSION" --json; then
             echo "Matching ClawHub artifact already exists."
           else
-            clawhub package publish "$artifact" \
+            "$clawhub" package publish "$artifact" \
               --family code-plugin \
               --name "$PACKAGE_NAME" \
-              --version "${{ inputs.version }}" \
+              --version "$VERSION" \
               --source-repo "$GITHUB_REPOSITORY" \
-              --source-ref "v${{ inputs.version }}" \
-              --source-commit "${{ inputs.commit }}" \
+              --source-ref "v$VERSION" \
+              --source-commit "$COMMIT" \
               --manual-override-reason "GitHub Actions workflow_dispatch publish via CLAWHUB_TOKEN" \
               --wait \
               --wait-timeout 2400 \
               --json
-            clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json
+            "$clawhub" package verify "$artifact" --package "$PACKAGE_NAME" --version "$VERSION" --json
           fi
 
       - name: Remove ClawHub token config
         if: always()
         run: rm -f "$RUNNER_TEMP/clawhub-config.json"
 
-      - name: Publish or verify npm artifact
+  github-release:
+    name: Create GitHub release
+    needs: [verify, publish-npm, publish-clawhub]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Download verified artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ inputs.version }}
+          path: artifact
+
+      - name: Reverify artifact digest
         env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.sha256 }}
           TARBALL: ${{ needs.verify.outputs.tarball }}
-        run: |
-          if npm view "$PACKAGE_NAME@${{ inputs.version }}" version >/dev/null 2>&1; then
-            mkdir "$RUNNER_TEMP/npm-existing"
-            npm pack "$PACKAGE_NAME@${{ inputs.version }}" --pack-destination "$RUNNER_TEMP/npm-existing" >/dev/null
-            existing="$(find "$RUNNER_TEMP/npm-existing" -name '*.tgz' -type f -print -quit)"
-            test "$(sha256sum "$existing" | cut -d' ' -f1)" = "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)"
-            echo "Matching npm artifact already exists."
-          else
-            npm publish "./artifact/$TARBALL" --access public --provenance
-          fi
+        run: test "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)" = "$EXPECTED_SHA256"
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ inputs.version }}
           TARBALL: ${{ needs.verify.outputs.tarball }}
-          VERSION: ${{ inputs.version }}
         run: |
-          awk -v version="$VERSION" '$0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {found=1; next} found && /^## /{exit} found{print}' CHANGELOG.md > /tmp/release-notes.md
+          git fetch origin main
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          git show "$COMMIT:CHANGELOG.md" > /tmp/release-changelog.md
+          awk -v version="$VERSION" '$0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {found=1; next} found && /^## /{exit} found{print}' /tmp/release-changelog.md > /tmp/release-notes.md
           test -s /tmp/release-notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "$TAG" --notes-file /tmp/release-notes.md

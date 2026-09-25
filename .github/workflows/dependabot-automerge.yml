@@ -94,6 +94,16 @@ jobs:
               ;;
           esac
 
+          # The build toolchain produces the shipped bundle (esbuild, with
+          # TypeScript/tsx for type checks and scripts) or is bundled into it
+          # (typebox), so its updates always get a manual review.
+          case "$names" in
+            *esbuild*|*typescript*|*tsx*|*typebox*)
+              echo "Manual review required for build toolchain dependency: $DEPENDENCY_NAMES"
+              exit 0
+              ;;
+          esac
+
           if [[ "$DEPENDENCY_TYPE" == "direct:development" ]]; then
             jq -e 'all(.files[].path; . == "package.json" or . == "pnpm-lock.yaml")' <<<"$pr_json" >/dev/null
           elif [[ "$names" == *"github/codeql-action/"* ]]; then

@@ -60,6 +60,8 @@ import {
   CODEX_PERMISSIONS_APPROVAL_METHOD,
   CODEX_USER_INPUT_METHOD,
   codexRequest,
+  codexVersionError,
+  codexVersionFromUserAgent,
   mapTurnPlanSteps,
   matchApprovalChoiceFromText,
   readOpenClawExecMode,
@@ -202,6 +204,7 @@ const WARN_HARNESS_EVENTS = new Set([
   "rate_limits.read.unavailable",
   "turn.error",
   "session.error",
+  "client.version.unsupported",
   "action.rejected",
 ]);
 
@@ -572,7 +575,7 @@ export class CodexHarness implements AgentHarness {
         hasResumeSessionId: Boolean(options.resumeSessionId),
       });
       await client.connect();
-      await codexRequest(client, "initialize", {
+      const initialized = await codexRequest(client, "initialize", {
         clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageVersion },
         capabilities: {
           experimentalApi: true,
@@ -580,6 +583,13 @@ export class CodexHarness implements AgentHarness {
           optOutNotificationMethods: OPTED_OUT_NOTIFICATIONS,
         },
       }, timeoutMs);
+      // Fail closed before any thread exists: an older App Server lacks
+      // methods and fields this harness sends.
+      const versionError = codexVersionError(initialized?.userAgent);
+      if (versionError) {
+        logCodexHarnessDiagnostic("client.version.unsupported", { version: codexVersionFromUserAgent(initialized?.userAgent) ?? "unknown" });
+        throw new Error(versionError);
+      }
       await client.notify("initialized", {});
       const auxTimeoutMs = Math.min(timeoutMs, AUXILIARY_READ_TIMEOUT_MS);
       const [account, models] = await Promise.allSettled([
