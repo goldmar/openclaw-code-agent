@@ -81,6 +81,15 @@ type ManagerFixture = {
   dispatches: SessionNotificationRequest[];
 };
 
+/** Remove a test worktree (it may already be gone after a strategy cleaned it up). */
+function removeTestWorktree(worktreePath: string): void {
+  try {
+    git(github.repoDir, "worktree", "remove", "--force", worktreePath);
+  } catch {
+    rmSync(worktreePath, { recursive: true, force: true });
+  }
+}
+
 /** Fake host plus a SessionManager on a fresh store, installed as the plugin singletons. */
 function createManagerFixture(llmReplies: string[]): ManagerFixture {
   github.resetState();
@@ -120,6 +129,7 @@ async function setup(options: {
 
   worktreeCounter += 1;
   const worktreePath = await createWorktree(gh.repoDir, `${SESSION_NAME}-${worktreeCounter}`);
+  cleanups.push(() => removeTestWorktree(worktreePath));
   const branch = await getBranchName(worktreePath);
   assert.ok(branch, "the worktree has a branch");
 
@@ -524,6 +534,7 @@ describe("auto-pr worktree strategy", () => {
     }, { notifyLaunch: false });
     const worktreePath = session.worktreePath;
     assert.ok(worktreePath, "auto-pr sessions run in a worktree");
+    cleanups.push(() => removeTestWorktree(worktreePath));
     writeFileSync(join(worktreePath, "feature.txt"), "feature flag on\n", "utf-8");
     git(worktreePath, "add", "feature.txt");
     git(worktreePath, "commit", "-m", "feat: add feature file");
