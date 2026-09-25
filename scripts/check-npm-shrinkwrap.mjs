@@ -2,17 +2,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  pinnedOverrideErrors,
+  pinnedRuntimeVersions,
+  readPnpmWorkspaceOverrides,
+} from "./lib/runtime-dependency-pins.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const requiredSecurityVersions = {
-  "@hono/node-server": "2.1.1",
-  "express-rate-limit": "8.7.0",
-  "fast-uri": "3.1.8",
-  hono: "4.13.7",
-  "ip-address": "10.7.2",
-  qs: "6.16.0",
-};
 
 export function validateNpmShrinkwrap(baseDir = rootDir) {
   const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
@@ -49,11 +46,11 @@ export function validateNpmShrinkwrap(baseDir = rootDir) {
     }
   }
 
-  for (const [name, version] of Object.entries(requiredSecurityVersions)) {
-    if (packageJson.dependencies?.[name] !== version) {
-      throw new Error(`package.json must declare exact runtime dependency ${name}@${version}`);
-    }
-  }
+  // The pinned security floors are package.json versions; pnpm overrides for
+  // the same packages must lift the development graph to exactly those.
+  const pinned = pinnedRuntimeVersions(packageJson);
+  const overrideErrors = pinnedOverrideErrors(readPnpmWorkspaceOverrides(baseDir), pinned);
+  if (overrideErrors.length > 0) throw new Error(overrideErrors.join("\n"));
 }
 
 if (process.argv[1] === scriptPath) {

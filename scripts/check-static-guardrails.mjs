@@ -9,6 +9,8 @@ function collectFiles(dir, predicate, acc = []) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+    // Installed packages (for example .github/release-tools/node_modules) are not repository content.
+    if (entry.isDirectory() && entry.name === "node_modules") continue;
     if (entry.isDirectory()) {
       collectFiles(path, predicate, acc);
     } else if (predicate(path)) {

@@ -123,7 +123,7 @@ git push origin --delete agent/<session-name>
 
 Releases are handled only through a manual dispatch of the `release.yml` GitHub Actions workflow. Supply the version without a leading `v` and the full `main` commit SHA to release.
 
-The workflow verifies that the selected commit belongs to `main`, runs the full CI and security gates on Node.js 24.16.0, validates package/plugin/changelog/lockfile metadata, and packs one artifact. The protected publish job uses the same supported Node baseline to publish that exact tarball to npm (GitHub OIDC Trusted Publishing with provenance) and ClawHub (the `CLAWHUB_TOKEN` secret), create or verify the immutable `v<version>` tag, and create or update the matching GitHub release. Safe retries verify existing artifact digests before skipping a registry or release upload.
+The workflow verifies that the selected commit belongs to `main`, runs the full CI and security gates on Node.js 24.16.0, validates package/plugin/changelog/lockfile metadata, and packs one artifact. The jobs that follow run in the protected `release` environment, which requires a reviewer's approval: one job creates or verifies the immutable `v<version>` tag, then separate jobs publish that exact tarball to npm (GitHub OIDC Trusted Publishing with provenance; the job holds no other credential and installs nothing) and to ClawHub (the environment's `CLAWHUB_TOKEN` secret and the ClawHub CLI pinned in `.github/release-tools/`). A final job creates or updates the matching GitHub release. Safe retries verify existing artifact digests before skipping a registry or release upload. See the release checklist in [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md#releasing).
 
 The npm trust relationship must match:
 
@@ -131,4 +131,4 @@ The npm trust relationship must match:
 - workflow: `release.yml`
 - environment: `release`
 
-npm then authenticates the publish job through OIDC. Do not add an `NPM_TOKEN` secret; `CLAWHUB_TOKEN` must stay available to the `release` job.
+npm then authenticates the npm publish job through OIDC. Do not add an `NPM_TOKEN` secret. `CLAWHUB_TOKEN` must be a secret of the `release` environment; only the environment-gated ClawHub job reads it, so no repository-level copy is needed.

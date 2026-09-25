@@ -7,6 +7,9 @@ updates:
       day: monday
       time: "09:00"
       timezone: America/Los_Angeles
+    # Propose only releases that have been public for 3 days.
+    cooldown:
+      default-days: 3
     # CodeQL init/analyze must move together or the analysis workflow fails.
     groups:
       codeql:
@@ -24,15 +27,42 @@ updates:
       day: monday
       time: "09:15"
       timezone: America/Los_Angeles
+    # Propose only releases that have been public for 3 days (the same window
+    # as pnpm's minimumReleaseAge in pnpm-workspace.yaml).
+    cooldown:
+      default-days: 3
     # Reduce noise only for development updates; runtime dependencies stay
-    # isolated for npm-shrinkwrap and compatibility review.
+    # isolated for npm-shrinkwrap and compatibility review. The build toolchain
+    # that produces or is bundled into dist/ gets its own PRs, which are never
+    # auto-merged (see dependabot-automerge.yml).
     groups:
       low-risk-development:
         dependency-type: development
         update-types:
           - minor
           - patch
+        exclude-patterns:
+          - esbuild
+          - typescript
+          - tsx
+          - typebox
+          - openclaw
     open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # The pinned ClawHub CLI the release workflow installs with `npm ci`.
+  - package-ecosystem: npm
+    directory: /.github/release-tools
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope

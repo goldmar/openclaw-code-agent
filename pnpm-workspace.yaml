@@ -9,6 +9,11 @@ allowBuilds:
   protobufjs: true
   tree-sitter-bash: false
 
+# No publication-age gate here: pnpm 11 checks every lockfile entry against
+# minimumReleaseAge at install time, including frozen CI and release installs,
+# so any window would block same-day OpenClaw compatibility and Claude SDK
+# updates. Dependabot's 3-day cooldown (.github/dependabot.yml) delays
+# automated updates instead; manual bumps are reviewed (docs/DEVELOPMENT.md).
 minimumReleaseAge: 0
 
 overrides:
@@ -25,6 +30,6 @@ overrides:
   ip-address@<10.7.2: 10.7.2
   fast-uri@<3.1.8: 3.1.8
   qs@<6.16.0: 6.16.0
-  hono@<4.13.5: 4.13.7
-  "@hono/node-server@<2.0.10": 2.0.10
+  hono@<4.13.9: 4.13.9
+  "@hono/node-server@<2.1.1": 2.1.1
   undici@>=8.0.0 <8.9.0: 8.9.0

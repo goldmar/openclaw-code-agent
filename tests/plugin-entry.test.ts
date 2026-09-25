@@ -8,6 +8,7 @@ import {
   normalizeOpenClawTargetVersion,
   validateReleaseMetadata,
 } from "../scripts/validate-release-metadata.mjs";
+import { PINNED_RUNTIME_DEPENDENCIES, pinnedRuntimeVersions } from "../scripts/lib/runtime-dependency-pins.mjs";
 import { register, routeFromInteractiveContext } from "../index";
 import { autoUpdateService, goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 import { SessionManager } from "../src/session-manager";
@@ -128,7 +129,6 @@ describe("plugin entry source", () => {
     const activeWorkflowSources = [
       readFileSync(join(rootDir, ".github", "workflows", "security-audit.yml"), "utf8"),
       readFileSync(join(rootDir, ".github", "workflows", "ci.yml"), "utf8"),
-      readFileSync(join(rootDir, ".github", "workflows", "pr-checks.yml"), "utf8"),
       readFileSync(join(rootDir, ".github", "workflows", "dependency-review.yml"), "utf8"),
     ].join("\n");
 
@@ -144,10 +144,13 @@ describe("plugin entry source", () => {
       overrides?: Record<string, string>;
     };
 
-    assert.equal(packageJson.dependencies?.["fast-uri"], "3.1.8");
-    assert.equal(packageJson.dependencies?.hono, "4.13.7");
-    assert.equal(packageJson.dependencies?.["ip-address"], "10.7.2");
-    assert.equal(packageJson.dependencies?.qs, "6.16.0");
+    // package.json is the single source of the pinned versions; the shared
+    // module only names the packages that must stay exact direct dependencies.
+    const pinned = pinnedRuntimeVersions(packageJson);
+    assert.deepEqual(Object.keys(pinned), [...PINNED_RUNTIME_DEPENDENCIES]);
+    for (const name of PINNED_RUNTIME_DEPENDENCIES) {
+      assert.match(packageJson.dependencies?.[name] ?? "", /^\d+\.\d+\.\d+$/u, name);
+    }
     assert.equal(packageJson.overrides, undefined);
     assert.doesNotThrow(() =>
       execFileSync("node", ["scripts/check-npm-shrinkwrap.mjs"], {
@@ -549,7 +552,9 @@ describe("plugin entry source", () => {
     assert.match(readme, new RegExp(`requires, is built against, and is validated against OpenClaw \`${target}\``));
     assert.match(reference, new RegExp(`Package installation therefore requires \`${target}\``));
     assert.match(reference, new RegExp(`keep the verified \`${floor}\` compatibility floor`));
-    assert.match(readme, /callback ownership, and namespaced tool allowlists remain under the same plugin contracts/);
+    assert.match(readme, /installing this package changes no OpenClaw host configuration/);
+    assert.match(readme, /Upgrading from 4\.x is not migration-free/);
+    assert.match(readme, /Restrictive tool allowlists must add the new `agent_session_action` tool/);
     assert.match(reference, /pnpm-workspace\.yaml/);
     assert.match(reference, /plugins\.allow/);
     assert.match(reference, /No host config migration is performed by this package/);
