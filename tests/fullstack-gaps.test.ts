@@ -129,6 +129,39 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
   });
 });
 
+describe("overlapping worktree retries", () => {
+  it("never lets an older retry prompt retire the buttons of a newer one", async () => {
+    // The host holds the first retry prompt back until the test releases it.
+    const held = Promise.withResolvers<void>();
+    let retries = 0;
+    const s = stack = await startFullStack({
+      backend: "codex",
+      sendResult: async (params) => {
+        if (params.payloads.some((payload) => /still open/.test(payload.text ?? ""))) {
+          retries += 1;
+          if (retries === 1) await held.promise;
+        }
+        return { status: "sent", results: params.payloads.map((_, index) => ({ channel: params.channel, messageId: `m-${index}` })) } as never;
+      },
+    });
+    const { session } = await finishConflictingSession(s, "ask");
+    const original = await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const first = s.sm.reofferWorktreeDecision(session.id);
+    await waitUntil(() => retries === 1, "first retry prompt in flight");
+    // A second failed action re-offers again while the first is still being delivered.
+    const second = s.sm.reofferWorktreeDecision(session.id);
+    held.resolve();
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    const prompts = s.messages().filter((message) => /still open/.test(message.text));
+    assert.equal(prompts.length, 2);
+    const [older, newer] = prompts;
+    assert.ok(s.sm.getActionToken(buttonIn(newer!, "Merge").payload), "the newest prompt keeps working buttons");
+    assert.equal(s.sm.getActionToken(buttonIn(older!, "Merge").payload), undefined, "the older retry prompt was superseded");
+    assert.equal(s.sm.getActionToken(original.payload), undefined, "the original controls were retired");
+  });
+});
+
 describe("auto-merge conflicts", () => {
   it("starts a conflict resolver session on a real rebase conflict and merges once it finishes", async () => {
     const s = stack = await startFullStack({ backend: "codex" });

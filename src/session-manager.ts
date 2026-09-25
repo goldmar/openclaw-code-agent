@@ -249,6 +249,9 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   /** How long a tool waits for a prompt's direct delivery result before reporting it as in progress. */
   userDeliveryResultWaitMs = 10_000;
+  /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
+  private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
+  private worktreeReofferGeneration = 0;
   private readonly worktrees: SessionWorktreeController;
   private readonly questions: SessionQuestionService;
   private readonly lifecycle: SessionLifecycleService;
@@ -1644,7 +1647,32 @@ export class SessionManager {
     const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
     const fresh = new Set((buttons ?? []).flat().map((button) => button.callbackData));
     if (fresh.size === 0) return false;
+    // Several re-offers of one decision can overlap (a second failed action
+    // while the first retry prompt is still being delivered). A delivered retry
+    // retires only older controls: never those of a newer retry or of one still
+    // in flight, so every delivered prompt keeps working buttons.
+    const reoffers = this.worktreeReoffers.get(ref) ?? new Map<number, { tokens: Set<string>; inFlight: boolean }>();
+    this.worktreeReoffers.set(ref, reoffers);
+    const generation = ++this.worktreeReofferGeneration;
+    const entry = { tokens: fresh, inFlight: true };
+    reoffers.set(generation, entry);
+    const settleEntry = (): void => {
+      entry.inFlight = false;
+    };
+    const retireOlder = (): void => {
+      const keep = new Set<string>();
+      for (const [otherGeneration, other] of reoffers) {
+        if (otherGeneration >= generation || other.inFlight) {
+          for (const tokenId of other.tokens) keep.add(tokenId);
+        } else {
+          reoffers.delete(otherGeneration);
+        }
+      }
+      this.interactions.clearWorktreeDecisionTokens(ref, keep);
+    };
     const dropFresh = (): void => {
+      reoffers.delete(generation);
+      if (reoffers.size === 0) this.worktreeReoffers.delete(ref);
       for (const tokenId of fresh) this.interactions.deleteActionToken(tokenId);
     };
     const name = active?.name ?? persisted?.name ?? ref;
@@ -1669,8 +1697,14 @@ export class SessionManager {
       buttons,
       shouldDispatch: decisionIsOpen,
       hooks: {
-        onNotifySucceeded: () => { this.interactions.clearWorktreeDecisionTokens(ref, fresh); },
-        onNotifyFailed: dropFresh,
+        onNotifySucceeded: () => {
+          settleEntry();
+          retireOlder();
+        },
+        onNotifyFailed: () => {
+          settleEntry();
+          dropFresh();
+        },
       },
     });
     if (delivery === "failed" || delivery === "skipped") dropFresh();
