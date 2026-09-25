@@ -40,8 +40,8 @@ export type RuntimeOwnerSpec = {
   regSeq: number;
   buildId: string;
   /**
-   * Identity of the settings the runtime's services are built from (plugin
-   * config). A newer owner with different settings restarts the runtime.
+   * Identity of the effective settings the runtime's services are built from.
+   * A newer owner with different build settings restarts the runtime.
    */
   configKey: string;
   handles: RuntimeHostHandles;
@@ -74,8 +74,11 @@ export type SharedRuntime<T = unknown> = {
 
 type RuntimeSlot = {
   nextRegSeq: number;
-  /** Build of the most recent registration; only it may create a runtime. */
-  newestBuildId?: string;
+  /**
+   * Builds a newer build took over from, with the registration sequence at
+   * takeover: registrations of that build made before it can never run again.
+   */
+  supersededBuilds?: Map<string, number>;
   runtime?: SharedRuntime;
   transition?: Promise<void>;
 };
@@ -95,17 +98,11 @@ function slot(): RuntimeSlot {
   return (host[SLOT_KEY] ??= { nextRegSeq: 1 });
 }
 
-/**
- * Allocate a process-wide registration sequence for a new plugin instance. The
- * newest registration's build becomes the only build allowed to run the
- * runtime: an older build is superseded even while no runtime is running, and
- * a host recovery that re-registers previous code makes that build newest again.
- */
-export function allocateRuntimeOwnerSequence(buildId: string): number {
+/** Allocate a process-wide registration sequence for a new plugin instance. */
+export function allocateRuntimeOwnerSequence(): number {
   const state = slot();
   const regSeq = state.nextRegSeq;
   state.nextRegSeq += 1;
-  state.newestBuildId = buildId;
   return regSeq;
 }
 
@@ -161,11 +158,12 @@ async function stopRuntime(state: RuntimeSlot, runtime: SharedRuntime, reason: R
 /**
  * Attach an owner to the process runtime, creating it when none is running.
  *
- * - Only the newest registered build may attach or create; an older build
- *   throws `SupersededRuntimeError` and never creates a second writer.
- * - A runtime of another (older) build stops first (sessions are persisted the
- *   same way a service stop persists them); this build then creates a fresh
- *   runtime from the persisted store.
+ * - A runtime of another build registered earlier stops first when this build
+ *   starts (sessions are persisted the same way a service stop persists them);
+ *   this build then creates a fresh runtime from the persisted store.
+ * - A build registered earlier than the running build's owners, or a
+ *   registration of a build that was taken over from, throws
+ *   `SupersededRuntimeError` and never creates a second writer.
  * - A newer registration of the same build with different settings restarts
  *   the runtime so its services use those settings.
  * - Otherwise the owner attaches and shares.
@@ -179,14 +177,24 @@ export async function acquireSharedRuntime<T>(
     while (state.transition) {
       await state.transition.catch(() => {});
     }
-    const newestBuildId = state.newestBuildId ?? owner.buildId;
     const runtime = state.runtime as SharedRuntime<T> | undefined;
-    if (owner.buildId !== newestBuildId) {
-      // An older build never runs again once a newer one registered.
-      throw new SupersededRuntimeError(owner.buildId, newestBuildId);
+    const supersededAt = state.supersededBuilds?.get(owner.buildId);
+    if (supersededAt !== undefined && owner.regSeq < supersededAt) {
+      // A build a newer one took over from never runs again, even once the
+      // slot is empty. A later re-registration of it (host recovery) may.
+      throw new SupersededRuntimeError(owner.buildId, runtime?.buildId ?? "a newer build");
     }
     if (runtime && runtime.buildId !== owner.buildId) {
-      // A newer build takes over: the old runtime persists and stops first.
+      if (owner.regSeq < runtime.maxRegSeq) {
+        // Registered before the running build's owners: this build is older.
+        throw new SupersededRuntimeError(owner.buildId, runtime.buildId);
+      }
+      // A newer build takes over only when it actually starts (an inspection-only
+      // registration changes nothing): the old runtime persists and stops first.
+      const superseded = state.supersededBuilds ?? new Map<string, number>();
+      superseded.set(runtime.buildId, state.nextRegSeq);
+      superseded.delete(owner.buildId);
+      state.supersededBuilds = superseded;
       await runTransition(state, () => stopRuntime(state, runtime as SharedRuntime, "superseded"));
       continue;
     }

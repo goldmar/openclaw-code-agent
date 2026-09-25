@@ -25,7 +25,7 @@ import {
   runtimeOwnerMarker,
   saveSessionStoreIndex,
   statSessionStoreIndex,
-  withSessionStoreLock,
+  tryAcquireSessionStoreLock,
   type SessionStoreDiskSnapshot,
 } from "./session-store-storage";
 import {
@@ -40,6 +40,9 @@ const log = createLogger("session-store");
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Retry interval and budget for a save deferred because another writer holds the index lock. */
+const LOCKED_SAVE_RETRY_MS = 25;
+const LOCKED_SAVE_MAX_DEFER_MS = 5_000;
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -149,6 +152,8 @@ export class SessionStore {
    */
   private readonly carriedSessions = new Map<string, unknown>();
   private syncing = false;
+  /** A save deferred because another writer held the lock (never blocks the event loop). */
+  private deferredSave: { timer: ReturnType<typeof setTimeout>; since: number } | undefined;
 
   constructor(options: SessionStoreOptions = {}) {
     const env = options.env ?? process.env;
@@ -379,8 +384,41 @@ export class SessionStore {
    * itself stays atomic (temp file + rename).
    */
   saveIndex(): void {
-    // The lock makes read-merge-write one step across processes.
-    withSessionStoreLock(this.indexPath, () => {
+    if (this.writeIndex({ force: false })) return;
+    // Another writer holds the lock: keep the change in memory and retry shortly
+    // instead of blocking the Gateway thread. Local changes stay the merge winner.
+    if (this.deferredSave) return;
+    const since = Date.now();
+    const retry = (): void => {
+      const force = Date.now() - since >= LOCKED_SAVE_MAX_DEFER_MS;
+      if (force) log.warn("[SessionStore] Session store lock still held after 5 s; breaking it to save (with a merge).");
+      if (this.writeIndex({ force })) {
+        this.deferredSave = undefined;
+        return;
+      }
+      this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
+      this.deferredSave.timer.unref?.();
+    };
+    this.deferredSave = { timer: setTimeout(retry, LOCKED_SAVE_RETRY_MS), since };
+    this.deferredSave.timer.unref?.();
+  }
+
+  /** Write a deferred save now (shutdown), breaking a held lock if necessary. */
+  flushPendingSave(): void {
+    if (!this.deferredSave) return;
+    clearTimeout(this.deferredSave.timer);
+    this.deferredSave = undefined;
+    this.writeIndex({ force: true });
+  }
+
+  /**
+   * Read-merge-write under the index lock. Returns false when another live
+   * writer holds the lock (nothing written). The write itself is atomic.
+   */
+  private writeIndex(options: { force: boolean }): boolean {
+    const lock = tryAcquireSessionStoreLock(this.indexPath, options);
+    if (lock === "busy") return false;
+    try {
       // Before load completes, the constructor has no base yet; write as loaded.
       if (this.diskSignature !== undefined) this.syncFromDisk("save");
       const revision = this.revision + 1;
@@ -391,11 +429,15 @@ export class SessionStore {
         [...this.repoPolicies.values()],
         revision,
       );
-      if (!written || this.diskSignature === undefined) return;
-      this.revision = revision;
-      this.captureBase();
-      this.diskSignature = statSessionStoreIndex(this.indexPath);
-    });
+      if (written && this.diskSignature !== undefined) {
+        this.revision = revision;
+        this.captureBase();
+        this.diskSignature = statSessionStoreIndex(this.indexPath);
+      }
+      return true;
+    } finally {
+      if (lock !== "unavailable") lock.release();
+    }
   }
 
   assertPersistedEntry(entry: PersistedSessionInfo): void {

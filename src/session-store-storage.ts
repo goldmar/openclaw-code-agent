@@ -200,12 +200,6 @@ export function isForeignLiveRunningRow(raw: unknown): boolean {
 }
 
 const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
-const lockSleepCell = new Int32Array(new SharedArrayBuffer(4));
-
-function sleepSync(ms: number): void {
-  Atomics.wait(lockSleepCell, 0, 0, ms);
-}
 
 function lockHolderIsGone(lockPath: string): boolean {
   try {
@@ -220,43 +214,42 @@ function lockHolderIsGone(lockPath: string): boolean {
 }
 
 /**
- * Serialize the read-merge-write sequence across processes with an exclusive
- * `<index>.lock` file (O_EXCL). Writes are short, so waits are brief; a lock
- * whose holder died or that is older than 10 s is broken. After 5 s the write
- * proceeds without the lock rather than failing, still merging first.
+ * Result of a non-blocking attempt at the `<index>.lock` file:
+ * `release` when held, `"busy"` when another live writer holds it, and
+ * `"unavailable"` when no lock file can be created (the save then reports the
+ * underlying problem itself).
  */
-export function withSessionStoreLock<T>(indexPath: string, fn: () => T): T {
+export type SessionStoreLockAttempt = { release: () => void } | "busy" | "unavailable";
+
+/**
+ * Try once, without waiting, to take the exclusive lock that makes the
+ * read-merge-write of a save one step across processes. A lock whose holder
+ * died, or that is older than 10 s, is broken. `force` breaks a live lock too
+ * (used after a save has been deferred for the full wait budget).
+ */
+export function tryAcquireSessionStoreLock(indexPath: string, options: { force?: boolean } = {}): SessionStoreLockAttempt {
   assertTestSafeStatePath(indexPath, "lock the session store");
   const lockPath = `${indexPath}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let fd: number | undefined;
-  for (;;) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      fd = openSync(lockPath, "wx", 0o600);
-      writeSync(fd, `${process.pid} ${Date.now()}`);
-      break;
+      const fd = openSync(lockPath, "wx", 0o600);
+      try {
+        writeSync(fd, `${process.pid} ${Date.now()}`);
+      } finally {
+        closeSync(fd);
+      }
+      return {
+        release: () => {
+          try { unlinkSync(lockPath); } catch { /* best-effort */ }
+        },
+      };
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") break; // Directory missing or unwritable: the save reports it.
-      if (lockHolderIsGone(lockPath)) {
-        try { unlinkSync(lockPath); } catch { /* another writer broke it first */ }
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        log.warn("[SessionStore] Session store lock is still held after 5 s; saving with a merge but without the lock.");
-        break;
-      }
-      sleepSync(25);
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return "unavailable";
+      if (!options.force && !lockHolderIsGone(lockPath)) return "busy";
+      try { unlinkSync(lockPath); } catch { /* another writer broke it first */ }
     }
   }
-  try {
-    return fn();
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* best-effort */ }
-      try { unlinkSync(lockPath); } catch { /* best-effort */ }
-    }
-  }
+  return "busy";
 }
 
 export function archiveLegacySessionIndex(indexPath: string, reason: string): boolean {

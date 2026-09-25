@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionStore, mergeKeyedRows } from "../src/session-store";
-import { withSessionStoreLock } from "../src/session-store-storage";
+import { tryAcquireSessionStoreLock } from "../src/session-store-storage";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { createCallbackHandler } from "../src/callback-handler";
@@ -225,21 +225,55 @@ describe("SessionStore ownership and write safety", () => {
     assert.deepEqual(readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId), ["mine"]);
   });
 
-  it("serializes saves with a lock file and breaks a lock whose holder is gone", () => {
+  it("breaks a lock whose holder is gone and releases its own lock after writing", () => {
     const lockPath = `${indexPath}.lock`;
     // A lock left by a process that no longer exists (pid 0 is never a live process here).
     writeFileSync(lockPath, `0 ${Date.now()}`);
-    let ranWhileLocked = false;
-    withSessionStoreLock(indexPath, () => {
-      ranWhileLocked = existsSync(lockPath) && readFileSync(lockPath, "utf-8").startsWith(`${process.pid} `);
-    });
-    assert.equal(ranWhileLocked, true);
-    assert.equal(existsSync(lockPath), false, "the lock is released after the write");
+    const attempt = tryAcquireSessionStoreLock(indexPath);
+    assert.equal(typeof attempt, "object");
+    assert.ok(readFileSync(lockPath, "utf-8").startsWith(`${process.pid} `));
+    (attempt as { release: () => void }).release();
+    assert.equal(existsSync(lockPath), false);
 
     const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
     store.persistTerminal(stubSession("after-lock"));
-    assert.equal(existsSync(lockPath), false);
+    assert.equal(existsSync(lockPath), false, "the lock is released after the write");
     assert.deepEqual(readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId), ["after-lock"]);
+  });
+
+  it("defers a save while another live writer holds the lock, without blocking, and never loses it", async () => {
+    const lockPath = `${indexPath}.lock`;
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("first"));
+    // Another live process (this test's parent) holds the lock.
+    writeFileSync(lockPath, `${process.ppid} ${Date.now()}`);
+    assert.equal(tryAcquireSessionStoreLock(indexPath), "busy");
+
+    const started = Date.now();
+    store.persistTerminal(stubSession("while-locked"));
+    assert.ok(Date.now() - started < 1_000, "the save must not block the event loop");
+    assert.deepEqual(readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId), ["first"]);
+
+    // Meanwhile the other writer adds its own row, then releases the lock.
+    const index = readIndex(indexPath);
+    index.sessions.push({ ...index.sessions[0], sessionId: "from-other", harnessSessionId: "h-from-other", name: "other" });
+    writeFileSync(indexPath, JSON.stringify(index));
+    rmSync(lockPath);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const rows = readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId).sort();
+    assert.deepEqual(rows, ["first", "from-other", "while-locked"]);
+  });
+
+  it("flushes a deferred save at shutdown", () => {
+    const lockPath = `${indexPath}.lock`;
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.persistTerminal(stubSession("first"));
+    writeFileSync(lockPath, `${process.ppid} ${Date.now()}`);
+    store.persistTerminal(stubSession("pending"));
+    store.flushPendingSave();
+    const rows = readIndex(indexPath).sessions.map((row: { sessionId: string }) => row.sessionId).sort();
+    assert.deepEqual(rows, ["first", "pending"]);
   });
 });
 

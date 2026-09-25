@@ -51,7 +51,7 @@ import {
   type RuntimeServices,
 } from "./src/process-runtime";
 import { createRuntimeWorktreeDecisionSummaryProvider } from "./src/worktree-decision-summary";
-import { setPluginConfig, pluginConfig } from "./src/config";
+import { resolveRuntimeBuildSettings, setPluginConfig, pluginConfig } from "./src/config";
 import { resolveCodeAgentStateDir, resolveOpenClawStateDir } from "./src/state-paths";
 import { routeFromOriginMetadata } from "./src/session-route";
 import type { SessionRoute } from "./src/types";
@@ -119,17 +119,6 @@ let hostBoundBySharedRuntime = false;
  */
 let servicesCreatedHere: CodeAgentServices | null = null;
 
-/** Stable identity of plugin settings: key order does not matter. */
-function stableConfigKey(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableConfigKey).join(",")}]`;
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableConfigKey(entry)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
 
 /**
  * Register plugin tools, commands, and the background session service.
@@ -140,7 +129,7 @@ function stableConfigKey(value: unknown): string {
  * service all attach to it, so there is exactly one SessionManager per process.
  */
 export function register(api: OpenClawPluginApi): void {
-  const regSeq = allocateRuntimeOwnerSequence(BUILD_ID);
+  const regSeq = allocateRuntimeOwnerSequence();
   const ownerId = `${BUILD_ID.split("+")[1]?.slice(0, 8) ?? "build"}#${regSeq}`;
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
@@ -291,7 +280,8 @@ export function register(api: OpenClawPluginApi): void {
         id: ownerId,
         regSeq,
         buildId: BUILD_ID,
-        configKey: stableConfigKey(api.pluginConfig ?? {}),
+        // Only settings the runtime is built from; the rest follow the newest owner live.
+        configKey: JSON.stringify(resolveRuntimeBuildSettings(api.pluginConfig ?? {})),
         handles: ownerHandles(),
         onDetached: detachLocal,
       }, createServices);

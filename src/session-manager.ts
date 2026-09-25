@@ -2120,6 +2120,8 @@ export class SessionManager {
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
+    // A save deferred behind another writer's index lock must not be lost.
+    this.store.flushPendingSave();
   }
 
   async drainTaskLifecycle(): Promise<void> {
