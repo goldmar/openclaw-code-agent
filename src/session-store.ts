@@ -317,10 +317,17 @@ export class SessionStore {
     for (const [key, choice] of tokenChoices) {
       const localToken = this.actionTokens.get(key);
       if (choice === "local") {
-        // A consumption recorded on either side is final.
+        // A consumption recorded on either side is final, and when both sides
+        // consumed the token the one already on disk (the first persisted) wins:
+        // only that click acts (see `confirmActionTokenConsumption`).
         const diskToken = normalizeActionToken(diskTokens.get(key));
-        if (localToken && localToken.consumedAt == null && diskToken?.consumedAt != null) {
+        if (
+          localToken
+          && diskToken?.consumedAt != null
+          && (localToken.consumedAt == null || localToken.consumptionId !== diskToken.consumptionId)
+        ) {
           localToken.consumedAt = diskToken.consumedAt;
+          localToken.consumptionId = diskToken.consumptionId;
           changed += 1;
         }
         continue;
@@ -333,7 +340,10 @@ export class SessionStore {
       }
       const token = normalizeActionToken(diskTokens.get(key));
       if (!token) continue;
-      if (localToken?.consumedAt != null && token.consumedAt == null) token.consumedAt = localToken.consumedAt;
+      if (localToken?.consumedAt != null && token.consumedAt == null) {
+        token.consumedAt = localToken.consumedAt;
+        token.consumptionId = localToken.consumptionId;
+      }
       if (!localToken) this.actionTokenStore.adoptedTokenIds.add(key);
       this.actionTokens.set(key, token);
     }
@@ -930,6 +940,10 @@ export class SessionStore {
 
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
     return this.actionTokenStore.consumeActionToken(tokenId);
+  }
+
+  confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    return this.actionTokenStore.confirmActionTokenConsumption(tokenId, consumptionId);
   }
 
   deleteActionTokensForSession(sessionId: string): void {

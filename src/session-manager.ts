@@ -1149,6 +1149,11 @@ export class SessionManager {
     return this.interactions.consumeActionToken(tokenId);
   }
 
+  /** False when another writer of the index persisted a consumption of this token first. */
+  confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    return this.store.confirmActionTokenConsumption(tokenId, consumptionId);
+  }
+
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.interactions.getActionToken(tokenId);
   }
@@ -1612,6 +1617,53 @@ export class SessionManager {
 
   snoozeWorktreeDecision(ref: string, options?: { notifyUser?: boolean }): string {
     return this.worktreeDecisions.snoozeWorktreeDecision(ref, options);
+  }
+
+  /**
+   * Re-offer an open worktree decision after a button action failed (merge, PR,
+   * or discard). A callback consumes its token before acting, so another writer
+   * of the index can never run the same button; the controls the user clicked
+   * are therefore spent. This replaces every worktree-decision button of the
+   * session with a fresh set in a new message, so the user can retry.
+   * Returns false (and sends nothing) when the decision is no longer open.
+   */
+  async reofferWorktreeDecision(ref: string): Promise<boolean> {
+    const decisionIsOpen = (): boolean => {
+      const persisted = this.getPersistedSession(ref);
+      if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
+      const state = persisted.worktreeLifecycle?.state;
+      if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
+      if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
+      return Boolean(persisted.worktreePath || persisted.worktreeBranch);
+    };
+    if (!decisionIsOpen()) return false;
+    const active = this.resolve(ref);
+    const persisted = this.getPersistedSession(ref);
+    this.interactions.clearWorktreeDecisionTokens(ref);
+    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
+    if (!buttons?.some((row) => row.length > 0)) return false;
+    const name = active?.name ?? persisted?.name ?? ref;
+    const branch = active?.worktreeBranch ?? persisted?.worktreeBranch;
+    const target = active ?? this.buildRoutingProxy({
+      id: ref,
+      name,
+      sessionId: persisted?.sessionId,
+      harnessSessionId: persisted?.harnessSessionId,
+      backendRef: persisted?.backendRef,
+      route: persisted?.route,
+    });
+    this.notifications.dispatch(target, {
+      label: "worktree-decision-retry",
+      idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
+      userMessage: [
+        `🔁 [${name}] The worktree decision${branch ? ` for \`${branch}\`` : ""} is still open: the last action did not complete.`,
+        `Choose again below.`,
+      ].join("\n"),
+      notifyUser: "always",
+      buttons,
+      shouldDispatch: decisionIsOpen,
+    });
+    return true;
   }
 
   /**

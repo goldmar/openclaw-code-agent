@@ -141,6 +141,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
+      // Keep the manager this call started with: a Gateway stop can clear the
+      // shared reference while a merge or PR is still running, and the outcome
+      // must still be recorded on the manager (and store) that started it.
+      const sm = sessionManager;
       if (!isAgentMergeParams(params)) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch? }." }] };
       }
@@ -151,7 +155,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       // Resolve session (active or persisted)
-      const target = resolveWorktreeToolTarget(sessionManager, params.session);
+      const target = resolveWorktreeToolTarget(sm, params.session);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
 
@@ -185,7 +189,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
-      const repoPolicy = await sessionManager.resolveRepoPolicy(effectiveWorkdir);
+      const repoPolicy = await sm.resolveRepoPolicy(effectiveWorkdir);
       if (repoPolicy?.policy === "pr-required") {
         return {
           content: [{
@@ -217,13 +221,13 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       // Serialise against concurrent merges on the same repo directory
-      let toolResult: { content: Array<{ type: string; text: string }> } = {
+      let toolResult: { content: Array<{ type: string; text: string }>; meta?: { success: boolean; conflictResolverSessionId?: string } } = {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
-      await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
+      await sm.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
-        const freshPersisted = sessionManager.getPersistedSession(params.session);
+        const freshPersisted = sm.getPersistedSession(params.session);
         if (freshPersisted?.worktreeLifecycle?.state === "merged" || freshPersisted?.worktreeMerged) {
           toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
           return;
@@ -247,7 +251,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           if (shouldPush) {
             if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
               const pushFailedText = `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
-              sessionManager.notifyWorktreeOutcome(
+              sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
                 pushFailedText,
                 {
@@ -286,7 +290,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           if (freshPersisted) {
             const mergedAt = new Date().toISOString();
             for (const mutationRef of getPersistedTargetMutationRefs({ ...target, persistedSession: freshPersisted })) {
-              sessionManager.updatePersistedSession(mutationRef, {
+              sm.updatePersistedSession(mutationRef, {
                 ...buildMergedPatch(
                   {
                     worktreeBaseBranch: resolvedBaseBranch,
@@ -314,7 +318,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             insertions: diffSummary?.insertions,
             deletions: diffSummary?.deletions,
           });
-          sessionManager.notifyWorktreeOutcome(
+          sm.notifyWorktreeOutcome(
             target.notificationTarget!,
             outcomeLine,
             {
@@ -354,7 +358,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           ].join("\n");
 
           try {
-            const conflictSession = await sessionManager.launchSession({
+            const conflictSession = await sm.launchSession({
               prompt: conflictPrompt,
               workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,
@@ -368,7 +372,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               originSessionKey: targetSession?.originSessionKey ?? persistedSession?.originSessionKey,
             });
 
-            toolResult = { content: [{ type: "text", text: appendMergeWarnings(`⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}`, mergeResult) }] };
+            toolResult = {
+              content: [{ type: "text", text: appendMergeWarnings(`⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}`, mergeResult) }],
+              meta: { success: false, conflictResolverSessionId: conflictSession.id },
+            };
           } catch (err) {
             toolResult = { content: [{ type: "text", text: appendMergeWarnings(`❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`, mergeResult) }] };
           }

@@ -1,4 +1,4 @@
-import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete } from "./runtime-llm";
+import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete, RuntimeLlmTimeoutError, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
 import { createLogger } from "./logger";
 
 const log = createLogger("question-context-summary");
@@ -15,9 +15,6 @@ export interface QuestionContextSummaryProvider {
 
 const MAX_CONTEXT_CHARS = 4_000;
 const MAX_SUMMARY_CHARS = 180;
-// The question notification waits for this summary, so keep the budget short;
-// a slower host completion is aborted and the notification ships without it.
-const SUMMARY_TIMEOUT_MS = 5_000;
 const SUMMARY_MAX_TOKENS = 200;
 
 export function createRuntimeQuestionContextSummaryProvider(): QuestionContextSummaryProvider | undefined {
@@ -54,17 +51,16 @@ export async function buildQuestionContextMicroSummary(args: {
     context: truncateText(context, MAX_CONTEXT_CHARS),
   };
 
-  const controller = new AbortController();
+  const provider = args.provider;
   try {
-    const generated = await withTimeout(
-      args.provider.generateQuestionContextSummary(evidence, controller.signal),
-      args.timeoutMs ?? SUMMARY_TIMEOUT_MS,
-      controller,
+    const generated = await withRuntimeLlmTimeout(
+      "question-context-summary",
+      args.timeoutMs ?? runtimeLlmTimeoutsMs.questionContextSummary,
+      (signal) => provider.generateQuestionContextSummary(evidence, signal),
     );
     return validateQuestionContextSummary(generated);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message !== "question-context-summary timed out") {
+    if (!(err instanceof RuntimeLlmTimeoutError)) {
       log.warn(`[question_context_summary] LLM summary provider failed: ${describeRuntimeLlmError(err)}`);
     }
     return undefined;
@@ -128,22 +124,3 @@ function truncateText(value: string, maxLength: number): string {
   return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, controller: AbortController): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      controller.abort();
-      reject(new Error("question-context-summary timed out"));
-    }, timeoutMs);
-    timeout.unref?.();
-    promise.then(
-      (value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      },
-    );
-  });
-}

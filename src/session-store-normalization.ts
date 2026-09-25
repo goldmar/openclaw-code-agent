@@ -327,25 +327,32 @@ function toOptionalApprovalExecutionState(value: unknown): ApprovalExecutionStat
     : undefined;
 }
 
+/** Every action kind a stored token may carry (a missing kind drops its buttons on reload). */
+const ACTION_KINDS = {
+  "plan-approve": true,
+  "plan-request-changes": true,
+  "plan-reject": true,
+  "plan-offer-start": true,
+  "plan-offer-dismiss": true,
+  "repo-policy-set": true,
+  "worktree-merge": true,
+  "worktree-create-pr": true,
+  "worktree-update-pr": true,
+  "worktree-view-pr": true,
+  "worktree-decide-later": true,
+  "worktree-dismiss": true,
+  "session-resume": true,
+  "session-restart": true,
+  "plugin-update-install": true,
+  "plugin-update-remind-later": true,
+  "plugin-update-dismiss": true,
+  "plugin-update-restart": true,
+  "view-output": true,
+  "question-answer": true,
+} satisfies Record<SessionActionKind, true>;
+
 function toOptionalActionKind(value: unknown): SessionActionKind | undefined {
-  return value === "plan-approve"
-    || value === "plan-request-changes"
-    || value === "plan-reject"
-    || value === "plan-offer-start"
-    || value === "plan-offer-dismiss"
-    || value === "repo-policy-set"
-    || value === "worktree-merge"
-    || value === "worktree-create-pr"
-    || value === "worktree-update-pr"
-    || value === "worktree-view-pr"
-    || value === "worktree-decide-later"
-    || value === "worktree-dismiss"
-    || value === "session-resume"
-    || value === "session-restart"
-    || value === "view-output"
-    || value === "question-answer"
-    ? value
-    : undefined;
+  return typeof value === "string" && Object.hasOwn(ACTION_KINDS, value) ? value as SessionActionKind : undefined;
 }
 
 function normalizeRoute(raw: unknown): SessionRoute | undefined {
@@ -699,11 +706,13 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     planDecisionVersion: toOptionalNumber(raw.planDecisionVersion),
     expiresAt: toOptionalNumber(raw.expiresAt),
     consumedAt: toOptionalNumber(raw.consumedAt),
+    consumptionId: toOptionalString(raw.consumptionId),
     optionIndex: toOptionalNumber(raw.optionIndex),
     pendingInputRequestId: toOptionalString(raw.pendingInputRequestId),
     pendingInputQuestionId: toOptionalString(raw.pendingInputQuestionId),
     label: toOptionalString(raw.label),
     targetUrl: toOptionalString(raw.targetUrl),
+    pluginUpdateVersion: toOptionalString(raw.pluginUpdateVersion),
     route: normalizeRoute(raw.route),
     launchName: toOptionalString(raw.launchName),
     launchPrompt: toOptionalString(raw.launchPrompt),

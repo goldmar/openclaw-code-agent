@@ -35,6 +35,15 @@ function shortenQuestionButtonLabel(label: string): string {
   return `${codePoints.slice(0, QUESTION_BUTTON_LABEL_MAX_LENGTH - QUESTION_BUTTON_LABEL_ELLIPSIS.length).join("")}${QUESTION_BUTTON_LABEL_ELLIPSIS}`;
 }
 
+const WORKTREE_DECISION_TOKEN_KINDS: readonly SessionActionKind[] = [
+  "worktree-merge",
+  "worktree-create-pr",
+  "worktree-update-pr",
+  "worktree-view-pr",
+  "worktree-decide-later",
+  "worktree-dismiss",
+];
+
 export class SessionInteractionService {
   constructor(
     private readonly actionTokens: SessionActionTokenStore,
@@ -78,6 +87,13 @@ export class SessionInteractionService {
 
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
     this.actionTokens.deletePlanDecisionTokensForSession(sessionId, keepVersion);
+  }
+
+  /** Drop every worktree-decision button of a session (before a replacement set is minted). */
+  clearWorktreeDecisionTokens(sessionId: string): void {
+    for (const kind of WORKTREE_DECISION_TOKEN_KINDS) {
+      this.actionTokens.deleteActionTokensForSessionByKind(sessionId, kind);
+    }
   }
 
   makeActionButton(

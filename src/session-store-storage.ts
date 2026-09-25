@@ -103,7 +103,7 @@ export function saveSessionStoreIndex(
       repoPolicies,
     };
     // Host json-store: private (0600) file, fsync'd temp write, atomic rename.
-    saveJsonFile(indexPath, payload);
+    sessionStoreStorageInternals.saveJsonFile(indexPath, payload);
     return true;
   } catch (err: unknown) {
     log.warn(`[SessionStore] Failed to save session index: ${errorMessage(err)}`);
@@ -294,6 +294,8 @@ function backupSessionIndex(indexPath: string, rawPayload: string, reason: strin
 export const sessionStoreStorageInternals = {
   archiveLegacySessionIndex,
   backupSessionIndex,
+  /** The atomic index write (fault-injection and snapshot tests wrap it). */
+  saveJsonFile,
 };
 
 export function cleanupSessionOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {

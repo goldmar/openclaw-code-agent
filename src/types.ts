@@ -282,6 +282,11 @@ export interface SessionActionToken {
   planDecisionVersion?: number;
   expiresAt?: number;
   consumedAt?: number;
+  /**
+   * Identifies the click that consumed the token. With two writers of the
+   * session index, the first consumption persisted wins and only its click acts.
+   */
+  consumptionId?: string;
   optionIndex?: number;
   pendingInputRequestId?: string;
   pendingInputQuestionId?: string;

@@ -112,6 +112,9 @@ export class SessionQuestionService {
         userMessage,
         notifyUser: "always",
         buttons,
+        // A question answered (or superseded) before its buttons went out, for
+        // example while their tokens waited to be persisted, is never shown.
+        shouldDispatch: () => this.pendingQuestions.get(session.id)?.requestId === requestId,
         wakeMessageOnNotifySuccess: [
           `AskUserQuestion delivered to the user.`,
           `Session: ${session.name} | ID: ${session.id}`,

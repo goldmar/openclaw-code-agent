@@ -397,4 +397,89 @@ describe("WakeDeliveryExecutor", () => {
     assert.ok(scheduledTimers.length > 0, "expected a non-ordered dispatch retry to be scheduled");
     assert.doesNotThrow(() => executor.dispose());
   });
+
+  it("reports a wake the validator skipped as skipped: neither success nor failure", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    t.mock.property(wakeDeliveryExecutorInternals, "execFile", fakeExecFile((_file, _args, callback) => {
+      queueMicrotask(() => callback(null, "{\"final\":\"NO_REPLY\"}", ""));
+    }));
+    const outcomes: string[] = [];
+    executor.execute(chatSendArgs("skip me"), {
+      label: "completion-wake",
+      sessionId: "session-skip",
+      target: "chat.send",
+      phase: "wake",
+      routeSummary: "session:agent:main:main",
+      messageKind: "wake",
+      successValidator: () => ({ outcome: "skipped", reason: "the orchestrator already replied" }),
+      onSuccess: () => { outcomes.push("success"); },
+      onSkipped: (reason) => { outcomes.push(`skipped: ${reason}`); },
+      onFinalFailure: () => { outcomes.push("failure"); },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(outcomes, ["skipped: the orchestrator already replied"]);
+  });
+
+  it("does not report a validator skip once the dispatch no longer applies", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    t.mock.property(wakeDeliveryExecutorInternals, "execFile", fakeExecFile((_file, _args, callback) => {
+      queueMicrotask(() => callback(null, "ok", ""));
+    }));
+    let current = true;
+    const outcomes: string[] = [];
+    executor.execute(chatSendArgs("obsolete"), {
+      label: "completion-wake",
+      sessionId: "session-obsolete",
+      target: "chat.send",
+      phase: "wake",
+      routeSummary: "session:agent:main:main",
+      messageKind: "wake",
+      shouldContinue: () => current,
+      successValidator: () => {
+        current = false;
+        return { outcome: "skipped", reason: "superseded" };
+      },
+      onSkipped: () => { outcomes.push("skipped"); },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(outcomes, []);
+  });
+
+  it("clears only the failed session's pending retries", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    const attempts = new Map<string, number>();
+    t.mock.property(wakeDeliveryExecutorInternals, "execFile", fakeExecFile((_file, args, callback) => {
+      const message = chatSendMessage(args);
+      attempts.set(message, (attempts.get(message) ?? 0) + 1);
+      queueMicrotask(() => callback(execError("gateway unavailable"), "", ""));
+    }));
+    const timers: Array<{ fn: () => void; cleared: boolean }> = [];
+    global.setTimeout = (((fn: () => void) => {
+      const timer = { fn, cleared: false, unref: () => timer };
+      timers.push(timer);
+      return timer as never;
+    }) as unknown as typeof setTimeout);
+    global.clearTimeout = (((timer: { cleared?: boolean }) => {
+      if (timer) timer.cleared = true;
+    }) as typeof clearTimeout);
+    const cleared: string[] = [];
+    for (const sessionId of ["session-a", "session-b"]) {
+      executor.execute(chatSendArgs(sessionId), {
+        label: "wake",
+        sessionId,
+        target: "chat.send",
+        phase: "wake",
+        routeSummary: "session:agent:main:main",
+        messageKind: "wake",
+        onFinalFailure: () => { cleared.push(`final:${sessionId}`); },
+      });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(timers.length, 2, "one retry scheduled per session");
+    executor.clearRetryTimersForSession("session-a");
+    assert.deepEqual(timers.map((timer) => timer.cleared), [true, false]);
+    executor.clearPendingRetries();
+    assert.deepEqual(timers.map((timer) => timer.cleared), [true, true]);
+    assert.deepEqual(cleared, []);
+  });
 });

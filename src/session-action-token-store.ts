@@ -123,8 +123,21 @@ export class SessionActionTokenStore {
     const token = this.getActionToken(tokenId);
     if (!token || token.consumedAt != null) return undefined;
     token.consumedAt = Date.now();
+    token.consumptionId = randomUUID();
     this.notifyChanged();
     return token;
+  }
+
+  /**
+   * Whether the consumption `consumptionId` of this token is still the one this
+   * store holds. Call it once the consumption is persisted: when another writer
+   * of the index persisted a consumption of the same token first, the merge
+   * adopted that one and this click must not act.
+   */
+  confirmActionTokenConsumption(tokenId: string, consumptionId: string | undefined): boolean {
+    if (!consumptionId) return true;
+    const token = this.tokens.get(tokenId);
+    return !token || token.consumptionId === undefined || token.consumptionId === consumptionId;
   }
 
   consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
