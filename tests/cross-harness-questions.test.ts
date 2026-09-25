@@ -186,6 +186,13 @@ for (const name of BACKEND_NAMES) {
       assert.deepEqual(await outcome, { kind: "answered", answers: { "Which color?": ["Red"] } });
     });
 
+    it("interrupts on request even while a question waits for an answer", async () => {
+      fixture = await startInteractionFixture(name);
+      await askAndWait([COLOR]);
+      const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: "", interrupt: true, userInitiated: true });
+      assert.doesNotMatch(result.text, /Answer not submitted/);
+    });
+
     for (const channel of ["telegram", "discord"] as const) {
       it(`answers a question with a ${channel} button`, async () => {
         fixture = await startInteractionFixture(name);
@@ -245,8 +252,14 @@ for (const name of BACKEND_NAMES) {
       const secondButtons = await questionButtons(before);
       assert.deepEqual(secondButtons.map((button) => button.label), ["Small", "Large"]);
 
-      const stale = await clickButton(buttonNamed(firstButtons, "Blue"));
-      assert.match(stale.replies.join("\n"), /no longer active/);
+      // Every prompt of step 1 (Claude Code sends two) is outdated now.
+      const stepOnePrompts = fixture.notifications.slice(0, before)
+        .filter((entry) => QUESTION_LABELS.test(entry.request.label) && (entry.request.buttons?.length ?? 0) > 0);
+      assert.ok(stepOnePrompts.length > 0);
+      for (const prompt of stepOnePrompts) {
+        const stale = await clickButton(buttonNamed(prompt.request.buttons!.flat(), "Blue"));
+        assert.match(stale.replies.join("\n"), /no longer (?:active|waiting)/, prompt.request.label);
+      }
       assert.equal(fixture.session.pendingInputState?.activeQuestionIndex, 1, "the stale click does not answer step 2");
 
       await clickButton(buttonNamed(secondButtons, "Large"));

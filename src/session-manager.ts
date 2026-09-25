@@ -2125,9 +2125,12 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== "running") return undefined;
     if (!requestId) return true;
-    if (this.pendingAskUserQuestions.get(sessionId)?.requestId === requestId) return true;
     const state = session.pendingInputState;
-    if (!state || state.requestId !== requestId) return false;
+    if (!state) {
+      // A Claude question the session has not applied yet is still current.
+      return this.pendingAskUserQuestions.get(sessionId)?.requestId === requestId;
+    }
+    if (state.requestId !== requestId) return false;
     if (!questionId) return true;
     const activeIndex = state.activeQuestionIndex ?? 0;
     const activeQuestionId = state.questions?.[activeIndex]?.id

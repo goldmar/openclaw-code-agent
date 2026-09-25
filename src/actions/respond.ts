@@ -505,7 +505,8 @@ export async function executeRespond(
       }
     }
 
-    const replyError = params.approve ? undefined : pendingInputReplyError(session, params.message);
+    // An interrupt is an instruction, not an answer: it is never held back.
+    const replyError = params.approve || params.interrupt ? undefined : pendingInputReplyError(session, params.message);
     if (replyError) {
       return { text: replyError, isError: true };
     }

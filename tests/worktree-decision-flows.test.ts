@@ -106,6 +106,23 @@ for (const name of BACKEND_NAMES) {
       assert.equal(existsSync(join(repo, "feature.txt")), false, "nothing was merged");
     });
 
+    it("runs only one of two decisions clicked at the same time", async () => {
+      const repo = createRepo();
+      const f = await finishSessionWithChange(name, repo, "ask");
+      const buttons = await decisionButtons("worktree-merge-ask");
+      const [merge, discard] = await Promise.all([
+        clickButton(buttonNamed(buttons, "Merge")),
+        clickButton(buttonNamed(buttons, "Discard")),
+      ]);
+      assert.match(discard.replies.join("\n"), /still being processed/);
+      assert.doesNotMatch(merge.replies.join("\n"), /still being processed/);
+      await waitUntil(() => existsSync(join(repo, "feature.txt")), "branch merged into main");
+      assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "merged");
+
+      const late = await clickButton(buttonNamed(buttons, "Discard"));
+      assert.match(late.replies.join("\n"), /already resolved \(merged\)/);
+    });
+
     it("delegates the decision to the orchestrator, which can hand it to the user with buttons", async () => {
       const repo = createRepo();
       const f = await finishSessionWithChange(name, repo, "delegate");
