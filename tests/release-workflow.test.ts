@@ -131,6 +131,11 @@ describe("release workflow", () => {
       /git merge-base --is-ancestor "\$COMMIT" origin\/main\n\s+git switch --detach "\$COMMIT"\n\s+test "\$\(git rev-parse HEAD\)" = "\$COMMIT"/u,
     );
     assert.match(
+      job("publish-clawhub"),
+      /git merge-base --is-ancestor "\$COMMIT" origin\/main\n\s+git switch --detach "\$COMMIT"[\s\S]*npm ci --prefix "\$RELEASE_TOOLS_DIR"/u,
+      "ClawHub publishes with the release tools of the verified commit",
+    );
+    assert.match(
       job("github-release"),
       /git merge-base --is-ancestor "\$COMMIT" origin\/main\n\s+git show "\$COMMIT:CHANGELOG\.md"/u,
     );

@@ -217,14 +217,22 @@ jobs:
     permissions:
       contents: read
     steps:
-      # The release tools come from the dispatch ref (main), like the workflow itself.
+      # The same release tools the verify job used: those of the selected main commit.
       - name: Checkout release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
           sparse-checkout: .github/release-tools
           sparse-checkout-cone-mode: false
+
+      - name: Switch to the selected main commit
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          git switch --detach "$COMMIT"
+          test "$(git rev-parse HEAD)" = "$COMMIT"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
