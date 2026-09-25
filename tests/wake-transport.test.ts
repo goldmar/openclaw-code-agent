@@ -14,7 +14,7 @@ describe("WakeTransport", () => {
   it("keeps chat.send payloads limited to the gateway-supported session wake shape", () => {
     const transport = new WakeTransport();
     const args = transport.buildChatSendArgs(
-      "agent:main:telegram:group:-1003863755361:topic:13832",
+      "agent:main:telegram:group:-1001234567890:topic:13832",
       "wake up",
       true,
     );
@@ -28,7 +28,7 @@ describe("WakeTransport", () => {
       "30000",
     ]);
     const payload = JSON.parse(args[7] ?? "{}") as Record<string, unknown>;
-    assert.equal(payload.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(payload.sessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
     assert.equal(payload.message, "wake up");
     assert.equal(payload.deliver, true);
     assert.equal(payload.channel, undefined);
@@ -111,7 +111,7 @@ describe("RuntimeSystemEventTransport", () => {
 
   it("targets the origin session when a session key is known", async () => {
     const { events, heartbeats } = installSystem();
-    const sessionKey = "agent:main:telegram:group:-1003863755361:topic:13832";
+    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:13832";
 
     await new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey, wakeNow: true });
 
@@ -121,7 +121,7 @@ describe("RuntimeSystemEventTransport", () => {
 
   it("enqueues a notice for the next turn without requesting a heartbeat", async () => {
     const { events, heartbeats } = installSystem();
-    const sessionKey = "agent:main:telegram:group:-1003863755361:topic:13832";
+    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:13832";
 
     await new RuntimeSystemEventTransport().enqueue("Session started", {
       sessionKey,

@@ -2032,9 +2032,9 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         route: {
           provider: "telegram",
           accountId: "bot",
-          target: "-1003863755361",
+          target: "-1001234567890",
           threadId: "13832",
-          sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
         },
         createdAt: now,
         completedAt: now,
@@ -2075,7 +2075,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       assert.equal(pending.lastWorktreeReminderAt, new Date(now).toISOString());
       assert.deepEqual(dispatchCalls, []);
       assert.equal(pending.route.threadId, "13832");
-      assert.equal(pending.route.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+      assert.equal(pending.route.sessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
     } finally {
       Date.now = originalDateNow;
     }
@@ -2167,7 +2167,7 @@ describe("SessionManager.notifySession()", () => {
   });
 
   it("delegates direct session notifications to the unified dispatcher", () => {
-    const s = fakeSession({ originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239" });
+    const s = fakeSession({ originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239" });
     sm.notifySession(s, "hello", "launch");
     assert.deepEqual((sm as any).__dispatchCalls, [[s, {
       label: "launch",
@@ -2182,9 +2182,9 @@ describe("SessionManager.notifySession()", () => {
       offerId: "plugin-readiness-v2026.5.18",
       route: {
         provider: "telegram",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
       text: "Readiness report body",
       planName: "plugin-readiness-v2026.5.18",
@@ -2533,9 +2533,9 @@ describe("SessionManager resumed launch routing", () => {
     const route = {
       provider: "telegram",
       accountId: "bot",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "26",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
     };
     (sm as any).store.persisted.set("7dkMOGyB", {
       sessionId: "fix-pr-98922-quality-codex",
@@ -2546,7 +2546,7 @@ describe("SessionManager resumed launch routing", () => {
       workdir: "/tmp",
       status: "completed",
       costUsd: 0,
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: "26",
       originSessionKey: route.sessionKey,
       route,
@@ -2569,10 +2569,10 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(session.resumeSessionId, "7dkMOGyB");
       assert.equal(harness.lastLaunchOptions?.resumeSessionId, "7dkMOGyB");
       assert.equal(session.route?.provider, "telegram");
-      assert.equal(session.route?.target, "-1003863755361");
+      assert.equal(session.route?.target, "-1001234567890");
       assert.equal(session.route?.threadId, "26");
       assert.equal(session.route?.sessionKey, route.sessionKey);
-      assert.equal(session.originChannel, "telegram|bot|-1003863755361");
+      assert.equal(session.originChannel, "telegram|bot|-1001234567890");
       assert.equal(session.originThreadId, "26");
       assert.equal(session.originSessionKey, route.sessionKey);
     } finally {
@@ -2605,9 +2605,9 @@ describe("SessionManager.launchPlanOffer()", () => {
     const route = {
       provider: "telegram",
       accountId: "bot1",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     } as const;
 
     const session = await sm.launchPlanOffer({
@@ -2624,9 +2624,9 @@ describe("SessionManager.launchPlanOffer()", () => {
     assert.equal(spawnCalls[0]?.planApproval, "ask");
     assert.equal(spawnCalls[0]?.worktreeStrategy, "auto-pr");
     assert.equal(spawnCalls[0]?.route, route);
-    assert.equal(spawnCalls[0]?.originChannel, "telegram|bot1|-1003863755361");
+    assert.equal(spawnCalls[0]?.originChannel, "telegram|bot1|-1001234567890");
     assert.equal(spawnCalls[0]?.originThreadId, "13832");
-    assert.equal(spawnCalls[0]?.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(spawnCalls[0]?.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
   });
 });
 

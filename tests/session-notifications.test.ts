@@ -1551,9 +1551,9 @@ describe("SessionNotificationService", () => {
     );
     const route = {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "32947",
-      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:32947",
+      sessionKey: "agent:x:telegram:channel:-1001234567890:topic:32947",
     };
     const session = {
       id: "trading-platform-readiness-gate-fix-restart",
@@ -1573,7 +1573,7 @@ describe("SessionNotificationService", () => {
       wakeMessage: [
         "Goal task succeeded.",
         goalStatus,
-        'originRoute: {"provider":"telegram","target":"-1003863755361","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1003863755361:topic:32947"}',
+        'originRoute: {"provider":"telegram","target":"-1001234567890","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1001234567890:topic:32947"}',
       ].join("\n"),
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-readiness-gate-fix-restart",
@@ -2182,9 +2182,9 @@ describe("SessionNotificationService", () => {
     const route = {
       provider: "telegram",
       accountId: "default",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
     const session = {
       id: "k7rM7W1J",
@@ -2306,15 +2306,15 @@ describe("SessionNotificationService", () => {
     );
     const openClawTopic = {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:13832",
+      sessionKey: "agent:x:telegram:channel:-1001234567890:topic:13832",
     };
     const tradingPlatformTopic = {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "32947",
-      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:32947",
+      sessionKey: "agent:x:telegram:channel:-1001234567890:topic:32947",
     };
     const outcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#171:agent/fix-duplicate-completion-notifications-0ce3:created";
     const notify = (id: string, route: typeof openClawTopic) => service.notifyWorktreeOutcome(
@@ -2759,9 +2759,9 @@ describe("SessionNotificationService", () => {
       };
       const route = {
         provider: "telegram",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       };
       const session = {
         id: "tiPnvl0H",

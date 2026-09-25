@@ -289,10 +289,10 @@ describe("SessionLifecycleService", () => {
       route: {
         provider: "system",
         target: "system",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
       },
       originChannel: "telegram",
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     }));
 
     assert.equal(requests.length, 1);

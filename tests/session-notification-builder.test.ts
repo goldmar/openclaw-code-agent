@@ -596,7 +596,7 @@ describe("session-notification-builder", () => {
       ].join("\n"),
       originThreadLine: [
         "Session origin route (authoritative for human follow-ups):",
-        'originRoute: {"provider":"telegram","target":"-1003863755361","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1003863755361:topic:32947"}',
+        'originRoute: {"provider":"telegram","target":"-1001234567890","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1001234567890:topic:32947"}',
         "Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.",
       ].join("\n"),
       canonicalStatusDelivered: true,
@@ -688,7 +688,7 @@ describe("session-notification-builder", () => {
       baseBranch: "main",
       promptSnippet: "Fix the bug",
       commitLines: ["- feat: implement fix"],
-      originThreadLine: "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-1003863755361\",\"threadId\":\"13832\"}",
+      originThreadLine: "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-1001234567890\",\"threadId\":\"13832\"}",
       diffSummary: {
         commits: 1,
         filesChanged: 2,

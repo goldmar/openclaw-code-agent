@@ -47,15 +47,15 @@ describe("prepareSessionBootstrap()", () => {
           workdir: "/tmp",
           status: "completed",
           costUsd: 0,
-          originChannel: "telegram|bot|-1003863755361",
+          originChannel: "telegram|bot|-1001234567890",
           originThreadId: "26",
-          originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+          originSessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
           route: {
             provider: "telegram",
             accountId: "bot",
-            target: "-1003863755361",
+            target: "-1001234567890",
             threadId: "26",
-            sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+            sessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
           },
         };
       },
@@ -63,12 +63,12 @@ describe("prepareSessionBootstrap()", () => {
 
     assert.equal(bootstrap.actualWorkdir, "/tmp");
     assert.equal(config.route?.provider, "telegram");
-    assert.equal(config.route?.target, "-1003863755361");
+    assert.equal(config.route?.target, "-1001234567890");
     assert.equal(config.route?.threadId, "26");
-    assert.equal(config.route?.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
-    assert.equal(config.originChannel, "telegram|bot|-1003863755361");
+    assert.equal(config.route?.sessionKey, "agent:main:telegram:group:-1001234567890:topic:26");
+    assert.equal(config.originChannel, "telegram|bot|-1001234567890");
     assert.equal(config.originThreadId, "26");
-    assert.equal(config.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
+    assert.equal(config.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:26");
   });
 
   it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", async () => {

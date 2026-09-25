@@ -30,9 +30,9 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
   return {
     provider: "telegram",
     accountId: "bot",
-    target: "-1003863755361",
+    target: "-1001234567890",
     threadId: "11239",
-    sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     ...overrides,
   };
 }
@@ -195,7 +195,7 @@ function findCall<K extends DeliveryCall["kind"]>(kind: K): Extract<DeliveryCall
   return calls.find((call) => call.kind === kind) as Extract<DeliveryCall, { kind: K }> | undefined;
 }
 
-const ORIGIN_SESSION_KEY = "agent:main:telegram:group:-1003863755361:topic:11239";
+const ORIGIN_SESSION_KEY = "agent:main:telegram:group:-1001234567890:topic:11239";
 /** An origin session with no deliverable chat route (for example a cron or CLI-launched agent turn). */
 const NON_ROUTABLE_ORIGIN_SESSION_KEY = "agent:ops:main";
 
@@ -262,9 +262,9 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-1",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
     const infoLogs: string[] = [];
     console.debug = (message?: unknown, ...rest: unknown[]) => {
@@ -282,23 +282,23 @@ describe("WakeDispatcher", () => {
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
     assert.equal(params.accountId, "bot");
-    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.to, "-1001234567890");
     assert.equal(params.text, "🚀 launched");
     assert.equal(params.threadId, "11239");
     await waitFor(
       () => infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")),
       "dispatcher completion log",
     );
-    assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|-1003863755361#11239\"")));
+    assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|-1001234567890#11239\"")));
   });
 
   it("sends buttons only after their tokens are persisted, and never after dispose", async () => {
     const session: FakeSession = {
       id: "session-buttons",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
     const buttons = [[{ label: "Merge", callbackData: "token-1" }]];
 
@@ -347,7 +347,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -376,10 +376,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-worktree-deferred-wake",
-      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -398,7 +398,7 @@ describe("WakeDispatcher", () => {
     const calls = await waitForCalls(2);
     assert.equal(asDurableSend(calls[0]).text, "✅ Merged: agent/example → main");
     const wakeParams = asChatSend(calls[1]);
-    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
     assert.equal(wakeParams.message, "Worktree follow-through outcome recorded.");
   });
 
@@ -406,10 +406,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-worktree-grace-delay",
-      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
     const delays: number[] = [];
 
@@ -446,7 +446,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
     let shouldDeliverPlanV2 = true;
 
@@ -484,7 +484,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
     const errorLogs: string[] = [];
     console.error = (message?: unknown, ...rest: unknown[]) => {
@@ -564,10 +564,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-direct",
-      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1001234567890:topic:28" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 28,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
     };
     const infoLogs: string[] = [];
     console.debug = (message?: unknown, ...rest: unknown[]) => {
@@ -587,7 +587,7 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(calls, [{
       kind: "durable-send",
       channel: "telegram",
-      to: "-1003863755361",
+      to: "-1001234567890",
       accountId: "bot",
       threadId: "28",
       text: "🚀 launched",
@@ -606,10 +606,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-direct-unavailable",
-      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1001234567890:topic:28" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 28,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -627,7 +627,7 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(calls.map((call) => call.kind), ["durable-send", "durable-send", "system-event"]);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.equal(asDurableSend(calls[1]).text, "✅ completed");
-    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-runtime-direct-unavailable", "agent:main:telegram:group:-1003863755361:topic:28"));
+    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-runtime-direct-unavailable", "agent:main:telegram:group:-1001234567890:topic:28"));
   });
 
   it("does not resend a plain notification through a system event after an ambiguous durable-send timeout", async (t) => {
@@ -638,7 +638,7 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-durable-timeout",
       route: buildRoute(),
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -667,10 +667,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-strict-direct-unavailable",
-      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1001234567890:topic:28" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 28,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:28",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -693,10 +693,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict",
-      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1001234567890:topic:26" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 26,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
     };
     const errorLogs: string[] = [];
     console.error = (message?: unknown, ...rest: unknown[]) => {
@@ -721,7 +721,7 @@ describe("WakeDispatcher", () => {
     assert.equal(asDurableSend(calls[0]).threadId, "26");
     const wakeParams = asChatSend(calls[1]);
     assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
-    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1001234567890:topic:26");
     assert.ok(errorLogs.some((line) => line.includes("\"terminal\":true") && line.includes("\"target\":\"message.send\"")));
   });
 
@@ -729,10 +729,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict-failure",
-      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1001234567890:topic:26" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 26,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
     };
 
     rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "telegram send failed" });
@@ -760,10 +760,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict-no-wake",
-      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1001234567890:topic:26" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 26,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:26",
     };
     let notifySucceeded = 0;
     let notifyFailed = 0;
@@ -817,10 +817,10 @@ describe("WakeDispatcher", () => {
       route: {
         provider: "system",
         target: "system",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
       },
       originChannel: "telegram",
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -833,7 +833,7 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 1);
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
-    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.to, "-1001234567890");
     assert.equal(params.threadId, "11239");
     assert.equal(params.text, "🚀 launched");
   });
@@ -855,9 +855,9 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-2",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
       originAgentId: "main",
     };
 
@@ -892,7 +892,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
       originAgentId: "main",
     };
 
@@ -935,7 +935,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
       originAgentId: "main",
     };
 
@@ -965,9 +965,9 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-button-failure",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
     const errorLogs: string[] = [];
     console.error = (message?: unknown, ...rest: unknown[]) => {
@@ -1059,7 +1059,7 @@ describe("WakeDispatcher", () => {
         target: "channel:999",
       },
       originChannel: "telegram|bot|12345",
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1099,7 +1099,7 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-origin-session-key-wake",
       route: buildRoute({ sessionKey: undefined }),
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1113,7 +1113,7 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.kind, "chat-send");
     const wakeParams = asChatSend(calls[0]);
-    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:11239");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1001234567890:topic:11239");
     assert.equal(wakeParams.channel, undefined);
     assert.equal(wakeParams.threadId, undefined);
   });
@@ -1144,7 +1144,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute({
         provider: "discord",
         accountId: undefined,
-        target: "channel:1481874223294054540",
+        target: "channel:1400000000000000001",
         threadId: undefined,
         sessionKey: undefined,
       }),
@@ -1160,7 +1160,7 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 1);
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "discord");
-    assert.equal(params.to, "channel:1481874223294054540");
+    assert.equal(params.to, "channel:1400000000000000001");
     assert.equal(params.text, "🚀 launched");
   });
 
@@ -1171,7 +1171,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute({
         provider: "discord",
         accountId: undefined,
-        target: "user:774236449288749097",
+        target: "user:700000000000000001",
         threadId: undefined,
         sessionKey: undefined,
       }),
@@ -1187,7 +1187,7 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 1);
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "discord");
-    assert.equal(params.to, "user:774236449288749097");
+    assert.equal(params.to, "user:700000000000000001");
     assert.equal(params.text, "🚀 launched");
   });
 
@@ -1198,13 +1198,13 @@ describe("WakeDispatcher", () => {
       route: buildRoute({
         provider: "discord",
         accountId: undefined,
-        target: "channel:1481874223294054540",
+        target: "channel:1400000000000000001",
         threadId: "1481999999999999999",
         sessionKey: undefined,
       }),
-      originChannel: "discord|1481874223294054540",
+      originChannel: "discord|1400000000000000001",
       originThreadId: "1481999999999999999",
-      originSessionKey: "agent:main:discord:channel:1481874223294054540",
+      originSessionKey: "agent:main:discord:channel:1400000000000000001",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1220,7 +1220,7 @@ describe("WakeDispatcher", () => {
     const calls = await waitForCalls(1);
     const args = asDurableSend(calls[0]);
     assert.equal(args.channel, "discord");
-    assert.equal(args.to, "channel:1481874223294054540");
+    assert.equal(args.to, "channel:1400000000000000001");
     assert.equal(args.text, "📋 Plan ready");
     assert.equal(args.threadId, "1481999999999999999");
     assert.deepEqual(args.presentation, {
@@ -1241,7 +1241,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute({
         provider: "discord",
         accountId: "bot-account",
-        target: "channel:1481874223294054540",
+        target: "channel:1400000000000000001",
         threadId: "1481999999999999999",
         sessionKey: undefined,
       }),
@@ -1261,7 +1261,7 @@ describe("WakeDispatcher", () => {
     const args = asDurableSend(calls[0]);
     assert.equal(args.channel, "discord");
     assert.equal(args.accountId, "bot-account");
-    assert.equal(args.to, "channel:1481874223294054540");
+    assert.equal(args.to, "channel:1400000000000000001");
     assert.equal(args.threadId, "1481999999999999999");
     assert.deepEqual(args.presentation, {
       blocks: [{
@@ -1287,7 +1287,7 @@ describe("WakeDispatcher", () => {
       route: buildRoute({
         provider: "discord",
         accountId: "bot-account",
-        target: "channel:1481874223294054540",
+        target: "channel:1400000000000000001",
         threadId: "1481999999999999999",
         sessionKey: undefined,
       }),
@@ -1316,7 +1316,7 @@ describe("WakeDispatcher", () => {
     assert.match(failureLog, /"target":"message\.send"/);
     assert.match(failureLog, /"transportChannel":"discord"/);
     assert.match(failureLog, /"transportAccountId":"bot-account"/);
-    assert.match(failureLog, /"transportTarget":"channel:1481874223294054540"/);
+    assert.match(failureLog, /"transportTarget":"channel:1400000000000000001"/);
     assert.match(failureLog, /"transportThreadId":"1481999999999999999"/);
     assert.match(failureLog, /"buttonsPresent":true/);
     assert.match(failureLog, /"buttonCount":2/);
@@ -1329,9 +1329,9 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-paginated",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1384,10 +1384,10 @@ describe("WakeDispatcher", () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-paginated-diagnostics",
-      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
-      originChannel: "telegram|bot|-1003863755361",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832" }),
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1423,9 +1423,9 @@ describe("WakeDispatcher", () => {
     const session: FakeSession = {
       id: "session-partial-sequence-failure",
       route: buildRoute(),
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     };
 
     const deliveries: string[] = [];
@@ -1638,7 +1638,7 @@ describe("WakeDispatcher", () => {
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
     assert.equal(params.accountId, "bot");
-    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.to, "-1001234567890");
     assert.equal(params.text, "🚀 launched");
     assert.equal(params.threadId, "11239");
   });
@@ -1650,13 +1650,13 @@ describe("WakeDispatcher", () => {
       route: {
         provider: "telegram",
         accountId: "bot",
-        target: "-1003863755361",
+        target: "-1001234567890",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
-      originChannel: "telegram|bot|-1003863755361",
+      originChannel: "telegram|bot|-1001234567890",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1670,7 +1670,7 @@ describe("WakeDispatcher", () => {
     const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
     assert.equal(params.accountId, "bot");
-    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.to, "-1001234567890");
     assert.equal(params.text, "✅ completed");
     assert.equal(params.threadId, "13832");
   });
@@ -1703,13 +1703,13 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(calls[1], systemEvent(
       "Coding agent session completed. Send the user a short factual completion summary.",
       "session-no-visible-followup",
-      "agent:main:telegram:group:-1003863755361:topic:11239",
+      "agent:main:telegram:group:-1001234567890:topic:11239",
     ));
     assert.deepEqual(heartbeats, [{
       source: "notifications-event",
       intent: "immediate",
       reason: "wake",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
     }]);
     assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
     assert.equal(wakeFailed, 0);
@@ -1783,11 +1783,11 @@ describe("WakeDispatcher", () => {
         accountId: "bot",
         target: "5551234",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
       originChannel: "telegram",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1805,11 +1805,11 @@ describe("WakeDispatcher", () => {
     assert.ok(wakeCall, "expected a chat.send wake call");
 
     const notifyArgs = asDurableSend(notifyCall);
-    assert.equal(notifyArgs.to, "-1003863755361");
+    assert.equal(notifyArgs.to, "-1001234567890");
     assert.equal(notifyArgs.threadId, "13832");
 
     const wakeParams = asChatSend(wakeCall);
-    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
     assert.equal(wakeParams.channel, undefined);
     assert.equal(wakeParams.accountId, undefined);
     assert.equal(wakeParams.target, undefined);

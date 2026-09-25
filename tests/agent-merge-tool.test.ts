@@ -89,13 +89,13 @@ function installPersistedSessionWithNotificationService(args: {
     costUsd: 0,
     route: {
       provider: "telegram",
-      target: "-1003863755361",
+      target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
     },
-    originChannel: "telegram|-1003863755361",
+    originChannel: "telegram|-1001234567890",
     originThreadId: 13832,
-    originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
   };
 
   const matchesRef = (ref: string): boolean => [
@@ -393,9 +393,9 @@ describe("agent_merge push behavior", () => {
       assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
       assert.equal(capturedRequests[0].request.completionWakeSummaryRequired, true);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1003863755361"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1001234567890"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1003863755361:topic:13832"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
       assert.equal(persistedSession.worktreeMerged, true);
       assert.equal(persistedSession.worktreeState, "merged");
       assert.equal(persistedSession.pendingWorktreeDecisionSince, undefined);

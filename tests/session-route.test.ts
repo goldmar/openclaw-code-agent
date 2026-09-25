@@ -11,11 +11,11 @@ import {
 
 describe("session-route", () => {
   it("defaults bare numeric discord targets to channel routes", () => {
-    const route = routeFromOriginMetadata("discord|1481874223294054540");
+    const route = routeFromOriginMetadata("discord|1400000000000000001");
     assert.deepEqual(route, {
       provider: "discord",
       accountId: undefined,
-      target: "channel:1481874223294054540",
+      target: "channel:1400000000000000001",
       threadId: undefined,
       sessionKey: undefined,
     });
@@ -23,46 +23,46 @@ describe("session-route", () => {
 
   it("keeps discord dm session keys normalized to user routes", () => {
     const route = routeFromOriginMetadata(
-      "discord|1481874223294054540",
+      "discord|1400000000000000001",
       undefined,
-      "agent:main:discord:dm:1481874223294054540",
+      "agent:main:discord:dm:1400000000000000001",
     );
     assert.deepEqual(route, {
       provider: "discord",
       accountId: undefined,
-      target: "user:1481874223294054540",
+      target: "user:1400000000000000001",
       threadId: undefined,
-      sessionKey: "agent:main:discord:dm:1481874223294054540",
+      sessionKey: "agent:main:discord:dm:1400000000000000001",
     });
   });
 
   it("maps discord group session keys to channel routes", () => {
     const route = routeFromOriginMetadata(
-      "discord|1481874223294054540",
+      "discord|1400000000000000001",
       undefined,
-      "agent:main:discord:group:1481874223294054540",
+      "agent:main:discord:group:1400000000000000001",
     );
     assert.deepEqual(route, {
       provider: "discord",
       accountId: undefined,
-      target: "channel:1481874223294054540",
+      target: "channel:1400000000000000001",
       threadId: undefined,
-      sessionKey: "agent:main:discord:group:1481874223294054540",
+      sessionKey: "agent:main:discord:group:1400000000000000001",
     });
   });
 
   it("canonicalizes mixed-case discord providers before target normalization", () => {
     const route = routeFromOriginMetadata(
-      "Discord|1481874223294054540",
+      "Discord|1400000000000000001",
       undefined,
-      "agent:main:discord:dm:1481874223294054540",
+      "agent:main:discord:dm:1400000000000000001",
     );
     assert.deepEqual(route, {
       provider: "discord",
       accountId: undefined,
-      target: "user:1481874223294054540",
+      target: "user:1400000000000000001",
       threadId: undefined,
-      sessionKey: "agent:main:discord:dm:1481874223294054540",
+      sessionKey: "agent:main:discord:dm:1400000000000000001",
     });
   });
 
@@ -147,22 +147,22 @@ describe("session-route", () => {
 
   it("formats an authoritative wake originRoute block for Telegram topic follow-ups", () => {
     const block = formatOriginRouteWakeBlock({
-      originChannel: "telegram|-1003863755361",
+      originChannel: "telegram|-1001234567890",
       originThreadId: 13832,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       route: {
         provider: "telegram",
         target: "5551234",
         threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       },
     });
 
     assert.match(block, /Session origin route \(authoritative for human follow-ups\):/);
     assert.match(block, /"provider":"telegram"/);
-    assert.match(block, /"target":"-1003863755361"/);
+    assert.match(block, /"target":"-1001234567890"/);
     assert.match(block, /"threadId":"13832"/);
-    assert.match(block, /"sessionKey":"agent:main:telegram:group:-1003863755361:topic:13832"/);
+    assert.match(block, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
     assert.match(block, /do not use a plain final assistant reply/i);
   });
 

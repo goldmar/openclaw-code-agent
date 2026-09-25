@@ -299,7 +299,7 @@ describe("OCA Codex Telegram proof runner", () => {
       writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password hunter2 apiKey abc123 credential lease-secret authorization: "Bearer abc123"');
       writeFileSync(
         join(artifactDir, "telegram-desktop.log"),
-        "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log mac /Users/runner/work/proof.log workspace /workspace/openclaw/proof.log runtime /run/user/1001/proof.log token=log-secret password hunter2 apiKey abc123 credential lease-secret",
+        "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1001234567890 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log mac /Users/runner/work/proof.log workspace /workspace/openclaw/proof.log runtime /run/user/1001/proof.log token=log-secret password hunter2 apiKey abc123 credential lease-secret",
       );
       writeFileSync(join(artifactDir, "telegram-desktop.png"), "fake rendered @qa_secret_user");
       writeFileSync(join(artifactDir, "session.json"), '{"secret":"x"}');
@@ -323,7 +323,7 @@ describe("OCA Codex Telegram proof runner", () => {
       const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
       assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(stagedLog, /qa_secret_user/);
-      assert.doesNotMatch(stagedLog, /-1003863755361/);
+      assert.doesNotMatch(stagedLog, /-1001234567890/);
       assert.doesNotMatch(stagedLog, /\/tmp\/oca-proof/);
       assert.doesNotMatch(stagedLog, /\/home\/runner\/work/);
       assert.doesNotMatch(stagedLog, /\/Users\/runner\/work/);
@@ -402,7 +402,7 @@ describe("OCA Codex Telegram proof runner", () => {
           return {
             credentialId: "credential-123456789",
             desktopWorkdir: join(sessionDir, "desktop"),
-            groupId: "-1003863755361",
+            groupId: "-1001234567890",
             leaseFile,
             ownerId: "telegram-user-owner",
             sutUsername: "sut_bot_secret",
@@ -428,7 +428,7 @@ describe("OCA Codex Telegram proof runner", () => {
           const publicLog = join(absoluteOutputDir, "telegram-desktop.log");
           const publicPng = join(absoluteOutputDir, "telegram-desktop.png");
           const privateSession = join(absoluteOutputDir, "session.json");
-          writeFileSync(publicLog, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 path /tmp/openclaw-proof/desktop.log password=hunter2");
+          writeFileSync(publicLog, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1001234567890 path /tmp/openclaw-proof/desktop.log password=hunter2");
           writeFileSync(publicPng, "fake png");
           writeFileSync(privateSession, '{"botToken":"123456789:abcdefghijklmnopqrstuvwxyzABCDE"}');
           return [
@@ -455,7 +455,7 @@ describe("OCA Codex Telegram proof runner", () => {
       const summaryText = readFileSync(join(repoRoot, outputDir, "summary.json"), "utf8");
       assert.doesNotMatch(summaryText, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(summaryText, /qa_secret_user/);
-      assert.doesNotMatch(summaryText, /-1003863755361/);
+      assert.doesNotMatch(summaryText, /-1001234567890/);
       assert.doesNotMatch(summaryText, /telegram-desktop\.png/);
 
       assert.equal(result.staged, join(outputDir, "public-artifacts"));
@@ -467,7 +467,7 @@ describe("OCA Codex Telegram proof runner", () => {
       const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
       assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(stagedLog, /qa_secret_user/);
-      assert.doesNotMatch(stagedLog, /-1003863755361/);
+      assert.doesNotMatch(stagedLog, /-1001234567890/);
       assert.doesNotMatch(stagedLog, /\/tmp\/openclaw-proof/);
       assert.doesNotMatch(stagedLog, /hunter2/);
     } finally {
