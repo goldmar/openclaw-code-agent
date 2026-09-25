@@ -4,9 +4,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pinnedRuntimeVersions } from "./lib/runtime-dependency-pins.mjs";
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
+const shrinkwrap = JSON.parse(readFileSync(join(rootDir, "npm-shrinkwrap.json"), "utf8"));
+// Expected versions come from package.json (the pinned floors) and, for the
+// MCP SDK's own ajv, from the shrinkwrap it ships with.
+const pinned = pinnedRuntimeVersions(packageJson);
+const mcpVersion = packageJson.dependencies["@modelcontextprotocol/sdk"];
+const ajvVersion = shrinkwrap.packages?.["node_modules/ajv"]?.version;
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const testRoot = mkdtempSync(join(tmpdir(), "oca-npm-consumer-"));
 
@@ -88,19 +95,14 @@ try {
 
   const tree = JSON.parse(runNpm(["ls", "--all", "--json"], consumerDir, { capture: true }));
   const plugin = requireDependency(tree, packageJson.name, packageJson.version, "consumer");
-  const mcp = requireDependency(plugin, "@modelcontextprotocol/sdk", "1.30.0", packageJson.name);
-  const ajv = requireDependency(mcp, "ajv", "8.20.0", "@modelcontextprotocol/sdk");
-  const rateLimit = requireDependency(
-    mcp,
-    "express-rate-limit",
-    "8.7.0",
-    "@modelcontextprotocol/sdk",
-  );
-  requireDependency(mcp, "@hono/node-server", "2.1.1", "@modelcontextprotocol/sdk");
-  requireDependency(mcp, "hono", "4.13.7", "@modelcontextprotocol/sdk");
-  requireDependency(ajv, "fast-uri", "3.1.8", "ajv");
-  requireDependency(plugin, "qs", "6.16.0", packageJson.name);
-  requireDependency(plugin, "ip-address", "10.7.2", packageJson.name);
+  const mcp = requireDependency(plugin, "@modelcontextprotocol/sdk", mcpVersion, packageJson.name);
+  const ajv = requireDependency(mcp, "ajv", ajvVersion, "@modelcontextprotocol/sdk");
+  requireDependency(mcp, "express-rate-limit", pinned["express-rate-limit"], "@modelcontextprotocol/sdk");
+  requireDependency(mcp, "@hono/node-server", pinned["@hono/node-server"], "@modelcontextprotocol/sdk");
+  requireDependency(mcp, "hono", pinned.hono, "@modelcontextprotocol/sdk");
+  requireDependency(ajv, "fast-uri", pinned["fast-uri"], "ajv");
+  requireDependency(plugin, "qs", pinned.qs, packageJson.name);
+  requireDependency(plugin, "ip-address", pinned["ip-address"], packageJson.name);
 
   console.log(`npm consumer install validated ${packageJson.name}@${packageJson.version}`);
 } finally {
