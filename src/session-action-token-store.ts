@@ -138,8 +138,9 @@ export class SessionActionTokenStore {
     // Bulk consumptions (question and plan tokens) carry no id; their callbacks
     // are serialized per session in-process instead.
     if (!consumptionId) return true;
-    const token = this.tokens.get(tokenId);
-    return !token || token.consumptionId === undefined || token.consumptionId === consumptionId;
+    // A consumption another writer persisted first replaces ours in the merge,
+    // including one from an older build that records no consumption id.
+    return this.tokens.get(tokenId)?.consumptionId === consumptionId;
   }
 
   consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {

@@ -1,7 +1,7 @@
 import "./test-env";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -223,6 +223,33 @@ describe("two writers of one session index (model)", () => {
         new SessionStore({ indexPath, env: {}, instanceId: "writer-b" }),
       ],
     );
+  });
+});
+
+describe("a consumption from an older build", () => {
+  it("wins over a later click whose save was deferred, although it carries no consumption id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-old-build-consumption-"));
+    const indexPath = join(dir, "sessions.json");
+    try {
+      const store = new SessionStore({ indexPath, env: {}, instanceId: "new-build" });
+      const token = store.actionTokenStore.createActionToken("s1", "worktree-merge", { expiresAt: Date.now() + 60_000 });
+      const lock = tryAcquireSessionStoreLock(indexPath);
+      assert.ok(typeof lock === "object");
+      const consumed = store.consumeActionToken(token.id);
+      assert.ok(consumed?.consumptionId, "this build records who consumed the token");
+      const consumptionId = consumed.consumptionId;
+      // Meanwhile an older runtime persists its own click, without a consumption id.
+      const disk = JSON.parse(readFileSync(indexPath, "utf-8")) as DiskIndex;
+      const row = disk.actionTokens.find((candidate) => candidate.id === token.id)!;
+      row.consumedAt = Date.now() - 1;
+      disk.revision = (disk.revision ?? 0) + 1;
+      writeFileSync(indexPath, JSON.stringify(disk));
+      lock.release();
+      await store.whenPersisted();
+      assert.equal(store.confirmActionTokenConsumption(token.id, consumptionId), false, "the older build's click acts; this one does not");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
