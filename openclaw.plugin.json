@@ -39,6 +39,14 @@
       {
         "path": "defaultWorktreeStrategy",
         "equals": "auto-pr"
+      },
+      {
+        "path": "harnesses.codex.permissionProfile",
+        "equals": ":danger-full-access"
+      },
+      {
+        "path": "harnesses.codex.approvalPolicy",
+        "equals": "never"
       }
     ]
   },

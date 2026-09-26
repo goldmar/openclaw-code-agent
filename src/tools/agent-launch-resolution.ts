@@ -239,8 +239,14 @@ export function resolveAgentLaunchRequest(
     if (!params.resume_session_id) {
       return { kind: "error", text: "Error: rewind_turns requires resume_session_id (optionally with fork_session=true)." };
     }
-    if (harness !== "codex") {
-      return { kind: "error", text: `Error: rewind_turns is only supported by the Codex harness (got "${harness}").` };
+    // N23: Codex (thread fork/revert), Claude Code (resumeSessionAt) and
+    // OpenCode (fork at a message) can drop the latest turns. OpenCode's
+    // in-place revert also restores files, so it only rewinds into a fork.
+    if (harness !== "codex" && harness !== "claude-code" && harness !== "opencode") {
+      return { kind: "error", text: `Error: rewind_turns is not supported by the "${harness}" harness.` };
+    }
+    if (harness === "opencode" && params.fork_session !== true) {
+      return { kind: "error", text: "Error: rewind_turns with the OpenCode harness requires fork_session=true (an in-place OpenCode revert would also undo file changes)." };
     }
   }
   const defaultModel = resolveDefaultModelForHarness(harness);

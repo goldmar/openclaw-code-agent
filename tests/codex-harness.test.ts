@@ -5,8 +5,8 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
-import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
-import { JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
+import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId, resetCodexAllowlistWarningsForTests } from "../src/harness/codex";
+import { JsonRpcRemoteError, JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
 import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { MIN_CODEX_CLI_VERSION, codexVersionError, codexVersionFromUserAgent } from "../src/harness/codex-protocol";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
@@ -535,7 +535,8 @@ describe("Codex App Server RPC transport", () => {
       assert.deepEqual(await client.request("initialize", {}), {});
       const turn = client.request("turn/start", { threadId: VALID_THREAD_ID });
       await question.promise;
-      await assert.rejects(turn, /codex app server stdio closed/);
+      // N28: the failure says how the server exited instead of "stdio closed".
+      await assert.rejects(turn, /codex app server exited \(exit code 3\) before it answered/);
       assert.equal(closed, 1, "the close handler fires once");
       await assert.rejects(() => client.request("turn/interrupt", {}), /stdio not connected/);
       reply.resolve({ answers: {} });
@@ -573,6 +574,37 @@ describe("Codex App Server RPC transport", () => {
     for (const secret of [/sk-test-secret/, /ghp_abc/, /hunter2/, /user:secret/, /\/home\/alice/, /abcdef1234567890abcdef1234567890/]) {
       assert.doesNotMatch(message, secret);
     }
+  });
+});
+
+describe("Codex App Server startup and error clarity (N28)", () => {
+  it("names a missing Codex command and how to fix it", async () => {
+    const client = new StdioJsonRpcClient("oca-missing-codex-binary-for-test", [], 2_000);
+    await client.connect();
+    await assert.rejects(
+      client.request("initialize", {}),
+      /Could not start the Codex App Server \(`oca-missing-codex-binary-for-test app-server`\).*ENOENT.*OPENCLAW_CODEX_APP_SERVER_COMMAND/s,
+    );
+    await client.close();
+  });
+
+  it("keeps the JSON-RPC error code and data of a failed request", async () => {
+    const pending = new Map<string, { method?: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+    const rejection = new Promise<Error>((resolve) => {
+      pending.set("rpc-1", { method: "thread/resume", resolve: () => undefined, reject: resolve, timer: setTimeout(() => undefined, 0) });
+    });
+    await dispatchJsonRpcEnvelope({ id: "rpc-1", error: { code: -32600, message: "no rollout found", data: { threadId: "t-1" } } }, {
+      pending,
+      onNotification: () => undefined,
+      onRequest: async () => ({}),
+      respond: () => undefined,
+    });
+    const error = await rejection;
+    assert.ok(error instanceof JsonRpcRemoteError);
+    assert.equal(error.code, -32600);
+    assert.deepEqual(error.data, { threadId: "t-1" });
+    assert.equal(error.method, "thread/resume");
+    assert.match(error.message, /rpc error \(-32600\) on thread\/resume: no rollout found \(\{"threadId":"t-1"\}\)/);
   });
 });
 
@@ -635,7 +667,8 @@ describe("CodexHarness launch settings", () => {
       model: "gpt-6-astra",
       serviceTier: "priority",
       developerInstructions: "You are working in a git worktree.",
-      permissions: ":danger-full-access",
+      // D5: a thread set up for plan review starts read-only as well.
+      permissions: ":read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
     });
@@ -644,6 +677,10 @@ describe("CodexHarness launch settings", () => {
       input: [{ type: "text", text: "ship it", text_elements: [] }],
       model: "gpt-6-astra",
       effort: "max",
+      // D5: plan turns run read-only and can never escalate.
+      permissions: ":read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
       collaborationMode: {
         mode: "plan",
         settings: { model: "gpt-6-astra", reasoning_effort: "max", developer_instructions: null },
@@ -1392,5 +1429,303 @@ describe("CodexHarness steering, interrupts, and thread actions", () => {
     for (const removed of ["thread/new", "turn/failed", "turn/cancelled", "thread/rollback"]) {
       assert.equal(methods.has(removed), false, removed);
     }
+  });
+});
+
+describe("CodexHarness plan review sandbox (D5)", () => {
+  it("runs plan turns read-only with approvals off, and restores the configured posture on every other turn", async () => {
+    setPluginRuntime({ config: { current: () => ({ tools: { exec: { mode: "auto" } } }) } });
+    const client = new MockCodexClient();
+    const harness = new CodexHarness({ createClient: () => client });
+    const prompts = pushableStream();
+    prompts.push({ type: "user", text: "plan it" });
+    const session = harness.launch({ prompt: prompts.stream, cwd: "/tmp", permissionMode: "plan" });
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_completed");
+    await session.setPermissionMode?.("bypassPermissions");
+    prompts.push({ type: "user", text: "implement it" });
+    await nextOfType(iter, "run_completed");
+    prompts.end();
+    const [planTurn, implementTurn] = client.requestsFor("turn/start");
+    assert.deepEqual([planTurn.permissions, planTurn.approvalPolicy, planTurn.approvalsReviewer], [":read-only", "never", "user"]);
+    assert.deepEqual([implementTurn.permissions, implementTurn.approvalPolicy, implementTurn.approvalsReviewer], [":workspace", "on-request", "auto_review"]);
+    // The thread itself starts read-only (a compact or review takes no overrides).
+    const thread = client.requestsFor("thread/start")[0];
+    assert.deepEqual([thread.permissions, thread.approvalPolicy, thread.approvalsReviewer], [":read-only", "never", "user"]);
+    const implementation = new MockCodexClient();
+    await collectMessages(launch(implementation, { permissionMode: "bypassPermissions" }));
+    const implementationThread = implementation.requestsFor("thread/start")[0];
+    assert.deepEqual([implementationThread.permissions, implementationThread.approvalPolicy], [":workspace", "on-request"]);
+  });
+
+  it("declines approval requests during a plan turn without surfacing them", async () => {
+    const client = new MockCodexClient({
+      serverRequest: {
+        method: "item/commandExecution/requestApproval",
+        id: 21,
+        params: { kind: "command", itemId: "i", startedAtMs: 0, environmentId: null, command: "python3 -c 'import calc'", reason: "retry outside the sandbox" },
+      },
+    });
+    const messages = await collectMessages(launch(client, { permissionMode: "plan" }));
+    assert.equal(messages.some((message) => message.type === "pending_input"), false);
+    assert.deepEqual(client.serverResponses, [{ decision: "decline" }]);
+  });
+
+  it("still routes approvals to the user outside plan turns", async () => {
+    const client = new MockCodexClient({
+      serverRequest: { method: "item/fileChange/requestApproval", id: 22, params: { itemId: "i", startedAtMs: 0 } },
+    });
+    const session = launch(client, { permissionMode: "default" });
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "pending_input");
+    assert.equal(await session.submitPendingInputOption?.(0), true);
+    await nextOfType(iter, "run_completed");
+    assert.deepEqual(client.serverResponses, [{ decision: "accept" }]);
+  });
+});
+
+describe("CodexHarness harness consistency (N16–N31)", () => {
+  it("reports authoritative outcomes and a stable error code from codexErrorInfo (N16)", async () => {
+    const failed = runCompleted(await collectMessages(launch(new MockCodexClient({
+      turnStatus: "failed",
+      turnError: { message: "Upstream connection failed", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 502 } } },
+    }))));
+    assert.equal(failed?.data.success, false);
+    assert.equal(failed?.data.outcomeAuthoritative, true);
+    assert.equal(failed?.data.errorCode, "httpConnectionFailed");
+    const unauthorized = runCompleted(await collectMessages(launch(new MockCodexClient({
+      turnStatus: "failed",
+      turnError: { message: "401", codexErrorInfo: "unauthorized" },
+    }))));
+    assert.equal(unauthorized?.data.errorCode, "unauthorized");
+    const ok = runCompleted(await collectMessages(launch(new MockCodexClient({ assistantText: "done" }))));
+    assert.equal(ok?.data.outcomeAuthoritative, true);
+    assert.equal(ok?.data.errorCode, undefined);
+  });
+
+  it("reports context tokens and the model context window from token usage (N17)", async () => {
+    const messages = await collectMessages(launch(new MockCodexClient({ tokenUsage: [breakdown(9_000, 0, 0, 1_000, 0)] })));
+    const context = messages.find((message): message is Extract<HarnessMessage, { type: "usage_updated" }> => (
+      message.type === "usage_updated" && message.usage.contextTokens !== undefined
+    ));
+    assert.deepEqual(context?.usage, { contextTokens: 10_000, contextWindow: 258_400 });
+  });
+
+  it("reports this connection's token totals per model, billed or not (N17)", async () => {
+    const messages = await collectMessages(launch(new MockCodexClient({
+      accountType: "chatgpt",
+      tokenUsage: [breakdown(9_000, 4_000, 0, 1_000, 200), breakdown(3_000, 1_000, 0, 500, 0)],
+    }), { model: "gpt-6-sol" }));
+    const updates = messages.filter((message): message is Extract<HarnessMessage, { type: "usage_updated" }> => (
+      message.type === "usage_updated" && message.usage.models !== undefined
+    ));
+    assert.deepEqual(updates.at(-1)?.usage.models, [{
+      model: "gpt-6-sol",
+      costUsd: 0,
+      inputTokens: 7_000,
+      outputTokens: 1_500,
+      reasoningTokens: 200,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 0,
+      costBasis: "managed",
+    }]);
+  });
+
+  it("emits tool_call events for completed command, file-change and MCP items (N18)", async () => {
+    const client = new MockCodexClient({ holdTurns: true });
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    const base = { threadId: VALID_THREAD_ID, turnId: "turn-1", completedAtMs: 0 };
+    await client.notificationHandler("item/completed", { ...base, item: {
+      type: "commandExecution", id: "c1", pluginId: null, scriptPath: null, command: "npm test", cwd: "/tmp", processId: null,
+      source: "agent", status: "completed", commandActions: [], aggregatedOutput: "ok", exitCode: 0, durationMs: 5,
+    } });
+    await client.notificationHandler("item/completed", { ...base, item: {
+      type: "fileChange", id: "f1", changes: [{ path: "src/a.ts", kind: { type: "update", move_path: null }, diff: "" }], status: "completed",
+    } });
+    await client.notificationHandler("item/completed", { ...base, item: {
+      type: "mcpToolCall", id: "m1", server: "docs", tool: "search", status: "completed", arguments: { q: "x" }, appContext: null,
+      mcpAppUi: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: 1,
+    } });
+    const seen: HarnessMessage[] = [];
+    await client.completeTurn();
+    await nextOfType(iter, "run_completed", seen);
+    const calls = seen.filter((message): message is Extract<HarnessMessage, { type: "tool_call" }> => message.type === "tool_call");
+    assert.deepEqual(calls.map((call) => call.name), ["Bash", "Edit", "mcp__docs__search"]);
+    assert.deepEqual(calls[0]?.input, { command: "npm test", cwd: "/tmp" });
+    assert.deepEqual(calls[1]?.input, { changes: [{ path: "src/a.ts", kind: "update" }] });
+  });
+
+  it("shows one request at a time and queues concurrent ones in order (N20)", async () => {
+    const client = new MockCodexClient({ holdTurns: true });
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    const params = { threadId: VALID_THREAD_ID, turnId: "turn-1", itemId: "i", startedAtMs: 0 };
+    const first = client.requestHandler("item/fileChange/requestApproval", params, 31);
+    const shownFirst = await nextOfType(iter, "pending_input");
+    assert.equal(shownFirst.state.requestId, "31");
+    const second = client.requestHandler("item/fileChange/requestApproval", params, 32);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "32" }), false, "the queued request is not answerable yet");
+    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "31" }), true);
+    assert.deepEqual(await first, { decision: "accept" });
+    const shownSecond = await nextOfType(iter, "pending_input");
+    assert.equal(shownSecond.state.requestId, "32");
+    assert.equal(await session.submitPendingInputOption?.(2, { requestId: "32" }), true);
+    assert.deepEqual(await second, { decision: "decline" });
+    await client.completeTurn();
+    await nextOfType(iter, "run_completed");
+  });
+
+  it("declines queued requests when their turn ends", async () => {
+    const client = new MockCodexClient({ holdTurns: true });
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    const params = { threadId: VALID_THREAD_ID, turnId: "turn-1", itemId: "i", startedAtMs: 0 };
+    const first = client.requestHandler("item/fileChange/requestApproval", params, 41);
+    await nextOfType(iter, "pending_input");
+    const second = client.requestHandler("item/fileChange/requestApproval", params, 42);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    await client.completeTurn();
+    await nextOfType(iter, "run_completed");
+    assert.deepEqual(await first, { decision: "decline" });
+    assert.deepEqual(await second, { decision: "decline" });
+  });
+
+  it("refuses free text for a question with isOther=false and accepts it with isOther=true (N21)", async () => {
+    const client = new MockCodexClient({
+      serverRequest: {
+        method: "item/tool/requestUserInput",
+        id: 51,
+        params: {
+          itemId: "i",
+          isBlocking: true,
+          autoResolutionMs: null,
+          questions: [
+            { id: "env", header: "Env", question: "Which environment?", isOther: false, isSecret: false, options: [{ label: "Staging", description: "" }, { label: "Production", description: "" }] },
+            { id: "note", header: "Note", question: "Anything else?", isOther: true, isSecret: false, options: [{ label: "No", description: "" }] },
+          ],
+        },
+      },
+    });
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    const pending = await nextOfType(iter, "pending_input");
+    assert.equal(pending.state.questions?.[0]?.allowsFreeText, false);
+    assert.equal(pending.state.questions?.[1]?.allowsFreeText, true);
+    assert.equal(await session.submitPendingInputText?.("somewhere else"), false, "free text is refused for isOther=false");
+    assert.equal(await session.submitPendingInputText?.("production"), true);
+    await nextOfType(iter, "pending_input");
+    assert.equal(await session.submitPendingInputText?.("ship on Friday"), true);
+    await nextOfType(iter, "run_completed");
+    assert.deepEqual(client.serverResponses, [{ answers: { env: { answers: ["Production"] }, note: { answers: ["ship on Friday"] } } }]);
+  });
+
+  it("marks non-blocking questions and treats willRetry errors as transient (N22)", async () => {
+    const client = new MockCodexClient({ holdTurns: true });
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    const answer = client.requestHandler("item/tool/requestUserInput", {
+      threadId: VALID_THREAD_ID, turnId: "turn-1", itemId: "i", isBlocking: false, autoResolutionMs: 60_000,
+      questions: [{ id: "q", header: "Q", question: "Prefer tabs?", isOther: true, isSecret: false, options: null }],
+    }, 61);
+    const pending = await nextOfType(iter, "pending_input");
+    assert.match(pending.state.promptText, /keeps working meanwhile/);
+    await client.notificationHandler("serverRequest/resolved", { threadId: VALID_THREAD_ID, requestId: 61 });
+    assert.deepEqual(await answer, { answers: {} });
+    const error: TurnError = { message: "stream disconnected", codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } }, additionalDetails: null, misalignment: null };
+    const seen: HarnessMessage[] = [];
+    await client.notificationHandler("error", { threadId: VALID_THREAD_ID, turnId: "turn-1", willRetry: true, error });
+    await client.notificationHandler("error", { threadId: VALID_THREAD_ID, turnId: "turn-1", willRetry: false, error: { ...error, message: "gave up after retries" } });
+    // A failed turn without its own error text reports the final error notification.
+    client.options.turnError = undefined;
+    await client.completeTurn("turn-1", "failed");
+    const completed = await nextOfType(iter, "run_completed", seen);
+    assert.ok(seen.some((message) => message.type === "activity"), "a retry counts as activity");
+    assert.equal(completed.data.result, "gave up after retries");
+    assert.equal(completed.data.errorCode, "responseStreamDisconnected");
+  });
+
+  it("latches an interrupt that arrives before the turn id and sends it once the turn starts (N29)", async () => {
+    const client = new MockCodexClient({ holdTurns: true });
+    const gate = Promise.withResolvers<void>();
+    const originalRequest = client.request.bind(client);
+    client.request = async (method: string, params?: unknown, timeoutMs?: number) => {
+      if (method === "thread/start") await gate.promise;
+      return originalRequest(method, params, timeoutMs);
+    };
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    for (let i = 0; i < 50 && client.requestsFor("thread/start").length === 0 && !client.requests.some((r) => r.method === "account/read"); i += 1) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 2); });
+    }
+    await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+    await session.interrupt?.();
+    assert.equal(client.requestsFor("turn/interrupt").length, 0, "nothing to interrupt yet");
+    gate.resolve();
+    await nextOfType(iter, "run_started");
+    for (let i = 0; i < 50 && client.requestsFor("turn/interrupt").length === 0; i += 1) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 2); });
+    }
+    assert.deepEqual(client.requestsFor("turn/interrupt"), [{ threadId: VALID_THREAD_ID, turnId: "turn-1" }]);
+    await client.completeTurn("turn-1", "interrupted");
+    assert.equal((await nextOfType(iter, "run_completed")).data.outcome, "interrupted");
+  });
+
+  it("resets the fast tier when a thread continues without fast mode, and skips an unoffered tier (N30)", async () => {
+    const resumed = new MockCodexClient();
+    await collectMessages(launch(resumed, { resumeSessionId: VALID_THREAD_ID }));
+    assert.equal(resumed.requestsFor("thread/resume")[0].serviceTier, "default");
+    // The fork's notifications carry the forked thread id.
+    const forked = new MockCodexClient({ threadId: FORKED_THREAD_ID });
+    await collectMessages(launch(forked, { resumeSessionId: VALID_THREAD_ID, forkSession: true }));
+    assert.equal(forked.requestsFor("thread/fork")[0].serviceTier, "default");
+    const fresh = new MockCodexClient();
+    await collectMessages(launch(fresh));
+    assert.equal("serviceTier" in fresh.requestsFor("thread/start")[0], false, "a new thread keeps Codex's own default");
+
+    const noFastTier: Model = { ...codexCatalogModel("gpt-5.5", ["low"]), serviceTiers: [] };
+    const unsupported = new MockCodexClient({ models: [noFastTier] });
+    const messages = await collectMessages(launch(unsupported, { model: "gpt-5.5", fastMode: true }));
+    assert.equal("serviceTier" in unsupported.requestsFor("thread/start")[0], false);
+    assert.ok(messages.some((message) => message.type === "backend_info" && message.info.fastModeSupported === false));
+    const supported = new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] });
+    await collectMessages(launch(supported, { model: "gpt-5.5", fastMode: true }));
+    assert.equal(supported.requestsFor("thread/start")[0].serviceTier, "priority");
+  });
+
+  it("warns once when an allowed Codex model is missing from model/list (N31)", async () => {
+    resetCodexAllowlistWarningsForTests();
+    setPluginConfig({ harnesses: { codex: { allowedModels: ["gpt-5.5", "gpt-typo"] } } });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] }), { model: "gpt-5.5" }));
+      await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] }), { model: "gpt-5.5" }));
+    } finally {
+      console.warn = originalWarn;
+    }
+    const unknown = warnings.filter((line) => line.includes("model.allowlist.unknown"));
+    assert.equal(unknown.length, 1);
+    assert.match(unknown[0]!, /gpt-typo/);
+    assert.doesNotMatch(unknown[0]!, /gpt-5\.5/);
+  });
+
+  it("keeps an API-price estimate apart from billed cost for ChatGPT logins (max_cost_usd fallback)", async () => {
+    const messages = await collectMessages(launch(new MockCodexClient({
+      accountType: "chatgpt",
+      tokenUsage: [breakdown(100_000, 0, 0, 10_000, 0)],
+    }), { model: "gpt-6-sol" }));
+    const estimate = messages.find((message): message is Extract<HarnessMessage, { type: "usage_updated" }> => (
+      message.type === "usage_updated" && message.usage.estimatedCostUsd !== undefined
+    ));
+    assert.ok((estimate?.usage.estimatedCostUsd ?? 0) > 0);
+    assert.equal(messages.some((message) => message.type === "usage_updated" && message.usage.costUsd !== undefined), false);
+    assert.equal(runCompleted(messages)?.data.total_cost_usd, 0);
   });
 });

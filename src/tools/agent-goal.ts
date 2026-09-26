@@ -82,7 +82,7 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
       system_prompt: Type.Optional(Type.String()),
       allowed_tools: Type.Optional(Type.Array(Type.String())),
       max_iterations: Type.Optional(Type.Number({ minimum: 1, description: "Default 8, capped at 25" })),
-      max_cost_usd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Stop starting iterations once the task cost this much" })),
+      max_cost_usd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Stop starting iterations once the task cost this much (ChatGPT-login Codex counts at the API-price estimate)" })),
       goal_mode: Type.Optional(Type.StringEnum(["ralph", "verifier"], { description: "Default: verifier when verifier_commands are given, else ralph" })),
       completion_promise: Type.Optional(Type.String({ description: "ralph: text that ends the loop (default DONE)" })),
       permission_mode: Type.Optional(Type.StringEnum(["default", "plan", "bypassPermissions"],

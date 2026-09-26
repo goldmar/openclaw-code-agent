@@ -269,6 +269,33 @@ describe("session buttons", () => {
     assert.match(again.replies.join("\n"), /expired or was already used/);
   });
 
+  it("keeps the launch system prompt (without the worktree preamble) across a Resume", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const repo = createRepo();
+    await s.sm.setRepoPolicy(repo, "never-pr");
+    const worktreeSession = await s.launch({ workdir: repo, worktreeStrategy: "manual", systemPrompt: "Marker ZEBRA-41.", name: "sys-worktree" });
+    const worktreeEffective = (worktreeSession as unknown as { systemPrompt?: string }).systemPrompt ?? "";
+    assert.ok(worktreeEffective.length > "Marker ZEBRA-41.".length, "the worktree preamble is appended for the harness");
+    await s.sm.whenStorePersisted();
+    assert.equal(s.sm.getPersistedSession(worktreeSession.id)?.launchSystemPrompt, "Marker ZEBRA-41.", "only the launch prompt is persisted");
+    // The fake backend reuses one thread id: stop this session before the next one.
+    assert.ok(s.sm.kill(worktreeSession.id, "user"));
+    await waitUntil(() => worktreeSession.status !== "running", "first session stopped");
+
+    const session = await s.launch({ systemPrompt: "Marker ZEBRA-42.", name: "sys-resume" });
+    assert.ok(s.sm.kill(session.id, "idle-timeout"));
+    const suspended = await s.waitForMessage(/Suspended after idle timeout/);
+    const turnsBefore = s.backend.turns.length;
+    const clicked = await s.click(buttonIn(suspended, "Resume"));
+    assert.match(clicked.replies.join("\n"), /^▶️/, clicked.replies.join("\n"));
+    await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
+    const resumed = s.sm.resolve(session.id)!;
+    assert.equal(resumed.launchSystemPrompt, "Marker ZEBRA-42.");
+    const effective = (resumed as unknown as { systemPrompt?: string }).systemPrompt ?? "";
+    assert.match(effective, /^Marker ZEBRA-42\./, "the resumed harness gets the launch system prompt");
+    assert.equal(effective.match(/Marker ZEBRA-42\./g)?.length, 1);
+  });
+
   it("resumes from a Restart button a 4.x store left behind", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const session = await s.launch();

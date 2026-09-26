@@ -65,6 +65,33 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
+  it("resumes a live worktree session from its original checkout, not the worktree path", async () => {
+    const session = createStubSession({
+      status: "killed",
+      lifecycle: "suspended",
+      runtimeState: "stopped",
+      isExplicitlyResumable: true,
+      killReason: "idle-timeout",
+      harnessSessionId: "harness-wt",
+      backendRef: { kind: "claude-code", conversationId: "harness-wt" },
+      name: "worktree-session",
+      workdir: "/repo/.worktrees/agent-worktree-session",
+      originalWorkdir: "/repo",
+      worktreeStrategy: "ask",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    let capturedConfig: any;
+    sm.launchSession = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "worktree-session", id: "test-id" });
+    };
+
+    await executeRespond(sm, { session: "test-id", message: "continue" });
+    // The repo policy and worktree reuse resolve against the checkout; the worktree path broke the lookup.
+    assert.equal(capturedConfig.workdir, "/repo");
+    assert.equal(capturedConfig.resumeWorktreeFrom, "test-id");
+  });
+
   it("preserves routing and harness metadata during explicit resume", async () => {
     const session = createStubSession({
       status: "killed",
@@ -120,6 +147,45 @@ describe("executeRespond", () => {
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.resumeSessionId, "harness-done");
+  });
+
+  it("reuses the launch system prompt when a finished session resumes (live and persisted)", async () => {
+    const live = createStubSession({
+      status: "completed",
+      lifecycle: "terminal",
+      killReason: "done",
+      harnessSessionId: "harness-sys-live",
+      backendRef: { kind: "claude-code", conversationId: "harness-sys-live" },
+      launchSystemPrompt: "Marker ZEBRA-42.",
+    });
+    const sm = createStubSessionManager({ "live-id": live });
+    const configs: any[] = [];
+    sm.launchSession = (config: any) => {
+      configs.push(config);
+      return createStubSession({ name: "resumed", id: config.sessionIdOverride });
+    };
+    await executeRespond(sm, { session: "live-id", message: "continue" });
+    assert.equal(configs[0]?.systemPrompt, "Marker ZEBRA-42.");
+
+    (sm as any).store.persisted.set("harness-sys", {
+      sessionId: "sys-id",
+      harnessSessionId: "harness-sys",
+      backendRef: { kind: "claude-code", conversationId: "harness-sys" },
+      name: "sys-session",
+      prompt: "Do the task.",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      killReason: "done",
+      launchSystemPrompt: "Marker ZEBRA-43.",
+      costUsd: 0,
+      harness: "claude-code",
+      route: { provider: "telegram", target: "-1001234567890" },
+    } as any);
+    (sm as any).store.idIndex.set("sys-id", "harness-sys");
+    const result = await executeRespond(sm, { session: "sys-id", message: "continue" });
+    assert.match(result.text, /Resume started for session/);
+    assert.equal(configs[1]?.systemPrompt, "Marker ZEBRA-43.");
   });
 
   it("keeps completed sessions without a resumable backend closed by default", async () => {
@@ -237,8 +303,8 @@ describe("executeRespond", () => {
       },
       name: "repair-real-openclaw-dashboard",
       prompt: "Repair dashboard after plan approval.",
-      workdir: "/home/openclaw/workspace/openclaw-dashboard",
-      worktreePath: "/home/openclaw/workspace/openclaw-dashboard/.worktrees/openclaw-worktree-repair-real-openclaw-dashboard",
+      workdir: "/home/alice/workspace/openclaw-dashboard",
+      worktreePath: "/home/alice/workspace/openclaw-dashboard/.worktrees/openclaw-worktree-repair-real-openclaw-dashboard",
       worktreeBranch: "agent/repair-real-openclaw-dashboard",
       worktreeStrategy: "delegate",
       status: "completed",
@@ -275,7 +341,7 @@ describe("executeRespond", () => {
     });
 
     assert.match(result.text, /Plan approved for session/);
-    assert.equal(capturedConfig.workdir, "/home/openclaw/workspace/openclaw-dashboard");
+    assert.equal(capturedConfig.workdir, "/home/alice/workspace/openclaw-dashboard");
     assert.equal(capturedConfig.resumeSessionId, "019e6c36-1321-7130-a871-7b4303e8ff32");
     assert.equal(capturedConfig.resumeWorktreeFrom, "SPhNrL4Q");
     assert.equal(capturedConfig.worktreeStrategy, "delegate");

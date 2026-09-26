@@ -2791,7 +2791,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -2805,7 +2805,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: (args: Record<string, unknown>) => {
@@ -2825,7 +2825,7 @@ describe("createCallbackHandler()", () => {
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.name, "plugin-readiness-v2026.5.18");
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
-    assert.equal(launches[0]?.workdir, "/home/openclaw/workspace/openclaw-code-agent");
+    assert.equal(launches[0]?.workdir, "/home/alice/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
     assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.18 \[sess-plan\]/);
   });
@@ -2848,7 +2848,7 @@ describe("createCallbackHandler()", () => {
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
         };
       },
@@ -2866,7 +2866,7 @@ describe("createCallbackHandler()", () => {
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
         };
       },
@@ -3247,7 +3247,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -3261,7 +3261,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: (args: Record<string, unknown>) => {
@@ -3314,7 +3314,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -3328,7 +3328,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: () => {
@@ -3436,6 +3436,51 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:plan-token/);
+  });
+
+  it("refuses a Telegram callback from a chat other than the one the token was sent to (N2)", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        id: "t-other-chat",
+        sessionId: "sess-1",
+        kind: "worktree-merge",
+        createdAt: Date.now(),
+        route: { provider: "telegram", target: "-1009876543210" },
+      }),
+      consumeActionToken: (): undefined => { consumes++; return undefined; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+    } as any);
+    const handler = createCallbackHandler();
+    const state = createCtx("t-other-chat");
+    const result = await handler.handler(state.ctx as any);
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 0);
+    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
+  });
+
+  it("refuses a Discord callback from another channel than the token's (N2)", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        id: "t-discord",
+        sessionId: "sess-1",
+        kind: "worktree-merge",
+        createdAt: Date.now(),
+        route: { provider: "discord", target: "channel:111111111111111111" },
+      }),
+      consumeActionToken: (): undefined => { consumes++; return undefined; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+    } as any);
+    const handler = createCallbackHandler("discord");
+    const state = createCtx("t-discord", "discord");
+    (state.ctx as any).conversationId = "channel:222222222222222222";
+    const result = await handler.handler(state.ctx as any);
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 0);
+    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
   });
 
   it("blocks unauthorized Telegram topic callbacks before consuming the token", async () => {

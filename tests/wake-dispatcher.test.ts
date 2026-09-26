@@ -334,6 +334,37 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 0, "a stopped runtime never shows its buttons");
   });
 
+  it("binds each button's action token to the chat it is sent to before the tokens are persisted (N2)", async () => {
+    const session: FakeSession = {
+      id: "session-bound",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1001234567890",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
+    };
+    const events: string[] = [];
+    let bound: { tokenIds: string[]; route: Record<string, unknown> } | undefined;
+    const dispatcher = createDispatcher({
+      bindInteractiveButtons: (tokenIds, route) => {
+        events.push("bind");
+        bound = { tokenIds, route: { ...route } };
+      },
+      beforeInteractiveSend: async () => { events.push("persist"); },
+    });
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-decision",
+      userMessage: "Choose",
+      notifyUser: "always",
+      buttons: [[{ label: "Merge", callbackData: "token-a" }, { label: "Later", callbackData: "token-b" }]],
+    });
+    await waitForCalls(1);
+    dispatcher.dispose();
+    assert.deepEqual(events.slice(0, 2), ["bind", "persist"]);
+    assert.deepEqual(bound?.tokenIds, ["token-a", "token-b"]);
+    assert.equal(bound?.route.channel, "telegram");
+    assert.equal(bound?.route.target, "-1001234567890");
+  });
+
   it("keeps direct notification order when an earlier delivery falls back", async () => {
     rules.push({
       match: (call) => call.kind === "durable-send" && call.text === "🚀 launched",

@@ -65,6 +65,17 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("launch system prompt persistence (resume follow-up)", () => {
+  it("persists the launch system prompt on running and terminal rows and reloads it", () => {
+    const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });
+    store.markRunning(stubSession("sys", { status: "running", completedAt: undefined, launchSystemPrompt: "Marker ZEBRA-42." }));
+    assert.equal(readIndex(indexPath).sessions[0].launchSystemPrompt, "Marker ZEBRA-42.");
+    store.persistTerminal(stubSession("sys", { launchSystemPrompt: "Marker ZEBRA-42." }));
+    const reloaded = new SessionStore({ indexPath, env: {}, instanceId: "reader" });
+    assert.equal(reloaded.getPersistedSession("sys")?.launchSystemPrompt, "Marker ZEBRA-42.");
+  });
+});
+
 describe("B2: persistTerminal keeps state the runtime session does not track", () => {
   it("re-persisting a terminal session (runtime GC) keeps PR, merge, disposition, policy and completion-wake fields", () => {
     const store = new SessionStore({ indexPath, env: {}, instanceId: "store" });

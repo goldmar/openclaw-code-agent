@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { buildHarnessChildEnv } from "../child-env";
+import { spawnWithLifeline } from "./process-lifeline";
 import { constants as fsConstants, accessSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
@@ -44,6 +45,8 @@ type FetchLike = typeof fetch;
 /** A running `opencode serve` process (or a test double). */
 export interface OpenCodeServerHandle {
   baseUrl: string;
+  /** `Authorization` header value for this server (N1: every spawn has its own password). */
+  authorization?: string;
   close(): Promise<void>;
   /** Register a listener for an unexpected server exit. */
   onExit?(listener: (reason: string) => void): void;
@@ -84,7 +87,15 @@ type OpenCodePendingInput = {
   answers?: Record<string, { answers: string[] }>;
 };
 
-type NormalizedEvent = { type?: string; properties: Record<string, unknown> };
+type NormalizedEvent = {
+  type?: string;
+  properties: Record<string, unknown>;
+  /**
+   * N24: the event belongs to a subagent (child) session of the listening
+   * session, for example a permission prompt raised inside the `task` tool.
+   */
+  childSessionId?: string;
+};
 
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -121,7 +132,7 @@ function commandHasPathSeparator(command: string): boolean {
   return command.includes("/") || (sep === "\\" && command.includes("\\"));
 }
 
-function candidateSearchPaths(envPath: string | undefined): string[] {
+export function candidateSearchPaths(envPath: string | undefined): string[] {
   const paths = (envPath ?? "")
     .split(delimiter)
     .map((entry) => entry.trim())
@@ -133,7 +144,9 @@ function candidateSearchPaths(envPath: string | undefined): string[] {
       expanded.push(join(dirname(dirname(dirname(entry))), "bin"));
     }
   }
-  expanded.push("/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+  // N6: only standard system locations; a Homebrew/Linuxbrew install must be on
+  // the Gateway's PATH or named by OPENCLAW_OPENCODE_COMMAND.
+  expanded.push("/usr/local/bin", "/usr/bin", "/bin");
   return [...new Set(expanded)];
 }
 
@@ -222,13 +235,11 @@ export function permissionRulesForMode(mode: string | undefined): Array<{ permis
   }));
 }
 
-function authHeader(): Record<string, string> {
-  const password = process.env.OPENCODE_SERVER_PASSWORD;
-  if (!password) return {};
-  const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
-  return {
-    Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-  };
+const OPENCODE_SERVER_USERNAME = "opencode";
+
+/** Basic-auth header value for an OpenCode server password. */
+export function openCodeAuthorization(password: string, username = OPENCODE_SERVER_USERNAME): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 }
 
 /**
@@ -240,8 +251,8 @@ function authHeader(): Record<string, string> {
  * for the first request to the new one and fail with ECONNRESET ("fetch
  * failed"). A fresh loopback connection per request costs next to nothing.
  */
-function requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  return { ...authHeader(), connection: "close", ...extra };
+function requestHeaders(authorization: string | undefined, extra: Record<string, string> = {}): Record<string, string> {
+  return { ...(authorization ? { Authorization: authorization } : {}), connection: "close", ...extra };
 }
 
 const CONNECTION_RESET_CODES = new Set(["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"]);
@@ -303,23 +314,6 @@ async function boundedPromise<T>(
   });
 }
 
-async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve) => {
-    let killTimeout: NodeJS.Timeout | undefined;
-    const forceTimeout = setTimeout(() => {
-      if (child.exitCode === null) child.kill("SIGKILL");
-      killTimeout = setTimeout(resolve, 1_000);
-    }, 2_000);
-    child.once("exit", () => {
-      clearTimeout(forceTimeout);
-      if (killTimeout) clearTimeout(killTimeout);
-      resolve();
-    });
-    child.kill("SIGTERM");
-  });
-}
-
 /**
  * Start `opencode serve` on an OS-chosen port and read the bound URL from its
  * `opencode server listening on <url>` stdout line. With `--port 0` OpenCode
@@ -334,12 +328,21 @@ export async function startOpenCodeServer(options: OpenCodeServerStartOptions = 
   // The server resolves a project instance per request (`?directory=`), so its
   // own working directory is irrelevant; keep it out of any repository.
   const serverCwd = tmpdir();
-  const child = spawn(command, args, {
+  // N1: without a password `opencode serve` accepts any local connection, and
+  // every local user or process could drive the agent. Each spawn gets its own
+  // random password, known only to this Gateway process.
+  const password = randomBytes(24).toString("base64url");
+  // N27: the server leads its own process group, watched by a parent-death
+  // watchdog, so it (and its tool processes) stops with the Gateway, even on SIGKILL.
+  const lifeline = spawnWithLifeline(command, args, {
     cwd: serverCwd,
     // Gateway environment minus secrets unrelated to the agent (see child-env.ts).
-    env: buildHarnessChildEnv(process.env),
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as ChildProcessWithoutNullStreams;
+    env: buildHarnessChildEnv(process.env, {
+      OPENCODE_SERVER_USERNAME: OPENCODE_SERVER_USERNAME,
+      OPENCODE_SERVER_PASSWORD: password,
+    }),
+  });
+  const child = lifeline.process;
   let stdout = "";
   let stderr = "";
   const appendOutput = (current: string, chunk: unknown): string => {
@@ -358,7 +361,7 @@ export async function startOpenCodeServer(options: OpenCodeServerStartOptions = 
 
   const baseUrl = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      void terminateChild(child);
+      void lifeline.terminate();
       reject(new Error(`Timed out waiting for OpenCode server readiness after ${startupTimeoutMs}ms.${describeLaunch()}`));
     }, startupTimeoutMs);
     child.stdout.on("data", (chunk) => {
@@ -391,23 +394,38 @@ export async function startOpenCodeServer(options: OpenCodeServerStartOptions = 
   });
 
   // The shared server can outlive its last session for a short idle window;
-  // never leave it running after the Gateway process itself exits.
+  // never leave it running after the Gateway process itself exits (a normal
+  // exit; the lifeline pipe covers a killed Gateway).
   const killOnParentExit = (): void => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
   };
   process.once("exit", killOnParentExit);
   child.once("exit", () => process.removeListener("exit", killOnParentExit));
 
   return {
     baseUrl,
+    authorization: openCodeAuthorization(password),
     close: async () => {
       closing = true;
-      await terminateChild(child);
+      await lifeline.terminate();
     },
     onExit(listener) {
       exitListeners.push(listener);
     },
   };
+}
+
+/** A turn failure OpenCode reported with an error class (`error.name`). */
+class OpenCodeTurnError extends Error {
+  constructor(message: string, readonly code: string | undefined) {
+    super(message);
+    this.name = "OpenCodeTurnError";
+  }
 }
 
 class OpenCodeHttpError extends Error {
@@ -477,6 +495,16 @@ function eventIndicatesSessionIdle(event: NormalizedEvent): boolean {
   return event.type === "session.status" && eventStatusType(event) === "idle";
 }
 
+type RequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Called with the headers of a successful response (paging cursors). */
+  onHeaders?: (headers: Headers) => void;
+};
+
+/** One page of `GET /session/{id}/message`: chronological entries and the cursor to older ones. */
+type MessagePage = { entries: unknown[]; nextCursor?: string };
+
 /** Directory-scoped HTTP client for the classic OpenCode API. */
 class OpenCodeClient {
   constructor(
@@ -484,11 +512,12 @@ class OpenCodeClient {
     private readonly fetchImpl: FetchLike,
     private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
     private readonly directory?: string,
+    private readonly authorization?: string,
   ) {}
 
   /** A client whose every request targets `directory` on the shared server. */
   forDirectory(directory: string): OpenCodeClient {
-    return new OpenCodeClient(this.baseUrl, this.fetchImpl, this.requestTimeoutMs, directory);
+    return new OpenCodeClient(this.baseUrl, this.fetchImpl, this.requestTimeoutMs, directory, this.authorization);
   }
 
   private url(path: string): string {
@@ -501,7 +530,7 @@ class OpenCodeClient {
     method: string,
     path: string,
     body?: unknown,
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+    options: RequestOptions = {},
   ): Promise<T> {
     try {
       return await this.requestOnce<T>(method, path, body, options);
@@ -518,7 +547,7 @@ class OpenCodeClient {
     method: string,
     path: string,
     body: unknown,
-    options: { signal?: AbortSignal; timeoutMs?: number },
+    options: RequestOptions,
   ): Promise<T> {
     const controller = new AbortController();
     let callerAborted = false;
@@ -549,7 +578,7 @@ class OpenCodeClient {
     try {
       const response = await bounded(this.fetchImpl(this.url(path), {
         method,
-        headers: requestHeaders(body === undefined ? {} : { "content-type": "application/json" }),
+        headers: requestHeaders(this.authorization, body === undefined ? {} : { "content-type": "application/json" }),
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       }));
@@ -557,6 +586,7 @@ class OpenCodeClient {
         const text = await bounded(response.text()).catch(() => "");
         throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
+      options.onHeaders?.(response.headers);
       if (response.status === 204) return undefined as T;
       const text = await bounded(response.text());
       if (!text) return undefined as T;
@@ -593,7 +623,7 @@ class OpenCodeClient {
     onOpen?: () => void,
   ): Promise<void> {
     const response = await this.fetchImpl(this.url(path), {
-      headers: requestHeaders(),
+      headers: requestHeaders(this.authorization),
       signal,
     });
     if (!response.ok) {
@@ -680,6 +710,8 @@ type SharedServer = {
   exitReason?: string;
   leases: number;
   listeners: Map<string, Set<SessionEventListener>>;
+  /** Subagent session id → the listened-to session it descends from (N24). */
+  childSessions: Map<string, string>;
   streamAbort: AbortController;
   streamConnected: boolean;
   streamReady: Promise<void>;
@@ -759,7 +791,12 @@ class OpenCodeServerManager {
         return () => {
           const listeners = server.listeners.get(sessionId);
           listeners?.delete(listener);
-          if (listeners?.size === 0) server.listeners.delete(sessionId);
+          if (listeners?.size === 0) {
+            server.listeners.delete(sessionId);
+            for (const [child, root] of server.childSessions) {
+              if (root === sessionId) server.childSessions.delete(child);
+            }
+          }
         };
       },
       release: async () => {
@@ -804,10 +841,11 @@ class OpenCodeServerManager {
     let markReady!: () => void;
     const server: SharedServer = {
       handle,
-      client: new OpenCodeClient(handle.baseUrl, fetchImpl, this.deps.requestTimeoutMs),
+      client: new OpenCodeClient(handle.baseUrl, fetchImpl, this.deps.requestTimeoutMs, undefined, handle.authorization),
       alive: true,
       leases: 0,
       listeners: new Map(),
+      childSessions: new Map(),
       streamAbort: new AbortController(),
       streamConnected: false,
       streamReady: new Promise<void>((resolve) => { markReady = resolve; }),
@@ -820,11 +858,37 @@ class OpenCodeServerManager {
 
   private dispatch(server: SharedServer, raw: unknown): void {
     const event = normalizeEvent(raw);
+    this.trackChildSession(server, event);
     const sessionId = sessionIdFromProperties(event.properties);
     if (!sessionId) return;
-    for (const listener of [...(server.listeners.get(sessionId) ?? [])]) {
-      listener.onEvent(event);
+    const direct = server.listeners.get(sessionId);
+    if (direct) {
+      for (const listener of [...direct]) listener.onEvent(event);
+      return;
     }
+    // N24: a subagent's events reach the session that started it (its
+    // permission prompts and questions would otherwise never be seen).
+    const root = server.childSessions.get(sessionId);
+    if (!root) return;
+    for (const listener of [...(server.listeners.get(root) ?? [])]) {
+      listener.onEvent({ ...event, childSessionId: sessionId });
+    }
+  }
+
+  /** Record `session.created`/`session.updated` of a subagent session under its listened-to ancestor. */
+  private trackChildSession(server: SharedServer, event: NormalizedEvent): void {
+    if (event.type !== "session.created" && event.type !== "session.updated") return;
+    const info = isRecord(event.properties.info) ? event.properties.info : undefined;
+    const childId = typeof info?.id === "string" ? info.id : undefined;
+    const parentId = typeof info?.parentID === "string" ? info.parentID : undefined;
+    if (!childId || !parentId || server.childSessions.has(childId)) return;
+    const root = server.listeners.has(parentId) ? parentId : server.childSessions.get(parentId);
+    if (!root) return;
+    // Tracked for routing only. OpenCode evaluates a subagent's tools with the
+    // permissions it started with: a session overlay PATCHed onto the child
+    // afterwards is stored but not applied (checked on 1.18.32), so the user's
+    // gate for a subagent is the parent's `task` permission prompt.
+    server.childSessions.set(childId, root);
   }
 
   private notifyAll(server: SharedServer, fn: (listener: SessionEventListener) => void): void {
@@ -875,15 +939,16 @@ class OpenCodeServerManager {
   }
 }
 
-function buildPermissionPendingInput(request: Record<string, unknown>): PendingInputState {
+function buildPermissionPendingInput(request: Record<string, unknown>, childSessionId?: string): PendingInputState {
   const requestId = typeof request.id === "string" ? request.id : "opencode-permission";
   const permission = typeof request.permission === "string" ? request.permission : "permission";
   const patterns = Array.isArray(request.patterns)
     ? request.patterns.filter((value): value is string => typeof value === "string")
     : [];
+  const who = childSessionId ? "An OpenCode subagent" : "OpenCode";
   const promptText = patterns.length > 0
-    ? `OpenCode requests ${permission} permission for ${patterns.join(", ")}.`
-    : `OpenCode requests ${permission} permission.`;
+    ? `${who} requests ${permission} permission for ${patterns.join(", ")}.`
+    : `${who} requests ${permission} permission.`;
   const actions: PendingInputAction[] = [
     { kind: "approval", label: "Allow once", decision: "accept", responseDecision: "once" },
     { kind: "approval", label: "Always allow", decision: "acceptForSession", responseDecision: "always" },
@@ -973,6 +1038,8 @@ type AssistantRecord = {
   id?: string;
   text?: string;
   error?: string;
+  /** OpenCode's error class (`ProviderAuthError`, `APIError`, ...), reported as `errorCode` (N16). */
+  errorName?: string;
   cost?: number;
   providerID?: string;
   modelID?: string;
@@ -987,6 +1054,10 @@ type AssistantRecord = {
     cacheWrite: number;
   };
 };
+
+function assistantErrorName(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.name === "string" && error.name ? error.name : undefined;
+}
 
 function assistantErrorMessage(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined;
@@ -1034,6 +1105,7 @@ function extractAssistantRecords(messages: unknown): AssistantRecord[] {
       ...(typeof info.id === "string" ? { id: info.id } : {}),
       ...(texts.length > 0 ? { text: texts.at(-1) } : {}),
       ...(assistantErrorMessage(info.error) ? { error: assistantErrorMessage(info.error) } : {}),
+      ...(assistantErrorName(info.error) ? { errorName: assistantErrorName(info.error) } : {}),
       ...(finiteNumber(info.cost) !== undefined ? { cost: finiteNumber(info.cost) } : {}),
       ...(typeof info.providerID === "string" ? { providerID: info.providerID } : {}),
       ...(typeof info.modelID === "string" ? { modelID: info.modelID } : {}),
@@ -1089,6 +1161,35 @@ function recordDurationMs(records: AssistantRecord[]): number | undefined {
   return duration >= 0 ? duration : undefined;
 }
 
+/** Id and role of one `GET /session/{id}/message` entry. */
+function messageIdentity(entry: unknown): { id?: string; role?: string } {
+  const info = isRecord(entry) && isRecord(entry.info) ? entry.info : entry;
+  if (!isRecord(info)) return {};
+  return {
+    ...(typeof info.id === "string" ? { id: info.id } : {}),
+    ...(typeof info.role === "string" ? { role: info.role } : {}),
+  };
+}
+
+/** What `GET /config/providers` says about one model (N19). */
+export type OpenCodeModelInfo = { variants?: string[]; contextWindow?: number };
+
+export function findOpenCodeModelInfo(providers: unknown, model: string | undefined): OpenCodeModelInfo | undefined {
+  const parsed = parseModel(model);
+  if (!parsed || !isRecord(providers) || !Array.isArray(providers.providers)) return undefined;
+  const provider = providers.providers.find((entry) => isRecord(entry) && entry.id === parsed.providerID);
+  const models = isRecord(provider) && isRecord(provider.models) ? provider.models : undefined;
+  const info = models && isRecord(models[parsed.modelID]) ? models[parsed.modelID] as Record<string, unknown> : undefined;
+  if (!info) return undefined;
+  const limit = isRecord(info.limit) ? info.limit : undefined;
+  return {
+    ...(isRecord(info.variants) ? { variants: Object.keys(info.variants) } : {}),
+    ...(finiteNumber(limit?.context) ? { contextWindow: finiteNumber(limit?.context) } : {}),
+  };
+}
+
+const MESSAGE_PAGE_SIZE = 50;
+
 type TurnWaiter = {
   sawActivity: boolean;
   settled: boolean;
@@ -1129,6 +1230,9 @@ export class OpenCodeHarness implements AgentHarness {
     let runCounter = 0;
     let currentPermissionMode = options.permissionMode ?? "default";
     let currentPendingInput: OpenCodePendingInput | undefined;
+    // N20: one visible request at a time; concurrent ones (for example from
+    // parallel subagents) wait here in arrival order.
+    const queuedPendingInputs: OpenCodePendingInput[] = [];
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let closed = false;
@@ -1159,11 +1263,44 @@ export class OpenCodeHarness implements AgentHarness {
     const resolvePendingInput = (requestId: string | undefined): void => {
       if (requestId && resolvedPendingInputRequestIds.has(requestId)) return;
       if (requestId) resolvedPendingInputRequestIds.add(requestId);
+      const queuedIndex = requestId ? queuedPendingInputs.findIndex((entry) => entry.requestId === requestId) : -1;
+      if (queuedIndex >= 0) {
+        // Answered or withdrawn before it was shown.
+        queuedPendingInputs.splice(queuedIndex, 1);
+        return;
+      }
       queue.enqueue(createPendingInputResolvedEvent(requestId));
       if (requestId && currentPendingInput?.requestId === requestId) {
         currentPendingInput = undefined;
+        showNextPendingInput();
       }
       if (activeTurn) armTurnInactivityTimer(activeTurn);
+    };
+
+    const showNextPendingInput = (): void => {
+      if (currentPendingInput) return;
+      const next = queuedPendingInputs.shift();
+      if (!next?.state) return;
+      currentPendingInput = next;
+      queue.enqueue(createPendingInputEvent(next.state));
+    };
+
+    /** Show a new request now, or queue it behind the visible one (N20). */
+    const presentPendingInput = (pending: OpenCodePendingInput): void => {
+      if (currentPendingInput) {
+        log.debug(`[OpenCodeHarness] ${pending.kind} ${pending.requestId} queued behind ${currentPendingInput.requestId}`);
+        queuedPendingInputs.push(pending);
+        return;
+      }
+      currentPendingInput = pending;
+      queue.enqueue(createPendingInputEvent(pending.state!));
+      refreshRunningUsage();
+    };
+
+    /** A turn's requests end with it (visible and queued). */
+    const releaseAllPendingInput = (): void => {
+      for (const queued of queuedPendingInputs.splice(0)) resolvedPendingInputRequestIds.add(queued.requestId);
+      if (currentPendingInput) resolvePendingInput(currentPendingInput.requestId);
     };
 
     const ensureLease = async (): Promise<OpenCodeServerLease> => {
@@ -1260,7 +1397,63 @@ export class OpenCodeHarness implements AgentHarness {
       }
     };
 
+    /** Permission prompts and questions (of the session or one of its subagents). */
+    const handleInteractiveEvent = (event: NormalizedEvent): boolean => {
+      if (event.type === "permission.asked") {
+        if (currentPermissionMode === "bypassPermissions") {
+          const requestId = typeof event.properties.id === "string" ? event.properties.id : undefined;
+          if (requestId) {
+            void replyPermission(requestId, "once")
+              .catch((): undefined => undefined)
+              .finally(() => resolvePendingInput(requestId));
+          }
+          return true;
+        }
+        const state = buildPermissionPendingInput(event.properties, event.childSessionId);
+        presentPendingInput({
+          requestId: state.requestId,
+          kind: "approval",
+          options: state.options,
+          actions: state.actions ?? [],
+          state,
+        });
+        return true;
+      }
+      if (event.type === "permission.replied") {
+        const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
+        resolvePendingInput(requestId);
+        return true;
+      }
+      if (event.type === "question.asked") {
+        const state = buildQuestionPendingInput(event.properties);
+        presentPendingInput({
+          requestId: state.requestId,
+          kind: "question",
+          options: state.options,
+          actions: [],
+          state,
+        });
+        return true;
+      }
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
+        resolvePendingInput(requestId);
+        return true;
+      }
+      return false;
+    };
+
     const handleSessionEvent = (event: NormalizedEvent, waiter: TurnWaiter | undefined): void => {
+      if (event.childSessionId) {
+        // N24: a subagent's prompts go to the user like the session's own; the
+        // rest of its stream only shows that the turn is still working (its
+        // idle never ends the parent's turn, and its text is not the agent's).
+        if (handleInteractiveEvent(event)) return;
+        if (waiter) waiter.sawActivity = true;
+        queue.enqueue({ type: "activity" });
+        return;
+      }
+      if (handleInteractiveEvent(event)) return;
       if (
         (event.type === "session.next.text.delta" || event.type === "message.part.delta")
         && event.properties.field !== "reasoning"
@@ -1284,7 +1477,11 @@ export class OpenCodeHarness implements AgentHarness {
         if (event.type === "message.part.updated" && part?.type !== "tool") {
           queue.enqueue({ type: "activity" });
           // A finished step is when OpenCode adds its cost to the session.
-          if (part?.type === "step-finish") refreshRunningUsage();
+          if (part?.type === "step-finish") {
+            const tokens = parseAssistantTokens(part.tokens);
+            if (tokens) latestStepContextTokens = tokens.total ?? tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output;
+            refreshRunningUsage();
+          }
           return;
         }
         // Tool parts are re-sent on every state change; report each call once,
@@ -1308,52 +1505,7 @@ export class OpenCodeHarness implements AgentHarness {
       }
       if (event.type === "session.next.step.failed" || event.type === "session.error") {
         const reason = assistantErrorMessage(event.properties.error) ?? `${event.type} failed`;
-        settleWaiter((pending) => pending.reject(new Error(reason)));
-        return;
-      }
-      if (event.type === "permission.asked") {
-        if (currentPermissionMode === "bypassPermissions") {
-          const requestId = typeof event.properties.id === "string" ? event.properties.id : undefined;
-          if (requestId) {
-            void replyPermission(requestId, "once")
-              .catch((): undefined => undefined)
-              .finally(() => resolvePendingInput(requestId));
-          }
-          return;
-        }
-        const state = buildPermissionPendingInput(event.properties);
-        currentPendingInput = {
-          requestId: state.requestId,
-          kind: "approval",
-          options: state.options,
-          actions: state.actions ?? [],
-          state,
-        };
-        queue.enqueue(createPendingInputEvent(state));
-        refreshRunningUsage();
-        return;
-      }
-      if (event.type === "permission.replied") {
-        const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
-        resolvePendingInput(requestId);
-        return;
-      }
-      if (event.type === "question.asked") {
-        const state = buildQuestionPendingInput(event.properties);
-        currentPendingInput = {
-          requestId: state.requestId,
-          kind: "question",
-          options: state.options,
-          actions: [],
-          state,
-        };
-        queue.enqueue(createPendingInputEvent(state));
-        refreshRunningUsage();
-        return;
-      }
-      if (event.type === "question.replied" || event.type === "question.rejected") {
-        const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
-        resolvePendingInput(requestId);
+        settleWaiter((pending) => pending.reject(new OpenCodeTurnError(reason, assistantErrorName(event.properties.error))));
         return;
       }
       if (eventIndicatesSessionIdle(event)) {
@@ -1379,10 +1531,112 @@ export class OpenCodeHarness implements AgentHarness {
       }
     };
 
-    let turnBaselineAssistantCount = 0;
+    /**
+     * N25: the newest message before this turn's prompt. A turn's own messages
+     * are those after it, so finishing a turn reads only its own messages
+     * instead of the whole history (which made every step O(history)).
+     */
+    let turnBaselineMessageId: string | undefined;
+    /** Every assistant message of the session seen so far (cumulative per-model usage). */
+    const knownAssistantRecords = new Map<string, AssistantRecord>();
+    /** A resumed or forked session's earlier history is read once, on its first turn. */
+    let historyLoaded = !options.resumeSessionId;
+    /** Context size reported by the latest finished step of this turn. */
+    let latestStepContextTokens: number | undefined;
+    let modelContextWindow: number | undefined;
 
-    const fetchMessages = async (id: string, signal?: AbortSignal): Promise<unknown> => {
-      return await client().request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`, undefined, { signal });
+    const fetchMessagePage = async (id: string, limit: number, before?: string, signal?: AbortSignal): Promise<MessagePage> => {
+      let nextCursor: string | undefined;
+      const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`;
+      const body = await client().request<unknown>("GET", `/session/${encodeURIComponent(id)}/message?${query}`, undefined, {
+        signal,
+        onHeaders: (headers) => { nextCursor = headers.get("x-next-cursor") ?? undefined; },
+      });
+      return { entries: Array.isArray(body) ? body : [], ...(nextCursor ? { nextCursor } : {}) };
+    };
+
+    /**
+     * Messages newer than `sinceId` (all of them without one), oldest first,
+     * read newest-first one page at a time.
+     */
+    const fetchMessagesSince = async (id: string, sinceId: string | undefined): Promise<unknown[]> => {
+      const collected: unknown[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 1_000; page += 1) {
+        const { entries, nextCursor } = await fetchMessagePage(id, MESSAGE_PAGE_SIZE, cursor);
+        const stop = sinceId ? entries.findIndex((entry) => messageIdentity(entry).id === sinceId) : -1;
+        collected.unshift(...(stop >= 0 ? entries.slice(stop + 1) : entries));
+        if (stop >= 0 || !nextCursor || entries.length === 0) break;
+        cursor = nextCursor;
+      }
+      return collected;
+    };
+
+    const newestMessage = async (id: string, signal?: AbortSignal): Promise<{ id?: string; role?: string } | undefined> => {
+      const { entries } = await fetchMessagePage(id, 1, undefined, signal);
+      return entries.length > 0 ? messageIdentity(entries.at(-1)) : undefined;
+    };
+
+    /** The id of the user message that starts the `count`-th last turn (N23 rewind). */
+    const findRewindMessageId = async (id: string, count: number): Promise<string> => {
+      let cursor: string | undefined;
+      let seen = 0;
+      for (let page = 0; page < 1_000; page += 1) {
+        const { entries, nextCursor } = await fetchMessagePage(id, MESSAGE_PAGE_SIZE, cursor);
+        for (const entry of [...entries].reverse()) {
+          const message = messageIdentity(entry);
+          if (message.role !== "user" || !message.id) continue;
+          seen += 1;
+          if (seen === count) return message.id;
+        }
+        if (!nextCursor || entries.length === 0) break;
+        cursor = nextCursor;
+      }
+      throw new Error(`Cannot rewind ${count} turn(s): the OpenCode session only has ${seen} turn(s).`);
+    };
+
+    const rememberRecords = (records: AssistantRecord[]): void => {
+      for (const record of records) {
+        if (record.id) knownAssistantRecords.set(record.id, record);
+      }
+    };
+
+    /** N19: model facts (effort variants, context window) from the server's provider catalog. */
+    let reportedModelInfo = false;
+    let resolvedVariant: string | undefined = options.reasoningEffort;
+    /**
+     * Without an explicit model, OpenCode runs its configured default; the
+     * model is then known from the first turn's assistant records, and the
+     * catalog check (effort variant, context window) applies from there on.
+     */
+    const resolveModelInfo = async (model: string | undefined = options.model): Promise<void> => {
+      if (reportedModelInfo || !model) return;
+      reportedModelInfo = true;
+      let info: OpenCodeModelInfo | undefined;
+      try {
+        info = findOpenCodeModelInfo(await client().request<unknown>("GET", "/config/providers", undefined, {
+          timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
+        }), model);
+      } catch (error) {
+        log.debug(`[OpenCodeHarness] provider catalog unavailable: ${errorMessage(error)}`);
+      }
+      const effort = options.reasoningEffort;
+      const supported = effort && info?.variants ? info.variants.includes(effort) : undefined;
+      if (supported === false) {
+        // OpenCode ignores a variant the model lacks; say so instead of claiming it.
+        log.warn(`[OpenCodeHarness] model ${model} has no "${effort}" variant (available: ${info?.variants?.join(", ") || "none"}); running without one.`);
+        resolvedVariant = undefined;
+      }
+      modelContextWindow = info?.contextWindow;
+      queue.enqueue({
+        type: "backend_info",
+        info: {
+          model,
+          ...(effort ? { reasoningEffort: supported === false ? null : effort } : {}),
+          ...(supported !== undefined ? { reasoningEffortSupported: supported } : {}),
+        },
+      });
+      if (modelContextWindow) queue.enqueue({ type: "usage_updated", usage: { contextWindow: modelContextWindow } });
     };
 
     /** Resolve the turn when the session is idle and produced a new assistant message. */
@@ -1395,8 +1649,8 @@ export class OpenCodeHarness implements AgentHarness {
           timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
         });
         if (!isIdleSessionStatus(statuses, id)) return;
-        const records = extractAssistantRecords(await fetchMessages(id));
-        if (records.length > turnBaselineAssistantCount) {
+        const newest = await newestMessage(id);
+        if (newest?.role === "assistant" && newest.id !== turnBaselineMessageId) {
           settleWaiter((pending) => pending.resolve());
         }
       } catch {
@@ -1432,8 +1686,15 @@ export class OpenCodeHarness implements AgentHarness {
         unsubscribe = serverLease.subscribe(sessionId, listener);
       }
       if (sessionId) {
+        if (options.rewindTurns && options.rewindTurns > 0 && !options.forkSession) {
+          throw new Error("OpenCode can only rewind into a fork (fork_session=true): its in-place revert would also undo file changes.");
+        }
         if (options.forkSession && !sessionForked) {
-          const forked = await client().request<OpenCodeSession>("POST", `/session/${encodeURIComponent(sessionId)}/fork`, {});
+          // N23: a rewind forks before the user message that started the
+          // N-th last turn (the fork copies only the messages before it).
+          const rewind = options.rewindTurns && options.rewindTurns > 0 ? Math.floor(options.rewindTurns) : 0;
+          const messageID = rewind > 0 ? await findRewindMessageId(sessionId, rewind) : undefined;
+          const forked = await client().request<OpenCodeSession>("POST", `/session/${encodeURIComponent(sessionId)}/fork`, messageID ? { messageID } : {});
           if (!forked?.id) throw new Error("OpenCode fork did not return a session id.");
           unsubscribe?.();
           sessionId = forked.id;
@@ -1441,7 +1702,7 @@ export class OpenCodeHarness implements AgentHarness {
           sessionForked = true;
           sessionValidated = true;
         } else if (!sessionValidated) {
-          await fetchMessages(sessionId);
+          await fetchMessagePage(sessionId, 1);
           sessionValidated = true;
         }
         emitBackendRef();
@@ -1462,29 +1723,48 @@ export class OpenCodeHarness implements AgentHarness {
       return sessionId;
     };
 
-    /** Cumulative session usage and cost as OpenCode currently reports them. */
-    const readUsageSnapshot = async (id: string): Promise<{
-      records: AssistantRecord[];
+    const readSessionCost = async (id: string): Promise<number | undefined> => {
+      const session = await client().request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
+        timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
+      }).catch((): undefined => undefined);
+      return sessionCostUsd(session);
+    };
+
+    /**
+     * Cumulative session usage after a turn: the turn's own messages (plus, on
+     * a resumed session's first turn, its earlier history once) and the
+     * session cost as OpenCode reports it.
+     */
+    const readTurnUsage = async (id: string): Promise<{
+      turnRecords: AssistantRecord[];
       usage: HarnessUsage;
       costUsd?: number;
     }> => {
-      const [messages, session] = await Promise.all([
-        fetchMessages(id).catch((): undefined => undefined),
-        client().request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
-          timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
-        }).catch((): undefined => undefined),
+      const [turnEntries, sessionCost] = await Promise.all([
+        fetchMessagesSince(id, historyLoaded ? turnBaselineMessageId : undefined).catch((): unknown[] => []),
+        readSessionCost(id),
       ]);
-      const records = extractAssistantRecords(messages);
+      const allNew = extractAssistantRecords(turnEntries);
+      let turnRecords = allNew;
+      if (!historyLoaded) {
+        historyLoaded = true;
+        const baselineIndex = turnBaselineMessageId
+          ? turnEntries.findIndex((entry) => messageIdentity(entry).id === turnBaselineMessageId)
+          : -1;
+        turnRecords = baselineIndex >= 0 ? extractAssistantRecords(turnEntries.slice(baselineIndex + 1)) : allNew;
+      }
+      rememberRecords(allNew);
+      const records = [...knownAssistantRecords.values()];
       const models = summarizeModelUsage(records);
-      const contextTokens = latestContextTokens(records);
+      const contextTokens = latestContextTokens(turnRecords) ?? latestContextTokens(records);
       return {
-        records,
+        turnRecords,
         usage: {
           ...(models ? { models } : {}),
           ...(contextTokens !== undefined ? { contextTokens } : {}),
+          ...(modelContextWindow ? { contextWindow: modelContextWindow } : {}),
         },
-        costUsd: sessionCostUsd(session)
-          ?? (models ? models.reduce((sum, entry) => sum + entry.costUsd, 0) : undefined),
+        costUsd: sessionCost ?? (models ? models.reduce((sum, entry) => sum + entry.costUsd, 0) : undefined),
       };
     };
 
@@ -1506,10 +1786,17 @@ export class OpenCodeHarness implements AgentHarness {
       if (!turn || !id || !lease?.alive || closed) return;
       usageRefresh = (async () => {
         try {
-          const snapshot = await readUsageSnapshot(id);
+          // N25: one small request (the session's own cost), not the history.
+          const costUsd = await readSessionCost(id);
           // Once the turn settles, run_completed carries the authoritative total.
-          if (closed || activeTurn !== turn || turn.waiter?.settled || snapshot.costUsd === undefined) return;
-          queue.enqueue({ type: "usage_updated", usage: { ...snapshot.usage, costUsd: snapshot.costUsd } });
+          if (closed || activeTurn !== turn || turn.waiter?.settled || costUsd === undefined) return;
+          queue.enqueue({
+            type: "usage_updated",
+            usage: {
+              costUsd,
+              ...(latestStepContextTokens !== undefined ? { contextTokens: latestStepContextTokens } : {}),
+            },
+          });
         } catch {
           // Usage is advisory; the turn result reports the final total.
         } finally {
@@ -1525,17 +1812,26 @@ export class OpenCodeHarness implements AgentHarness {
     const completeTurn = async (args: {
       outcome: "completed" | "failed" | "interrupted";
       result?: string;
+      errorCode?: string;
       startedAt: number;
     }): Promise<void> => {
       let outcome = args.outcome;
       let finalResult = args.result;
+      let errorCode = args.errorCode;
       let totalCostUsd = 0;
       let durationMs: number | undefined;
       let usage: HarnessUsage | undefined;
       if (lease?.alive && sessionId) {
-        const snapshot = await readUsageSnapshot(sessionId);
-        const records = snapshot.records;
-        const turnRecords = records.slice(turnBaselineAssistantCount);
+        const snapshot = await readTurnUsage(sessionId);
+        const turnRecords = snapshot.turnRecords;
+        if (!reportedModelInfo) {
+          // A default-model session: learn the model OpenCode actually used.
+          const used = [...turnRecords].reverse().find((record) => record.providerID && record.modelID);
+          if (used) {
+            await resolveModelInfo(`${used.providerID}/${used.modelID}`);
+            if (modelContextWindow) snapshot.usage.contextWindow = modelContextWindow;
+          }
+        }
         usage = snapshot.usage;
         totalCostUsd = snapshot.costUsd ?? 0;
         durationMs = recordDurationMs(turnRecords);
@@ -1544,9 +1840,12 @@ export class OpenCodeHarness implements AgentHarness {
           if (lastRecord?.error) {
             outcome = "failed";
             finalResult = lastRecord.error;
+            errorCode = lastRecord.errorName;
           } else {
             finalResult = finalResult ?? [...turnRecords].reverse().find((record) => record.text)?.text;
           }
+        } else if (outcome === "failed" && !errorCode) {
+          errorCode = lastRecord?.errorName;
         }
       }
       if (!closed && await prompts.hasQueued()) {
@@ -1560,6 +1859,10 @@ export class OpenCodeHarness implements AgentHarness {
       queue.enqueue(createRunCompletedEvent({
         success: outcome === "completed",
         outcome,
+        // N16: OpenCode reports structured errors (assistant `error.name`), so
+        // the outcome is authoritative and the error class travels as a code.
+        outcomeAuthoritative: true,
+        ...(outcome === "failed" && errorCode ? { errorCode } : {}),
         duration_ms: durationMs ?? Math.max(0, Date.now() - args.startedAt),
         total_cost_usd: totalCostUsd,
         num_turns: runCounter,
@@ -1582,8 +1885,9 @@ export class OpenCodeHarness implements AgentHarness {
         }
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
-        const baseline = await fetchMessages(id).catch((): undefined => undefined);
-        turnBaselineAssistantCount = extractAssistantRecords(baseline).length;
+        await resolveModelInfo();
+        turnBaselineMessageId = (await newestMessage(id).catch((): undefined => undefined))?.id;
+        latestStepContextTokens = undefined;
 
         const done = new Promise<void>((resolve, reject) => {
           turn.waiter = { sawActivity: false, settled: false, resolve, reject };
@@ -1599,7 +1903,7 @@ export class OpenCodeHarness implements AgentHarness {
           model: options.model,
           systemPrompt: options.systemPrompt,
           agent: openCodeAgentForMode(currentPermissionMode),
-          variant: options.reasoningEffort,
+          variant: resolvedVariant,
         }), { signal: turn.abort.signal });
         if (!lease?.streamConnected && turn.waiter) {
           void pollUntilSettled(turn.waiter, turn.abort.signal);
@@ -1610,7 +1914,12 @@ export class OpenCodeHarness implements AgentHarness {
         if (turn.interrupted) {
           await completeTurn({ outcome: "interrupted", startedAt });
         } else {
-          await completeTurn({ outcome: "failed", result: errorMessage(error), startedAt });
+          await completeTurn({
+            outcome: "failed",
+            result: errorMessage(error),
+            ...(error instanceof OpenCodeTurnError && error.code ? { errorCode: error.code } : {}),
+            startedAt,
+          });
         }
       } finally {
         if (turn.inactivityTimer) clearTimeout(turn.inactivityTimer);
@@ -1618,7 +1927,7 @@ export class OpenCodeHarness implements AgentHarness {
         // A question or approval belongs to the turn that raised it. Once the
         // turn is over (completed, failed, aborted) it can no longer be
         // answered, and the next prompt must start a new turn, not answer it.
-        if (currentPendingInput) resolvePendingInput(currentPendingInput.requestId);
+        releaseAllPendingInput();
       }
     };
 

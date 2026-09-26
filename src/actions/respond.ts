@@ -64,6 +64,16 @@ function getResumeWorktreeRef(session: ResumableSession): string | undefined {
   return getStableSessionId(session) ?? getPrimarySessionLookupRef(session) ?? getBackendConversationId(session);
 }
 
+/**
+ * The repository a resumed session launches from. A live worktree session's
+ * `workdir` is its worktree; the launch (repo policy, worktree reuse) must see
+ * the original checkout. Persisted rows already store the original workdir.
+ */
+function resumeWorkdir(session: ResumableSession): string {
+  const original = "originalWorkdir" in session ? session.originalWorkdir : undefined;
+  return original?.trim() ? original : session.workdir;
+}
+
 function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
   return session.status !== "running"
     && !!session.pendingPlanApproval
@@ -104,11 +114,13 @@ async function spawnFreshRelaunch(
     const freshConfig: SessionConfig = {
       prompt: session.prompt,
       sessionIdOverride: getStableSessionId(session),
-      workdir: session.workdir,
+      workdir: resumeWorkdir(session),
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       fastMode: session.fastMode,
+      // The launch system prompt (the worktree preamble is re-added at bootstrap).
+      systemPrompt: session.launchSystemPrompt,
       worktreeStrategy: session.worktreeStrategy,
       multiTurn: true,
       originChannel: session.originChannel,
@@ -356,11 +368,13 @@ async function tryAutoResume(
       // re-presenting the plan.
       prompt: isPlanApproval ? RESUMED_PLAN_APPROVAL_PREFIX + message : message,
       sessionIdOverride: assessment.stableSessionId,
-      workdir: session.workdir,
+      workdir: resumeWorkdir(session),
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       fastMode: session.fastMode,
+      // The launch system prompt (the worktree preamble is re-added at bootstrap).
+      systemPrompt: session.launchSystemPrompt,
       resumeSessionId: assessment.resumeSessionId,
       resumeWorktreeFrom: getResumeWorktreeRef(session),
       worktreeStrategy: session.worktreeStrategy,

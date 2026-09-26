@@ -1,4 +1,4 @@
-import { branchNameValidationError } from "../worktree-ref-validation";
+import { branchNameValidationError, targetRepoValidationError } from "../worktree-ref-validation";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
@@ -114,7 +114,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       resume_session_id: Type.Optional(Type.String({ description: "Session to continue (or fork with fork_session=true)" })),
       fork_session: Type.Optional(Type.Boolean({ description: "With resume_session_id: start a new session from its context" })),
       rewind_turns: Type.Optional(
-        Type.Number({ minimum: 1, description: "Codex, with resume_session_id: drop the last N turns first (with fork_session the original is kept). Files are not reverted." }),
+        Type.Number({ minimum: 1, description: "With resume_session_id: drop the last N turns first (Codex, Claude Code; OpenCode only with fork_session=true, which keeps the original). Files are not reverted." }),
       ),
       force_new_session: Type.Optional(Type.Boolean({ description: "Start a new session even if a linked one could be resumed" })),
       permission_mode: Type.Optional(
@@ -147,6 +147,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       if (params.worktree_base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.worktree_base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
+      }
+      if (params.worktree_pr_target_repo !== undefined) {
+        const repoError = targetRepoValidationError(params.worktree_pr_target_repo);
+        if (repoError) return { content: [{ type: "text", text: `Error: worktree_pr_target_repo: ${repoError}` }] };
       }
 
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).

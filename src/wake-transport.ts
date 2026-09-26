@@ -8,6 +8,14 @@ export interface WakeTransportOptions {}
  *
  * `chat.send` stays a CLI subprocess: the in-process `runtime.gateway.request`
  * surface grants operator scopes only to trusted plugins, which OCA is not.
+ *
+ * N3 (decision): the params travel in argv, visible to other local users in
+ * `ps` for the call's lifetime. `openclaw gateway call` has no stdin or file
+ * option for params (2026.9.6), and the in-process alternatives are worse: a
+ * system event prefixes every line, agent output included, with `System:` in
+ * the orchestrator's prompt, and `runtime.subagent.run` starts an `agent` run
+ * (not a `chat.send` turn) and is bound only inside a Gateway request scope.
+ * See docs/SECURITY.md (Subprocess Inventory).
  */
 export class WakeTransport {
   constructor(_options: WakeTransportOptions = {}) {}

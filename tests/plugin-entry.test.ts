@@ -227,6 +227,9 @@ describe("plugin entry source", () => {
       [
         "defaultWorktreeStrategy=auto-merge",
         "defaultWorktreeStrategy=auto-pr",
+        // N7: explicit Codex settings that disable the sandbox or approvals.
+        "harnesses.codex.approvalPolicy=never",
+        "harnesses.codex.permissionProfile=:danger-full-access",
         "permissionMode=bypassPermissions",
         "planApproval=approve",
       ],

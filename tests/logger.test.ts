@@ -1,12 +1,38 @@
 import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { build } from "esbuild";
 
 import { createLogger } from "../src/logger";
 import { setPluginRuntime } from "../src/runtime-store";
 
 afterEach(() => {
   setPluginRuntime(undefined);
+});
+
+describe("production build keeps the logger's warn fallback (N9)", () => {
+  it("bundles src/logger.ts with the package build's --pure flags and keeps console.warn/error", async () => {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")) as { scripts: { build: string } };
+    const pure = [...pkg.scripts.build.matchAll(/--pure:(\S+)/g)].map((match) => match[1]!);
+    assert.ok(pure.length > 0, "the build still strips some console methods");
+    const result = await build({
+      entryPoints: [join(import.meta.dirname, "..", "src", "logger.ts")],
+      bundle: true,
+      write: false,
+      minify: true,
+      platform: "node",
+      format: "esm",
+      packages: "external",
+      pure,
+      logLevel: "silent",
+    });
+    const code = result.outputFiles[0]!.text;
+    assert.match(code, /console\.warn\(/, "the pre-registration warn fallback survives the build");
+    assert.match(code, /console\.error\(/);
+    assert.doesNotMatch(code, /console\.debug\(/, "debug output is still stripped");
+  });
 });
 
 describe("createLogger", () => {

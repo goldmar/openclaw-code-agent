@@ -254,6 +254,17 @@ function routeToNotificationRoute(route?: SessionRoute): NotificationRoute | und
   };
 }
 
+/** The chat a prompt goes to; its buttons act only from there (N2). */
+function sessionRouteFor(route: NotificationRoute): SessionRoute {
+  return {
+    provider: route.channel,
+    accountId: route.accountId,
+    target: route.target,
+    threadId: route.threadId,
+    sessionKey: route.sessionKey,
+  };
+}
+
 function fallbackRoute(): SessionRoute | undefined {
   if (!pluginConfig.fallbackChannel) return undefined;
   return routeFromOriginMetadata(pluginConfig.fallbackChannel);
@@ -484,19 +495,15 @@ export class AutoUpdateService {
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-install", "Update now", {
         pluginUpdateVersion: latestVersion,
-        route: {
-          provider: route.channel,
-          accountId: route.accountId,
-          target: route.target,
-          threadId: route.threadId,
-          sessionKey: route.sessionKey,
-        },
+        route: sessionRouteFor(route),
       }),
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-remind-later", "Remind later", {
         pluginUpdateVersion: latestVersion,
+        route: sessionRouteFor(route),
       }),
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Skip this version", {
         pluginUpdateVersion: latestVersion,
+        route: sessionRouteFor(route),
       }),
     ]]);
   }
@@ -526,9 +533,11 @@ export class AutoUpdateService {
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-restart", "Restart Gateway", {
         pluginUpdateVersion: version,
+        route: sessionRouteFor(route),
       }),
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Not now", {
         pluginUpdateVersion: version,
+        route: sessionRouteFor(route),
       }),
     ]]);
     this.writeState({
