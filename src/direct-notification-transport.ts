@@ -87,7 +87,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
         ...(route.threadId ? { threadId: route.threadId } : {}),
         payloads: [presentation ? { text, presentation } : { text }],
         durability: "required",
-        onDeliveryIntent: () => options?.onDeliveryIntent?.(),
+        ...(options?.onDeliveryIntent ? { onDeliveryIntent: options.onDeliveryIntent } : {}),
       });
     } catch (err) {
       logButtonDiagnostic("direct_send_failed", {

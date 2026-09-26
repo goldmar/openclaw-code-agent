@@ -70,6 +70,20 @@ describe("RuntimeDirectNotificationTransport", () => {
     assert.equal(calls[0]?.cfg, cfg);
   });
 
+  it("forwards a durable admission observer only when requested", async () => {
+    setPluginRuntime({}, {});
+    const { calls, transport } = recordingTransport();
+    let admissions = 0;
+
+    await transport.send(TOPIC_ROUTE, "Reminder", undefined, {
+      onDeliveryIntent: () => { admissions += 1; },
+    });
+
+    assert.equal(typeof calls[0]?.onDeliveryIntent, "function");
+    calls[0]?.onDeliveryIntent({ id: "durable-intent" });
+    assert.equal(admissions, 1);
+  });
+
   it("caches a null runtime.config.current result", () => {
     let runtimeConfigReads = 0;
     setPluginRuntime({
