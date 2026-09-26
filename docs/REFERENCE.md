@@ -516,7 +516,7 @@ Send a follow-up, steer or redirect work, answer a pending question, approve a p
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | `true` when the message is the user's own words. It resets the auto-respond counter, and for a pending plan the words `approve`, `reject` and `revise` decide it (any other text is revision feedback) |
 | `approve` | `boolean` | No | Approve a pending plan (`delegate` or `approve` mode) or escalate `default` mode permissions. Refused for a plan with `planApproval: "ask"`, even with `userInitiated`: only the user's button or their forwarded words approve there |
-| `approval_rationale` | `string` | No | With `approve=true`: one line on why the plan is safe. It is shown to the user in the `👍 [name] Plan approved: <rationale>` notice, so no separate explanation is needed |
+| `approval_rationale` | `string` | No | With `approve=true`: one line on why the plan is safe. It is shown to the user under the `👍 [name] Plan approved` notice (`Why: <rationale>`), so no separate explanation is needed |
 
 Examples:
 
@@ -831,7 +831,7 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Launch | `🚀 [name] Launched \| <dir> \| <harness \| model>` (from `/agent`, this is the command reply) |
 | Waiting for input | `❓ [name]` the agent's question, with option buttons when it has simple options |
 | Plan ready (`ask`, or escalated) | `📋 [name] Plan vN ready for approval` decision brief with Approve / Revise / Reject |
-| Plan approved | `👍 [name] Plan approved: <rationale>` (the rationale appears when the orchestrator approved with `approval_rationale`) |
+| Plan approved | `👍 [name] Plan approved`, with `Why: <rationale>` on the next line when the orchestrator approved with `approval_rationale` |
 | Resumed | `▶️ [name] Resumed` |
 | Turn completed | `⏸️ [name]` paused after a turn |
 | Completed | `✅ [name] Completed` with cost and duration |

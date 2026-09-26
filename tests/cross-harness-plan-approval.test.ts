@@ -222,7 +222,7 @@ for (const name of BACKEND_NAMES) {
       });
       assert.match(result.text, /Plan approved/);
       await expectImplementationStarted(round);
-      assert.match(fixture.lastNotification("plan-approved")?.request.userMessage ?? "", /Plan approved: Scope matches the task and the change is low risk\./);
+      assert.match(fixture.lastNotification("plan-approved")?.request.userMessage ?? "", /Plan approved[^\n]*\nWhy: Scope matches the task and the change is low risk\./);
     });
 
     for (const mode of ["delegate", "approve"] as const) {

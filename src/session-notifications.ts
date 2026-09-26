@@ -656,7 +656,10 @@ export class SessionNotificationService {
   }
 }
 
+/** Stats go on the first line; later lines (for example an outcome summary) stay as they are. */
 function appendSessionStatsSuffix(line: string, stats: SessionNotificationStats): string {
   const suffix = formatSessionStatsSuffix(stats);
-  return suffix ? `${line}${suffix}` : line;
+  if (!suffix) return line;
+  const newline = line.indexOf("\n");
+  return newline < 0 ? `${line}${suffix}` : `${line.slice(0, newline)}${suffix}${line.slice(newline)}`;
 }

@@ -455,7 +455,7 @@ describe("agent_merge push behavior", () => {
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
       assert.equal(capturedRequests.length, 1);
       const request = capturedRequests[0].request;
-      assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+\nAdds the sub\(\) helper with a unit test\./);
+      assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+ \| \$0\.00\nAdds the sub\(\) helper with a unit test\.$/);
       // 4.x had no summary parameter and always woke the orchestrator for a follow-up.
       assert.equal(request.wakeMessageOnNotifySuccess, undefined);
       // If the line cannot be delivered, the orchestrator is still told.

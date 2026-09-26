@@ -448,7 +448,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (session resumed): The plan stays in bounds and only touches low-risk files.");
+    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (session resumed)\nWhy: The plan stays in bounds and only touches low-risk files.");
     assert.equal(
       notifications[0].idempotencyKey,
       "agent-respond-plan-approved-resumed:dead-plan-shutdown:1780000003000:harness-plan-shutdown:vunknown",
@@ -736,7 +736,7 @@ describe("executeRespond", () => {
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
     // N36: the user sees why the orchestrator approved, without a separate message.
-    assert.equal(notifications[0].text, "👍 [test-session] Plan approved: The scope matches the request and the change is low risk.");
+    assert.equal(notifications[0].text, "👍 [test-session] Plan approved\nWhy: The scope matches the request and the change is low risk.");
   });
 
   it("persists active plan approval state before notifying", async () => {

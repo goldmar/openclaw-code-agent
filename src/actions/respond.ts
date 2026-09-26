@@ -145,10 +145,14 @@ async function spawnFreshRelaunch(
 const RESUMED_PLAN_APPROVAL_PREFIX =
   "The user approved your plan while this session was suspended. Implement the approved plan now; do not ask for further confirmation.\n\n";
 
-/** "👍 [name] Plan approved — <rationale>" (N36): the user sees why without a separate message. */
+/**
+ * "👍 [name] Plan approved" with the orchestrator's rationale on the next line
+ * (N36): the user sees why without a separate message. The status metadata
+ * stays on the first line.
+ */
 export function formatPlanApprovedLine(sessionName: string, rationale?: string, resumed = false): string {
   const base = `👍 [${sessionName}] Plan approved${resumed ? " (session resumed)" : ""}`;
-  return rationale ? `${base}: ${rationale}` : base;
+  return rationale ? `${base}\nWhy: ${rationale}` : base;
 }
 
 function normalizeApprovalRationale(rationale?: string): string | undefined {

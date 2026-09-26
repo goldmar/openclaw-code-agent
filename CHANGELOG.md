@@ -71,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `agent_merge` and `agent_pr` take an optional `summary` (one or two lines for the user). It is shown under the outcome line, and the outcome wake that asks the orchestrator for a follow-up summary is skipped.
-- `approval_rationale` is shown to the user in the approval notice (`👍 [name] Plan approved: <rationale>`), so a delegated approval needs no separate explanation.
+- `approval_rationale` is shown to the user in the approval notice (`👍 [name] Plan approved` followed by `Why: <rationale>`), so a delegated approval needs no separate explanation.
 - `agent_sessions(status="waiting")` and the new `/agent_status` command list the sessions that wait for a plan decision, an answer, or a merge / PR decision, with the next step.
 - After the user presses **Revise**, the orchestrator gets a queued note that the user's next chat message is the requested change.
 - A session that finishes with uncommitted changes and no commits gets **Commit changes** (resume with a commit instruction), **View output** and **Discard** buttons.
