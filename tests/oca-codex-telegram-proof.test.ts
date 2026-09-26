@@ -417,7 +417,7 @@ describe("OCA Codex Telegram proof runner", () => {
         },
         async startLocalSut() {
           events.push("start-sut");
-          return { gatewayPort: 38975, isolatedHome: "/home/openclaw/private-proof-home" };
+          return { gatewayPort: 38975, isolatedHome: "/home/alice/private-proof-home" };
         },
         async startCrabboxDesktop() {
           events.push("start-crabbox");

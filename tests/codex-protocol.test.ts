@@ -17,6 +17,7 @@ import {
   DEFAULT_CODEX_EXECUTION_SETTINGS,
   matchApprovalChoiceFromText,
   readOpenClawExecMode,
+  resetCodexExecOverrideWarningsForTests,
   resolveCodexExecutionSettings,
   turnErrorMessage,
 } from "../src/harness/codex-protocol";
@@ -115,6 +116,25 @@ describe("codex protocol thread payloads", () => {
       { permissionProfile: ":read-only", approvalPolicy: "on-request", approvalsReviewer: "user" },
     );
   });
+
+  it("warns once when explicit settings run Codex although the host blocks local execution (N7)", () => {
+    resetCodexExecOverrideWarningsForTests();
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      resolveCodexExecutionSettings({ permissionProfile: ":danger-full-access", approvalPolicy: "never" }, "deny");
+      resolveCodexExecutionSettings({ permissionProfile: ":danger-full-access", approvalPolicy: "never" }, "deny");
+      resolveCodexExecutionSettings({ permissionProfile: ":workspace" }, "allowlist");
+      resolveCodexExecutionSettings({ permissionProfile: ":danger-full-access" }, "auto");
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(warnings.length, 2, warnings.join("\n"));
+    assert.match(warnings[0]!, /tools\.exec\.mode is "deny".*unsandboxed or unapproved/s);
+    assert.match(warnings[1]!, /tools\.exec\.mode is "allowlist"/);
+    assert.doesNotMatch(warnings[1]!, /unsandboxed/);
+  });
 });
 
 describe("codex protocol turn payloads", () => {
@@ -142,11 +162,23 @@ describe("codex protocol turn payloads", () => {
       input: [{ type: "text", text: "Plan it", text_elements: [] }],
       model: "gpt-6-sol",
       effort: "xhigh",
+      // D5: a plan turn is read-only and cannot escalate, whatever the thread posture.
+      permissions: ":read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
       collaborationMode: {
         mode: "plan",
         settings: { model: "gpt-6-sol", reasoning_effort: "xhigh", developer_instructions: null },
       },
     });
+    const restored = buildTurnStartParams({
+      threadId: "t-1",
+      prompt: "Go",
+      model: "gpt-6-sol",
+      permissionMode: "default",
+      execution: { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" },
+    });
+    assert.deepEqual([restored.permissions, restored.approvalPolicy, restored.approvalsReviewer], [":workspace", "on-request", "auto_review"]);
     const implement = buildTurnStartParams({ threadId: "t-1", prompt: "Go", model: "gpt-6-sol", permissionMode: "bypassPermissions" });
     assert.equal(implement.collaborationMode?.mode, "default");
     assert.equal("effort" in implement, false);

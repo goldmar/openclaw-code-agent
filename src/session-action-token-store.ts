@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { SessionActionKind, SessionActionToken } from "./types";
+import type { SessionActionKind, SessionActionToken, SessionRoute } from "./types";
 
 function isPlanDecisionKind(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
@@ -77,6 +77,22 @@ export class SessionActionTokenStore {
     this.tokens.set(token.id, token);
     this.notifyChanged();
     return token;
+  }
+
+  /**
+   * Bind tokens to the chat their buttons are delivered to (N2). A token that
+   * already carries a route (plan offers, goal verifiers, plugin updates) keeps
+   * it: those are minted for one known chat.
+   */
+  bindActionTokensToRoute(tokenIds: Iterable<string>, route: SessionRoute): void {
+    let changed = false;
+    for (const tokenId of tokenIds) {
+      const token = this.tokens.get(tokenId);
+      if (!token || token.route?.target) continue;
+      token.route = { ...route };
+      changed = true;
+    }
+    if (changed) this.notifyChanged();
   }
 
   /**

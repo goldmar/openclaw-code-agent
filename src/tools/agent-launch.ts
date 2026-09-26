@@ -1,4 +1,4 @@
-import { branchNameValidationError } from "../worktree-ref-validation";
+import { branchNameValidationError, targetRepoValidationError } from "../worktree-ref-validation";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
@@ -120,7 +120,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         Type.Boolean({ description: "When resuming, fork to a new session instead of continuing the existing one. Use with resume_session_id." }),
       ),
       rewind_turns: Type.Optional(
-        Type.Number({ minimum: 1, description: "Codex only, integer, with resume_session_id: drop the latest N turns of the backend thread before continuing. With fork_session=true the fork is created before those turns (the original thread is untouched); without it the resumed thread's history is reverted in place. Conversation history only — files changed by those turns are NOT reverted." }),
+        Type.Number({ minimum: 1, description: "Integer, with resume_session_id: drop the latest N turns of the backend conversation before continuing (Codex, Claude Code; OpenCode only with fork_session=true). With fork_session=true the fork is created before those turns (the original conversation is untouched); without it the resumed conversation continues from before them. Conversation history only — files changed by those turns are NOT reverted." }),
       ),
       force_new_session: Type.Optional(
         Type.Boolean({ description: "Bypass resume-first protection and start a brand-new linked session even when a resumable or active linked session already exists." }),
@@ -164,6 +164,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       if (params.worktree_base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.worktree_base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
+      }
+      if (params.worktree_pr_target_repo !== undefined) {
+        const repoError = targetRepoValidationError(params.worktree_pr_target_repo);
+        if (repoError) return { content: [{ type: "text", text: `Error: worktree_pr_target_repo: ${repoError}` }] };
       }
 
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).

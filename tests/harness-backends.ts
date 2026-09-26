@@ -674,6 +674,7 @@ export class OpenCodeBackend implements BackendDriver {
       return new Response(null, { status: 204 });
     }
     if (method === "POST" && /^\/session\/[^/]+\/abort$/.test(path)) return this.json(method, path, true);
+    if (method === "GET" && path === "/config/providers") return this.json(method, path, { providers: [], default: {} });
     const sessionMatch = /^\/session\/([^/]+)$/.exec(path);
     if (sessionMatch && (method === "GET" || method === "PATCH")) return this.json(method, path, this.session(sessionMatch[1]!));
     const replyMatch = /^\/(permission|question)\/([^/]+)\/reply$/.exec(path);

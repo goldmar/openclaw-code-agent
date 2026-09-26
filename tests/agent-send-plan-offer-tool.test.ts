@@ -36,7 +36,7 @@ describe("agent_send_plan_offer tool", () => {
       offer_id: "plugin-readiness-v2026.5.18",
       offer_text: "Readiness report body",
       plan_prompt: "Plan the follow-up.",
-      plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
+      plan_workdir: "/home/alice/workspace/openclaw-code-agent",
       plan_worktree_strategy: "auto-pr",
       plan_name: "plugin-readiness-v2026.5.18",
     });
@@ -72,7 +72,7 @@ describe("agent_send_plan_offer tool", () => {
       offer_id: "plugin-readiness-v2026.5.18",
       offer_text: "Readiness report body",
       plan_prompt: "Plan the compatibility follow-up.",
-      plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
+      plan_workdir: "/home/alice/workspace/openclaw-code-agent",
       plan_name: "plugin-readiness-v2026.5.18",
     });
 

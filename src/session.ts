@@ -154,6 +154,8 @@ export class Session extends EventEmitter {
   readonly reasoningEffort?: ReasoningEffort;
   readonly fastMode?: boolean;
   private readonly systemPrompt?: string;
+  /** The launch system prompt without the worktree preamble (persisted for resume). */
+  readonly launchSystemPrompt?: string;
   private readonly allowedTools?: string[];
   private readonly permissionMode: PermissionMode;
   readonly requestedPermissionMode: PermissionMode;
@@ -307,6 +309,7 @@ export class Session extends EventEmitter {
       ? (config.fastMode ?? resolveFastModeForHarness(this.harness.name))
       : undefined;
     this.systemPrompt = config.systemPrompt;
+    this.launchSystemPrompt = config.launchSystemPrompt ?? config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
     this.requestedPermissionMode = config.requestedPermissionMode ?? this.permissionMode;

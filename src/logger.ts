@@ -43,9 +43,10 @@ function formatDetail(detail: unknown): unknown {
 }
 
 function writeConsole(level: LogLevel, message: string, details: unknown[]): void {
-  // Fallback before registration and in tests. The production bundle
-  // strips console.log/info/warn/debug through esbuild `--pure`, so only the host
-  // logger (or console.error) is observable there.
+  // Fallback before registration and in tests. The production bundle strips
+  // console.log/info/debug through esbuild `--pure`; console.warn and
+  // console.error stay, so warnings logged before the host logger exists (or
+  // when it throws) are still visible (N9, tests/logger.test.ts checks the build).
   if (level === "error") console.error(message, ...details);
   else if (level === "warn") console.warn(message, ...details);
   else if (level === "info") console.info(message, ...details);

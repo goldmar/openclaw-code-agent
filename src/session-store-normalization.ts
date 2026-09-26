@@ -591,6 +591,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     model: toOptionalString(raw.model),
     reasoningEffort: toOptionalReasoningEffort(raw.reasoningEffort),
     fastMode: raw.fastMode === true ? true : undefined,
+    launchSystemPrompt: toOptionalString(raw.launchSystemPrompt),
     createdAt: toOptionalNumber(raw.createdAt),
     completedAt: toOptionalNumber(raw.completedAt),
     status,

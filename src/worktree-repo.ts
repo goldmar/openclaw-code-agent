@@ -1,4 +1,4 @@
-import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
+import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef, targetRepoValidationError } from "./worktree-ref-validation";
 import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
 import { homedir } from "os";
@@ -455,7 +455,12 @@ export async function hasGitHubRemote(repoDir: string, env: NodeJS.ProcessEnv = 
 }
 
 export async function resolveTargetRepo(repoDir: string, explicitRepo?: string): Promise<string | undefined> {
-  if (explicitRepo) return explicitRepo;
+  if (explicitRepo) {
+    // Also covers a value persisted by an older build: it reaches `gh --repo`.
+    const error = targetRepoValidationError(explicitRepo);
+    if (error) throw new Error(`Invalid PR target repository: ${error}`);
+    return explicitRepo;
+  }
   let origin: string | undefined;
   try {
     origin = (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim() || undefined;
@@ -466,7 +471,7 @@ export async function resolveTargetRepo(repoDir: string, explicitRepo?: string):
     const upstream = (await runGit(["-C", repoDir, "remote", "get-url", "upstream"], { timeout: 5_000 })).trim();
     if (upstream && upstream !== origin) {
       const match = upstream.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
-      if (match) return match[1];
+      if (match && !targetRepoValidationError(match[1])) return match[1];
     }
   } catch {
     // no upstream remote

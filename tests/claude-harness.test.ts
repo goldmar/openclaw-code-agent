@@ -1,11 +1,11 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, planFileWrittenByTool, trustedPlanFilePath } from "../src/harness/claude-code";
+import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, planFileWrittenByTool, resolveClaudeRewindPoint, trustedPlanFilePath } from "../src/harness/claude-code";
 import { setPluginConfig } from "../src/config";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
@@ -285,6 +285,29 @@ describe("ClaudeCodeHarness", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+
+  it("shows one question at a time: a concurrent AskUserQuestion waits for the first answer (N20)", async () => {
+    const { session, canUseTool, messages, finish } = await launchForCanUseTool("default", {
+      canUseTool: () => new Promise(() => {}),
+    });
+    const tick = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+    const first = canUseTool("AskUserQuestion", { questions: [{ question: "First?", options: [{ label: "A" }, { label: "B" }] }] },
+      { signal: new AbortController().signal, requestId: "r1", toolUseID: "t1" });
+    const second = canUseTool("AskUserQuestion", { questions: [{ question: "Second?", options: [{ label: "C" }, { label: "D" }] }] },
+      { signal: new AbortController().signal, requestId: "r2", toolUseID: "t2" });
+    await tick();
+    const shown = () => messages.filter((message): message is Extract<HarnessMessage, { type: "pending_input" }> => message.type === "pending_input");
+    assert.equal(shown().length, 1, "the second question waits");
+    assert.match(shown()[0]!.state.promptText, /First\?/);
+    assert.equal(await session.submitPendingInputText?.("2"), true);
+    assert.deepEqual((await first).updatedInput.answers, { "First?": "B" });
+    await tick();
+    assert.equal(shown().length, 2);
+    assert.match(shown()[1]!.state.promptText, /Second\?/);
+    assert.equal(await session.submitPendingInputText?.("C"), true);
+    assert.deepEqual((await second).updatedInput.answers, { "Second?": "C" });
+    await finish();
   });
 
   it("maps a single-select text reply by option number and by label", async () => {
@@ -931,5 +954,43 @@ describe("ClaudeCodeHarness", () => {
       message: { role: "user", content: "hello" },
       parent_tool_use_id: null,
     });
+  });
+});
+
+describe("ClaudeCodeHarness rewind (N23)", () => {
+  const user = (uuid: string, content: unknown, parent: string | null = null): SessionMessage => ({ type: "user", uuid, session_id: "s", message: { role: "user", content }, parent_tool_use_id: parent, parent_agent_id: null });
+  const assistant = (uuid: string): SessionMessage => ({ type: "assistant", uuid, session_id: "s", message: { role: "assistant", content: [] }, parent_tool_use_id: null, parent_agent_id: null });
+  const transcript = [
+    user("u1", "first task"),
+    assistant("a1"),
+    user("r1", [{ type: "tool_result", tool_use_id: "t", content: "ok" }]),
+    assistant("a1b"),
+    user("u2", [{ type: "text", text: "second task" }]),
+    assistant("a2"),
+    user("sub", "subagent prompt", "toolu_task"),
+    user("u3", "third task"),
+    assistant("a3"),
+  ];
+
+  it("resumes at the last entry before the prompt of the N-th last turn", () => {
+    assert.equal(resolveClaudeRewindPoint(transcript, 1), "a2");
+    assert.equal(resolveClaudeRewindPoint(transcript, 2), "a1b", "tool results and subagent messages are not turn prompts");
+    assert.throws(() => resolveClaudeRewindPoint(transcript, 3), /would drop the whole Claude Code session/);
+    assert.throws(() => resolveClaudeRewindPoint(transcript, 4), /only has 3 turn\(s\)/);
+  });
+
+  it("passes resumeSessionAt to the SDK when a resumed launch rewinds", async () => {
+    let seenOptions: Record<string, unknown> | undefined;
+    const query = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(query.handle, (options) => { seenOptions = options; }, {
+      getSessionMessages: async (sessionId: string) => {
+        assert.equal(sessionId, "claude-old");
+        return transcript;
+      },
+    });
+    await collectMessages(harness.launch({ prompt: "redo", cwd: "/tmp/project", resumeSessionId: "claude-old", forkSession: true, rewindTurns: 1 }));
+    assert.equal(seenOptions?.resume, "claude-old");
+    assert.equal(seenOptions?.forkSession, true);
+    assert.equal(seenOptions?.resumeSessionAt, "a2");
   });
 });

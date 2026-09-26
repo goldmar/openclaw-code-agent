@@ -469,7 +469,8 @@ describe("agent_launch tool defaults", () => {
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const text = async (params: Record<string, unknown>) => ((await tool.execute("tool-id", { prompt: "x", ...params })).content[0] as { text: string }).text;
     assert.match(await text({ harness: "codex", rewind_turns: 1 }), /rewind_turns requires resume_session_id/);
-    assert.match(await text({ harness: "claude-code", resume_session_id: "a", rewind_turns: 1 }), /only supported by the Codex harness/);
+    // N23: OpenCode rewinds only into a fork (its in-place revert also undoes files).
+    assert.match(await text({ harness: "opencode", resume_session_id: "a", rewind_turns: 1 }), /requires fork_session=true/);
     assert.match(await text({ harness: "codex", resume_session_id: "a", rewind_turns: 1.5 }), /positive integer/);
   });
 

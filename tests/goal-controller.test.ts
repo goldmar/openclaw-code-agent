@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { GoalController, normalizeVerifierCommands } from "../src/goal-controller";
+import { GoalController, goalRunCostUsd, normalizeVerifierCommands } from "../src/goal-controller";
 import { GoalTaskStore } from "../src/goal-store";
 import type { GoalTaskState } from "../src/types";
 import { createStubSession, tick } from "./helpers";
@@ -884,6 +884,20 @@ describe("GoalController", () => {
     assert.equal((controller as any).recordRunCost(costly, { ...run, startedAt: 2 }), false);
     assert.equal(costly.status, "failed");
     assert.match(costly.failureReason ?? "", /cost limit/);
+  });
+
+  it("bounds max_cost_usd for runs that bill nothing per token by their API-price estimate", () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    (controller as any).store = createStore();
+    const chatgpt = buildTask({ id: "g-chatgpt", maxCostUsd: 1, totalCostUsd: 0 });
+    // Codex with a ChatGPT login: billed $0, estimated $0.70 per run at API prices.
+    const run = { id: "cx", startedAt: 1, costUsd: 0, usage: { estimatedCostUsd: 0.7 } };
+    assert.equal((controller as any).recordRunCost(chatgpt, run), true);
+    assert.equal((controller as any).recordRunCost(chatgpt, { ...run, startedAt: 2 }), false);
+    assert.equal(chatgpt.status, "failed");
+    assert.match(chatgpt.failureReason ?? "", /cost limit/);
+    assert.equal(goalRunCostUsd({ costUsd: 0.2, usage: { estimatedCostUsd: 5 } }), 0.2, "billed cost wins when there is one");
+    assert.equal(goalRunCostUsd({ costUsd: 0 }), 0);
   });
 
   it("fails waiting_for_user tasks during restore", async () => {

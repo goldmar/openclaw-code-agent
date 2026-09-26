@@ -1,3 +1,4 @@
+import type { HarnessUsage } from "./harness/types";
 import { spawn } from "child_process";
 import { buildMinimalChildEnv } from "./child-env";
 import { pluginConfig } from "./config";
@@ -458,6 +459,18 @@ function buildVerifierConfirmationText(task: GoalTaskState): string {
     ``,
     `Nothing runs until you confirm. Up to ${task.maxIterations} iterations${task.maxCostUsd ? `, at most $${task.maxCostUsd.toFixed(2)}` : ""}.`,
   ].join("\n");
+}
+
+/**
+ * The cost a goal's spend limit counts for one run: the billed cost, or, for
+ * a backend that bills nothing per token (Codex with a ChatGPT login), the
+ * API-price estimate of the tokens it used, so `max_cost_usd` still bounds it.
+ */
+export function goalRunCostUsd(session: { costUsd: number; usage?: Pick<HarnessUsage, "estimatedCostUsd"> }): number {
+  const billed = Number.isFinite(session.costUsd) ? session.costUsd : 0;
+  if (billed > 0) return billed;
+  const estimate = session.usage?.estimatedCostUsd;
+  return typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0 ? estimate : billed;
 }
 
 export class GoalController {
@@ -971,10 +984,10 @@ export class GoalController {
   }
 
   /** Add a finished run's cost; false, and the task failed, once `maxCostUsd` is reached. */
-  private recordRunCost(task: GoalTaskState, session: Pick<Session, "id" | "startedAt" | "costUsd">): boolean {
+  private recordRunCost(task: GoalTaskState, session: Pick<Session, "id" | "startedAt" | "costUsd"> & { usage?: Pick<HarnessUsage, "estimatedCostUsd"> }): boolean {
     const runKey = `${session.id}:${session.startedAt}`;
     if (task.lastCostedRun !== runKey) {
-      task.totalCostUsd = (task.totalCostUsd ?? 0) + (Number.isFinite(session.costUsd) ? session.costUsd : 0);
+      task.totalCostUsd = (task.totalCostUsd ?? 0) + goalRunCostUsd(session);
       task.lastCostedRun = runKey;
       this.store.upsert(task);
     }

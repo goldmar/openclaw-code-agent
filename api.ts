@@ -46,6 +46,12 @@ export type PluginInteractiveTelegramHandlerContext = {
 
 export type PluginInteractiveDiscordHandlerContext = {
   channel: "discord";
+  accountId?: string;
+  /** `channel:<id>` (guild channel or group DM) or `user:<id>` (DM). */
+  conversationId?: string;
+  parentConversationId?: string;
+  guildId?: string;
+  senderId?: string;
   auth: { isAuthorizedSender: boolean };
   /** `data` is the full component callback data; `payload` is the part after `<namespace>:`. */
   interaction: {

@@ -45,7 +45,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
       system_prompt: Type.Optional(Type.String({ description: "Additional system prompt" })),
       allowed_tools: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools for the underlying agent session" })),
       max_iterations: Type.Optional(Type.Number({ description: "Maximum iterations (repair turns and restarts after a gateway restart or idle timeout count). Default 8; values above 25 are capped at 25.", minimum: 1 })),
-      max_cost_usd: Type.Optional(Type.Number({ description: "Optional spend limit in USD: no further iteration starts once the task's sessions cost this much. Sessions without a reported price (for example Codex with a ChatGPT login) count as $0.", exclusiveMinimum: 0 })),
+      max_cost_usd: Type.Optional(Type.Number({ description: "Optional spend limit in USD: no further iteration starts once the task's sessions cost this much. Sessions that bill nothing per token (Codex with a ChatGPT login) count at the API-price estimate of the tokens they used.", exclusiveMinimum: 0 })),
       goal_mode: Type.Optional(
         Type.Union(
           [Type.Literal("ralph"), Type.Literal("verifier")],

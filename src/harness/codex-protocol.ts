@@ -27,6 +27,7 @@ import type {
 } from "../types";
 import { formatPendingInputWizardQuestion, matchApprovalChoiceText } from "../pending-input-normalization";
 import type { JsonRpcClient } from "./codex-rpc";
+import { createLogger } from "../logger";
 import type {
   GetAccountParams,
   GetAccountRateLimitsResponse,
@@ -67,9 +68,13 @@ import type { PermissionsRequestApprovalResponse } from "./codex-app-server-prot
 import type { ReviewTarget } from "./codex-app-server-protocol/v2/ReviewTarget";
 import type { ToolRequestUserInputParams } from "./codex-app-server-protocol/v2/ToolRequestUserInputParams";
 import type { Turn } from "./codex-app-server-protocol/v2/Turn";
+import type { ThreadItem } from "./codex-app-server-protocol/v2/ThreadItem";
+import type { CodexErrorInfo } from "./codex-app-server-protocol/v2/CodexErrorInfo";
 import type { FileSystemPath } from "./codex-app-server-protocol/v2/FileSystemPath";
 import type { TurnPlanStep } from "./codex-app-server-protocol/v2/TurnPlanStep";
 import type { UserInput } from "./codex-app-server-protocol/v2/UserInput";
+
+const log = createLogger("codex-protocol");
 
 // ---------------------------------------------------------------------------
 // Typed client requests
@@ -268,12 +273,39 @@ export function resolveCodexExecutionSettings(
     // of the posture then asks the user before any escalation.
     if (!permissionProfile) throw new CodexExecModeBlockedError(execMode!);
     posture = { permissionProfile, approvalPolicy: "on-request", approvalsReviewer: "user" };
+    warnExplicitCodexOverride(execMode!, { permissionProfile, approvalPolicy, approvalsReviewer });
   }
   return {
     permissionProfile: permissionProfile ?? posture.permissionProfile,
     approvalPolicy: approvalPolicy ?? posture.approvalPolicy,
     approvalsReviewer: approvalsReviewer ?? posture.approvalsReviewer,
   };
+}
+
+const warnedExecOverrides = new Set<string>();
+
+/**
+ * N7: explicit `harnesses.codex.*` settings run Codex even though the host's
+ * `tools.exec.mode` blocks local execution. That is intended (an operator
+ * opt-in), but it must not be silent: warn once per distinct combination.
+ */
+function warnExplicitCodexOverride(
+  execMode: OpenClawExecMode,
+  settings: { permissionProfile?: string; approvalPolicy?: string; approvalsReviewer?: string },
+): void {
+  const key = `${execMode}:${settings.permissionProfile}:${settings.approvalPolicy ?? ""}:${settings.approvalsReviewer ?? ""}`;
+  if (warnedExecOverrides.has(key)) return;
+  warnedExecOverrides.add(key);
+  const dangerous = settings.permissionProfile === ":danger-full-access" || settings.approvalPolicy === "never";
+  log.warn(
+    `Codex runs with explicit harnesses.codex settings (permissionProfile ${settings.permissionProfile}`
+    + `${settings.approvalPolicy ? `, approvalPolicy ${settings.approvalPolicy}` : ""}) although the host's tools.exec.mode is "${execMode}", `
+    + `which blocks local execution for other agents.${dangerous ? " These settings allow unsandboxed or unapproved commands." : ""}`,
+  );
+}
+
+export function resetCodexExecOverrideWarningsForTests(): void {
+  warnedExecOverrides.clear();
 }
 
 function executionFields(execution: CodexExecutionSettings): Pick<ThreadStartParams, "permissions" | "approvalPolicy" | "approvalsReviewer"> {
@@ -290,7 +322,9 @@ function executionFields(execution: CodexExecutionSettings): Pick<ThreadStartPar
 // ---------------------------------------------------------------------------
 
 /** Codex's model catalog exposes fast mode as the `priority` service tier. */
-const CODEX_FAST_SERVICE_TIER = "priority";
+export const CODEX_FAST_SERVICE_TIER = "priority";
+/** The standard-speed service tier id Codex accepts on thread and turn requests. */
+export const CODEX_STANDARD_SERVICE_TIER = "default";
 
 type CommonThreadOptions = {
   model?: string;
@@ -299,12 +333,23 @@ type CommonThreadOptions = {
   execution: CodexExecutionSettings;
 };
 
-function commonThreadFields(options: CommonThreadOptions): Pick<ThreadStartParams, "model" | "serviceTier" | "developerInstructions" | "permissions" | "approvalPolicy" | "approvalsReviewer"> {
+/**
+ * N30: the service tier a thread request sends. A new thread gets the fast
+ * tier only when fast mode is on (otherwise Codex's own default applies). A
+ * resumed or forked thread keeps the tier it last ran with, so turning fast
+ * mode off for the continuation must reset it explicitly to the standard tier.
+ */
+function serviceTierField(fastMode: boolean | undefined, continuation: boolean): Pick<ThreadStartParams, "serviceTier"> {
+  if (fastMode === true) return { serviceTier: CODEX_FAST_SERVICE_TIER };
+  return continuation ? { serviceTier: CODEX_STANDARD_SERVICE_TIER } : {};
+}
+
+function commonThreadFields(options: CommonThreadOptions, continuation = false): Pick<ThreadStartParams, "model" | "serviceTier" | "developerInstructions" | "permissions" | "approvalPolicy" | "approvalsReviewer"> {
   const model = options.model?.trim();
   const developerInstructions = options.developerInstructions?.trim();
   return {
     ...(model ? { model } : {}),
-    ...(options.fastMode === true ? { serviceTier: CODEX_FAST_SERVICE_TIER } : {}),
+    ...serviceTierField(options.fastMode, continuation),
     // Thread-level developer instructions carry OCA's system prompt (including
     // the worktree preamble). The collaboration mode keeps
     // `developer_instructions: null` so Codex's built-in plan/default mode
@@ -323,7 +368,7 @@ export function buildThreadResumeParams(options: CommonThreadOptions & { threadI
   return {
     threadId: options.threadId,
     ...(cwd ? { cwd } : {}),
-    ...commonThreadFields(options),
+    ...commonThreadFields(options, true),
     // OCA never renders prior turns, so skip full-history hydration.
     excludeTurns: true,
   };
@@ -339,7 +384,7 @@ export function buildThreadForkParams(options: CommonThreadOptions & {
     threadId: options.threadId,
     ...(options.beforeTurnId ? { beforeTurnId: options.beforeTurnId } : {}),
     ...(cwd ? { cwd } : {}),
-    ...commonThreadFields(options),
+    ...commonThreadFields(options, true),
     excludeTurns: true,
   };
 }
@@ -372,23 +417,42 @@ export function buildCollaborationMode(
   };
 }
 
+/**
+ * D5: the execution posture of a plan turn. Codex's plan collaboration mode
+ * only instructs the model, so OCA enforces read-only itself while a plan is
+ * being written or reviewed: the `:read-only` profile AND `approvalPolicy:
+ * "never"`, so the model cannot escalate out of the sandbox (under
+ * `on-request` an `auto_review` guardian approves escalations, and a `user`
+ * reviewer routes them to chat). The harness also declines any approval
+ * request that still arrives during a plan turn.
+ */
+export const CODEX_PLAN_REVIEW_EXECUTION: CodexExecutionSettings = {
+  permissionProfile: ":read-only",
+  approvalPolicy: "never",
+  approvalsReviewer: "user",
+};
+
 export function buildTurnStartParams(options: {
   threadId: string;
   prompt: string;
   model: string;
   reasoningEffort?: string;
   permissionMode?: string;
+  /**
+   * The thread's configured execution settings. Turn overrides are sticky for
+   * later turns, reviews and compactions, so every turn sends a complete
+   * posture: the plan-review posture for plan turns, this one otherwise.
+   */
+  execution?: CodexExecutionSettings;
 }): TurnStartParams {
   const effort = options.reasoningEffort?.trim();
-  // D5 (decided against for 5.0.0): a `:read-only` override for plan turns was
-  // tried and live-tested; under `tools.exec.mode` auto/ask Codex still wrote
-  // during plan review (sandbox escalations), so the thread keeps its
-  // configured profile in both phases. See docs/SECURITY.md "Codex Sandbox".
+  const execution = options.permissionMode === "plan" ? CODEX_PLAN_REVIEW_EXECUTION : options.execution;
   return {
     threadId: options.threadId,
     input: buildTurnInput(options.prompt),
     model: options.model,
     ...(effort ? { effort } : {}),
+    ...(execution ? executionFields(execution) : {}),
     // Takes precedence over model/effort, so it must repeat both.
     collaborationMode: buildCollaborationMode(
       collaborationModeKindForPermissionMode(options.permissionMode),
@@ -438,6 +502,42 @@ export function turnErrorMessage(turn: Pick<Turn, "error"> | undefined): string 
   if (!error) return undefined;
   const details = error.additionalDetails?.trim();
   return details ? `${error.message}\n${details}` : error.message;
+}
+
+/**
+ * N16: a stable `errorCode` for a Codex failure. `codexErrorInfo` is either a
+ * string (`"usageLimitExceeded"`) or a single-key object carrying details
+ * (`{ httpConnectionFailed: { httpStatusCode } }`); the key is the code.
+ */
+export function codexErrorCode(info: CodexErrorInfo | null | undefined): string | undefined {
+  if (!info) return undefined;
+  if (typeof info === "string") return info;
+  const [key] = Object.keys(info);
+  return key || undefined;
+}
+
+/**
+ * N18: the tool call a completed Codex item represents, in the shape the
+ * other harnesses report (`name` plus the tool input). Items that are not
+ * tool calls (messages, reasoning, plans, compaction) return undefined.
+ */
+export function toolCallFromThreadItem(item: ThreadItem): { name: string; input: unknown } | undefined {
+  switch (item.type) {
+    case "commandExecution":
+      return { name: "Bash", input: { command: item.command, cwd: item.cwd } };
+    case "fileChange":
+      return { name: "Edit", input: { changes: item.changes.map((change) => ({ path: change.path, kind: change.kind.type })) } };
+    case "mcpToolCall":
+      return { name: `mcp__${item.server}__${item.tool}`, input: item.arguments };
+    case "dynamicToolCall":
+      return { name: item.namespace ? `${item.namespace}__${item.tool}` : item.tool, input: item.arguments };
+    case "webSearch":
+      return { name: "WebSearch", input: { query: item.query } };
+    case "collabAgentToolCall":
+      return { name: "Agent", input: { tool: item.tool, prompt: item.prompt } };
+    default:
+      return undefined;
+  }
 }
 
 export function mapTurnPlanSteps(plan: TurnPlanStep[]): PlanArtifactStep[] {
@@ -592,7 +692,9 @@ export function buildUserInputRequest(requestId: string, params: ToolRequestUser
         ...(question.header ? { header: question.header } : {}),
         question: question.question,
         options,
-        ...(question.isOther || options.length === 0 ? { allowsFreeText: true } : {}),
+        // N21: `isOther: false` restricts the answer to the listed options, so
+        // free text is refused (an explicit false, not just an absent flag).
+        allowsFreeText: question.isOther || options.length === 0,
         ...(question.isSecret ? { isSecret: true } : {}),
       };
     });
@@ -600,12 +702,17 @@ export function buildUserInputRequest(requestId: string, params: ToolRequestUser
     throw new Error(`Malformed Codex request_user_input payload for ${requestId}: expected non-empty questions[]`);
   }
   const first = questions[0];
+  const promptText = formatPendingInputWizardQuestion(first, 0, questions.length);
   return {
     kind: "question",
     state: {
       requestId,
       kind: "question",
-      promptText: formatPendingInputWizardQuestion(first, 0, questions.length),
+      // N22: a non-blocking question does not stop Codex; it continues on its
+      // own judgment if nobody answers in time.
+      promptText: params.isBlocking === false
+        ? `${promptText}\n(Codex keeps working meanwhile; an unanswered question resolves on its own.)`
+        : promptText,
       options: first.options.map((option) => option.label),
       questions,
       activeQuestionIndex: 0,

@@ -43,6 +43,12 @@ export interface HarnessUsage {
    * while a turn is still open, for example while it waits for user input.
    */
   costUsd?: number;
+  /**
+   * API-list-price estimate for a backend that reports no billed cost (Codex
+   * with a ChatGPT login). Never shown as spend; goal `max_cost_usd` falls
+   * back to it so a spend limit still bounds such sessions.
+   */
+  estimatedCostUsd?: number;
   models?: HarnessModelUsage[];
   contextTokens?: number;
   contextWindow?: number;
@@ -88,6 +94,8 @@ export interface HarnessBackendInfo {
   reasoningEffort?: ReasoningEffort | null;
   /** Whether the requested effort is supported by the resolved model. */
   reasoningEffortSupported?: boolean;
+  /** False when fast mode was requested but the model offers no fast tier (it runs at standard speed). */
+  fastModeSupported?: boolean;
 }
 
 export type HarnessMessage =
@@ -130,9 +138,11 @@ export interface HarnessLaunchOptions {
   resumeSessionId?: string;
   forkSession?: boolean;
   /**
-   * Drop the latest N backend turns before continuing (Codex only). With
-   * `forkSession` the fork is created before those turns; without it the
-   * resumed thread's history is reverted in place. Files are not reverted.
+   * Drop the latest N backend turns before continuing. With `forkSession` the
+   * fork is created before those turns; without it the resumed conversation
+   * continues from before them (Codex reverts the thread, Claude Code resumes
+   * at an earlier message; OpenCode supports only the fork). Files are not
+   * reverted.
    */
   rewindTurns?: number;
   /** Worktree strategy of the session (Claude Code uses it for `projectConfigRoot`). */
