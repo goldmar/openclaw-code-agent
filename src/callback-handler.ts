@@ -1011,15 +1011,9 @@ export function createCallbackHandler(
             const result = rejectPlanDecision(sessionManager, sessionId);
             await replyText(ctx, `❌ ${result.text}`);
           } else {
+            // Also queues the orchestrator note that the next message is the change (N35).
             const result = requestPlanDecisionChanges(sessionManager, sessionId);
             await replyText(ctx, `✏️ ${result.text}`);
-            // The user's next chat message is plan feedback; tell the orchestrator (N35).
-            sessionManager.queueOrchestratorContext?.(
-              sessionId,
-              "plan-revise-requested",
-              `[${actionSessionName}] The user pressed Revise on plan v${consumedToken.planDecisionVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(session='${sessionId}', message='<their words>', userInitiated=true). ID: ${sessionId}`,
-              `plan-revise-requested:${sessionId}:v${consumedToken.planDecisionVersion ?? "?"}`,
-            );
           }
           return { handled: true };
         });

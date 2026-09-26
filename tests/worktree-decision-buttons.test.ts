@@ -10,7 +10,7 @@ function labels(rows: Array<Array<{ label: string; url?: string }>>): string[][]
 }
 
 describe("worktree decision buttons (N47, N48)", () => {
-  const service = (gh: boolean) => new SessionInteractionService(new SessionActionTokenStore(() => {}), () => gh);
+  const service = (gh: boolean) => new SessionInteractionService(new SessionActionTokenStore(() => {}, 60_000), () => gh);
 
   it("uses one fixed layout: land the branch on the first row, Later and Discard on the second", async () => {
     // 4.x moved Later and Discard between rows depending on PR and GitHub CLI state.

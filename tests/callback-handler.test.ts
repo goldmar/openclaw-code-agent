@@ -1722,7 +1722,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(queued.length, 1, "4.x never told the orchestrator about a Revise press");
     assert.equal(queued[0]!.ref, "test-id");
     assert.equal(queued[0]!.label, "plan-revise-requested");
-    assert.match(queued[0]!.text, /^\[revise-me\] The user pressed Revise on plan v4\./);
+    assert.match(queued[0]!.text, /^\[revise-me\] The user asked to revise plan v4\./);
     assert.match(queued[0]!.text, /agent_respond\(session='test-id', message='<their words>', userInitiated=true\)/);
   });
 

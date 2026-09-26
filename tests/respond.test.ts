@@ -621,12 +621,21 @@ describe("executeRespond", () => {
       patches.push({ ref, patch });
       return true;
     };
+    const queued: Array<{ ref: string; label: string; text: string }> = [];
+    (sm as any).queueOrchestratorContext = (ref: string, label: string, text: string) => {
+      queued.push({ ref, label, text });
+      return true;
+    };
 
     const result = await executeRespond(sm, {
       session: "test-id",
       message: "Revise",
       userInitiated: true,
     });
+    // N35: the orchestrator learns, for its next turn, that the user's next message is the change.
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0]!.label, "plan-revise-requested");
+    assert.match(queued[0]!.text, /Their next message is the requested change: forward it with agent_respond\(session='test-id'/);
 
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Reply with the changes you want/);

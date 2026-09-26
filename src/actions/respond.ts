@@ -296,6 +296,7 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
 
   sm.clearPlanDecisionTokens?.(sessionId);
 
+  const reviewedVersion = target ? (target.actionablePlanDecisionVersion ?? target.planDecisionVersion) : undefined;
   if (target) {
     const patch = buildPlanDecisionClosedPatch(target, "changes_requested");
     if (active) {
@@ -303,6 +304,17 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
     }
     sm.updatePersistedSession?.(sessionId, patch);
   }
+
+  // The user's next chat message is the requested change. Tell the orchestrator,
+  // for its next turn in that chat, where to forward it (N35). Covers the Revise
+  // button, "/agent_respond <session> revise", and a forwarded "revise".
+  const ref = active?.id ?? persisted?.sessionId ?? sessionId;
+  sm.queueOrchestratorContext?.(
+    ref,
+    "plan-revise-requested",
+    `[${name}] The user asked to revise plan v${reviewedVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(session='${ref}', message='<their words>', userInitiated=true).`,
+    `plan-revise-requested:${ref}:v${reviewedVersion ?? "?"}`,
+  );
 
   return { text: `[${name}] Reply with the changes you want; they go to the agent.` };
 }
