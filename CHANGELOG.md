@@ -164,6 +164,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resuming a stopped live worktree session with `agent_respond` launched from the worktree path instead of the original checkout, which broke the repo-policy lookup; it now resolves against the original workdir.
 - Codex plan turns could write to the workspace: plan collaboration mode only instructs the model, and under `tools.exec.mode: "auto"` / `"ask"` sandbox escalations were approved by the `auto_review` reviewer or in chat. Plan turns now run read-only with approvals off (see Breaking changes).
 - A Codex interrupt sent before the turn id arrived was lost; it is latched and sent once the turn starts.
 - Resuming or forking a Codex thread without fast mode kept the fast (`priority`) tier it last ran with; the standard tier is now requested explicitly. Fast mode is only requested when the model's `model/list` entry offers the tier.
