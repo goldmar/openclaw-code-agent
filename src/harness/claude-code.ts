@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import {
   getSessionInfo as sdkGetSessionInfo,
+  getSessionMessages as sdkGetSessionMessages,
   startup as sdkStartup,
   type CanUseTool,
   type ModelInfo,
@@ -20,6 +21,7 @@ import {
   type SDKMessage,
   type SDKResultMessage,
   type SDKUserMessage,
+  type SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   PendingInputQuestion,
@@ -66,6 +68,36 @@ type ClaudeWarmQuery = {
 interface ClaudeCodeHarnessDeps {
   startup?: (params: { options: Options }) => Promise<ClaudeWarmQuery>;
   getSessionInfo?: typeof sdkGetSessionInfo;
+  getSessionMessages?: typeof sdkGetSessionMessages;
+}
+
+/** A main-chain user message that starts a turn (typed text, not a tool result). */
+function isTurnPrompt(message: SessionMessage): boolean {
+  if (message.type !== "user" || message.parent_tool_use_id !== null) return false;
+  const content = (message.message as { content?: unknown } | undefined)?.content;
+  if (typeof content === "string") return content.trim().length > 0;
+  return Array.isArray(content) && content.some((block) => (
+    !!block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+  ));
+}
+
+/**
+ * N23: the transcript entry to resume at so the latest `count` turns are
+ * dropped: the last entry before the prompt that started the `count`-th last
+ * turn (the SDK's `resumeSessionAt` keeps everything up to and including it).
+ */
+export function resolveClaudeRewindPoint(messages: SessionMessage[], count: number): string {
+  const chain = messages.filter((message) => message.parent_tool_use_id === null && message.type !== "system");
+  const promptIndexes = chain.flatMap((message, index) => (isTurnPrompt(message) ? [index] : []));
+  if (promptIndexes.length < count) {
+    throw new Error(`Cannot rewind ${count} turn(s): the Claude Code session only has ${promptIndexes.length} turn(s).`);
+  }
+  const cut = promptIndexes[promptIndexes.length - count];
+  const keep = chain[cut - 1];
+  if (!keep) {
+    throw new Error(`Cannot rewind ${count} turn(s): that would drop the whole Claude Code session. Launch a new session instead.`);
+  }
+  return keep.uuid;
 }
 
 /**
@@ -577,6 +609,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     const prompt = options.prompt as string | AsyncIterable<SDKUserMessage>;
     const startupFn = this.deps.startup ?? sdkStartup;
     const getSessionInfo = this.deps.getSessionInfo ?? sdkGetSessionInfo;
+    const getSessionMessages = this.deps.getSessionMessages ?? sdkGetSessionMessages;
     const qPromise = (async (): Promise<Query> => {
       if (options.resumeSessionId) {
         // Completed Claude sessions are resumable; confirm the transcript still
@@ -584,6 +617,10 @@ export class ClaudeCodeHarness implements AgentHarness {
         const info = await getSessionInfo(options.resumeSessionId).catch((): undefined => undefined);
         if (!info) {
           throw new Error(`Claude Code session ${options.resumeSessionId} was not found on this host, so it cannot be resumed.`);
+        }
+        const rewind = options.rewindTurns && options.rewindTurns > 0 ? Math.floor(options.rewindTurns) : 0;
+        if (rewind > 0) {
+          sdkOptions.resumeSessionAt = resolveClaudeRewindPoint(await getSessionMessages(options.resumeSessionId), rewind);
         }
       }
       const warmQuery = await startupFn({ options: sdkOptions });

@@ -120,7 +120,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         Type.Boolean({ description: "When resuming, fork to a new session instead of continuing the existing one. Use with resume_session_id." }),
       ),
       rewind_turns: Type.Optional(
-        Type.Number({ minimum: 1, description: "Codex only, integer, with resume_session_id: drop the latest N turns of the backend thread before continuing. With fork_session=true the fork is created before those turns (the original thread is untouched); without it the resumed thread's history is reverted in place. Conversation history only — files changed by those turns are NOT reverted." }),
+        Type.Number({ minimum: 1, description: "Integer, with resume_session_id: drop the latest N turns of the backend conversation before continuing (Codex, Claude Code; OpenCode only with fork_session=true). With fork_session=true the fork is created before those turns (the original conversation is untouched); without it the resumed conversation continues from before them. Conversation history only — files changed by those turns are NOT reverted." }),
       ),
       force_new_session: Type.Optional(
         Type.Boolean({ description: "Bypass resume-first protection and start a brand-new linked session even when a resumable or active linked session already exists." }),
