@@ -121,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The production build dropped the logger's `console.warn` fallback (esbuild `--pure:console.warn`), so warnings logged before plugin registration, or when the host logger threw, were lost. Only `console.log` / `info` / `debug` are stripped now.
 - An early startup failure on resume (for example a usage-limit or auth error) auto-cleaned the resumed session's worktree and ran `git branch -D` on its branch, deleting unmerged commits. Only a worktree the launch created is cleaned, and a branch with commits of its own is never deleted.
 - When runtime GC re-persisted a terminal session after 24 hours, the row lost its PR, merge, disposition, repo-policy and completion-wake fields, so the worktree buttons fell back to Merge + PR. Fields the runtime session does not track are now kept.
 - `agent_pr` could rewind a local PR branch that had unpushed commits (`git branch -f`). It now only fast-forwards (compare-and-swap) and refuses otherwise.
