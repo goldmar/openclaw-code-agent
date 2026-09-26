@@ -83,6 +83,23 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
     }
   });
 
+  it("stops the tool processes a server leaves behind when it exits on its own", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-lifeline-"));
+    try {
+      const server = writeFakeServer(dir);
+      const exiting = join(dir, "exiting-server.cjs");
+      writeFileSync(exiting, `require(${JSON.stringify(server)}); setTimeout(() => process.exit(3), 300);`);
+      const child = spawnWithLifeline(process.execPath, [exiting], { cwd: dir });
+      child.process.stdout.resume();
+      const pidsFile = join(dir, "pids.json");
+      await waitFor(() => existsSync(pidsFile) && readFileSync(pidsFile, "utf8").length > 0, "server start");
+      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number };
+      await waitFor(() => !alive(pids.server) && !alive(pids.tool), "the orphaned tool to stop");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards the server's exit status", async () => {
     const child = spawnWithLifeline(process.execPath, ["-e", "process.exit(7)"], { cwd: tmpdir() });
     const code = await new Promise<number | null>((resolveExit) => child.process.once("exit", resolveExit));

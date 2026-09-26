@@ -88,9 +88,14 @@ export function spawnWithLifeline(
   const stopWatchdog = (): void => {
     if (watchdog && watchdog.exitCode === null && watchdog.signalCode === null) watchdog.kill("SIGKILL");
   };
-  // Once the server has exited its pid (the group id) may be reused, so the
-  // group is only ever signalled while the server is still running.
-  child.once("exit", stopWatchdog);
+  child.once("exit", () => {
+    // Tool processes the server left behind are stopped right away. This is
+    // the only signal sent after the leader exited, and it is sent at once:
+    // Linux does not reuse a pid while a process group of that id still has
+    // members, and an empty group just fails the call (ESRCH).
+    if (supported) signalGroup(child.pid, "SIGKILL");
+    stopWatchdog();
+  });
   child.once("error", stopWatchdog);
 
   const terminate = async (graceMs = 2_000): Promise<void> => {

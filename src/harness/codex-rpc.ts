@@ -237,6 +237,11 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       this.startError = error;
       this.flushPending(new Error(this.describeStartFailure(error)));
     });
+    child.once("exit", () => {
+      // N27: commands the app server left in its group stop with it. Sent at
+      // once: a pid is not reused while a group of that id has members.
+      signalProcessGroup(child, "SIGKILL");
+    });
     child.on("close", (code, signal) => {
       logCodexRpcDiagnostic("process.close", {
         pid: child.pid,
