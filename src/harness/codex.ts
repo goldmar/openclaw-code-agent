@@ -18,6 +18,7 @@ import type {
   AgentHarness,
   HarnessBackendInfo,
   HarnessLaunchOptions,
+  HarnessModelUsage,
   HarnessSession,
 } from "./types";
 import type { JsonRpcClient, JsonRpcId } from "./codex-rpc";
@@ -503,9 +504,16 @@ export class CodexHarness implements AgentHarness {
       });
     };
 
+    /** N17: this connection's token totals per model (from each response's `last` breakdown). */
+    const modelTotals = new Map<string, HarnessModelUsage>();
+    const reportModelUsage = (): void => {
+      if (modelTotals.size === 0) return;
+      queue.enqueue({ type: "usage_updated", usage: { models: [...modelTotals.values()].map((entry) => ({ ...entry })) } });
+    };
+
     const priceTokenUsage = (params: ThreadTokenUsageUpdatedNotification): void => {
       const total = params.tokenUsage.total.totalTokens;
-      // Only price responses produced by the turn we are running, once each.
+      // Only count responses produced by the turn we are running, once each.
       if (!activeTurn?.turnId || params.turnId !== activeTurn.turnId) {
         lastPricedTotalTokens = total;
         return;
@@ -514,11 +522,32 @@ export class CodexHarness implements AgentHarness {
       lastPricedTotalTokens = total;
       const usage = tokenUsageFromBreakdown(params.tokenUsage.last);
       if (!usage) return;
-      const cost = estimateCodexApiCostUsd({ model: effectiveModel ?? threadModel, serviceTier, usage });
+      const model = effectiveModel ?? threadModel ?? "codex";
+      const cost = estimateCodexApiCostUsd({ model, serviceTier, usage });
+      const billed = accountType === "apiKey";
+      const entry = modelTotals.get(model) ?? {
+        model,
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        // A ChatGPT login is billed by its plan, not per token.
+        costBasis: billed ? (cost === undefined ? "unknown" : "list") : "managed",
+      };
+      entry.inputTokens += Math.max(0, usage.inputTokens - usage.cachedInputTokens - usage.cacheWriteInputTokens);
+      entry.outputTokens += usage.outputTokens;
+      entry.reasoningTokens = (entry.reasoningTokens ?? 0) + usage.reasoningOutputTokens;
+      entry.cacheReadTokens = (entry.cacheReadTokens ?? 0) + usage.cachedInputTokens;
+      entry.cacheWriteTokens = (entry.cacheWriteTokens ?? 0) + usage.cacheWriteInputTokens;
+      if (billed && cost !== undefined) entry.costUsd += cost;
+      modelTotals.set(model, entry);
+      reportModelUsage();
       if (cost === undefined) return;
-      if (accountType !== "apiKey") {
-        // A ChatGPT login is not billed per token: keep an API-price estimate
-        // apart from the reported cost, for spend limits (goal max_cost_usd).
+      if (!billed) {
+        // Keep an API-price estimate apart from the (zero) billed cost, for
+        // spend limits (goal max_cost_usd).
         cumulativeEstimatedCostUsd += cost;
         queue.enqueue({ type: "usage_updated", usage: { estimatedCostUsd: cumulativeEstimatedCostUsd } });
         return;

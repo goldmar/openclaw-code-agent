@@ -1505,6 +1505,26 @@ describe("CodexHarness harness consistency (N16–N31)", () => {
     assert.deepEqual(context?.usage, { contextTokens: 10_000, contextWindow: 258_400 });
   });
 
+  it("reports this connection's token totals per model, billed or not (N17)", async () => {
+    const messages = await collectMessages(launch(new MockCodexClient({
+      accountType: "chatgpt",
+      tokenUsage: [breakdown(9_000, 4_000, 0, 1_000, 200), breakdown(3_000, 1_000, 0, 500, 0)],
+    }), { model: "gpt-6-sol" }));
+    const updates = messages.filter((message): message is Extract<HarnessMessage, { type: "usage_updated" }> => (
+      message.type === "usage_updated" && message.usage.models !== undefined
+    ));
+    assert.deepEqual(updates.at(-1)?.usage.models, [{
+      model: "gpt-6-sol",
+      costUsd: 0,
+      inputTokens: 7_000,
+      outputTokens: 1_500,
+      reasoningTokens: 200,
+      cacheReadTokens: 5_000,
+      cacheWriteTokens: 0,
+      costBasis: "managed",
+    }]);
+  });
+
   it("emits tool_call events for completed command, file-change and MCP items (N18)", async () => {
     const client = new MockCodexClient({ holdTurns: true });
     const session = launch(client);
