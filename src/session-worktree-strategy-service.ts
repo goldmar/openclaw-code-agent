@@ -622,6 +622,7 @@ export class SessionWorktreeStrategyService {
 
     const outcomeLine = formatWorktreeOutcomeLine({
       kind: "merge",
+      sessionName: session.name,
       branch: branchName,
       base: baseBranch,
       filesChanged: diffSummary.filesChanged,

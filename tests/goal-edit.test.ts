@@ -2,11 +2,11 @@ import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { registerGoalEditCommand } from "../src/commands/goal-edit";
+import { registerGoalCommand } from "../src/commands/goal";
 import { setGoalController } from "../src/singletons";
-import { makeGoalEditTool } from "../src/tools/goal-edit";
+import { makeAgentGoalTool } from "../src/tools/agent-goal";
 
-describe("agent_goal_edit", () => {
+describe("agent_goal edit", () => {
   afterEach(() => {
     setGoalController(null);
   });
@@ -28,8 +28,9 @@ describe("agent_goal_edit", () => {
       },
     } as any);
 
-    const tool = makeGoalEditTool({} as any);
+    const tool = makeAgentGoalTool({} as any);
     const result = await tool.execute("tool-id", {
+      action: "edit",
       task: "goal-task",
       goal: "New goal",
     });
@@ -38,7 +39,7 @@ describe("agent_goal_edit", () => {
     assert.equal((result.content[0] as { text: string }).text, 'Task "goal-task" (goal-1) goal updated.');
   });
 
-  it("command parses task ref and replacement goal", () => {
+  it("command parses task ref and replacement goal", async () => {
     let editCall: { ref: string; goal: string } | undefined;
     setGoalController({
       editTask(ref: string, goal: string) {
@@ -55,14 +56,14 @@ describe("agent_goal_edit", () => {
       },
     } as any);
 
-    let handler: ((ctx: any) => { text: string }) | undefined;
-    registerGoalEditCommand({
+    let handler: ((ctx: any) => Promise<{ text: string }>) | undefined;
+    registerGoalCommand({
       registerCommand(command: { handler: typeof handler }) {
         handler = command.handler;
       },
     });
 
-    const result = handler?.({ args: 'goal-task New  goal   with spacing' });
+    const result = await handler?.({ args: 'edit goal-task New  goal   with spacing' });
 
     assert.deepEqual(editCall, { ref: "goal-task", goal: "New  goal   with spacing" });
     assert.equal(result?.text, 'Task "goal-task" (goal-1) goal updated.');
@@ -77,11 +78,11 @@ describe("agent_goal_edit", () => {
       },
     } as any);
 
-    const tool = makeGoalEditTool({} as any);
-    const result = await tool.execute("tool-id", { task: "goal-1" });
+    const tool = makeAgentGoalTool({} as any);
+    const result = await tool.execute("tool-id", { action: "edit", task: "goal-1" });
 
     assert.equal(called, false);
-    assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { task, goal }.");
+    assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. action 'edit' requires task and goal.");
   });
 
   it("reports already-terminal tasks without claiming they were edited", async () => {
@@ -98,8 +99,9 @@ describe("agent_goal_edit", () => {
       },
     } as any);
 
-    const tool = makeGoalEditTool({} as any);
+    const tool = makeAgentGoalTool({} as any);
     const result = await tool.execute("tool-id", {
+      action: "edit",
       task: "goal-1",
       goal: "New goal",
     });
@@ -107,7 +109,7 @@ describe("agent_goal_edit", () => {
     assert.equal((result.content[0] as { text: string }).text, "Task is already succeeded.");
   });
 
-  it("command reports non-running non-terminal states clearly", () => {
+  it("command reports non-running non-terminal states clearly", async () => {
     setGoalController({
       editTask() {
         return {
@@ -121,14 +123,14 @@ describe("agent_goal_edit", () => {
       },
     } as any);
 
-    let handler: ((ctx: any) => { text: string }) | undefined;
-    registerGoalEditCommand({
+    let handler: ((ctx: any) => Promise<{ text: string }>) | undefined;
+    registerGoalCommand({
       registerCommand(command: { handler: typeof handler }) {
         handler = command.handler;
       },
     });
 
-    const result = handler?.({ args: "goal-1 New goal" });
+    const result = await handler?.({ args: "edit goal-1 New goal" });
 
     assert.equal(result?.text, 'Error: Goal task "goal-task" is waiting_for_user and cannot be edited.');
   });

@@ -59,6 +59,8 @@ export interface WorktreeOutcomeParams {
   insertions?: number;
   deletions?: number;
   prUrl?: string;
+  /** Session name shown as `[name]` after the status icon. */
+  sessionName?: string;
 }
 
 function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" | "insertions" | "deletions">): string {
@@ -377,14 +379,15 @@ export async function commentOnPR(repoDir: string, prNumber: number, body: strin
 
 export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
   const stats = formatOutcomeStats(params);
+  const tag = params.sessionName ? `[${params.sessionName}] ` : "";
   if (params.kind === "merge") {
-    return `✅ Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
+    return `✅ ${tag}Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
   }
   if (params.kind === "pr-updated") {
-    return `✅ PR updated: ${params.prUrl ?? ""}${stats}`;
+    return `✅ ${tag}PR updated: ${params.prUrl ?? ""}${stats}`;
   }
   if (params.targetRepo) {
-    return `✅ PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
+    return `✅ ${tag}PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
   }
-  return `✅ PR opened: ${params.prUrl ?? ""}${stats}`;
+  return `✅ ${tag}PR opened: ${params.prUrl ?? ""}${stats}`;
 }

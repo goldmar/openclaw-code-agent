@@ -19,11 +19,11 @@ function isAgentOutputParams(value: unknown): value is AgentOutputParams {
 export function makeAgentOutputTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_output",
-    description: "Show recent output from a coding agent session (by name or ID).",
+    description: "Recent output of a session, with its status header. Use full=true to read a whole plan or result.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID to get output from" }),
-      lines: Type.Optional(Type.Number({ description: "Number of recent lines to show (default 50)" })),
-      full: Type.Optional(Type.Boolean({ description: "Show all available output" })),
+      session: Type.String({ description: "Session name or ID" }),
+      lines: Type.Optional(Type.Number({ description: "Default 50" })),
+      full: Type.Optional(Type.Boolean()),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {

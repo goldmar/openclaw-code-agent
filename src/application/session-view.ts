@@ -7,6 +7,7 @@ import type { HarnessUsage } from "../harness";
 import type {
   ApprovalExecutionState,
   PermissionMode,
+  PlanApprovalMode,
   PersistedSessionInfo,
   PersistedWorktreeLifecycle,
   SessionRuntimeRecoveryDiagnostics,
@@ -77,6 +78,9 @@ interface SessionListingItem {
   worktreePrUrl?: string;
   recovered?: boolean;
   runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
+  planApproval?: PlanApprovalMode;
+  approvalPromptStatus?: PersistedSessionInfo["approvalPromptStatus"];
+  pendingWorktreeDecisionSince?: string;
 }
 
 export interface SessionListingOptions {
@@ -303,18 +307,24 @@ export function getSessionOutputText(
  */
 export function getSessionsListingText(
   sm: SessionManager,
-  filter: "all" | "running" | "completed" | "failed" | "killed" = "all",
+  filter: "all" | "running" | "waiting" | "completed" | "failed" | "killed" = "all",
   originChannel?: string,
   options: SessionListingOptions = {},
 ): string {
   const persisted = sm.listPersistedSessions() ?? [];
   const merged = mergeActiveAndPersistedSessions(sm.list("all"), persisted);
   let sessions = merged;
-  if (filter !== "all") {
+  if (filter === "waiting") {
+    sessions = sessions.filter((s) => describeWaiting(s) !== undefined);
+  } else if (filter !== "all") {
     sessions = sessions.filter((s) => s.status === filter);
   }
   if (originChannel) {
     sessions = sessions.filter((s) => s.originChannel === originChannel);
+  }
+  if (filter === "waiting") {
+    if (sessions.length === 0) return "Nothing is waiting for a decision or an answer.";
+    return sessions.map((s) => formatSessionListing(s, { nextStep: describeWaiting(s) })).join("\n\n");
   }
   if (options.full) {
     const cutoff = Date.now() - FULL_SESSION_LIST_WINDOW_MS;
@@ -324,6 +334,34 @@ export function getSessionsListingText(
   }
   if (sessions.length === 0) return "No sessions found.";
   return sessions.map((s) => formatSessionListing(s)).join("\n\n");
+}
+
+const WORKTREE_DECISION_STATES = new Set(["pending_decision"]);
+
+/**
+ * What a session is waiting for and the next step, or undefined when it needs
+ * nothing. Covers pending plans, questions, and worktree decisions.
+ */
+export function describeWaiting(session: SessionListingItem): string | undefined {
+  const escalated = session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered";
+  if (session.phase === "awaiting_plan_decision") {
+    return session.planApproval === "ask" || escalated
+      ? "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)"
+      : "Plan waiting for the orchestrator's review: approve it or agent_escalate(kind='plan')";
+  }
+  if (session.phase === "awaiting_user_input") {
+    return "Question waiting for an answer (agent_output shows it; answer with agent_respond)";
+  }
+  const lifecycleState = session.worktreeLifecycle?.state ?? session.worktreeState;
+  const resolved = session.worktreeMerged || session.worktreePrUrl
+    || (lifecycleState !== undefined && !WORKTREE_DECISION_STATES.has(lifecycleState));
+  if (!resolved && (session.phase === "awaiting_worktree_decision" || lifecycleState === "pending_decision"
+    || (session.pendingWorktreeDecisionSince && lifecycleState === undefined))) {
+    return session.worktreeStrategy === "delegate"
+      ? "Branch waiting for the orchestrator: agent_merge, or agent_escalate(kind='worktree')"
+      : "Branch waiting for the user: Merge / Open PR / Later / Discard";
+  }
+  return undefined;
 }
 
 /**
@@ -380,6 +418,9 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreePrUrl: p.worktreePrUrl,
       recovered: true,
       runtimeRecovery: p.runtimeRecovery,
+      planApproval: p.planApproval,
+      approvalPromptStatus: p.approvalPromptStatus,
+      pendingWorktreeDecisionSince: p.pendingWorktreeDecisionSince,
     });
   }
 
@@ -418,6 +459,9 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreeMergedAt: session.worktreeMergedAt ?? persistedMatch?.worktreeMergedAt,
       worktreePrUrl: session.worktreePrUrl ?? persistedMatch?.worktreePrUrl,
       recovered: false,
+      planApproval: session.planApproval,
+      approvalPromptStatus: session.approvalPromptStatus,
+      pendingWorktreeDecisionSince: persistedMatch?.pendingWorktreeDecisionSince,
     });
   }
 

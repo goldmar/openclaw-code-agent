@@ -4,7 +4,7 @@ import { resolveAgentChannel } from "../config";
 import type { OpenClawPluginToolContext } from "../types";
 import { getSessionsListingText } from "../application/session-view";
 
-type SessionsFilter = "all" | "running" | "completed" | "failed" | "killed";
+type SessionsFilter = "all" | "running" | "waiting" | "completed" | "failed" | "killed";
 
 interface AgentSessionsParams {
   status?: SessionsFilter;
@@ -16,6 +16,7 @@ function parseStatus(params: unknown): SessionsFilter {
   const status = (params as Record<string, unknown>).status;
   switch (status) {
     case "running":
+    case "waiting":
     case "completed":
     case "failed":
     case "killed":
@@ -30,16 +31,15 @@ function parseStatus(params: unknown): SessionsFilter {
 export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_sessions",
-    description: "List coding agent sessions with their status and progress. By default, shows the 5 most recent sessions; set `full` to show all sessions from the last 24 hours.",
+    description: "List sessions (5 most recent; full=true: last 24h). status='waiting' lists only sessions waiting for a decision or answer, with the next step.",
     parameters: Type.Object({
       status: Type.Optional(
-        Type.Union(
-          [Type.Literal("all"), Type.Literal("running"), Type.Literal("completed"), Type.Literal("failed"), Type.Literal("killed")],
-          { description: 'Filter by status (default "all")' },
+        Type.StringEnum(["all", "running", "waiting", "completed", "failed", "killed"],
+          { description: "Default all" },
         ),
       ),
       full: Type.Optional(
-        Type.Boolean({ description: "Show all sessions from the last 24h instead of just the most recent 5" }),
+        Type.Boolean(),
       ),
     }),
     async execute(_id: string, params: AgentSessionsParams | unknown) {

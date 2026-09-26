@@ -25,21 +25,19 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_respond",
     description:
-      "Send a follow-up message to a running coding agent session. The session must be running. All sessions are multi-turn.",
+      "Send a message to a session: a follow-up, an answer to its question (option number or label; comma-separated for multi-select), or plan feedback. A stopped, suspended or completed session that still has its conversation is resumed.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID to respond to" }),
-      message: Type.String({ description: "The message to send to the session" }),
-      interrupt: Type.Optional(
-        Type.Boolean({ description: "If true, interrupt the current turn before sending the message. Useful to redirect the session mid-response." }),
-      ),
+      session: Type.String({ description: "Session name or ID" }),
+      message: Type.String(),
+      interrupt: Type.Optional(Type.Boolean({ description: "Stop the current turn first" })),
       userInitiated: Type.Optional(
-        Type.Boolean({ description: "Set to true when the message comes from the user (not auto-generated). Resets the auto-respond counter and bypasses the auto-respond limit." }),
+        Type.Boolean({ description: "true when forwarding the user's own words. Then 'approve', 'reject' or 'revise' decide a pending plan; other text is feedback." }),
       ),
       approve: Type.Optional(
-        Type.Boolean({ description: "Set to true to escalate session permissions to bypassPermissions. Works in two scenarios: (1) approve a pending plan in plan mode, or (2) escalate a default-mode session to skip remaining OpenClaw approval checkpoints. No-op if already in bypassPermissions mode. In plan mode without a pending plan, this flag is ignored. When the session's planApproval is 'ask', only the user may approve (their button, or their own reply forwarded as text with userInitiated=true): approve=true is refused." }),
+        Type.Boolean({ description: "Approve the pending plan (delegate/approve modes). Refused when planApproval is 'ask': only the user approves there. On a default-mode session: switch to bypassPermissions." }),
       ),
       approval_rationale: Type.Optional(
-        Type.String({ description: "Optional structured rationale for a direct delegated plan approval. Use this instead of embedding the rationale in message text when approve=true for a pending plan." }),
+        Type.String({ description: "With approve=true: one short line on why the plan is safe; shown to the user in the approval notice" }),
       ),
     }),
     async execute(_id: string, params: unknown) {

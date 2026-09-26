@@ -481,6 +481,8 @@ export interface PluginConfig {
    * orchestrator with only these commands needs no user confirmation.
    */
   trustedVerifierCommands?: string[];
+  /** Register the opt-in `agent_send_plan_offer` tool (default false). */
+  planOfferTool?: boolean;
 }
 
 export type WorktreeGitHooksMode = "run" | "skip";
@@ -509,6 +511,8 @@ export interface RawPluginConfig {
   worktreeGitHooks?: WorktreeGitHooksMode;
   /** Operator-approved goal verifier commands (exact strings). */
   trustedVerifierCommands?: string[];
+  /** Register the opt-in `agent_send_plan_offer` tool; default false. */
+  planOfferTool?: boolean;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */

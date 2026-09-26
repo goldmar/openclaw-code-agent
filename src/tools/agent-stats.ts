@@ -8,7 +8,7 @@ export function makeAgentStatsTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_stats",
     description:
-      "Show OpenClaw Code Agent usage metrics: session counts by status, average duration, and notable sessions.",
+      "Session counts by status, average duration, and notable sessions.",
     parameters: Type.Object({}),
     async execute(_id: string, _params: Record<string, never>) {
       if (!sessionManager) {
