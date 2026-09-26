@@ -416,6 +416,23 @@ describe("AutoUpdateService", () => {
     assert.equal(harness.sends.length, 2, "a skipped version is never offered again (4.x re-offered it weekly)");
   });
 
+  it("keeps a Remind later pressed while the prompt is still being sent", async () => {
+    setPluginConfig({});
+    const now = Date.parse("2026-07-15T12:00:00.000Z");
+    const stateDir = tempStateDir();
+    const harness = createService({ stateDir, latestVersion: "4.6.1", now: () => now });
+    // The user answers the prompt before its send settles.
+    const originalSend = (harness.service as any).notifier.send.bind((harness.service as any).notifier);
+    (harness.service as any).notifier.send = async (...args: unknown[]) => {
+      await originalSend(...args);
+      harness.service.remindLater("4.6.1");
+    };
+    harness.service.maybeCheckForUpdate({ route: ROUTE });
+    await harness.service.waitForIdle();
+    assert.equal(readState(stateDir).remindVersion, "4.6.1");
+    assert.equal(readState(stateDir).remindAt, new Date(now + 24 * 60 * 60 * 1000).toISOString());
+  });
+
   it("runs update and restart only from explicit confirmation methods", async () => {
     setPluginConfig({});
     const stateDir = tempStateDir();

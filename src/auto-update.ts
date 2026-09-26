@@ -459,6 +459,9 @@ export class AutoUpdateService {
     const route = routeToNotificationRoute(context.route ?? fallbackRoute());
     if (!route) return;
 
+    // The due "Remind later" this prompt answers (if any); captured before the send
+    // so a new Remind later pressed while the prompt is in flight is kept.
+    const dueRemindAt = state.remindVersion === latestVersion ? state.remindAt : undefined;
     await this.sendUpdatePrompt(route, latestVersion);
     const next: AutoUpdateState = {
       ...this.readState(),
@@ -466,9 +469,11 @@ export class AutoUpdateService {
       promptedVersion: latestVersion,
       lastPromptedAt: new Date(this.now()).toISOString(),
     };
-    // A due "Remind later" is used up by this prompt; the weekly rule applies again.
-    delete next.remindVersion;
-    delete next.remindAt;
+    // That reminder is used up by this prompt; the weekly rule applies again.
+    if (dueRemindAt !== undefined && next.remindVersion === latestVersion && next.remindAt === dueRemindAt) {
+      delete next.remindVersion;
+      delete next.remindAt;
+    }
     this.writeState(next);
   }
 
