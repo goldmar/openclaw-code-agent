@@ -15,6 +15,7 @@ const SMOKE_MODEL = process.env.OPENCLAW_OPENCODE_SMOKE_MODEL?.trim() || undefin
 
 type LiveServer = {
   baseUrl: string;
+  authorization: string;
   cwd: string;
   close(): Promise<void>;
 };
@@ -26,6 +27,7 @@ async function startLiveServer(): Promise<LiveServer> {
     const handle = await startOpenCodeServer({ startupTimeoutMs: 20_000 });
     return {
       baseUrl: handle.baseUrl,
+      authorization: handle.authorization,
       cwd,
       async close(): Promise<void> {
         await handle.close();
@@ -48,7 +50,10 @@ async function requestJson<T>(
   url.searchParams.set("directory", server.cwd);
   const response = await fetch(url, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      Authorization: server.authorization,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(5_000),
   });
@@ -73,7 +78,10 @@ async function requestNoContent(
   url.searchParams.set("directory", server.cwd);
   const response = await fetch(url, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      Authorization: server.authorization,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(5_000),
   });
@@ -110,7 +118,7 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
       // separate v2 JSON API on 1.18+. The harness uses the classic routes.
       const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { Authorization: server.authorization, "content-type": "application/json" },
         body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
         signal: AbortSignal.timeout(5_000),
       });
@@ -145,7 +153,10 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
       assert.equal(abort.data, true);
 
       // The harness demultiplexes one shared stream for every project directory.
-      const events = await fetch(`${server.baseUrl}/global/event`, { signal: AbortSignal.timeout(5_000) });
+      const events = await fetch(`${server.baseUrl}/global/event`, {
+        headers: { Authorization: server.authorization },
+        signal: AbortSignal.timeout(5_000),
+      });
       assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
       await events.body?.cancel();
     } finally {
