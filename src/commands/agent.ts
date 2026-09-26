@@ -110,6 +110,12 @@ export function registerAgentCommand(api: CommandApi): void {
           taskLifecycle: resolveSessionTaskLifecycle(ctx as OpenClawPluginToolContext),
         }, { notifyLaunch: false });
 
+        // A harness that throws during startup has already failed the session.
+        if (session.status === "failed" || session.status === "killed") {
+          const reason = session.error?.trim();
+          return { text: `❌ [${session.name}] Did not start${reason ? `: ${reason}` : "."}\nFix the problem and run /agent again.` };
+        }
+
         // One message: this reply replaces the separate 🚀 launch notice (N45).
         const harnessLabel = formatHarnessModelLabel({
           harness: session.harnessName,

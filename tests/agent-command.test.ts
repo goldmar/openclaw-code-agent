@@ -25,6 +25,23 @@ describe("agent command", () => {
     setSessionManager(null);
   });
 
+  it("reports a session whose harness failed during startup instead of saying Launched", async () => {
+    setSessionManager({
+      list: (): never[] => [],
+      listPersistedSessions: (): never[] => [],
+      launchSession(config: Record<string, unknown>) {
+        return { id: "sess-failed", name: config.name, model: config.model, status: "failed", error: "model_not_found" };
+      },
+    } as any);
+    const result = await captureAgentCommand()({
+      args: "--name broken --model sonnet --harness claude-code Fix it",
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
+      deliveryContext: { channel: "telegram", to: "-1001234567890", accountId: "bot1", threadId: 13832 },
+    });
+    assert.equal(result.text, "❌ [broken] Did not start: model_not_found\nFix the problem and run /agent again.");
+  });
+
   it("uses the shared launch resolver for routing and policy defaults", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     let launchOptions: { notifyLaunch?: boolean } | undefined;
