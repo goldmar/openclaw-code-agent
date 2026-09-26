@@ -16,7 +16,7 @@ function isAgentOutputParams(value: unknown): value is AgentOutputParams {
 }
 
 /** Register the `agent_output` tool factory. */
-export function makeAgentOutputTool(_ctx?: OpenClawPluginToolContext) {
+export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_output",
     description: "Recent output of a session, with its status header. Use full=true to read a whole plan or result.",
@@ -35,7 +35,7 @@ export function makeAgentOutputTool(_ctx?: OpenClawPluginToolContext) {
       const text = getSessionOutputText(sessionManager, params.session, {
         full: params.full,
         lines: params.lines,
-        markOutcomeSeen: true,
+        readerSessionKey: ctx?.sessionKey || undefined,
       });
       return { content: [{ type: "text", text }] };
     },

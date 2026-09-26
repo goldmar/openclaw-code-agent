@@ -20,6 +20,19 @@ describe("Session state machine", () => {
     session = new Session(BASE_CONFIG, "test");
   });
 
+  it("records a read outcome only for its origin orchestrator session and only after it ended", () => {
+    const origin = "agent:main:telegram:direct:5551234";
+    const owned = new Session({ ...BASE_CONFIG, originSessionKey: origin }, "owned");
+    owned.transition("running");
+    owned.noteOutcomeSeen(origin);
+    assert.equal(owned.outcomeSeenAt, undefined, "not ended yet");
+    owned.transition("completed");
+    owned.noteOutcomeSeen("agent:main:ux-driver");
+    assert.equal(owned.outcomeSeenAt, undefined, "another session read it");
+    owned.noteOutcomeSeen(origin);
+    assert.equal(typeof owned.outcomeSeenAt, "number");
+  });
+
   it("canonicalizes provider-qualified Claude models for internal session launches", () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",

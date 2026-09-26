@@ -544,12 +544,15 @@ export class Session extends EventEmitter {
 
   get status(): SessionStatus { return this._status; }
 
-  /** Record that the orchestrator read this session's output after it ended. */
-  noteOutcomeSeen(): void {
+  /** Record that the origin orchestrator session read this session's output after it ended. */
+  noteOutcomeSeen(readerSessionKey: string): void {
+    const origin = this.route?.sessionKey?.trim() || this.originSessionKey?.trim();
+    if (!origin || readerSessionKey.trim() !== origin) return;
     if (this.outcomeSeenAt === undefined && (this._status === "completed" || this._status === "failed" || this._status === "killed")) {
       this.outcomeSeenAt = Date.now();
     }
   }
+
 
   get harnessName(): string { return this.harness.name; }
 

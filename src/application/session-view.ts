@@ -23,8 +23,11 @@ const VALID_SESSION_STATUSES = new Set<SessionStatus>(["starting", "running", "c
 export interface OutputOptions {
   full?: boolean;
   lines?: number;
-  /** The reader is the orchestrator's agent_output: record that it read a terminal session. */
-  markOutcomeSeen?: boolean;
+  /**
+   * The orchestrator session calling agent_output. When it is the session's
+   * origin session, record that the launching orchestrator read the outcome.
+   */
+  readerSessionKey?: string;
 }
 
 interface SessionResultSummary {
@@ -271,7 +274,7 @@ export function getSessionOutputText(
     return `Error: Session "${ref}" not found.`;
   }
 
-  if (options.markOutcomeSeen) session.noteOutcomeSeen();
+  if (options.readerSessionKey) session.noteOutcomeSeen(options.readerSessionKey);
   const liveOutputLines = readLiveOutputLines(session, options, linesToShow);
   const outputLines = liveOutputLines && liveOutputLines.length > 0
     ? liveOutputLines
