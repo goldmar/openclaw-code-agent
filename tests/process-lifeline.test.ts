@@ -37,7 +37,9 @@ function writeFakeServer(dir: string): string {
     "const { writeFileSync } = require('node:fs');",
     // Like OpenCode's shell tool, the tool leads a process group of its own.
     "const tool = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });",
-    `writeFileSync(${JSON.stringify(join(dir, "pids.json"))}, JSON.stringify({ server: process.pid, tool: tool.pid }));`,
+    // A second tool also clears its environment (like `env -i`), so only the process tree finds it.
+    "const bare = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true, env: {} });",
+    `writeFileSync(${JSON.stringify(join(dir, "pids.json"))}, JSON.stringify({ server: process.pid, tool: tool.pid, bare: bare.pid }));`,
     "console.log('ready');",
     "setInterval(() => {}, 1000);",
   ].join("\n"));
@@ -60,10 +62,10 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
       const gatewayProcess = spawn(process.execPath, ["--import", "tsx", gateway], { stdio: "ignore" });
       const pidsFile = join(dir, "pids.json");
       await waitFor(() => existsSync(pidsFile) && readFileSync(pidsFile, "utf8").length > 0, "server start");
-      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number };
+      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number; bare: number };
       assert.ok(alive(pids.server) && alive(pids.tool));
       gatewayProcess.kill("SIGKILL");
-      await waitFor(() => !alive(pids.server) && !alive(pids.tool), "server and tool to stop after the Gateway died");
+      await waitFor(() => !alive(pids.server) && !alive(pids.tool) && !alive(pids.bare), "server and tools to stop after the Gateway died");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -76,9 +78,9 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
       child.process.stdout.resume();
       const pidsFile = join(dir, "pids.json");
       await waitFor(() => existsSync(pidsFile) && readFileSync(pidsFile, "utf8").length > 0, "server start");
-      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number };
+      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number; bare: number };
       await child.terminate(1_000);
-      await waitFor(() => !alive(pids.server) && !alive(pids.tool), "group to stop");
+      await waitFor(() => !alive(pids.server) && !alive(pids.tool) && !alive(pids.bare), "server and tools to stop");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -94,8 +96,10 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
       child.process.stdout.resume();
       const pidsFile = join(dir, "pids.json");
       await waitFor(() => existsSync(pidsFile) && readFileSync(pidsFile, "utf8").length > 0, "server start");
-      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number };
+      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { server: number; tool: number; bare: number };
       await waitFor(() => !alive(pids.server) && !alive(pids.tool), "the orphaned tool to stop");
+      // Documented limit: a tool that cleared its environment and outlived the server is not found.
+      try { process.kill(pids.bare, "SIGKILL"); } catch { /* already gone */ }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

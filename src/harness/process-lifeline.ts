@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 
 /**
@@ -38,7 +38,11 @@ const WATCHDOG_SOURCE = [
   "const alive = () => serverStart !== undefined && (statOf(server) || [])[19] === serverStart;",
   "const marked = () => { let entries = []; try { entries = fs.readdirSync('/proc'); } catch { return []; } const out = [];",
   "  for (const d of entries) { if (!/^\\d+$/.test(d) || Number(d) === process.pid) continue; try { if (fs.readFileSync('/proc/' + d + '/environ').includes(marker)) out.push(Number(d)); } catch {} } return out; };",
-  "const signal = (sig) => { if (alive()) { try { process.kill(-server, sig); } catch {} } for (const pid of marked()) { try { process.kill(pid, sig); } catch {} } };",
+  // Descendants of the live server too, for tools that cleared their environment.
+  "const tree = () => { if (!alive()) return []; const kids = new Map(); let entries = []; try { entries = fs.readdirSync('/proc'); } catch { return []; }",
+  "  for (const d of entries) { if (!/^\\d+$/.test(d)) continue; const st = statOf(d); if (!st) continue; const ppid = Number(st[1]); if (!kids.has(ppid)) kids.set(ppid, []); kids.get(ppid).push(Number(d)); }",
+  "  const out = []; const stack = [server]; while (stack.length) { for (const c of kids.get(stack.pop()) || []) { out.push(c); stack.push(c); } } return out; };",
+  "const signal = (sig) => { const pids = new Set([...tree(), ...marked()]); if (alive()) { try { process.kill(-server, sig); } catch {} } for (const pid of pids) { try { process.kill(pid, sig); } catch {} } };",
   "let stopping = false;",
   "const stop = () => {",
   "  if (stopping) return; stopping = true;",
@@ -65,27 +69,52 @@ export function lifelineSupported(platform: NodeJS.Platform = process.platform):
 }
 
 /**
- * Processes whose environment carries `NAME=value` (Linux `/proc`; empty
- * elsewhere). Read afresh for each signal, so a pid is never reused stale.
+ * Processes whose environment carries `NAME=value`, plus the live descendants
+ * of `root` (tools that cleared their environment), from Linux `/proc` (empty
+ * elsewhere). Read afresh for each signal, so a stale pid is never used, and
+ * asynchronously, so a busy host does not stall the Gateway's event loop.
  */
-export function markedPids(name: string, value: string): number[] {
+export async function lifelinePids(name: string, value: string, root?: number): Promise<number[]> {
   let entries: string[];
   try {
-    entries = readdirSync("/proc");
+    entries = (await readdir("/proc")).filter((entry) => /^\d+$/.test(entry) && Number(entry) !== process.pid);
   } catch {
     return [];
   }
   const marker = Buffer.from(`${name}=${value}\0`);
-  const out: number[] = [];
-  for (const entry of entries) {
-    if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue;
-    try {
-      if (readFileSync(`/proc/${entry}/environ`).includes(marker)) out.push(Number(entry));
-    } catch {
-      // Exited, or not ours to read.
+  const found = new Set<number>();
+  const children = new Map<number, number[]>();
+  const BATCH = 64;
+  for (let index = 0; index < entries.length; index += BATCH) {
+    await Promise.all(entries.slice(index, index + BATCH).map(async (entry) => {
+      const pid = Number(entry);
+      try {
+        if ((await readFile(`/proc/${entry}/environ`)).includes(marker)) found.add(pid);
+      } catch {
+        // Exited, or not ours to read.
+      }
+      if (root === undefined) return;
+      try {
+        const stat = await readFile(`/proc/${entry}/stat`, "utf8");
+        const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+        const list = children.get(ppid) ?? [];
+        list.push(pid);
+        children.set(ppid, list);
+      } catch {
+        // Exited meanwhile.
+      }
+    }));
+  }
+  if (root !== undefined) {
+    const stack = [root];
+    while (stack.length > 0) {
+      for (const child of children.get(stack.pop()!) ?? []) {
+        found.add(child);
+        stack.push(child);
+      }
     }
   }
-  return out;
+  return [...found];
 }
 
 function signalPids(pids: readonly number[], signal: NodeJS.Signals): void {
@@ -147,32 +176,33 @@ export function spawnWithLifeline(
   const stopWatchdog = (): void => {
     if (watchdog && watchdog.exitCode === null && watchdog.signalCode === null) watchdog.kill("SIGKILL");
   };
-  const signalMarked = (signal: NodeJS.Signals): void => {
-    if (supported) signalPids(markedPids(LIFELINE_ENV, marker), signal);
+  const signalMarked = async (signal: NodeJS.Signals, withTree: boolean): Promise<void> => {
+    if (!supported) return;
+    signalPids(await lifelinePids(LIFELINE_ENV, marker, withTree ? child.pid : undefined), signal);
   };
   child.once("exit", () => {
-    // Tool processes the server left behind are stopped right away: its group
-    // (the only group signal after the leader exited, sent at once, since a
-    // pid is not reused while a group of that id has members) and every
-    // process carrying its marker. The watchdog repeats this a second later
-    // for tools that were still starting, then exits by itself.
-    if (!supported) return;
-    signalGroup(child.pid, "SIGKILL");
-    signalMarked("SIGKILL");
+    // Tool processes left in the server's group are stopped right away (the
+    // only group signal after the leader exited, sent at once, since a pid is
+    // not reused while a group of that id has members). Tools in groups of
+    // their own are found by the watchdog, by marker, within a second.
+    if (supported) signalGroup(child.pid, "SIGKILL");
   });
   child.once("error", stopWatchdog);
 
   const terminate = async (graceMs = 2_000): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) {
-      signalMarked("SIGKILL");
+      await signalMarked("SIGKILL", false);
       stopWatchdog();
       return;
     }
+    // Collected before the server is signalled: its descendants are
+    // reparented once it exits.
+    const tools = supported && child.pid ? await lifelinePids(LIFELINE_ENV, marker, child.pid) : [];
     await new Promise<void>((resolve) => {
       let killTimer: NodeJS.Timeout | undefined;
       const forceTimer = setTimeout(() => {
         if (!(supported && signalGroup(child.pid, "SIGKILL"))) child.kill("SIGKILL");
-        signalMarked("SIGKILL");
+        void signalMarked("SIGKILL", false);
         killTimer = setTimeout(resolve, 1_000);
       }, graceMs);
       child.once("exit", () => {
@@ -181,8 +211,10 @@ export function spawnWithLifeline(
         resolve();
       });
       if (!(supported && signalGroup(child.pid, "SIGTERM"))) child.kill("SIGTERM");
-      signalMarked("SIGTERM");
+      signalPids(tools, "SIGTERM");
     });
+    // Whatever still carries the marker (read afresh, so no stale pid).
+    await signalMarked("SIGKILL", false);
     stopWatchdog();
   };
   return { process: child, terminate };
