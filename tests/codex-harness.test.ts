@@ -644,8 +644,6 @@ describe("CodexHarness launch settings", () => {
       input: [{ type: "text", text: "ship it", text_elements: [] }],
       model: "gpt-6-astra",
       effort: "max",
-      // D5: plan turns run read-only whatever the thread's profile.
-      permissions: ":read-only",
       collaborationMode: {
         mode: "plan",
         settings: { model: "gpt-6-astra", reasoning_effort: "max", developer_instructions: null },

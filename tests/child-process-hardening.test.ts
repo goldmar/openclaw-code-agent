@@ -11,11 +11,10 @@ import { setPluginConfig } from "../src/config";
 import { fenceAgentOutput } from "../src/untrusted-output";
 import { runVerifierCommand } from "../src/goal-controller";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
-import { buildTurnStartParams } from "../src/harness/codex-protocol";
 
 /**
  * Regression tests for B8 (fenced agent output in wakes), B9/D3 (hardened
- * verifiers), B10/D5 (Codex plan turns run read-only), B11/B12/D4 (child
+ * verifiers), B11/B12/D4 (child
  * environments, hook-path detection, git hook setting).
  */
 
@@ -188,15 +187,3 @@ describe("goal verifier commands (D3)", () => {
     assert.equal(alive, false, "the background child was killed with its group");
   });
 });
-
-describe("Codex plan review sandbox (D5)", () => {
-  it("runs plan turns with the read-only profile and restores the configured profile afterwards", () => {
-    const plan = buildTurnStartParams({ threadId: "t", prompt: "p", model: "m", permissionMode: "plan", permissionProfile: ":danger-full-access" });
-    assert.equal(plan.permissions, ":read-only");
-    assert.equal(plan.collaborationMode?.mode, "plan");
-    const implement = buildTurnStartParams({ threadId: "t", prompt: "p", model: "m", permissionMode: "bypassPermissions", permissionProfile: ":workspace" });
-    assert.equal(implement.permissions, ":workspace");
-    assert.equal(implement.collaborationMode?.mode, "default");
-  });
-});
-

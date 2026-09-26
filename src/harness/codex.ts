@@ -850,7 +850,6 @@ export class CodexHarness implements AgentHarness {
           model,
           reasoningEffort: resolveTurnEffort(model),
           permissionMode: currentPermissionMode,
-          permissionProfile: execution.permissionProfile,
         }), timeoutMs);
         return started.turn.id;
       });

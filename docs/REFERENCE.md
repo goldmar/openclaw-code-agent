@@ -337,7 +337,7 @@ These should remain manual or follow-up configuration:
 
 `plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
 
-For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode. Codex's plan collaboration mode only instructs the model, and the thread sandbox stays what `harnesses.codex.permissionProfile` (or the host `tools.exec.mode`) selects, which is `:danger-full-access` by default. OCA therefore runs every plan turn with the `:read-only` permission profile and restores the configured profile on the first turn after approval; reviews and compactions use whichever profile the last turn set. Approval prompts come from `approvalPolicy` and `approvalsReviewer` in both phases. Use `permissionMode` and `planApproval` to control plan review gates.
+For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode. Codex's plan collaboration mode only instructs the model: the thread sandbox stays what `harnesses.codex.permissionProfile` (or the host `tools.exec.mode`) selects, which is `:danger-full-access` by default, so a plan turn can technically write files and run commands before approval (see [SECURITY.md](SECURITY.md#codex-sandbox)). Set `permissionProfile` to `:workspace` or `:read-only` when that matters. Approval prompts come from `approvalPolicy` and `approvalsReviewer` in both phases. Use `permissionMode` and `planApproval` to control plan review gates.
 
 ### `planApproval`
 
