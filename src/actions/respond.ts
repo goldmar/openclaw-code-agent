@@ -109,6 +109,8 @@ async function spawnFreshRelaunch(
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       fastMode: session.fastMode,
+      // The launch system prompt (the worktree preamble is re-added at bootstrap).
+      systemPrompt: session.launchSystemPrompt,
       worktreeStrategy: session.worktreeStrategy,
       multiTurn: true,
       originChannel: session.originChannel,
@@ -339,6 +341,8 @@ async function tryAutoResume(
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       fastMode: session.fastMode,
+      // The launch system prompt (the worktree preamble is re-added at bootstrap).
+      systemPrompt: session.launchSystemPrompt,
       resumeSessionId: assessment.resumeSessionId,
       resumeWorktreeFrom: getResumeWorktreeRef(session),
       worktreeStrategy: session.worktreeStrategy,

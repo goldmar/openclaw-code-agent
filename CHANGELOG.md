@@ -122,6 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resuming a finished or suspended session through `agent_respond` (or its Resume button) dropped the launch `system_prompt`. The launch prompt (without the worktree preamble, which is added again) is now stored on the session row and reused on resume and on a fresh relaunch.
 - The production build dropped the logger's `console.warn` fallback (esbuild `--pure:console.warn`), so warnings logged before plugin registration, or when the host logger threw, were lost. Only `console.log` / `info` / `debug` are stripped now.
 - An early startup failure on resume (for example a usage-limit or auth error) auto-cleaned the resumed session's worktree and ran `git branch -D` on its branch, deleting unmerged commits. Only a worktree the launch created is cleaned, and a branch with commits of its own is never deleted.
 - When runtime GC re-persisted a terminal session after 24 hours, the row lost its PR, merge, disposition, repo-policy and completion-wake fields, so the worktree buttons fell back to Merge + PR. Fields the runtime session does not track are now kept.

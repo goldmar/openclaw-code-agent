@@ -370,6 +370,12 @@ export interface SessionConfig {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   systemPrompt?: string;
+  /**
+   * The system prompt the launch asked for, before the worktree preamble is
+   * appended (`systemPrompt` is the effective prompt). Persisted so resuming
+   * the session later reuses it.
+   */
+  launchSystemPrompt?: string;
   allowedTools?: string[];
   originChannel?: string;
   originThreadId?: string | number;
@@ -528,6 +534,8 @@ export interface PersistedSessionInfo {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
+  /** Launch system prompt (without the worktree preamble), reused on resume. */
+  launchSystemPrompt?: string;
   createdAt?: number;
   completedAt?: number;
   status: SessionStatus;

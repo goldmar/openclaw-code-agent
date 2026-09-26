@@ -701,6 +701,8 @@ export class SessionManager {
       ...config,
       workdir: preparedLaunch.actualWorkdir,
       systemPrompt: preparedLaunch.effectiveSystemPrompt,
+      // The worktree preamble is added again when a resume prepares its worktree.
+      launchSystemPrompt: config.systemPrompt,
       canUseTool,
       ...(config.forkSession && config.resumeSessionId && !config.forkBaselineUsage
         ? { forkBaselineUsage: this.resolveForkBaselineUsage(config.resumeSessionId) }

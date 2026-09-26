@@ -93,6 +93,7 @@ export type LaunchOptions = {
   worktreeStrategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
   permissionMode?: "default" | "plan" | "bypassPermissions";
   planApproval?: "ask" | "delegate" | "approve";
+  systemPrompt?: string;
 };
 
 export type ClickResult = { replies: string[]; cleared: number };
@@ -279,6 +280,7 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
         worktree_strategy: launch.worktreeStrategy ?? "off",
         permission_mode: launch.permissionMode ?? "default",
         ...(launch.planApproval ? { plan_approval: launch.planApproval } : {}),
+        ...(launch.systemPrompt ? { system_prompt: launch.systemPrompt } : {}),
       });
       let session: Session | undefined;
       await waitUntil(() => {

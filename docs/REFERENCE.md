@@ -480,7 +480,7 @@ Launch a background coding session.
 | `workdir` | `string` | No | Defaults to an existing absolute path in a leading `Workdir:` or `Repo:` prompt header line, then the tool workspace, plugin `defaultWorkdir`, or cwd |
 | `reasoning_effort` | `low \| medium \| high \| xhigh \| max` | No | Per-launch override. Otherwise retains saved resume/fork effort, then uses the harness default. Known supported settings appear as `reasoning: <level>` in session status headings; unknown/unsupported settings are omitted. |
 | `model` | `string` | No | Defaults to the selected harness default model. For experimental OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
-| `system_prompt` | `string` | No | Extra system prompt |
+| `system_prompt` | `string` | No | Extra system prompt. Stored with the session and reused when `agent_respond` (or a Resume button) resumes it |
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |
 | `resume_session_id` | `string` | No | Resume by plugin session ID or name. Persisted backend conversation IDs still work for recovery/diagnostics, but they are not the normal operator-facing path |
 | `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
