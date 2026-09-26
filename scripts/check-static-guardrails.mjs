@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { basename, dirname, join, relative, sep } from "path";
 
@@ -5,14 +6,46 @@ const root = process.cwd();
 const srcDir = join(root, "src");
 const testsDir = join(root, "tests");
 
+/**
+ * Repository files: tracked plus untracked-but-not-ignored (so a new file is
+ * checked before its first commit), from `git ls-files`. Ignored build output,
+ * installed packages, and local scratch files are never scanned. Falls back to
+ * a directory walk outside a git checkout (for example an unpacked tarball).
+ */
+function listRepositoryFiles() {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\0").filter(Boolean).map((file) => join(root, file)).filter((path) => existsSync(path));
+  } catch {
+    return undefined;
+  }
+}
+const repositoryFiles = listRepositoryFiles();
+
 function collectFiles(dir, predicate, acc = []) {
+  if (repositoryFiles) {
+    const prefix = dir.endsWith(sep) ? dir : `${dir}${sep}`;
+    for (const path of repositoryFiles) {
+      if (path.startsWith(prefix) && predicate(path)) acc.push(path);
+    }
+    return acc;
+  }
+  return walkFiles(dir, predicate, acc);
+}
+
+function walkFiles(dir, predicate, acc = []) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     // Installed packages (for example .github/release-tools/node_modules) are not repository content.
     if (entry.isDirectory() && entry.name === "node_modules") continue;
     if (entry.isDirectory()) {
-      collectFiles(path, predicate, acc);
+      walkFiles(path, predicate, acc);
     } else if (predicate(path)) {
       acc.push(path);
     }
@@ -314,8 +347,34 @@ const TOKEN_PATTERNS = [
   ["private key block", /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/g],
   ["Telegram bot token", /\b\d{8,10}:AA[A-Za-z0-9_-]{30,}/g],
 ];
+// Home directories: only these synthetic (or CI / system) user names may appear
+// in a /home/<user> or /Users/<user> path. A real account name in a path
+// identifies a host; use /home/alice/... or /home/user/... in fixtures.
+const FAKE_HOME_USERS = new Set(["user", "u", "me", "alice", "bob", "example", "runner", "linuxbrew"]);
+const HOME_PATH_PATTERN = /(?<![\w.-])\/(?:home|Users)\/([A-Za-z0-9._-]+)/g;
+// Telegram user ids (senders, direct chats) and Discord snowflakes (users,
+// channels, guilds). Fixtures use the fakes below or an obviously synthetic
+// number (at most four distinct digits, or an ascending 1234… run).
+const FAKE_NUMERIC_IDS = new Set([
+  "12345", "123456", "5551234", "123456789", "9988776655", "1111111111", "2222222222",
+  "1234567890123456789", "998877665544332211", "1481999999999999999",
+]);
+function isSyntheticNumericId(value) {
+  if (FAKE_NUMERIC_IDS.has(value)) return true;
+  if (new Set(value).size <= 4) return true;
+  return "12345678901234567890".startsWith(value);
+}
+const TELEGRAM_USER_ID_PATTERNS = [
+  /\b(?:sender|user|from)_?id["']?\s*[:=]\s*["']?(\d{5,12})(?!\d)/gi,
+  /\btelegram(?::(?:direct|dm|user|group):|\|(?:[\w-]+\|)?)(\d{5,12})(?!\d)/gi,
+];
+const DISCORD_SNOWFLAKE_PATTERN = /(?<![\w.-])(\d{17,20})(?![\d])/g;
+// Generated or third-party files that are not written by hand.
+const PRIVACY_SKIP = new Set(["npm-shrinkwrap.json", "pnpm-lock.yaml"]);
 const PRIVACY_TEXT_FILE = /\.(?:[cm]?[jt]s|json|md|ya?ml|txt|sh|html)$/;
-const privacyFiles = [
+const privacyFiles = repositoryFiles
+  ? repositoryFiles.filter((path) => PRIVACY_TEXT_FILE.test(path) && !PRIVACY_SKIP.has(rel(path)))
+  : [
   ...collectFiles(srcDir, (path) => PRIVACY_TEXT_FILE.test(path)),
   ...collectFiles(testsDir, (path) => PRIVACY_TEXT_FILE.test(path)),
   ...collectFiles(join(root, "docs"), (path) => PRIVACY_TEXT_FILE.test(path)),
@@ -337,6 +396,31 @@ for (const path of privacyFiles) {
       if (FAKE_TOKEN_FIXTURES.has(match[0])) continue;
       failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} ${kind}-shaped string; use a fixture fake listed in scripts/check-static-guardrails.mjs`);
     }
+  }
+  if (rel(path) === "scripts/check-static-guardrails.mjs") continue;
+  for (const match of source.matchAll(HOME_PATH_PATTERN)) {
+    if (FAKE_HOME_USERS.has(match[1])) continue;
+    failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} home path of a real-looking account; use /home/alice/... (see scripts/check-static-guardrails.mjs)`);
+  }
+  for (const pattern of TELEGRAM_USER_ID_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      if (isSyntheticNumericId(match[1])) continue;
+      failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} Telegram user id that is not a known fake; use 123456789 (see scripts/check-static-guardrails.mjs)`);
+    }
+  }
+  for (const match of source.matchAll(DISCORD_SNOWFLAKE_PATTERN)) {
+    if (isSyntheticNumericId(match[1])) continue;
+    failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} Discord snowflake-shaped id that is not synthetic; use 111111111111111111 (see scripts/check-static-guardrails.mjs)`);
+  }
+}
+
+// N4: OCA never runs an unqualified `git checkout <name>` (a name that is both
+// a branch and a path is ambiguous, and a branch switch moves the user's
+// checkout). Use `git switch` for branches and `git restore` for files.
+for (const path of srcFiles) {
+  const source = stripComments(readFileSync(path, "utf8"));
+  for (const match of source.matchAll(/["'`]checkout["'`]/g)) {
+    failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} git "checkout" subcommand; use "switch" (branches) or "restore" (files)`);
   }
 }
 

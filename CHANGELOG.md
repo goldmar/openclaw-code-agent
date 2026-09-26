@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The static privacy guardrail scans every repository text file listed by `git ls-files` (tracked, plus untracked files that are not ignored) instead of walking a few directories, and also rejects real-looking home paths, Telegram user ids, and Discord snowflakes. Tests use synthetic home paths. `src/` may not call `git checkout` (`git switch` / `git restore` only).
 - `agent_pr` `target_repo` and `agent_launch` `worktree_pr_target_repo` must be `OWNER/REPO` or `HOST/OWNER/REPO` (GitHub name rules; no option-like or URL values); other values are rejected before `gh` runs.
 - Button callbacks are bound to the chat the button was delivered to: a callback from another chat or channel is refused ("This button belongs to another chat"), in addition to the host's sender check. Tokens minted by 4.7.x carry no chat and keep working.
 - `pnpm build` deletes `dist/` before bundling, and a `prepack` script runs the build, so `npm pack` and registry publishing cannot ship stale chunks.

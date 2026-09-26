@@ -237,8 +237,8 @@ describe("executeRespond", () => {
       },
       name: "repair-real-openclaw-dashboard",
       prompt: "Repair dashboard after plan approval.",
-      workdir: "/home/openclaw/workspace/openclaw-dashboard",
-      worktreePath: "/home/openclaw/workspace/openclaw-dashboard/.worktrees/openclaw-worktree-repair-real-openclaw-dashboard",
+      workdir: "/home/alice/workspace/openclaw-dashboard",
+      worktreePath: "/home/alice/workspace/openclaw-dashboard/.worktrees/openclaw-worktree-repair-real-openclaw-dashboard",
       worktreeBranch: "agent/repair-real-openclaw-dashboard",
       worktreeStrategy: "delegate",
       status: "completed",
@@ -275,7 +275,7 @@ describe("executeRespond", () => {
     });
 
     assert.match(result.text, /Plan approved for session/);
-    assert.equal(capturedConfig.workdir, "/home/openclaw/workspace/openclaw-dashboard");
+    assert.equal(capturedConfig.workdir, "/home/alice/workspace/openclaw-dashboard");
     assert.equal(capturedConfig.resumeSessionId, "019e6c36-1321-7130-a871-7b4303e8ff32");
     assert.equal(capturedConfig.resumeWorktreeFrom, "SPhNrL4Q");
     assert.equal(capturedConfig.worktreeStrategy, "delegate");

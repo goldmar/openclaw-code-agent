@@ -2189,7 +2189,7 @@ describe("SessionManager.notifySession()", () => {
       text: "Readiness report body",
       planName: "plugin-readiness-v2026.5.18",
       planPrompt: "Create a plugin readiness plan.",
-      planWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+      planWorkdir: "/home/alice/workspace/openclaw-code-agent",
       planWorktreeStrategy: "auto-pr",
     });
 
@@ -2613,7 +2613,7 @@ describe("SessionManager.launchPlanOffer()", () => {
     const session = await sm.launchPlanOffer({
       route,
       prompt: "Plan the OpenClaw v2026.5.18 plugin-readiness follow-up.",
-      workdir: "/home/openclaw/workspace/openclaw-code-agent",
+      workdir: "/home/alice/workspace/openclaw-code-agent",
       name: "plugin-readiness-v2026.5.18",
       worktreeStrategy: "auto-pr",
     });

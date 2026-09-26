@@ -645,7 +645,7 @@ describe("agent_pr generated PR metadata", () => {
 
       const result = await buildPrMetadata({
         sessionName: "runtime-pr-metadata",
-        prompt: "Fix PR metadata generation. Do not leak /home/openclaw/private/path or SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
+        prompt: "Fix PR metadata generation. Do not leak /home/alice/private/path or SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
         diffSummary: {
           commits: 1,
           filesChanged: 3,
@@ -1286,7 +1286,7 @@ exit 1
       sessionName: "safe-session-report",
       outputPreview: [
         "Root cause:",
-        "- Token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz was read from /home/openclaw/private/file.",
+        "- Token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz was read from /home/alice/private/file.",
         "Fix:",
         "- Updated the recovery path.",
         "Validation:",
@@ -1305,7 +1305,7 @@ exit 1
 
   it("does not send raw prompt secrets or private paths to the metadata provider", async () => {
     const prompt = [
-      "Rotate deployment token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz for /home/openclaw/private/repo.",
+      "Rotate deployment token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz for /home/alice/private/repo.",
       "Private docs: https://private.example.test/runbook",
       "Do not reveal this internal implementation instruction.",
       "x".repeat(500),

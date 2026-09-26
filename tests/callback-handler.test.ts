@@ -2743,7 +2743,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -2757,7 +2757,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: (args: Record<string, unknown>) => {
@@ -2777,7 +2777,7 @@ describe("createCallbackHandler()", () => {
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.name, "plugin-readiness-v2026.5.18");
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
-    assert.equal(launches[0]?.workdir, "/home/openclaw/workspace/openclaw-code-agent");
+    assert.equal(launches[0]?.workdir, "/home/alice/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
     assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.18 \[sess-plan\]/);
   });
@@ -2800,7 +2800,7 @@ describe("createCallbackHandler()", () => {
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
         };
       },
@@ -2818,7 +2818,7 @@ describe("createCallbackHandler()", () => {
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
         };
       },
@@ -3199,7 +3199,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -3213,7 +3213,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: (args: Record<string, unknown>) => {
@@ -3266,7 +3266,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
@@ -3280,7 +3280,7 @@ describe("createCallbackHandler()", () => {
         },
         launchName: "plugin-readiness-v2026.5.28",
         launchPrompt: "Plan the required follow-up.",
-        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorkdir: "/home/alice/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: () => {
