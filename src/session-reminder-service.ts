@@ -8,6 +8,7 @@ import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { createLogger } from "./logger";
 
 const log = createLogger("session-reminder-service");
+const REMINDER_DELIVERY_RESULT_WAIT_MS = 10_000;
 
 type RoutingProxyBuilder = (session: {
   id?: string;
@@ -78,7 +79,15 @@ export class SessionReminderService {
     const candidates = [pendingSince + SessionReminderService.REMINDER_THRESHOLD_MS];
     if (session.worktreeDecisionSnoozedUntil) {
       const snoozedUntil = new Date(session.worktreeDecisionSnoozedUntil).getTime();
-      if (Number.isFinite(snoozedUntil)) candidates.push(snoozedUntil);
+      const lastReminderAt = session.lastWorktreeReminderAt
+        ? new Date(session.lastWorktreeReminderAt).getTime()
+        : Number.NaN;
+      // An explicit Later choice owns the next deadline even after the second
+      // reminder, whose automatic backoff would otherwise wait a week. Once a
+      // later reminder succeeds, its timestamp supersedes this snooze.
+      if (Number.isFinite(snoozedUntil) && (!Number.isFinite(lastReminderAt) || snoozedUntil > lastReminderAt)) {
+        return Math.max(...candidates, snoozedUntil);
+      }
     }
     if (session.lastWorktreeReminderAt) {
       const lastReminderAt = new Date(session.lastWorktreeReminderAt).getTime();
@@ -105,8 +114,20 @@ export class SessionReminderService {
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
     const sent = SessionReminderService.remindersSent(session);
     const isLast = sent + 1 >= SessionReminderService.MAX_REMINDERS;
+    let recorded = false;
+    const recordDelivered = (): void => {
+      if (recorded || !stillCurrent()) return;
+      recorded = true;
+      for (const mutationRef of getPersistedMutationRefs(session)) {
+        this.updatePersistedSession(mutationRef, {
+          lastWorktreeReminderAt: new Date(now).toISOString(),
+          worktreeReminderCount: sent + 1,
+          worktreeDecisionSnoozedUntil: undefined,
+        });
+      }
+    };
     try {
-      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent, isLast))) return false;
+      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent, isLast, recordDelivered))) return false;
     } catch (err) {
       log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -114,12 +135,6 @@ export class SessionReminderService {
       return false;
     }
 
-    for (const mutationRef of getPersistedMutationRefs(session)) {
-      this.updatePersistedSession(mutationRef, {
-        lastWorktreeReminderAt: new Date(now).toISOString(),
-        worktreeReminderCount: sent + 1,
-      });
-    }
     return true;
   }
 
@@ -129,6 +144,7 @@ export class SessionReminderService {
     pendingHours: number,
     stillCurrent: () => boolean,
     isLast: boolean,
+    onDelivered: () => void,
   ): Promise<boolean> {
     const routingProxy = this.buildRoutingProxy({
       id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
@@ -139,13 +155,19 @@ export class SessionReminderService {
     });
 
     if (session.worktreeStrategy === "delegate") {
-      this.dispatchNotification(routingProxy, {
+      return this.awaitReminderDelivery((settle) => this.dispatchNotification(routingProxy, {
         label: `worktree-stale-reminder-${session.name}`,
         wakeMessage: buildDelegateReminderWakeMessage(session, pendingHours),
         notifyUser: "never",
+        shouldDispatch: stillCurrent,
         idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${pendingHours}`,
-      });
-      return true;
+        hooks: {
+          onWakeSucceeded: () => { onDelivered(); settle(true); },
+          onWakeFailed: () => settle(false),
+          onWakeSkipped: () => settle(false),
+          onDuplicateSkipped: () => settle(false),
+        },
+      }));
     }
 
     const text = `⏰ [${session.name}] Branch \`${session.worktreeBranch ?? "unknown"}\` still waits for your decision (${formatPendingAge(pendingHours)})${isLast ? ". Last reminder." : "."}`;
@@ -156,13 +178,41 @@ export class SessionReminderService {
     );
     // Building policy-aware buttons awaits git; a snooze may have landed meanwhile.
     if (!stillCurrent()) return false;
-    this.dispatchNotification(routingProxy, {
+    return this.awaitReminderDelivery((settle) => this.dispatchNotification(routingProxy, {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
+      requireDirectUserNotification: true,
+      shouldDispatch: stillCurrent,
       buttons,
+      hooks: {
+        onNotifySucceeded: () => { onDelivered(); settle(true); },
+        onNotifyFailed: () => settle(false),
+        onDuplicateSkipped: () => settle(false),
+      },
+    }));
+  }
+
+  private awaitReminderDelivery(dispatch: (settle: (delivered: boolean) => void) => void): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (delivered: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(delivered);
+      };
+      // A host send can remain pending. Maintenance retries after its own backoff;
+      // a late success still records delivery through the hook above.
+      const timer = setTimeout(() => settle(false), REMINDER_DELIVERY_RESULT_WAIT_MS);
+      timer.unref?.();
+      try {
+        dispatch(settle);
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
+      }
     });
-    return true;
   }
 
   async clearResolvedReminderState(session: PersistedSessionInfo): Promise<boolean> {

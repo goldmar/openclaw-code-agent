@@ -135,7 +135,7 @@ describe("plan decision brief presentation", () => {
     assert.equal(fallback.map((m) => m.text).join("\n").split('Reply "approve"').length - 1, 1);
   });
 
-  it("keeps a fenced code block with the step that introduces it instead of splitting it into fields", () => {
+  it("keeps multiline code verbatim instead of changing its executable meaning", () => {
     const plan = [
       "## Plan", "",
       "1. Edit `calc.py` to add:",
@@ -149,10 +149,9 @@ describe("plan decision brief presentation", () => {
       "No tests exist in the repo to run; verification is visual (read file back).",
     ].join("\n");
     const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
-    assert.match(message, /Edit `calc\.py` to add: `def mul\(a, b\): """Return the product of a and b\."""; return a \* b`/);
-    assert.doesNotMatch(message, /```/);
-    assert.doesNotMatch(message, /: return a \* b$/m);
-    assert.match(message, /Tests \/ verification: No tests exist/);
+    assert.match(message, /```python\n   def mul\(a, b\):\n       """Return the product of a and b\."""\n       return a \* b\n   ```/);
+    assert.doesNotMatch(message, /def mul\(a, b\): .*; return a \* b/);
+    assert.match(message, /No tests exist in the repo to run/);
   });
 
   it("shows the plan itself when a code block is too long for one brief line, so no command is clipped", () => {
@@ -170,9 +169,35 @@ describe("plan decision brief presentation", () => {
     assert.match(message, /rm -rf \.\/dist \.\/coverage/);
   });
 
-  it("still folds a short unterminated fence into its step", () => {
+  it("keeps shell substitution and multiline comments literal in an approval plan", () => {
+    const plan = [
+      "1. Run the cleanup script:",
+      "```sh",
+      "echo `rm -rf /tmp/cache`",
+      "echo safe # explanation",
+      "rm -rf /tmp/cache",
+      "```",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "shell-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /```sh\necho `rm -rf \/tmp\/cache`\necho safe # explanation\nrm -rf \/tmp\/cache\n```/);
+    assert.doesNotMatch(message, /echo 'rm -rf \/tmp\/cache'|echo safe # explanation; rm -rf/);
+  });
+
+  it("shows late effects before approval even when the verbatim plan spans messages", () => {
+    const plan = [
+      "## Current state", "The current reader is local.",
+      "## Proposed changes", "Keep the explanation complete. ".repeat(110),
+      "## Final effect", "Delete the production archive after the rollout.",
+    ].join("\n");
+    const prompt = buildPlanApprovalPromptContent({ sessionName: "long-plan", actionableVersion: 1, preview: plan, hasButtons: true });
+    assert.equal(prompt.displayMode, "chunked-summary");
+    assert.match(prompt.userMessages.join("\n"), /Delete the production archive after the rollout/);
+    assert.equal(prompt.userMessages.join("\n").split("Choose Approve, Revise, or Reject below.").length - 1, 1);
+  });
+
+  it("keeps a short unterminated multiline fence verbatim", () => {
     const summary = buildPlanReviewSummary({ preview: ["1. Update `parser.ts` so it reads:", "```", "a = 1", "b = 2"].join("\n") });
-    assert.match(summary, /Update `parser\.ts` so it reads: `a = 1; b = 2`/);
+    assert.match(summary, /Update `parser\.ts` so it reads:\n```\na = 1\nb = 2/);
   });
 
   it("shows the plan itself instead of a brief when a section heading maps to no field", () => {

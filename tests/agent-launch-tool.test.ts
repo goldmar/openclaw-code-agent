@@ -58,7 +58,7 @@ describe("agent_launch tool defaults", () => {
       id: "sess-fail", name: "ux-fail", model: "claude-nonexistent-9", status: "running",
       error: undefined as string | undefined,
       getOutput: () => ["There's an issue with the selected model."],
-      noteOutcomeSeen: (reader: string) => { seen.push(reader); },
+      noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
     });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,

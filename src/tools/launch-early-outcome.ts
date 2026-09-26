@@ -61,7 +61,10 @@ export async function awaitLaunchEarlyOutcome(
     });
   }
   if (!TERMINAL.has(session.status)) return undefined;
-  if (readerSessionKey) session.noteOutcomeSeen(readerSessionKey);
+  // Only the originating orchestrator turn may replace the deferred outcome
+  // wake. A direct delivery route does not always include a session key, and a
+  // mismatched key also leaves the wake in place.
+  if (!readerSessionKey || !session.noteOutcomeSeen(readerSessionKey)) return undefined;
   // The launch result carries the outcome and asks the launching turn to report it.
   const output = truncateText(session.getOutput(20).join("\n").trim(), EARLY_OUTCOME_PREVIEW_MAX_CHARS);
   if (session.status === "failed") {

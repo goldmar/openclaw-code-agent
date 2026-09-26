@@ -13,7 +13,7 @@ function fakeSession() {
     status: "running" as string,
     error: undefined as string | undefined,
     getOutput: () => ["There's an issue with the selected model."],
-    noteOutcomeSeen: (reader: string) => { seen.push(reader); },
+    noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
   });
   return { session, seen };
 }
@@ -30,6 +30,22 @@ describe("agent_launch early outcome", () => {
     assert.match(text ?? "", /\[ux-fail\] failed right after launch \(the user already sees the ❌ Failed notice\)\. Tell the user the cause/);
     assert.match(text ?? "", /model_not_found/);
     assert.deepEqual(seen, ["agent:main:telegram:direct:1"]);
+  });
+
+  it("leaves the deferred wake in place when there is no originating session key", async () => {
+    const { session, seen } = fakeSession();
+    session.status = "failed";
+    session.error = "model_not_found";
+    assert.equal(await awaitLaunchEarlyOutcome(session as any, undefined, 0), undefined);
+    assert.deepEqual(seen, []);
+  });
+
+  it("leaves the deferred wake in place when the reader does not own the outcome", async () => {
+    const { session, seen } = fakeSession();
+    session.status = "completed";
+    session.noteOutcomeSeen = (reader: string) => { seen.push(reader); return false; };
+    assert.equal(await awaitLaunchEarlyOutcome(session as any, "another-session", 0), undefined);
+    assert.deepEqual(seen, ["another-session"]);
   });
 
   it("returns at once when the agent starts working, and adds nothing", async () => {

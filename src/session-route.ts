@@ -345,7 +345,7 @@ function compactRouteObject(route: Record<string, string | undefined>): Record<s
  * every case; NO_REPLY then keeps the turn's final answer silent.
  */
 export const ROUTED_REPLY_RULE =
-  "To tell the user anything, send it with the message tool to originRoute (channel = provider, target, and threadId only when originRoute has one), then answer NO_REPLY.";
+  "To tell the user anything, send it with the message tool to originRoute (channel = provider, target, accountId and threadId only when originRoute has them), then answer NO_REPLY.";
 
 export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const route = canonicalizeSessionRoute(source);

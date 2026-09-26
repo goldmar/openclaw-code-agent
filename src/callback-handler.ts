@@ -1153,6 +1153,7 @@ export function createCallbackHandler(
         }
 
         // Route action
+        let worktreeDecisionSucceeded = false;
         switch (consumedToken.kind) {
           case "plugin-update-install": {
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
@@ -1241,6 +1242,7 @@ export function createCallbackHandler(
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
               break;
             }
             await replyText(ctx, text);
@@ -1258,6 +1260,7 @@ export function createCallbackHandler(
                 : `⏭️ Snoozed 24h for [${actionSessionName}]`;
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               await replyText(ctx, confirmation);
+              worktreeDecisionSucceeded = true;
             } else {
               await replyText(ctx, result);
             }
@@ -1269,6 +1272,7 @@ export function createCallbackHandler(
             const succeeded = worktreeActionTextSucceeded(result);
             if (succeeded) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
             }
             await replyText(ctx, succeeded ? "✅ Discarded" : result);
             if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, undefined, callbackAcknowledged);
@@ -1288,6 +1292,7 @@ export function createCallbackHandler(
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
               break;
             }
             await replyText(ctx, text);
@@ -1483,7 +1488,9 @@ export function createCallbackHandler(
           }
         }
 
-        queueDecisionPressedNote(sessionManager, token.kind, sessionId, actionSessionName, tokenId);
+        if (worktreeDecisionSucceeded) {
+          queueDecisionPressedNote(sessionManager, token.kind, sessionId, actionSessionName, tokenId);
+        }
 
         return { handled: true };
       } finally {

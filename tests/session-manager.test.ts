@@ -11,6 +11,7 @@ import { setPluginRuntime } from "../src/runtime-store";
 import { normalizePersistedEntry, STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionReminderService } from "../src/session-reminder-service";
+import { WakeDispatcher } from "../src/wake-dispatcher";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { computeSessionMetrics } from "../src/session-metrics";
@@ -1730,7 +1731,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       });
       const reminders = new SessionReminderService(
         (session) => ({ id: session.id ?? pending.sessionId }) as any,
-        (_session, request) => { dispatchCalls.push({ request }); },
+        (_session, request) => { dispatchCalls.push({ request }); request.hooks?.onNotifySucceeded?.(); },
         (_ref, patch) => {
           Object.assign(pending, patch);
           return true;
@@ -1786,7 +1787,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const texts: string[] = [];
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
-      (_session, request) => { texts.push(request.userMessage ?? ""); },
+      (_session, request) => { texts.push(request.userMessage ?? ""); request.hooks?.onNotifySucceeded?.(); },
       (_ref, patch) => { Object.assign(pending, patch); return true; },
       async () => undefined,
     );
@@ -1821,6 +1822,131 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.match(later, /^⏭️ Kept for later: `agent\/backoff` \(session: backoff\)\. No more reminders; \/agent_status lists it\.$/);
     assert.doesNotMatch(later, /24h/);
     assert.equal(await reminders.getNextReminderAt(pending), undefined);
+  });
+
+  it("does not spend a reminder when its user notification or delegate wake fails", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    for (const strategy of ["ask", "delegate"] as const) {
+      const pending: any = {
+        sessionId: `failed-${strategy}`,
+        harnessSessionId: `failed-${strategy}-thread`,
+        name: `failed-${strategy}`,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeState: "pending_decision",
+        worktreeStrategy: strategy,
+        worktreeBranch: `agent/failed-${strategy}`,
+        pendingWorktreeDecisionSince: new Date(start).toISOString(),
+      };
+      let deliver = false;
+      const reminders = new SessionReminderService(
+        (session) => ({ id: session.id ?? pending.sessionId }) as any,
+        (_session, request) => {
+          if (strategy === "ask") {
+            // This is also the dispatcher's result when neither a direct route
+            // nor an origin session key can carry the user reminder.
+            if (deliver) request.hooks?.onNotifySucceeded?.();
+            else request.hooks?.onNotifyFailed?.();
+          } else if (deliver) request.hooks?.onWakeSucceeded?.();
+          else request.hooks?.onWakeFailed?.();
+        },
+        (_ref, patch) => { Object.assign(pending, patch); return true; },
+        async () => undefined,
+      );
+
+      assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), false);
+      assert.equal(pending.worktreeReminderCount, undefined);
+      assert.equal(pending.lastWorktreeReminderAt, undefined);
+      assert.equal(await reminders.getNextReminderAt(pending), start + 3 * hour);
+
+      deliver = true;
+      assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), true);
+      assert.equal(pending.worktreeReminderCount, 1);
+      assert.equal(await reminders.getNextReminderAt(pending), start + 27 * hour);
+    }
+  });
+
+  it("cancels a queued reminder after a snooze changes the decision generation", async () => {
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "stale-reminder", harnessSessionId: "stale-reminder-thread", name: "stale-reminder",
+      status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
+      worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
+    };
+    let current = true;
+    let canDispatch: boolean | undefined;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => {
+        current = false;
+        canDispatch = request.shouldDispatch?.();
+        request.hooks?.onNotifyFailed?.();
+      },
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * 60 * 60 * 1000, () => current), false);
+    assert.equal(canDispatch, false);
+    assert.equal(pending.worktreeReminderCount, undefined);
+  });
+
+  it("honors Later's 24-hour deadline after the second reminder", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "later-after-two", harnessSessionId: "later-after-two-thread", name: "later-after-two",
+      status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
+      worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
+      lastWorktreeReminderAt: new Date(start + 27 * hour).toISOString(), worktreeReminderCount: 2,
+      worktreeDecisionSnoozedUntil: new Date(start + 51 * hour).toISOString(),
+    };
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { request.hooks?.onNotifySucceeded?.(); },
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+    assert.equal(await reminders.getNextReminderAt(pending), start + 51 * hour);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 51 * hour), true);
+    assert.equal(pending.worktreeReminderCount, 3);
+    assert.equal(pending.worktreeDecisionSnoozedUntil, undefined);
+    assert.equal(await reminders.getNextReminderAt(pending), undefined);
+  });
+
+  it("does not count a user reminder with no direct route as delivered", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "no-route-reminder",
+      harnessSessionId: "no-route-reminder-thread",
+      name: "no-route-reminder",
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+      worktreeStrategy: "ask",
+      pendingWorktreeDecisionSince: new Date(start).toISOString(),
+    };
+    let sends = 0;
+    const dispatcher = new WakeDispatcher({
+      directNotifications: { send: async () => { sends += 1; } },
+      systemEvents: { enqueue: async () => { sends += 1; } },
+    });
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (session, request) => dispatcher.dispatchSessionNotification(session, request),
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+
+    try {
+      assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), false);
+      assert.equal(sends, 0, "a route-less text fallback is not a delivered user reminder");
+      assert.equal(pending.worktreeReminderCount, undefined);
+      assert.equal(pending.lastWorktreeReminderAt, undefined);
+    } finally {
+      dispatcher.dispose();
+    }
   });
 
   it("counts a legacy reminder timestamp without a counter as one sent reminder", async () => {
@@ -1883,7 +2009,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
-      (_session, request) => { dispatchCalls.push({ request }); },
+      (_session, request) => { dispatchCalls.push({ request }); request.hooks?.onNotifySucceeded?.(); },
       (_ref, patch) => {
         Object.assign(pending, patch);
         return true;
@@ -1950,7 +2076,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
-      (_session, request) => { dispatchCalls.push({ request }); },
+      (_session, request) => { dispatchCalls.push({ request }); request.hooks?.onNotifySucceeded?.(); },
       (_ref, patch) => {
         Object.assign(pending, patch);
         return true;

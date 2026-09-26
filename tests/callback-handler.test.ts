@@ -2415,11 +2415,13 @@ describe("createCallbackHandler()", () => {
     ];
 
     for (const testCase of cases) {
+      const queued: string[] = [];
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
+        queueOrchestratorContext: (_ref: string, label: string) => { queued.push(label); return true; },
       } as any);
 
       const handler = createCallbackHandler("telegram", testCase.dependencies);
@@ -2432,6 +2434,7 @@ describe("createCallbackHandler()", () => {
       assert.equal(state.buttonsCleared, 0, testCase.kind);
       assert.deepEqual(state.replies, [testCase.text], testCase.kind);
       assert.deepEqual(state.events, ["acknowledge", "reply"], testCase.kind);
+      assert.deepEqual(queued, [], `failed ${testCase.kind} must leave its decision pending`);
     }
   });
 
@@ -2462,12 +2465,14 @@ describe("createCallbackHandler()", () => {
   });
 
   it("keeps Telegram worktree decision buttons when the action fails", async () => {
+    const queued: string[] = [];
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: () => "Error: session no longer has a pending worktree decision.",
+      queueOrchestratorContext: (_ref: string, label: string) => { queued.push(label); return true; },
     } as any);
 
     const handler = createCallbackHandler();
@@ -2479,6 +2484,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonsCleared, 0);
     assert.equal(state.replies[0], "Error: session no longer has a pending worktree decision.");
     assert.deepEqual(state.events, ["acknowledge", "reply"]);
+    assert.deepEqual(queued, []);
   });
 
   it("uses the same text-result predicate for snooze prompt cleanup and replies", async () => {

@@ -128,7 +128,9 @@ const PLAN_INLINE_CODE_MAX_CHARS = 160;
 
 /** One code block as one inline code span: `def f(a): return a` or `a; b`. */
 function formatInlineCode(lines: string[]): string {
-  return `\`${joinCodeLines(lines).replace(/`/g, "'")}\``;
+  const content = joinCodeLines(lines);
+  const delimiter = "`".repeat(Math.max(1, ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1)));
+  return `${delimiter}${content}${delimiter}`;
 }
 
 function joinCodeLines(lines: string[]): string {
@@ -140,11 +142,11 @@ function joinCodeLines(lines: string[]): string {
 }
 
 /**
- * Whether the plan has a fenced block too long to fold into one brief line.
- * Clipping it could hide a material command (a delete at the end of a shell
- * block), so such a plan is shown itself instead of as a brief.
+ * Multiline code, code with backticks, and long blocks stay verbatim. Joining
+ * lines or changing backtick quoting can change an executable command's
+ * meaning, and clipping a block can hide a material command.
  */
-function hasLongFencedBlock(source: string): boolean {
+function requiresVerbatimFencedBlock(source: string): boolean {
   let fence: string | undefined;
   let code: string[] = [];
   for (const line of source.split("\n")) {
@@ -157,13 +159,13 @@ function hasLongFencedBlock(source: string): boolean {
       continue;
     }
     if (line.trim().startsWith(fence)) {
-      if (joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS) return true;
+      if (code.length > 1 || code.some((item) => item.includes("`")) || joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS) return true;
       fence = undefined;
       continue;
     }
     if (line.trim()) code.push(line.trim());
   }
-  return fence !== undefined && joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS;
+  return fence !== undefined && (code.length > 1 || code.some((item) => item.includes("`")) || joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS);
 }
 
 function pushUnique(target: string[], text: string): void {
@@ -173,8 +175,6 @@ function pushUnique(target: string[], text: string): void {
 }
 
 type PlanSummary = { text: string; verbatim: boolean };
-
-const PLAN_VERBATIM_MAX_CHARS = 2_400;
 
 function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanArtifact; detailRef?: string }): PlanSummary {
   const source = args.artifact?.markdown?.trim() || args.preview.trim();
@@ -257,16 +257,13 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
     ? `Full plan: /agent_output ${args.detailRef} --full`
     : "Reply asking for the full plan to see everything.";
 
-  if (unmappedLines > 0 || hasLongFencedBlock(source)) {
+  if (unmappedLines > 0 || requiresVerbatimFencedBlock(source)) {
     // The plan does not map cleanly onto the brief (a section with no brief
     // field, or code too long for one line): show the plan itself.
-    const detailRefNote = args.detailRef && /^[a-zA-Z0-9_-]+$/.test(args.detailRef)
-      ? `(Plan shortened. Full plan: /agent_output ${args.detailRef} --full)`
-      : "(Plan shortened. Reply asking for the full plan to see everything.)";
-    const text = source.length > PLAN_VERBATIM_MAX_CHARS
-      ? `${truncateText(source, PLAN_VERBATIM_MAX_CHARS)}\n\n${detailRefNote}`
-      : source;
-    return { text, verbatim: true };
+    // The approval controls can appear after paginated messages. Keep the
+    // complete source so a late effect or command remains visible before the
+    // user decides.
+    return { text: source, verbatim: true };
   }
 
   const brief = [

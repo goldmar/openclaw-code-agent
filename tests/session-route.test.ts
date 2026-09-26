@@ -319,6 +319,11 @@ describe("wake reply rule", () => {
       assert.equal(block, `originRoute: {"provider":"telegram","target":"5551234"}\n${ROUTED_REPLY_RULE}`);
     }
     assert.match(ROUTED_REPLY_RULE, /message tool to originRoute/);
-    assert.match(ROUTED_REPLY_RULE, /threadId only when originRoute has one/);
+    assert.match(ROUTED_REPLY_RULE, /accountId and threadId only when originRoute has them/);
+    const scoped = formatOriginRouteWakeBlock({
+      route: { provider: "telegram", accountId: "second-bot", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" },
+    });
+    assert.match(scoped, /"accountId":"second-bot"/);
+    assert.match(scoped, /accountId and threadId only when originRoute has them/);
   });
 });
