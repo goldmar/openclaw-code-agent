@@ -713,6 +713,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       // N44: the guidance comes with buttons to act on it.
       assert.deepEqual(request.buttons?.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Commit changes", "View output", "Discard"]]);
       assert.match(request.userMessage, /new-file\.txt/);
+      // Buttons that cannot be delivered have no text-only fallback: the orchestrator asks the user instead.
+      assert.match(request.wakeMessageOnNotifyFailed ?? "", /the Commit changes \/ Discard buttons could not be shown/);
+      assert.match(request.wakeMessageOnNotifyFailed ?? "", /agent_worktree_cleanup\(session='.+', dismiss_session=true\)/);
       const persisted = (sm as any).store.persisted.get("h-dirty-completion");
       assert.equal(persisted.lifecycle, "awaiting_worktree_decision");
       assert.equal(persisted.worktreeState, "pending_decision");

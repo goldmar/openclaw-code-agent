@@ -9,6 +9,7 @@ import {
   type DispatchSuccessValidationResult,
 } from "./wake-delivery-executor";
 import { WakeRouteResolver, type NotificationRoute } from "./wake-route-resolver";
+import { ROUTED_REPLY_RULE } from "./session-route";
 import {
   RuntimeSystemEventTransport,
   WakeTransport,
@@ -81,10 +82,14 @@ export interface SessionNotificationHooks {
  * valid final answer: the orchestrator sends its summary with the message tool
  * to the origin route and then answers NO_REPLY (see `ROUTED_REPLY_RULE`).
  */
-export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
+export function validateCompletionFollowupWakeSuccess(stdout: string, routedReply: boolean = true): DispatchSuccessValidationResult {
   const finalText = extractWakeFinalText(stdout).trim();
   if (!finalText) {
     return { outcome: "failure", reason: "completion follow-up wake produced no final response" };
+  }
+  // Without a routed send the plain reply is the summary, so NO_REPLY means none was produced.
+  if (!routedReply && /^NO_REPLY$/i.test(finalText)) {
+    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" };
   }
   return { outcome: "success" };
 }
@@ -678,8 +683,8 @@ export class WakeDispatcher {
     })).filter((message) => message.text.length > 0);
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
-    const wakeSuccessValidator = request.completionWakeSummaryRequired === true
-      ? validateCompletionFollowupWakeSuccess
+    const wakeSuccessValidatorFor = (wakeText: string) => request.completionWakeSummaryRequired === true
+      ? (stdout: string) => validateCompletionFollowupWakeSuccess(stdout, wakeText.includes(ROUTED_REPLY_RULE))
       : undefined;
 
     if (hasConditionalWake) {
@@ -707,7 +712,7 @@ export class WakeDispatcher {
           hooks?.onWakeFailed,
           hooks?.onWakeSucceeded,
           shouldDispatch,
-          wakeSuccessValidator,
+          wakeSuccessValidatorFor(wakeText),
           hooks?.onWakeSkipped,
           request.idempotencyKey,
         );
@@ -829,7 +834,7 @@ export class WakeDispatcher {
         hooks?.onWakeFailed,
         hooks?.onWakeSucceeded,
         shouldDispatch,
-        wakeSuccessValidator,
+        wakeSuccessValidatorFor(wakeMessage),
         hooks?.onWakeSkipped,
         request.idempotencyKey,
       );

@@ -9,6 +9,7 @@ import {
 import { setPluginRuntime } from "../src/runtime-store";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { ROUTED_REPLY_RULE } from "../src/session-route";
 
 type FakeSession = {
   id: string;
@@ -230,9 +231,14 @@ describe("WakeDispatcher", () => {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
-  it("accepts NO_REPLY after a routed send, and fails only an empty answer", () => {
+  it("accepts NO_REPLY after a routed send, rejects it for a plain-reply wake, and fails an empty answer", () => {
     // Routed wakes end with NO_REPLY after the message tool delivered the summary.
-    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" })), { outcome: "success" });
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), true), { outcome: "success" });
+    // Without a route the plain reply is the summary: NO_REPLY means none was produced.
+    assert.deepEqual(
+      validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), false),
+      { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" },
+    );
     assert.deepEqual(
       validateCompletionFollowupWakeSuccess("  \n"),
       { outcome: "failure", reason: "completion follow-up wake produced no final response" },
@@ -1775,7 +1781,7 @@ describe("WakeDispatcher", () => {
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
-      wakeMessage: "Coding agent session completed. Send the user a short factual completion summary.",
+      wakeMessage: `Coding agent session completed.\n${ROUTED_REPLY_RULE}`,
       notifyUser: "never",
       completionWakeSummaryRequired: true,
       hooks: {
@@ -1808,6 +1814,22 @@ describe("WakeDispatcher", () => {
     const event = calls.find((call) => call.kind === "system-event") as { text: string; sessionKey: string };
     assert.equal(event.text, "[held] Failed. ID: held");
     assert.equal(event.sessionKey, buildRoute().sessionKey);
+  });
+
+  it("falls back to a system-event wake when a plain-reply completion wake ends with NO_REPLY", async () => {
+    chatSendStdout = "NO_REPLY\n";
+    const dispatcher = createDispatcher();
+    let wakeSucceeded = 0;
+    dispatcher.dispatchSessionNotification({ id: "plain-followup", route: buildRoute() } as any, {
+      label: "completed",
+      wakeMessage: "Coding agent session completed. Your reply is sent to the user; do not answer NO_REPLY.",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      hooks: { onWakeSucceeded: () => { wakeSucceeded += 1; } },
+    });
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "system-event fallback after NO_REPLY");
+    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
+    await waitFor(() => wakeSucceeded === 1, "fallback wake counted");
   });
 
   it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {

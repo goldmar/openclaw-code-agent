@@ -598,6 +598,12 @@ export class SessionWorktreeStrategyService {
       ].join("\n"),
       notifyUser: "always",
       buttons: this.deps.makeDirtyWorktreeButtons?.(session.id),
+      // The buttons could not be shown: the orchestrator asks the user instead.
+      wakeMessageOnNotifyFailed: [
+        `[${session.name}] Finished with uncommitted changes and no commits on \`${branchName}\`; the Commit changes / Discard buttons could not be shown. ID: ${session.id}`,
+        ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
+        `Ask the user whether to commit the changes (agent_respond(session='${session.id}', message='Commit the task's real changes with a clear message.', userInitiated=true)) or discard them (agent_worktree_cleanup(session='${session.name}', dismiss_session=true)).`,
+      ].join("\n"),
     });
     return { notificationSent: true, worktreeRemoved: false };
   }
