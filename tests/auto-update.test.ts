@@ -406,6 +406,9 @@ describe("AutoUpdateService", () => {
     now += 2 * 60 * 60 * 1000;
     await check();
     assert.equal(harness.sends.length, 2, "4.x waited a week for Remind later, the same as Dismiss");
+    now += 60 * 60 * 1000;
+    await check();
+    assert.equal(harness.sends.length, 2, "a used-up reminder does not prompt again on every check");
 
     harness.service.dismiss("4.6.1");
     now += 30 * 24 * 60 * 60 * 1000;

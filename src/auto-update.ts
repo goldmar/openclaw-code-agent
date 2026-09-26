@@ -460,12 +460,16 @@ export class AutoUpdateService {
     if (!route) return;
 
     await this.sendUpdatePrompt(route, latestVersion);
-    this.writeState({
+    const next: AutoUpdateState = {
       ...this.readState(),
       latestVersion,
       promptedVersion: latestVersion,
       lastPromptedAt: new Date(this.now()).toISOString(),
-    });
+    };
+    // A due "Remind later" is used up by this prompt; the weekly rule applies again.
+    delete next.remindVersion;
+    delete next.remindAt;
+    this.writeState(next);
   }
 
   private async sendUpdatePrompt(route: NotificationRoute, latestVersion: string): Promise<void> {

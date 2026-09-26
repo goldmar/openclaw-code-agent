@@ -355,10 +355,10 @@ export function withOutcomeSummary(outcomeLine: string, summary?: string): strin
 }
 
 /**
- * A caller that passed `summary` already told the user what changed, so the
- * outcome wake that asks the orchestrator for a follow-up summary is skipped
- * (and no pending-summary repair flag is persisted).
+ * A caller that passed `summary` tells the user what changed in the outcome
+ * line itself, so no follow-up summary wake is sent once that line is
+ * delivered. If the line cannot be delivered, the orchestrator is still woken.
  */
-export function summaryOwnership(summary?: string): { completionSummaryOwner?: "foreground" } {
-  return summary?.trim() ? { completionSummaryOwner: "foreground" } : {};
+export function summaryOwnership(summary?: string): { outcomeSummaryShown?: true } {
+  return summary?.trim() ? { outcomeSummaryShown: true } : {};
 }

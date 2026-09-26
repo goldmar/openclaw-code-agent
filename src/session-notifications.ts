@@ -61,6 +61,14 @@ export interface WorktreeOutcomeNotificationOptions {
   detailLines?: string[];
   completionWakeOutcomeKey?: string;
   completionSummaryOwner?: "wake" | "foreground";
+  /**
+   * The outcome line carries the caller's summary (agent_merge / agent_pr
+   * `summary`). A delivered line is the summary: no follow-up wake, and the
+   * outcome is recorded as summarized once the send succeeds. If the line
+   * cannot be delivered, the orchestrator is still woken (and the pending
+   * summary flag set) so the user does not miss the outcome.
+   */
+  outcomeSummaryShown?: boolean;
 }
 
 export interface SessionNotificationServiceOptions {
@@ -373,6 +381,33 @@ export class SessionNotificationService {
       outcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
     };
     const wakeOwnsSummary = options.completionSummaryOwner !== "foreground";
+    if (summaryWakeRequired && wakeOwnsSummary && options.outcomeSummaryShown) {
+      const deliveryRef = this.getDeliveryRef(session);
+      this.dispatch(session, {
+        label: "worktree-outcome",
+        userMessage: outcomeUserMessage,
+        notifyUser: "always",
+        requireDirectUserNotification: true,
+        completionSummary,
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
+        idempotencyKey: `worktree-outcome:${options.completionWakeOutcomeKey ?? outcomeLine}`,
+        // No success wake: the delivered line already carries the summary.
+        wakeMessageOnNotifyFailed: buildWakeMessage(false),
+        hooks: {
+          onNotifySucceeded: () => {
+            const decision = this.completionSummaries.recordVisibleDelivery(
+              session,
+              completionSummary,
+              deliveryRef ? this.getPersistedSession?.(deliveryRef)?.completionSummaryDedupe : undefined,
+              "worktree-outcome",
+            );
+            if (decision.records) this.applyCompletionSummaryDedupePatch(deliveryRef, decision.records);
+          },
+        },
+      });
+      return;
+    }
     if (summaryWakeRequired && !wakeOwnsSummary) {
       const deliveryRef = this.getDeliveryRef(session);
       const decision = this.completionSummaries.recordVisibleDelivery(

@@ -71,6 +71,7 @@ function installPersistedSessionWithNotificationService(args: {
   branchName: string;
   wakeOutcome: "success" | "failure";
   capturedRequests: any[];
+  notifyOutcome?: "success" | "failure";
 }): Record<string, any> {
   const persistedSession: Record<string, any> = {
     sessionId: `s-${args.sessionName}`,
@@ -115,7 +116,8 @@ function installPersistedSessionWithNotificationService(args: {
       dispatchSessionNotification: (session: unknown, request: { hooks?: Record<string, () => void> }) => {
         args.capturedRequests.push({ session, request });
         request.hooks?.onNotifyStarted?.();
-        request.hooks?.onNotifySucceeded?.();
+        if (args.notifyOutcome === "failure") request.hooks?.onNotifyFailed?.();
+        else request.hooks?.onNotifySucceeded?.();
         request.hooks?.onWakeStarted?.();
         if (args.wakeOutcome === "success") {
           request.hooks?.onWakeSucceeded?.();
@@ -126,6 +128,7 @@ function installPersistedSessionWithNotificationService(args: {
       dispose: () => {},
     } as any,
     updatePersistedSession,
+    { getPersistedSession: (ref: string) => (matchesRef(ref) ? persistedSession as any : undefined) },
   );
 
   setSessionManager({
@@ -455,10 +458,38 @@ describe("agent_merge push behavior", () => {
       assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+\nAdds the sub\(\) helper with a unit test\./);
       // 4.x had no summary parameter and always woke the orchestrator for a follow-up.
       assert.equal(request.wakeMessageOnNotifySuccess, undefined);
-      assert.equal(request.wakeMessageOnNotifyFailed, undefined);
-      assert.equal(request.completionWakeSummaryRequired, false);
-      assert.equal(persistedSession.completionWakeSummaryRequired, undefined, "no pending-summary repair flag is stored");
+      // If the line cannot be delivered, the orchestrator is still told.
+      assert.match(request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
+      assert.equal(persistedSession.completionWakeSummaryRequired, undefined, "no pending-summary repair flag once the line is delivered");
+      assert.ok((persistedSession.completionSummaryDedupe ?? []).length > 0, "the delivered line counts as the outcome summary");
       assert.equal(persistedSession.worktreeMerged, true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still wakes the orchestrator and keeps the repair flag when the summary line cannot be delivered", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-summary-failed");
+    try {
+      const sessionName = "merge-summary-failed";
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
+      const capturedRequests: any[] = [];
+      const persistedSession = installPersistedSessionWithNotificationService({
+        sessionName,
+        repoDir,
+        worktreePath,
+        branchName,
+        wakeOutcome: "failure",
+        notifyOutcome: "failure",
+        capturedRequests,
+      });
+
+      await makeAgentMergeTool().execute("tool-id", { session: sessionName, summary: "Adds sub()." });
+
+      assert.equal(capturedRequests.length, 1);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
+      assert.equal(persistedSession.completionWakeSummaryRequired, true, "the pending summary survives for repair");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

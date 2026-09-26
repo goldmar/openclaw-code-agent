@@ -61,6 +61,19 @@ describe("session-view app layer", () => {
     assert.match(text, /👉 Question waiting for an answer/);
     assert.match(text, /branch \[5\][\s\S]*👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
 
+    // A branch with an existing PR that is pending again (new commits) still waits.
+    const withPr: any = {
+      list: (): never[] => [],
+      listPersistedSessions: () => [{
+        sessionId: "7", harnessSessionId: "h7", name: "resync", prompt: "x", workdir: "/tmp", status: "completed",
+        lifecycle: "awaiting_worktree_decision", worktreeStrategy: "ask", worktreeState: "pending_decision",
+        worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() },
+        worktreePrUrl: "https://github.com/example/repo/pull/3", worktreePath: "/tmp/.worktrees/r", worktreeBranch: "agent/r",
+        createdAt: now - 3000, completedAt: now - 2000,
+      }],
+    };
+    assert.match(getSessionsListingText(withPr, "waiting"), /resync \[7\][\s\S]*👉 Branch waiting for the user: Merge \/ Sync PR \/ Later \/ Discard/);
+
     const idle: any = { list: () => [{ ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now }], listPersistedSessions: (): never[] => [] };
     assert.equal(getSessionsListingText(idle, "waiting"), "Nothing is waiting for a decision or an answer.");
   });

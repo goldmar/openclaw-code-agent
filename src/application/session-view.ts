@@ -353,13 +353,16 @@ export function describeWaiting(session: SessionListingItem): string | undefined
     return "Question waiting for an answer (agent_output shows it; answer with agent_respond)";
   }
   const lifecycleState = session.worktreeLifecycle?.state ?? session.worktreeState;
-  const resolved = session.worktreeMerged || session.worktreePrUrl
-    || (lifecycleState !== undefined && !WORKTREE_DECISION_STATES.has(lifecycleState));
-  if (!resolved && (session.phase === "awaiting_worktree_decision" || lifecycleState === "pending_decision"
-    || (session.pendingWorktreeDecisionSince && lifecycleState === undefined))) {
+  // The recorded lifecycle decides; an existing PR does not settle a branch that
+  // is pending again (for example new commits waiting for Sync PR).
+  const pendingDecision = lifecycleState !== undefined
+    ? WORKTREE_DECISION_STATES.has(lifecycleState)
+    : session.phase === "awaiting_worktree_decision"
+      || Boolean(session.pendingWorktreeDecisionSince && !session.worktreeMerged && !session.worktreePrUrl);
+  if (pendingDecision) {
     return session.worktreeStrategy === "delegate"
       ? "Branch waiting for the orchestrator: agent_merge, or agent_escalate(kind='worktree')"
-      : "Branch waiting for the user: Merge / Open PR / Later / Discard";
+      : `Branch waiting for the user: Merge / ${session.worktreePrUrl ? "Sync PR" : "Open PR"} / Later / Discard`;
   }
   return undefined;
 }
