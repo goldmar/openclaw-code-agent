@@ -3,7 +3,7 @@ import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
 import { tokenizeCommandArgs } from "./args";
 
-const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>";
+const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N (max 25)] [--max-cost-usd N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>";
 
 interface GoalCommandContext extends Partial<OpenClawPluginToolContext> {
   args?: string;
@@ -40,7 +40,10 @@ export function registerGoalCommand(api: CommandApi): void {
       let workdir: string | undefined;
       let model: string | undefined;
       let maxIterations: number | undefined;
-      let permissionMode: PermissionMode = "bypassPermissions";
+      let maxCostUsd: number | undefined;
+      // Unset follows the configured permissionMode (default plan): the first
+      // iteration's plan goes through the normal plan gate.
+      let permissionMode: PermissionMode | undefined;
       let harness: string | undefined;
       let loopMode: GoalLoopMode | undefined;
       let completionPromise: string | undefined;
@@ -58,6 +61,10 @@ export function registerGoalCommand(api: CommandApi): void {
         } else if (token === "--max-iterations" && i + 1 < tokens.length) {
           const parsed = parseInt(tokens[++i], 10);
           if (!Number.isNaN(parsed) && parsed > 0) maxIterations = parsed;
+        } else if (token === "--max-cost-usd" && i + 1 < tokens.length) {
+          const parsed = Number.parseFloat(tokens[++i]);
+          if (!Number.isFinite(parsed) || parsed <= 0) return { text: "Error: --max-cost-usd must be a positive number." };
+          maxCostUsd = parsed;
         } else if (token === "--permission-mode" && i + 1 < tokens.length) {
           const mode = tokens[++i];
           if (mode === "default" || mode === "plan" || mode === "bypassPermissions") {
@@ -103,6 +110,7 @@ export function registerGoalCommand(api: CommandApi): void {
         harness,
         goalMode: loopMode,
         completionPromise,
+        maxCostUsd,
       }, ctx as OpenClawPluginToolContext);
       if (resolution.kind !== "resolved") {
         return { text: resolution.text };
@@ -127,9 +135,12 @@ export function registerGoalCommand(api: CommandApi): void {
           originSessionKey: resolution.originSessionKey,
           route: resolution.route,
           verifierCommands: resolution.verifierCommands,
+          maxCostUsd: resolution.maxCostUsd,
+          // The user typed these commands themselves: no extra confirmation.
+          requireVerifierConfirmation: false,
         });
 
-        return { text: formatGoalLaunchResult(task, resolution) };
+        return { text: formatGoalLaunchResult(task, { ...resolution, maxIterations }) };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { text: `Error launching goal task: ${message}` };

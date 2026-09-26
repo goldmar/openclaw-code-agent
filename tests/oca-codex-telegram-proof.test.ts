@@ -620,7 +620,7 @@ describe("OCA Codex Telegram proof runner", () => {
         },
         async startLocalSut() {
           events.push("start-sut");
-          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+          return { gatewayPort: 38975, isolatedHome: "/nonexistent/openclaw-proof-home" };
         },
         async startCrabboxDesktop() {
           events.push("start-crabbox");
@@ -685,7 +685,7 @@ describe("OCA Codex Telegram proof runner", () => {
           };
         },
         async startLocalSut() {
-          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+          return { gatewayPort: 38975, isolatedHome: "/nonexistent/openclaw-proof-home" };
         },
         async startCrabboxDesktop() {
           return { createdLease: true, id: "cbx-secret-123456789", provider: "local-container", target: "linux" };
@@ -809,7 +809,7 @@ describe("OCA Codex Telegram proof runner", () => {
         },
         async startLocalSut() {
           events.push("start-sut");
-          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+          return { gatewayPort: 38975, isolatedHome: "/nonexistent/openclaw-proof-home" };
         },
         async startCrabboxDesktop() {
           events.push("start-crabbox");

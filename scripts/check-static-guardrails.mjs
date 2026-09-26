@@ -270,6 +270,16 @@ for (const path of scriptFiles) {
   }
 }
 
+// Tests create files only under the per-run temp dir from tests/test-env.ts
+// (os.tmpdir() inside a test). A literal "/tmp/openclaw-" path would write to
+// (or look like it writes to) the real /tmp; use tmpdir() or a /nonexistent/ path.
+for (const path of testFiles) {
+  const source = stripComments(readFileSync(path, "utf8"));
+  for (const match of source.matchAll(/["'`]\/tmp\/openclaw-/g)) {
+    failures.push(`${rel(path)}:${lineForIndex(source, match.index ?? 0)} literal "/tmp/openclaw-" path; build paths from tmpdir() (per-run temp dir) or use a /nonexistent/ placeholder`);
+  }
+}
+
 for (const path of testFiles) {
   const source = readFileSync(path, "utf8");
   if (/SessionManager\[[^\]]*["'][A-Za-z0-9_]+["'][^\]]*\]/.test(source)) {

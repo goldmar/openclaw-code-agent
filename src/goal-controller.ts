@@ -1,4 +1,6 @@
-import { execFile } from "child_process";
+import { spawn } from "child_process";
+import { buildMinimalChildEnv } from "./child-env";
+import { pluginConfig } from "./config";
 import { createHash } from "crypto";
 import { shortId } from "./short-id";
 
@@ -24,11 +26,32 @@ import { createLogger } from "./logger";
 const log = createLogger("goal-controller");
 
 const DEFAULT_MAX_ITERATIONS = 8;
+/** Upper bound for `max_iterations` (restarts after a gateway restart or idle timeout count too). */
+export const MAX_GOAL_ITERATIONS = 25;
+/** A goal stops once the same failure fingerprint repeats this many times in a row. */
+const MAX_REPEATED_FAILURES = 3;
 const DEFAULT_VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
+const MIN_VERIFIER_TIMEOUT_MS = 1_000;
+const MAX_VERIFIER_TIMEOUT_MS = 30 * 60 * 1000;
+/** Only this much of a verifier's output is kept (its tail), however much it prints. */
+const VERIFIER_OUTPUT_TAIL_BYTES = 64 * 1024;
+const VERIFIER_KILL_GRACE_MS = 2_000;
 const MAX_COMMAND_OUTPUT_CHARS = 4000;
 const MAX_REASON_CHARS = 1200;
 const DEFAULT_RALPH_COMPLETION_PROMISE = "DONE";
-const VERIFIER_ENV_BLOCKLIST = ["BASH_ENV", "ENV"] as const;
+/** How often a goal whose session was suspended with a pending plan checks for the decision. */
+const PLAN_DECISION_RECHECK_MS = 30_000;
+
+/** `max_iterations` within 1..MAX_GOAL_ITERATIONS (default DEFAULT_MAX_ITERATIONS). */
+export function clampGoalMaxIterations(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_ITERATIONS;
+  return Math.min(MAX_GOAL_ITERATIONS, Math.max(1, Math.floor(value)));
+}
+
+function clampVerifierTimeoutMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_VERIFIER_TIMEOUT_MS;
+  return Math.min(MAX_VERIFIER_TIMEOUT_MS, Math.max(MIN_VERIFIER_TIMEOUT_MS, Math.floor(value)));
+}
 
 function normalizeName(value: string): string {
   return value
@@ -81,7 +104,7 @@ export function normalizeVerifierCommands(commands: GoalVerifierSpec[]): GoalVer
     .map((command, index) => ({
       label: command.label.trim() || `check-${index + 1}`,
       command: command.command.trim(),
-      timeoutMs: command.timeoutMs ?? DEFAULT_VERIFIER_TIMEOUT_MS,
+      timeoutMs: clampVerifierTimeoutMs(command.timeoutMs),
     }))
     .filter((command) => command.command.length > 0);
 }
@@ -236,6 +259,7 @@ function buildRepairPrompt(task: GoalTaskState, verifier: GoalVerifierRunResult)
     `Instructions:`,
     `- Continue from the current code state and prior session context.`,
     `- Make the minimum necessary changes to satisfy the remaining verifier failures.`,
+    ...(task.planApproved ? [`- Stay within the scope of the plan that was approved for this goal.`] : []),
     `- Re-run relevant checks yourself before ending the turn.`,
     `- Do not ask for confirmation unless you are truly blocked on a human decision.`,
   ].join("\n");
@@ -264,6 +288,7 @@ function buildRalphContinuationPrompt(task: GoalTaskState, output: string): stri
     ``,
     `Instructions:`,
     `- Keep working until the goal is actually complete.`,
+    ...(task.planApproved ? [`- Stay within the scope of the plan that was approved for this goal.`] : []),
     `- Only emit <promise>${task.completionPromise}</promise> when all requested work is done.`,
     `- If you are not done, do not emit the completion promise.`,
     task.verifierCommands.length > 0 ? `- If you believe you are done, make sure the expected verifiers are likely to pass before emitting the completion promise.` : `- There may not be external verifiers, so your completion promise is the success signal.`,
@@ -290,6 +315,7 @@ function buildRalphVerifierFailurePrompt(task: GoalTaskState, verifier: GoalVeri
     ``,
     `Instructions:`,
     `- Continue from the current repo state and fix only the remaining gaps.`,
+    ...(task.planApproved ? [`- Stay within the scope of the plan that was approved for this goal.`] : []),
     `- Do not emit <promise>${task.completionPromise}</promise> again until the goal is fully complete and the failing checks are addressed.`,
     `- Re-run relevant checks yourself before ending the turn.`,
   ].join("\n");
@@ -321,46 +347,117 @@ function sessionFailureReason(session: Pick<Session, "error">): string {
   return truncate(session.error?.trim() || "Underlying session failed.", MAX_REASON_CHARS);
 }
 
-function buildVerifierEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
-  // Verifier commands are intentionally operator-provided shell commands, but they
-  // should not inherit shell bootstrap hooks that can rewrite execution implicitly.
-  for (const key of VERIFIER_ENV_BLOCKLIST) delete env[key];
-  return env;
+class VerifierOutputTail {
+  private chunks: Buffer[] = [];
+  private bytes = 0;
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.bytes += chunk.length;
+    while (this.bytes > VERIFIER_OUTPUT_TAIL_BYTES && this.chunks.length > 1) {
+      this.bytes -= this.chunks.shift()!.length;
+    }
+  }
+
+  text(): string {
+    const buffer = Buffer.concat(this.chunks);
+    const tail = buffer.length > VERIFIER_OUTPUT_TAIL_BYTES ? buffer.subarray(buffer.length - VERIFIER_OUTPUT_TAIL_BYTES) : buffer;
+    return tail.toString("utf8");
+  }
 }
 
-function runCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifierStepResult> {
+function killVerifierGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // Already exited.
+  }
+}
+
+/**
+ * Run one verifier command: `bash -c` (no login shell, so no profile scripts),
+ * in the task workdir, with a minimal allowlisted environment (no API keys or
+ * tokens; see child-env.ts), in its own process group. Only the output tail is
+ * kept, so a noisy but passing check still passes. On timeout the whole
+ * process group is terminated.
+ */
+export function runVerifierCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifierStepResult> {
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    execFile(
-      "bash",
-      ["-lc", spec.command],
-      {
-        cwd: workdir,
-        timeout: spec.timeoutMs ?? DEFAULT_VERIFIER_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        env: buildVerifierEnv(),
-      },
-      (err, stdout, stderr) => {
-        const durationMs = Date.now() - startedAt;
-        const exitCode =
-          typeof (err as { code?: unknown } | null)?.code === "number"
-            ? (err as { code: number }).code
-            : err
-              ? 1
-              : 0;
-        const combined = `${stdout ?? ""}${stderr ? `\n${stderr}` : ""}`.trim();
-        resolve({
-          label: spec.label,
-          command: spec.command,
-          ok: !err,
-          exitCode,
-          durationMs,
-          output: truncate(combined || "(no output)", MAX_COMMAND_OUTPUT_CHARS),
-        });
-      },
-    );
+    const timeoutMs = clampVerifierTimeoutMs(spec.timeoutMs);
+    const stdout = new VerifierOutputTail();
+    const stderr = new VerifierOutputTail();
+    let timedOut = false;
+    let settled = false;
+    const child = spawn("bash", ["-c", spec.command], {
+      cwd: workdir,
+      env: buildMinimalChildEnv(process.env),
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killVerifierGroup(child.pid, "SIGTERM");
+      forceKill = setTimeout(() => killVerifierGroup(child.pid, "SIGKILL"), VERIFIER_KILL_GRACE_MS);
+      forceKill.unref?.();
+    }, timeoutMs);
+    timer.unref?.();
+    const finish = (code: number | null, error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (forceKill) clearTimeout(forceKill);
+      // Background processes the command left behind never outlive it.
+      killVerifierGroup(child.pid, "SIGKILL");
+      const out = stdout.text();
+      const err = stderr.text();
+      const combined = `${out}${err ? `\n${err}` : ""}`.trim();
+      const exitCode = timedOut ? 124 : (code ?? 1);
+      const note = timedOut
+        ? `Timed out after ${Math.round(timeoutMs / 1000)} s; the command's process group was terminated.`
+        : error ? `Failed to start: ${error.message}` : "";
+      const output = [combined, note].filter(Boolean).join("\n") || "(no output)";
+      resolve({
+        label: spec.label,
+        command: spec.command,
+        ok: !timedOut && !error && code === 0,
+        exitCode,
+        durationMs: Date.now() - startedAt,
+        output: output.length > MAX_COMMAND_OUTPUT_CHARS ? `...${output.slice(output.length - MAX_COMMAND_OUTPUT_CHARS + 3)}` : output,
+      });
+    };
+    child.on("error", (error) => finish(null, error));
+    child.on("close", (code) => finish(code));
   });
+}
+
+/**
+ * Permission mode for a goal session: the configured mode until the first
+ * plan is approved; afterwards later iterations continue within the approved
+ * scope (plan mode switches to bypassPermissions, as a plan approval does).
+ */
+function goalSessionPermissionMode(task: Pick<GoalTaskState, "permissionMode" | "planApproved">): PermissionMode {
+  const configured = (task.permissionMode ?? "plan") as PermissionMode;
+  return configured === "plan" && task.planApproved ? "bypassPermissions" : configured;
+}
+
+function buildVerifierConfirmationText(task: GoalTaskState): string {
+  return [
+    `🎯 [${task.name}] Goal task waiting for your confirmation`,
+    ``,
+    `Goal:`,
+    truncate(task.goal, 500),
+    ``,
+    `After each coding turn the goal loop will run these shell commands in ${task.workdir}:`,
+    ...task.verifierCommands.map((command) => `  $ ${command.command}`),
+    ``,
+    `Nothing runs until you confirm. Up to ${task.maxIterations} iterations${task.maxCostUsd ? `, at most $${task.maxCostUsd.toFixed(2)}` : ""}.`,
+  ].join("\n");
 }
 
 export class GoalController {
@@ -428,7 +525,7 @@ export class GoalController {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       iteration: 0,
-      maxIterations: config.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+      maxIterations: clampGoalMaxIterations(config.maxIterations),
       model: config.model,
       reasoningEffort: config.reasoningEffort,
       fastMode: config.fastMode,
@@ -440,13 +537,53 @@ export class GoalController {
       originSessionKey: config.originSessionKey,
       route: config.route,
       harness: config.harness,
-      permissionMode: config.permissionMode ?? "bypassPermissions",
+      // The first iteration goes through the normal plan gate (default: plan).
+      permissionMode: config.permissionMode ?? pluginConfig.permissionMode ?? "plan",
       loopMode,
       completionPromise: normalizeCompletionPromise(config.completionPromise),
       verifierCommands,
       repeatedFailureCount: 0,
+      ...(config.maxCostUsd !== undefined && config.maxCostUsd > 0 ? { maxCostUsd: config.maxCostUsd } : {}),
+      totalCostUsd: 0,
     };
 
+    if (config.requireVerifierConfirmation && verifierCommands.length > 0) {
+      // Commands the orchestrator chose run only after the user confirms them.
+      task.status = "awaiting_verifier_confirmation";
+      this.store.upsert(task);
+      this.sessionManager.sendGoalVerifierConfirmation(task, buildVerifierConfirmationText(task));
+      return task;
+    }
+
+    return await this.startTask(task);
+  }
+
+  /** The user confirmed the verifier commands of a waiting task: start it. */
+  async confirmVerifierCommands(ref: string): Promise<{ task: GoalTaskState; action: "started" | "not_waiting" } | undefined> {
+    const task = this.store.get(ref);
+    if (!task) return undefined;
+    if (task.status !== "awaiting_verifier_confirmation") return { task, action: "not_waiting" };
+    task.status = "waiting_for_session";
+    task.updatedAt = Date.now();
+    this.store.upsert(task);
+    try {
+      return { task: await this.startTask(task), action: "started" };
+    } catch (err: unknown) {
+      this.markTaskFailed(task, `Failed to start the goal task: ${errorMessage(err)}`);
+      throw err;
+    }
+  }
+
+  /** The user declined the verifier commands of a waiting task. */
+  declineVerifierCommands(ref: string): { task: GoalTaskState; action: "stopped" | "not_waiting" } | undefined {
+    const task = this.store.get(ref);
+    if (!task) return undefined;
+    if (task.status !== "awaiting_verifier_confirmation") return { task, action: "not_waiting" };
+    this.markTaskStopped(task, "The user did not confirm the verifier commands.");
+    return { task, action: "stopped" };
+  }
+
+  private async startTask(task: GoalTaskState): Promise<GoalTaskState> {
     const session = await this.spawnTaskSession(task, buildInitialPrompt(task));
     this.attachSessionObservers(task, session);
     task.sessionId = session.id;
@@ -518,7 +655,7 @@ export class GoalController {
       originAgentId: task.originAgentId,
       originSessionKey: task.originSessionKey,
       route: normalizeRoute(task),
-      permissionMode: task.permissionMode as PermissionMode,
+      permissionMode: goalSessionPermissionMode(task),
       multiTurn: true,
       goalTaskId: task.id,
       harness: task.harness,
@@ -604,6 +741,8 @@ export class GoalController {
         this.markTaskFailed(task, "Goal task could not be resumed after gateway restart because no resumable session id was available.");
         continue;
       }
+      // A restart is an iteration too: a task cannot restart forever.
+      if (!this.consumeIteration(task, "The gateway restarted while the goal task was running.")) continue;
 
       try {
         const resumed = await this.spawnManagedTaskSession(task, buildRestartPrompt(task), resumeSessionId);
@@ -657,7 +796,7 @@ export class GoalController {
 
     const steps: GoalVerifierStepResult[] = [];
     for (const command of verifierCommands) {
-      steps.push(await runCommand(task.workdir, command));
+      steps.push(await runVerifierCommand(task.workdir, command));
     }
 
     const status = steps.every((step) => step.ok) ? "pass" : "fail";
@@ -805,22 +944,74 @@ export class GoalController {
     this.notify(task, `⛔ [${task.name}] Goal task stopped\n\n${task.failureReason}`, "goal-task-stopped");
   }
 
+  /** Remember that the first plan was approved: later iterations run within its scope. */
+  private notePlanApproval(task: GoalTaskState, session: Session): void {
+    if (task.planApproved) return;
+    const planModeApproved = typeof session.controlStateSnapshot === "function" && session.controlStateSnapshot().planModeApproved;
+    if (planModeApproved || session.approvalState === "approved") {
+      task.planApproved = true;
+      task.updatedAt = Date.now();
+      this.store.upsert(task);
+    }
+  }
+
+  /**
+   * Count one more iteration (a repair turn, or a restart after a gateway
+   * restart or idle timeout). False, and the task failed, once the budget is used.
+   */
+  private consumeIteration(task: GoalTaskState, reason: string): boolean {
+    if (task.iteration + 1 >= task.maxIterations) {
+      this.markTaskFailed(task, `${reason} The iteration budget (${task.maxIterations}) is used up.`);
+      return false;
+    }
+    task.iteration += 1;
+    task.updatedAt = Date.now();
+    this.store.upsert(task);
+    return true;
+  }
+
+  /** Add a finished run's cost; false, and the task failed, once `maxCostUsd` is reached. */
+  private recordRunCost(task: GoalTaskState, session: Pick<Session, "id" | "startedAt" | "costUsd">): boolean {
+    const runKey = `${session.id}:${session.startedAt}`;
+    if (task.lastCostedRun !== runKey) {
+      task.totalCostUsd = (task.totalCostUsd ?? 0) + (Number.isFinite(session.costUsd) ? session.costUsd : 0);
+      task.lastCostedRun = runKey;
+      this.store.upsert(task);
+    }
+    if (task.maxCostUsd !== undefined && (task.totalCostUsd ?? 0) >= task.maxCostUsd) {
+      this.markTaskFailed(task, `The goal task reached its cost limit ($${(task.totalCostUsd ?? 0).toFixed(2)} of $${task.maxCostUsd.toFixed(2)}).`);
+      return false;
+    }
+    return true;
+  }
+
+  /** Track a failure fingerprint; false, and the task failed, after MAX_REPEATED_FAILURES identical ones. */
+  private recordFailureFingerprint(task: GoalTaskState, fingerprint: string, summary: string): boolean {
+    task.repeatedFailureCount = task.lastVerifierFingerprint === fingerprint ? task.repeatedFailureCount + 1 : 1;
+    task.lastVerifierFingerprint = fingerprint;
+    if (task.repeatedFailureCount >= MAX_REPEATED_FAILURES) {
+      this.markTaskFailed(task, [
+        `The same failure repeated ${task.repeatedFailureCount} times in a row; stopping instead of retrying.`,
+        summary,
+      ].join("\n"));
+      return false;
+    }
+    return true;
+  }
+
   private async handleRunningSession(task: GoalTaskState, session: Session): Promise<void> {
     if (session.pendingPlanApproval) {
-      // Goal loops are autonomous by design. Approval is resolved before the loop starts;
-      // once inside the loop, verifier checks are the approval mechanism and human review
-      // would break the contract by stalling the controller.
-      const result = await executeRespond(this.sessionManager, {
-        session: session.id,
-        message: "Approved. Implement the plan.",
-        approve: true,
-        userInitiated: false,
-      });
-      if (result.isError) {
-        this.markTaskFailed(task, result.text);
+      // The first iteration's plan goes through the normal plan gate (the
+      // user, or the orchestrator when planApproval allows it); the goal loop
+      // never approves its own plan.
+      if (task.status !== "waiting_for_plan_approval") {
+        task.status = "waiting_for_plan_approval";
+        task.updatedAt = Date.now();
+        this.store.upsert(task);
       }
       return;
     }
+    this.notePlanApproval(task, session);
 
     if (!session.pendingInputState) {
       this.setTaskRunningWithSession(task, session);
@@ -851,6 +1042,8 @@ export class GoalController {
   }
 
   private async resumeAfterIdleTimeout(task: GoalTaskState, session: Session, prompt: string): Promise<void> {
+    // A restart is an iteration too: an idle loop cannot restart forever.
+    if (!this.consumeIteration(task, "The goal task was idle-suspended and would restart again.")) return;
     try {
       const resumed = await this.resumeTaskSession(task, prompt, session);
       this.setTaskRunningWithSession(task, resumed);
@@ -861,7 +1054,37 @@ export class GoalController {
     }
   }
 
+  /**
+   * A goal session suspended while its plan waited: the plan decision resumes
+   * it under the same session id (for example the user's Approve button).
+   * Check periodically and follow the resumed session from there.
+   */
+  private schedulePlanDecisionRecheck(taskId: string, suspended: Session): void {
+    if (!this.started) return;
+    const timer = setTimeout(() => {
+      const task = this.store.get(taskId);
+      if (!task || task.status !== "waiting_for_plan_approval" || !task.sessionId) return;
+      const current = this.sessionManager.resolve(task.sessionId);
+      if (current && current !== suspended && (current.status === "starting" || current.status === "running")) {
+        this.attachSessionObservers(task, current);
+        this.setTaskRunningWithSession(task, current);
+        this.scheduleTaskEvaluation(task.id, "plan-decision-resumed", current.id);
+        return;
+      }
+      const persisted = this.sessionManager.getPersistedSession(task.sessionId);
+      if (persisted?.approvalState === "rejected") {
+        this.markTaskStopped(task, "The plan was rejected.");
+        return;
+      }
+      this.schedulePlanDecisionRecheck(taskId, suspended);
+    }, PLAN_DECISION_RECHECK_MS);
+    timer.unref?.();
+  }
+
   private async handleTerminalSession(task: GoalTaskState, session: Session): Promise<void> {
+    if (!this.recordRunCost(task, session)) return;
+    this.notePlanApproval(task, session);
+
     if (session.status === "failed") {
       this.markTaskFailed(task, sessionFailureReason(session));
       return;
@@ -875,27 +1098,12 @@ export class GoalController {
     if (session.status === "killed" && session.killReason === "idle-timeout") {
       const output = session.getOutput(60).join("\n");
       if (session.pendingPlanApproval) {
-        const result = await executeRespond(this.sessionManager, {
-          session: session.id,
-          message: "Approved. Implement the plan.",
-          approve: true,
-          userInitiated: false,
-        });
-        if (result.isError) {
-          this.markTaskFailed(task, result.text);
-          return;
-        }
-
-        const resumed = this.sessionManager.resolve(session.id);
-        if (!resumed) {
-          this.markTaskFailed(task, "Failed to resolve the resumed goal task session after idle timeout plan approval.");
-          return;
-        }
-
-        this.attachSessionObservers(task, resumed);
-        this.setTaskRunningWithSession(task, resumed);
-        this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
-        this.scheduleTaskEvaluation(task.id, "idle-timeout-plan-resume", resumed.id);
+        // The plan still waits for its decision; the suspended session resumes
+        // (same session id) when it is approved, rejected, or revised.
+        task.status = "waiting_for_plan_approval";
+        task.updatedAt = Date.now();
+        this.store.upsert(task);
+        this.schedulePlanDecisionRecheck(task.id, session);
         return;
       }
       if (session.pendingInputState) {
@@ -949,12 +1157,7 @@ export class GoalController {
           return;
         }
 
-        if (task.lastVerifierFingerprint === verifier.fingerprint) {
-          task.repeatedFailureCount += 1;
-        } else {
-          task.repeatedFailureCount = 1;
-        }
-        task.lastVerifierFingerprint = verifier.fingerprint;
+        if (!this.recordFailureFingerprint(task, verifier.fingerprint, verifier.summary)) return;
 
         if (task.iteration + 1 >= task.maxIterations) {
           this.markTaskFailed(
@@ -987,12 +1190,7 @@ export class GoalController {
       }
 
       const latestFingerprint = textFingerprint(output);
-      if (task.lastVerifierFingerprint === latestFingerprint) {
-        task.repeatedFailureCount += 1;
-      } else {
-        task.repeatedFailureCount = 1;
-      }
-      task.lastVerifierFingerprint = latestFingerprint;
+      if (!this.recordFailureFingerprint(task, latestFingerprint, `Latest output:\n${summarizeLines(output, 12) || "(no output)"}`)) return;
 
       if (task.iteration + 1 >= task.maxIterations) {
         this.markTaskFailed(
@@ -1033,12 +1231,7 @@ export class GoalController {
       return;
     }
 
-    if (task.lastVerifierFingerprint === verifier.fingerprint) {
-      task.repeatedFailureCount += 1;
-    } else {
-      task.repeatedFailureCount = 1;
-    }
-    task.lastVerifierFingerprint = verifier.fingerprint;
+    if (!this.recordFailureFingerprint(task, verifier.fingerprint, verifier.summary)) return;
 
     if (task.iteration + 1 >= task.maxIterations) {
       this.markTaskFailed(

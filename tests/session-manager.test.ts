@@ -1882,7 +1882,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       { label: "dismissed lifecycle", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeLifecycle: { state: "dismissed", updatedAt: new Date(now).toISOString() } },
       { label: "terminal session lifecycle", lifecycle: "terminal", worktreeState: "pending_decision", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
       { label: "cleaned lifecycle", lifecycle: "terminal", worktreeState: "none", worktreeLifecycle: { state: "none", updatedAt: new Date(now).toISOString() } },
-      { label: "missing branch cleanup failure", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/missing", worktreePath: "/tmp/openclaw-missing-worktree", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
+      { label: "missing branch cleanup failure", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/missing", worktreePath: "/nonexistent/openclaw-missing-worktree", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
     ];
 
     for (const entry of cases) {
@@ -3325,7 +3325,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "waiting");
     assert.equal(request.buttons, undefined);
     assert.equal(request.wakeMessage, undefined);
-    assert.match(request.wakeMessageOnNotifyFailed, /Follow your auto-respond rules strictly/);
+    assert.match(request.wakeMessageOnNotifyFailed, /Do NOT answer it yourself/);
+    assert.doesNotMatch(request.wakeMessageOnNotifyFailed, /auto-respond/);
     assert.doesNotMatch(request.userMessage, /Plan ready for approval/);
   });
 

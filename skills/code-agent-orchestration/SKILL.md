@@ -44,7 +44,7 @@ agent_launch(
 
 When a session already exists for the task, keep using it.
 
-- Waiting for plan approval: `agent_respond(session, message, approve=true)` or `agent_request_plan_approval(...)` if delegated approval must escalate to the user
+- Waiting for plan approval: `agent_respond(session, message, approve=true)` (not in `planApproval: "ask"`, where only the user approves) or `agent_request_plan_approval(...)` if delegated approval must escalate to the user
 - Waiting for a question answer (Claude Code `AskUserQuestion`, OpenCode or Codex pending input): `agent_respond(session, message)` with the option number or label (several, comma-separated, for multi-select) or free text
 - Suspended after idle timeout, or stopped by a restart: `agent_respond(session, message)`
 - Completed but needs follow-up: `agent_respond(session, message)` resumes the same backend conversation (Claude Code, Codex, and OpenCode), or `agent_launch(resume_session_id=session_id, prompt="...")` when you need to change launch settings
@@ -138,7 +138,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - Telegram and Discord buttons use the shared direct-message presentation path; if buttons are missing, a plain-text `approve` or `reject` in the same thread drives the same decision path, and any other reply is sent back as revision feedback.
 - If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - If the user rejects the plan or the session is killed, treat older plan prompts as stale and verify state with `agent_sessions` before acting.
-- Wait for the user's answer, then forward it with `agent_respond(...)`.
+- Wait for the user's answer. If they answer in chat instead of with a button, forward their exact words with `agent_respond(session='...', message='<their words>', userInitiated=true)`. Never approve yourself: `approve=true` is refused in `ask` mode.
 - Do not send a duplicate approval recap or second approval prompt.
 
 ### `planApproval: "delegate"`
@@ -166,7 +166,9 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 Use worktrees as temporary task sandboxes, not as generic branch inventory.
 
-New worktrees receive the repository's `.worktreeinclude` files (for example `.env`) and run its `.openclaw/worktree-setup.sh`. If a launch fails with `worktree setup failed`, report the script output to the user instead of retrying with `worktree_strategy: "off"`.
+New worktrees receive the repository's `.worktreeinclude` files (for example `.env`) and run its `.openclaw/worktree-setup.sh`, both as committed on the checked-out commit (uncommitted edits to them do not count). If a launch fails with `worktree setup failed`, report the script output to the user instead of retrying with `worktree_strategy: "off"`.
+
+A branch that changes git hooks or worktree setup files (`.husky/`, `.githooks/`, the `core.hooksPath` directory, `.openclaw/worktree-setup.sh`, `.worktreeinclude`) is never merged or turned into a PR automatically, and `agent_merge` / `agent_pr` refuse it: the user gets the Merge / Open PR prompt naming those files. Wait for their button.
 
 Lifecycle meanings:
 

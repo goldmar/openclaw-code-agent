@@ -96,11 +96,9 @@ for (const name of BACKEND_NAMES) {
       assert.equal(prompt.accountId, TELEGRAM_TOPIC.accountId);
       assert.match(prompt.text, /Which color\?/);
       assert.deepEqual(prompt.buttons.map((button) => button.label), ["Red", "Green", "Blue"]);
-      if (name === "claude-code") {
-        // Claude's AskUserQuestion tells the orchestrator the user was asked (so it does not answer itself).
-        await waitUntil(() => s.wakes.some((wake) => /AskUserQuestion delivered/.test(wake.message)), "question-delivered wake");
-        assert.equal(s.wakes.find((wake) => /AskUserQuestion delivered/.test(wake.message))?.sessionKey, TELEGRAM_TOPIC.sessionKey);
-      }
+      // One prompt per question for every harness (B20: Claude used to post two).
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(s.messages().filter((message) => /Which color\?/.test(message.text)).length, 1);
 
       const click = await s.click(green);
       assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);

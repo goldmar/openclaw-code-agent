@@ -25,6 +25,8 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `sessionGcAgeMinutes` | `1440` |
 | `maxPersistedSessions` | `10000` |
 | `autoUpdate` | `true` (check and offer; install and restart only after a button press) |
+| `worktreeGitHooks` | `run` (repository hooks run during OCA's git operations) |
+| `trustedVerifierCommands` | unset (every orchestrator-supplied goal verifier needs one user confirmation) |
 
 Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and stopped, completed, or suspended sessions that still have a backend conversation can also be continued with `agent_respond`.
 
@@ -59,6 +61,7 @@ The current `openclaw-code-agent` package requires, is built against, and is val
 - **Minimum host.** OpenClaw `2026.9.6` is required for installation, the plugin API, the Gateway, and the peer dependency; upgrade the host first.
 - **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review). If an agent's tool allowlist names OCA tools individually, add it.
 - **Stricter tools.** `agent_kill` accepts only `session` and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
+- **Safety defaults.** Goal loops start with the configured `permissionMode` (plan) and wait for the user to confirm orchestrator-supplied verifier commands (pre-approve fixed ones in `trustedVerifierCommands`). With `planApproval: "ask"` only the user approves plans. `.worktreeinclude` and `.openclaw/worktree-setup.sh` must be committed to take effect, and the setup script and verifiers get a minimal environment. Branches that change git hooks or those files need the user's Merge / Open PR button. Coding agents no longer see `GH_TOKEN` and similar unrelated secrets; see [Child process environments](#child-process-environments).
 - **Removed knobs.** `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` and the startup sweep of unmanaged `openclaw-worktree-*` directories are gone, a launch that needs a worktree outside a git repository fails instead of using the OS temp directory, and OCA no longer copies `~/.claude.json` MCP servers into Claude Code launches.
 - **In-process integrations.** `SessionManager.spawn` is `launchSession`, and the worktree, repo-policy, and branch-name helpers return promises. The full list is in the [CHANGELOG](../CHANGELOG.md).
 - **Rolling back.** 5.0 rewrites the session index in place, and 4.7.x uses the same store schema version, so a 4.7.x build loads the rewritten file without an error but may drop or misread 5.0-only rows, fields, and buttons. To roll back: stop the Gateway, reinstall 4.7.20 (`openclaw plugins install openclaw-code-agent@4.7.20 --force`), restore the session and goal-task files you backed up, and start the Gateway. Sessions started under 5.0 are then gone from OCA, but their worktrees and branches stay in git. Output transcripts and update state written under `plugin-state/openclaw-code-agent/` are not read by 4.x; the 4.x `/tmp` transcripts and `openclaw-code-agent-auto-update.json` are still where 4.x expects them, unless maintenance aged them out.
@@ -238,7 +241,7 @@ Claude Code harness details:
 - MCP servers come from Claude Code's own settings sources; OCA does not re-inject `~/.claude.json` servers.
 - Completed Claude Code sessions can be resumed with `agent_respond` or `agent_launch(resume_session_id=...)`. OCA first checks that the transcript still exists (`getSessionInfo()`) and fails with a clear message if it does not. Forks use the SDK `resume` + `forkSession` options, which report the new session id at startup.
 - Turn outcomes come from structured SDK fields: `is_error`, the assistant `error` code (for example `authentication_failed`), `startup_failure_reason`, and `terminal_reason` (aborted turns become interrupted turns). Results are deferred while `queued_turn_count` says more queued user turns follow, and empty background-task notification results (`origin.kind: "task-notification"`, zero turns) are skipped.
-- `AskUserQuestion` can be answered through `agent_respond` as well as with buttons: reply with an option number, an option label, several comma-separated numbers or labels for multi-select questions, or free text. Multi-question requests are answered one question at a time. A question that is not answered within 10 minutes ends, and Claude is told to continue without the answer.
+- `AskUserQuestion` can be answered through `agent_respond` as well as with buttons: reply with an option number, an option label, several comma-separated numbers or labels for multi-select questions, or free text. Multi-question requests are answered one question at a time. Like Codex and OpenCode questions, a Claude question has no deadline of its own and is posted to the user once: it waits until it is answered or the session is idle-suspended (`idleTimeoutMinutes`), after which an answer (button or text) resumes the session.
 - A turn that ends while SDK background tasks (for example background shells) are still running keeps the session running until the tasks finish; the follow-up turn Claude Code starts to report them ends the session normally.
 - If `ExitPlanMode` carries neither `plan` nor `planFilePath`, the pending plan is read from the last file this session wrote to a Claude plans directory (never another session's plan), so `agent_output` and the approval prompt still show it.
 - A forked session reports only its own cost: the parent's usage at fork time is subtracted from the SDK totals. When the parent is no longer live, only its total cost is known, so the fork's per-model breakdown is omitted rather than showing the parent's tokens.
@@ -252,6 +255,8 @@ OpenCode harness details:
 - One `/global/event` stream is demultiplexed by session id. A turn completes on `session.idle` (or an idle `session.status`) once the turn has shown activity; an idle event without activity is confirmed against session status and messages. Session status is polled only while the event stream is disconnected, to catch up on missed events.
 - If the server process dies, every in-flight turn fails with the exit reason, and the next turn starts a fresh server. OpenCode persists sessions, so they continue.
 - Fresh launches create sessions through OpenCode's classic session-create route. Prompts use classic `prompt_async`; message, permission reply, and question reply flows use the classic routes. Responses that are not JSON (for example the web UI's HTML shell) are rejected with a diagnostic.
+- The session system prompt (including the worktree preamble) is sent with every prompt, because OpenCode applies only the latest user message's `system`.
+- A turn fails after 15 minutes without any event from OpenCode; the limit restarts on every event and is paused while a question or permission request waits for the user. When it fires, and when the OCA session is interrupted, closed, or aborted, OCA sends `/abort` so the shared server stops working (and spending) on the turn. A question or permission request belongs to its turn: when the turn ends unanswered, it is cleared, and the next message starts a new turn instead of being taken as the answer.
 - Plan mode prompts OpenCode's built-in `plan` agent, which denies edits except its own plan files. OCA adds a session overlay that also denies `bash` and access outside the project, because the plan agent otherwise relies on instructions to keep shell commands read-only. After approval, prompts use the `build` agent; OpenCode then adds its own build-switch reminder. The plugin still owns the plan approval gate. (OpenCode's own `plan_exit` tool is only available in the OpenCode CLI.)
 - Multi-question requests are answered with one answer list per question. Text replies send the selected option labels (an option number selects that option), and multi-select questions accept several comma-separated labels or option numbers.
 - Permission requests (`permission.asked`) show Allow once / Always allow / Reject buttons. Text replies also work: `yes` or `allow` (once), `always` (always), `no` or `reject`, or the option number; any other text rejects the request and passes the text to the agent as the rejection message.
@@ -278,15 +283,15 @@ Accepted subprocess surfaces:
 - Codex App Server launch over stdio
 - one shared OpenCode server on `127.0.0.1` for experimental OpenCode sessions
 - local `git` / `gh` commands for worktree and PR flows
-- a repository's executable `.openclaw/worktree-setup.sh` in new OCA worktrees
-- operator-provided verifier shell commands in explicit goal tasks
+- a repository's committed, executable `.openclaw/worktree-setup.sh` in new OCA worktrees
+- goal verifier shell commands the user confirmed (or typed, or the operator pre-approved in `trustedVerifierCommands`)
 
 Self-update: with `autoUpdate: true` (default) OCA checks about once a day for a newer release and offers it with buttons. It reinstalls itself only after a user presses **Update now**, and restarts the Gateway only after a separate **Restart Gateway** press. `autoUpdate: false` disables update checks, installs, and restarts.
 
 Operator guidance:
 
-- treat goal-task verifier commands as trusted shell input
-- do not expose verifier mode to untrusted users
+- goal verifier commands run only after the user confirms them (the confirmation message lists the exact commands), unless the user typed them in `/agent_goal` or they are listed in `trustedVerifierCommands`
+- verifier commands and the worktree setup script get a minimal environment without API keys or tokens (see [Child process environments](#child-process-environments))
 - expect plugin-security scanners to flag `child_process` usage for this plugin
 - use [SECURITY.md](SECURITY.md) when reviewing whether a finding is expected or a real regression
 
@@ -313,6 +318,7 @@ These should remain manual or follow-up configuration:
 - `defaultWorktreeStrategy`
 - `worktreeDir`
 - `autoUpdate`
+- `worktreeGitHooks` and `trustedVerifierCommands`
 - session/concurrency/retention limits such as `maxSessions`, `idleTimeoutMinutes`, `sessionGcAgeMinutes`, `maxPersistedSessions`, and `maxAutoResponds`
 
 ### Removed Fields
@@ -331,13 +337,13 @@ These should remain manual or follow-up configuration:
 
 `plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
 
-For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode; the Codex sandbox and approval prompts come from `harnesses.codex.permissionProfile`, `approvalPolicy`, and `approvalsReviewer` and do not change when a plan is approved. Use `permissionMode` and `planApproval` to control plan review gates.
+For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode. Codex's plan collaboration mode only instructs the model: the thread sandbox stays what `harnesses.codex.permissionProfile` (or the host `tools.exec.mode`) selects, which is `:danger-full-access` by default, so a plan turn can technically write files and run commands before approval (see [SECURITY.md](SECURITY.md#codex-sandbox)). Set `permissionProfile` to `:workspace` or `:read-only` when that matters. Approval prompts come from `approvalPolicy` and `approvalsReviewer` in both phases. Use `permissionMode` and `planApproval` to control plan review gates.
 
 ### `planApproval`
 
 | Mode | Meaning |
 | --- | --- |
-| `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision |
+| `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision. Only the user approves: the Approve button, or the user's own reply (for example `approve`) forwarded as text with `agent_respond(..., userInitiated=true)`. `agent_respond(approve=true)` is refused, with or without `userInitiated` |
 | `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Wake the orchestrator, which may approve without asking the user only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user with `agent_request_plan_approval` |
 
@@ -439,11 +445,27 @@ Notes:
 New OCA worktrees follow the same repository conventions as OpenClaw managed worktrees:
 
 1. **`.worktreeinclude`** at the source checkout root lists gitignored files to copy into the new worktree (for example `.env` or local config). It uses gitignore syntax (comments, `!` negation, `**`, trailing `/`) and is evaluated by git itself: a file is copied only when it matches `.worktreeinclude` and is ignored by the repository's standard excludes, so tracked files are never copied. Symlinked files, paths through symlinked directories, and files that already exist in the worktree are skipped; file modes are preserved. A `.worktreeinclude` that is not a regular file fails the launch.
-2. **`.openclaw/worktree-setup.sh`**, when it exists and is executable, then runs inside the new worktree. It is executed directly (give it a shebang), with the Gateway environment plus `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`, no stdin, and a 120 s timeout after which its whole process group is terminated.
+2. **`.openclaw/worktree-setup.sh`**, when the committed version is executable (git mode `100755`), then runs inside the new worktree. It is executed directly (give it a shebang) from a private temporary copy, with the new worktree as its working directory, a minimal environment (see [Child process environments](#child-process-environments)) plus `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`, no stdin, and a 120 s timeout after which its whole process group is terminated. Use those variables or the working directory, not `$0`, to find files.
+
+Both inputs are read from the commit the source checkout has checked out (`HEAD`), never from the working tree: an untracked, modified, or agent-written copy of `.worktreeinclude` or `worktree-setup.sh` is ignored, and so is the agent branch's version when a worktree is recreated for a resume. Commit changes to either file before they take effect.
 
 OCA always runs the setup script for its worktrees, unlike OpenClaw core, which runs it for managed worktrees only when the caller has admin scope. Core's rule protects the `worktrees.create` Gateway method, which lower-privileged clients can reach. An OCA worktree exists only for a coding session launched in an operator-chosen repository, so running the repository's own setup script is part of trusting that repository. The script runs unsandboxed with the Gateway's privileges, which can be more than a Codex session gets inside a `:workspace` sandbox. Do not point OCA at repositories whose setup scripts you do not trust.
 
 If either step fails, the launch fails with the reason (for the setup script, the exit code or timeout plus the tail of its output), the new worktree is removed, and the new `agent/*` branch is deleted; a resumed session's existing branch is kept. Git hooks are disabled for the provisioning git calls. OCA keeps its `agent/*` branch prefix so its branches never collide with core's `openclaw/*` managed worktrees.
+
+### Git Hooks
+
+`worktreeGitHooks` controls repository hooks during OCA's own git operations: the merge (rebase, fast-forward or squash commit), pushes, and `git worktree add`. `run` (default) lets them run as git normally would; `skip` runs those commands with `core.hooksPath=/dev/null`.
+
+Whatever the setting, a merge or PR whose branch changes hook or worktree-provisioning locations is never automatic: `.husky/`, `.githooks/`, the repository's in-repo `core.hooksPath` directory, `.openclaw/worktree-setup.sh`, and `.worktreeinclude`. Those files run code on the next git operation or worktree creation. For such a branch `auto-merge` and `auto-pr` post the Merge / Open PR / Later / Discard prompt instead, the prompt names the changed files, and `agent_merge` / `agent_pr` called by the orchestrator are refused (they post the same prompt). The user's Merge or Open PR button proceeds.
+
+### Child Process Environments
+
+| Child | Environment |
+| --- | --- |
+| `.openclaw/worktree-setup.sh`, goal verifier commands | Minimal allowlist: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TMPDIR`/`TMP`/`TEMP`, `TERM`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`, `CI`, the `XDG_*` base directories, CA bundle variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`), proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and lowercase forms), and the Windows process basics. No API keys or tokens. The setup script also gets `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH` |
+| Codex app server, Claude Agent SDK, OpenCode server | The Gateway environment (provider credentials, cloud-provider variables for Bedrock or Vertex, and whatever MCP servers need) minus secrets unrelated to a coding agent: `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_PAT`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, `CLAWHUB_TOKEN`, `OP_SERVICE_ACCOUNT_TOKEN`, `OP_CONNECT_TOKEN`, `OP_SESSION_*`, `HCLOUD_TOKEN`, `DIGITALOCEAN_TOKEN`, `CLOUDFLARE_API_TOKEN`, chat bot tokens (`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `DISCORD_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_USER_TOKEN`, `SLACK_SIGNING_SECRET`), and every `OPENCLAW_*TOKEN`, `OPENCLAW_*PASSWORD`, and `OPENCLAW_*SECRET` variable. An agent that needs the GitHub CLI uses `gh`'s own stored login |
+| `git`, `gh` | The full Gateway environment: pushing and opening pull requests need `SSH_AUTH_SOCK`, `GH_TOKEN`, and git credential helpers |
 
 ## Tool Reference
 
@@ -491,7 +513,7 @@ Send a follow-up, steer or redirect work, answer a pending question, approve a p
 | `message` | `string` | Yes | Follow-up text |
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | Reset the auto-respond counter |
-| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions |
+| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions. Refused for a plan with `planApproval: "ask"`: forward the user's own reply as text with `userInitiated=true` instead |
 | `approval_rationale` | `string` | No | Structured rationale for a direct delegated plan approval (use with `approve=true` instead of putting it in `message`) |
 
 Example:
@@ -604,7 +626,12 @@ Explicit goal tools use the same `agent_goal_*` public namespace as the chat com
 | `agent_goal_edit` | Change the goal text for an active goal task |
 | `agent_goal_stop` | Stop a running goal task |
 
-`agent_goal_launch` accepts `goal`, optional `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Goal launch defaults remain unchanged: verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
+`agent_goal_launch` accepts `goal`, optional `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `max_cost_usd`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
+
+- **Verifier confirmation.** Verifier commands the orchestrator supplies run only after the user confirms them once: the task waits (`awaiting_verifier_confirmation`) and the user gets a message listing the exact commands with **Run these checks** / **Cancel** buttons; nothing runs before that. Commands the user typed in `/agent_goal` and commands listed in the `trustedVerifierCommands` config need no confirmation.
+- **Plan gate.** The first iteration uses the configured `permissionMode` (default `plan`), so its plan goes through the normal plan approval (`planApproval`); the goal loop never approves its own plan. Later iterations continue within the approved scope (`bypassPermissions`). A plan that waits past the idle timeout keeps the task waiting (`waiting_for_plan_approval`) until the decision resumes the session.
+- **Limits.** `max_iterations` defaults to 8 and is capped at 25; restarts after a Gateway restart or an idle suspension count as iterations. The task stops after the same failure fingerprint repeats 3 times in a row. `max_cost_usd` stops the task before the next iteration once its sessions cost that much (sessions without a reported price, such as Codex with a ChatGPT login, count as $0).
+- **Verifier execution.** Each command runs with `bash -c` (no login profile) in the task workdir, with the minimal environment from [Child process environments](#child-process-environments), in its own process group. Only the last 64 KiB of output is kept (a noisy passing check still passes), and on timeout (default 10 minutes, bounded to 1 second..30 minutes) the whole process group is terminated.
 
 ### `agent_merge`
 
@@ -615,6 +642,8 @@ Merge a worktree branch back to base.
 | `session` | `string` | Yes | Must resolve to a session with worktree metadata |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
+
+A merge never switches the user's checkout to another branch. `merge` rebases the branch onto base only when needed: in the session worktree, the checkout that already has the branch, or a temporary worktree. The base branch moves where it lives: when base is checked out (usually the main checkout) the fast-forward or squash commit runs there, uncommitted changes there are auto-stashed and restored on that same branch, and repository hooks run per `worktreeGitHooks`; when base is not checked out anywhere, a fast-forward updates the base ref directly (compare-and-swap) and a squash commit is made in a temporary checkout of base (so commit hooks run; with `worktreeGitHooks: "skip"` the ref is updated directly), and no user checkout is touched. The rebase runs in the session worktree only while it still has the session branch checked out. When a commit hook rejects a squash commit after changing files, the error names a patch file in the repository's git directory that holds those changes. Uncommitted changes in the branch's own checkout are reported as such, not as a rebase conflict, and rebasing a branch that was already pushed adds a warning because the remote copy keeps the old commits. A branch that changes hook locations needs the user's button (see [Git Hooks](#git-hooks)).
 | `push` | `boolean` | No | Defaults to `false`; set `true` only when you want the merged base branch pushed |
 | `delete_branch` | `boolean` | No | Defaults to `true` |
 
@@ -735,7 +764,7 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_kill` | `/agent_kill <name-or-id>` | Stop a session |
 | `/agent_stats` | `/agent_stats` | Show aggregate metrics |
 | `/agent_policy` | `/agent_policy [pr-required\|pr-allowed\|never-pr\|manual\|reset [repo-path]\|list\|cleanup]` | Set or inspect repository worktree/PR policy; no argument shows the current repo |
-| `/agent_goal` | `/agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode ralph\|verifier] [--completion-promise <text>] [--max-iterations N] [--permission-mode <mode>] [--verify <cmd> ...] <goal>` | Launch an explicit goal task |
+| `/agent_goal` | `/agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode ralph\|verifier] [--completion-promise <text>] [--max-iterations N] [--max-cost-usd N] [--permission-mode <mode>] [--verify <cmd> ...] <goal>` | Launch an explicit goal task (commands typed here need no extra confirmation) |
 | `/agent_goal_status` | `/agent_goal_status [<task-id-or-name>]` | Show one goal task or list all goal tasks |
 | `/agent_goal_edit` | `/agent_goal_edit <task-id-or-name> <replacement-goal>` | Change the goal text for an active goal task |
 | `/agent_goal_stop` | `/agent_goal_stop <task-id-or-name>` | Stop a running goal task |
@@ -863,6 +892,10 @@ Worktree-decision reminders use in-process deadline timers that are rebuilt from
 - Runtime GC evicts old runtime records from memory after `sessionGcAgeMinutes`, but explicitly resumable persisted sessions remain available through `agent_sessions`.
 - Startup recovery may convert interrupted running sessions into resumable persisted entries so they can be continued intentionally.
 - Persisted session resolution accepts OCA session IDs, names, and backend conversation IDs.
+- `idleTimeoutMinutes` suspends a session that waits: for the user (a question or a plan decision) or for the next message between turns. A turn that is still working is not idle, even when its backend reports no progress (for example one long, silent shell command). Claude Code progress heartbeats (`tool_progress`, subagent and hook progress, partial output) also count as activity.
+- When a backend stops without finishing (its process exited or its event stream closed, for example the Codex app server dying between turns), the session fails with that reason instead of staying `running`; the next `agent_respond` resumes it.
+- A Codex resume id that is not a Codex thread UUID fails the launch instead of silently starting a fresh thread.
+- An early startup failure (failed, zero cost, under 30 s) removes the worktree and branch only when this launch created them and the branch has no commits of its own; a resumed session's worktree and branch are always kept.
 
 ## Troubleshooting
 

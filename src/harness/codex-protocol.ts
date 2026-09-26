@@ -380,6 +380,10 @@ export function buildTurnStartParams(options: {
   permissionMode?: string;
 }): TurnStartParams {
   const effort = options.reasoningEffort?.trim();
+  // D5 (decided against for 5.0.0): a `:read-only` override for plan turns was
+  // tried and live-tested; under `tools.exec.mode` auto/ask Codex still wrote
+  // during plan review (sandbox escalations), so the thread keeps its
+  // configured profile in both phases. See docs/SECURITY.md "Codex Sandbox".
   return {
     threadId: options.threadId,
     input: buildTurnInput(options.prompt),

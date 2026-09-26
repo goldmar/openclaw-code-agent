@@ -5,6 +5,49 @@ import type { Session } from "../session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { SessionManager } from "../session-manager";
 import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
+import { describeHookPathChanges, listHookPathChanges } from "../git-hooks";
+
+/**
+ * Tool-call id the button callback handler uses when a user's Merge / Open PR
+ * button runs agent_merge or agent_pr. Model tool calls never carry it.
+ */
+export const USER_BUTTON_TOOL_CALL_ID = "callback";
+
+/**
+ * A branch that changes git hooks or worktree setup files is merged or turned
+ * into a PR only on the user's button. Called from agent_merge / agent_pr: for
+ * any other caller it posts the decision prompt (naming the files) and returns
+ * the refusal text; undefined when the call may proceed.
+ */
+export async function refuseHookChangesWithoutUser(args: {
+  sessionManager: Partial<Pick<SessionManager, "requestWorktreeDecisionFromUser">>;
+  toolCallId: string;
+  sessionRef: string;
+  repoDir: string;
+  branchName: string;
+  baseBranch: string;
+  action: "merge" | "pr";
+}): Promise<string | undefined> {
+  if (args.toolCallId === USER_BUTTON_TOOL_CALL_ID) return undefined;
+  let hookWarning: string | undefined;
+  try {
+    hookWarning = describeHookPathChanges(await listHookPathChanges(args.repoDir, args.branchName, args.baseBranch));
+  } catch {
+    // Without a computable branch diff the merge or PR itself cannot run
+    // either; let it report the real problem.
+    return undefined;
+  }
+  if (!hookWarning) return undefined;
+  const prompt = await args.sessionManager.requestWorktreeDecisionFromUser?.(
+    args.sessionRef,
+    "Changes git hook or worktree setup files; waiting for your decision.",
+    { hookWarning },
+  ) ?? "";
+  return [
+    `❌ ${args.action === "merge" ? "Not merged" : "No PR opened"}: ${hookWarning.replace(/^⚠️\s*/u, "")}`,
+    `Only the user's button can ${args.action === "merge" ? "merge" : "open a PR for"} this branch. ${prompt}`,
+  ].join("\n");
+}
 
 export interface ResolvedWorktreeToolTarget {
   activeSession?: Session;

@@ -1,7 +1,7 @@
 import { Type } from "../tool-parameter-schema";
 
 import { goalController } from "../singletons";
-import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
+import { formatGoalLaunchResult, resolveGoalLaunchRequest, verifierCommandsNeedConfirmation } from "../goal-launch-resolution";
 import type { OpenClawPluginToolContext } from "../types";
 
 interface GoalLaunchParams {
@@ -17,6 +17,7 @@ interface GoalLaunchParams {
   harness?: string;
   goal_mode?: "ralph" | "verifier";
   completion_promise?: string;
+  max_cost_usd?: number;
 }
 
 function isGoalLaunchParams(value: unknown): value is GoalLaunchParams {
@@ -35,7 +36,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
       verifier_commands: Type.Optional(
         Type.Array(
           Type.String({ description: "Shell command that must pass for the goal to be considered complete" }),
-          { minItems: 1, description: "Verifier commands run after each coding turn" },
+          { minItems: 1, description: "Verifier commands run after each coding turn (bash -c in the workdir, minimal environment without API keys or tokens). Commands not pre-approved in the plugin's trustedVerifierCommands need one user confirmation: the task waits until the user presses Run on the message listing them." },
         ),
       ),
       name: Type.Optional(Type.String({ description: "Short task name (kebab-case preferred)" })),
@@ -43,7 +44,8 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
       model: Type.Optional(Type.String({ description: "Model name to use" })),
       system_prompt: Type.Optional(Type.String({ description: "Additional system prompt" })),
       allowed_tools: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools for the underlying agent session" })),
-      max_iterations: Type.Optional(Type.Number({ description: "Maximum verifier-driven repair iterations", minimum: 1 })),
+      max_iterations: Type.Optional(Type.Number({ description: "Maximum iterations (repair turns and restarts after a gateway restart or idle timeout count). Default 8; values above 25 are capped at 25.", minimum: 1 })),
+      max_cost_usd: Type.Optional(Type.Number({ description: "Optional spend limit in USD: no further iteration starts once the task's sessions cost this much. Sessions without a reported price (for example Codex with a ChatGPT login) count as $0.", exclusiveMinimum: 0 })),
       goal_mode: Type.Optional(
         Type.Union(
           [Type.Literal("ralph"), Type.Literal("verifier")],
@@ -54,7 +56,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
       permission_mode: Type.Optional(
         Type.Union(
           [Type.Literal("default"), Type.Literal("plan"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode for the underlying agent session. Defaults to bypassPermissions for autonomous goal loops." },
+          { description: "Permission mode for the first iteration. Defaults to the plugin's configured permissionMode (plan): the first iteration's plan goes through the normal plan approval, and later iterations continue within the approved scope." },
         ),
       ),
       harness: Type.Optional(Type.String({ description: "Agent harness to use ('claude-code', 'codex', or experimental 'opencode')." })),
@@ -80,6 +82,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
         harness: params.harness,
         goalMode: params.goal_mode,
         completionPromise: params.completion_promise,
+        maxCostUsd: params.max_cost_usd,
       }, ctx);
       if (resolution.kind !== "resolved") {
         return { content: [{ type: "text", text: resolution.text }] };
@@ -106,12 +109,15 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
           route: resolution.route,
           harness: resolution.harness,
           verifierCommands: resolution.verifierCommands,
+          maxCostUsd: resolution.maxCostUsd,
+          // The orchestrator chose these commands: the user confirms them once.
+          requireVerifierConfirmation: verifierCommandsNeedConfirmation(resolution.verifierCommands),
         });
 
         return {
           content: [{
             type: "text",
-            text: formatGoalLaunchResult(task, resolution),
+            text: formatGoalLaunchResult(task, { ...resolution, maxIterations: params.max_iterations }),
           }],
         };
       } catch (err: unknown) {

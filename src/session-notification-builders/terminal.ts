@@ -1,4 +1,5 @@
 import { formatSessionStatsSuffix } from "../session-notification-stats";
+import { fenceAgentOutput } from "../untrusted-output";
 import type { NotificationButton } from "../session-interactions";
 import type { ApprovalExecutionState, KillReason, PermissionMode } from "../types";
 import type { Session } from "../session";
@@ -208,7 +209,7 @@ export function buildCompletedPayload(args: {
     ...formatApprovalExecutionContextLines(session),
     ``,
     `Output preview:`,
-    preview,
+    fenceAgentOutput(preview, "output preview"),
     ``,
     ...buildCompletionDiagnosticsLines({ contract: followupContract, canonicalStatusDelivered }),
     ``,
@@ -342,7 +343,7 @@ export function buildFailedPayload(args: {
   failedButtons?: NotificationButton[][];
 }): { userMessage: string; wakeMessage: string; buttons?: NotificationButton[][] } {
   const { session, originThreadLine, errorSummary, preview, worktreeAutoCleaned, failedButtons } = args;
-  const outputSection = preview.trim() ? ["", "Output preview:", preview] : [];
+  const outputSection = preview.trim() ? ["", "Output preview:", fenceAgentOutput(preview, "output preview")] : [];
   const worktreeCleanupNote = worktreeAutoCleaned
     ? [``, `Note: Worktree and branch were auto-removed (zero cost, startup failure).`]
     : [];
@@ -360,7 +361,7 @@ export function buildFailedPayload(args: {
       ...(session.harnessSessionId ? [`Backend conversation ID: ${session.harnessSessionId}`] : []),
       ``,
       `Failure summary:`,
-      errorSummary,
+      fenceAgentOutput(errorSummary, "failure summary"),
       ...outputSection,
       ...worktreeCleanupNote,
       ``,
@@ -391,7 +392,7 @@ export function buildTurnCompletePayload(args: {
       `Lifecycle: ${session.lifecycle}`,
       ``,
       `Last output (~20 lines):`,
-      preview,
+      fenceAgentOutput(preview, "last output"),
       ...(originThreadLine ? ["", originThreadLine] : []),
     ].join("\n"),
   };

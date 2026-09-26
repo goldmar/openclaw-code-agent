@@ -118,6 +118,7 @@ export class SessionInteractionService {
   private resolveButtonStyle(kind: SessionActionKind): NotificationButton["style"] {
     switch (kind) {
       case "plan-approve":
+      case "goal-verifiers-confirm":
       case "worktree-create-pr":
       case "worktree-update-pr":
       case "plan-offer-start":
@@ -132,6 +133,7 @@ export class SessionInteractionService {
       case "plugin-update-remind-later":
         return "secondary";
       case "plan-reject":
+      case "goal-verifiers-decline":
       case "worktree-dismiss":
       case "plugin-update-dismiss":
         return "danger";
@@ -240,6 +242,14 @@ export class SessionInteractionService {
       rows.push(buttons.slice(index, index + QUESTION_BUTTONS_PER_ROW));
     }
     return rows;
+  }
+
+  /** Run / Cancel buttons for a goal task waiting for its verifier commands to be confirmed. */
+  getGoalVerifierButtons(taskId: string, route: SessionRoute | undefined): NotificationButton[][] {
+    return [[
+      this.makeActionButton(taskId, "goal-verifiers-confirm", "Run these checks", { route }),
+      this.makeActionButton(taskId, "goal-verifiers-decline", "Cancel", { route }),
+    ]];
   }
 
   getPlanOfferButtons(args: {

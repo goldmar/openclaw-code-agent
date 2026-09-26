@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { buildHarnessChildEnv } from "../child-env";
 import { constants as fsConstants, accessSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
@@ -335,6 +336,8 @@ export async function startOpenCodeServer(options: OpenCodeServerStartOptions = 
   const serverCwd = tmpdir();
   const child = spawn(command, args, {
     cwd: serverCwd,
+    // Gateway environment minus secrets unrelated to the agent (see child-env.ts).
+    env: buildHarnessChildEnv(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
   let stdout = "";
@@ -1128,10 +1131,14 @@ export class OpenCodeHarness implements AgentHarness {
     let currentPendingInput: OpenCodePendingInput | undefined;
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
-    let systemPromptInjected = false;
     let closed = false;
     let lastBackendRefConversationId: string | undefined;
-    let activeTurn: { waiter?: TurnWaiter; abort: AbortController; interrupted: boolean } | undefined;
+    let activeTurn: {
+      waiter?: TurnWaiter;
+      abort: AbortController;
+      interrupted: boolean;
+      inactivityTimer?: NodeJS.Timeout;
+    } | undefined;
     const emittedToolCalls = new Set<string>();
     const prompts = new PromptReader(typeof options.prompt === "string"
       ? (async function* (): AsyncGenerator<unknown> {
@@ -1156,6 +1163,7 @@ export class OpenCodeHarness implements AgentHarness {
       if (requestId && currentPendingInput?.requestId === requestId) {
         currentPendingInput = undefined;
       }
+      if (activeTurn) armTurnInactivityTimer(activeTurn);
     };
 
     const ensureLease = async (): Promise<OpenCodeServerLease> => {
@@ -1209,11 +1217,50 @@ export class OpenCodeHarness implements AgentHarness {
       fn(waiter);
     };
 
+    /**
+     * Ask the shared server to stop this session's in-flight turn. Closing or
+     * aborting the OCA session must stop the work (and the spending) on the
+     * server too, not only locally.
+     */
+    const abortServerTurn = async (): Promise<void> => {
+      const id = sessionId;
+      if (!id || !lease?.alive) return;
+      await client().request("POST", `/session/${encodeURIComponent(id)}/abort`).catch((): undefined => undefined);
+    };
+
+    /**
+     * The turn limit counts inactivity, not wall time: it restarts on every
+     * event of the turn, and it is paused while the turn waits for the user (a
+     * question or approval). When it fires the server turn is aborted too.
+     */
+    const armTurnInactivityTimer = (turn: NonNullable<typeof activeTurn>): void => {
+      if (turn.inactivityTimer) clearTimeout(turn.inactivityTimer);
+      turn.inactivityTimer = undefined;
+      if (activeTurn !== turn || turn.waiter?.settled || currentPendingInput) return;
+      const turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+      turn.inactivityTimer = setTimeout(() => {
+        if (activeTurn !== turn || currentPendingInput) return;
+        void abortServerTurn();
+        settleWaiter((pending) => pending.reject(new Error(`OpenCode session ${sessionId ?? ""} showed no activity for ${Math.round(turnTimeoutMs / 1000)} s; the turn was aborted.`)));
+      }, turnTimeoutMs);
+      turn.inactivityTimer.unref?.();
+    };
+
     let lastTextPartKey: string | undefined;
 
     const handleEvent = (event: NormalizedEvent): void => {
       if (closed) return;
       const waiter = activeTurn?.waiter;
+      try {
+        handleSessionEvent(event, waiter);
+      } finally {
+        // Every event of this session counts as turn activity (and a pending
+        // question or approval pauses the limit until it is resolved).
+        if (activeTurn) armTurnInactivityTimer(activeTurn);
+      }
+    };
+
+    const handleSessionEvent = (event: NormalizedEvent, waiter: TurnWaiter | undefined): void => {
       if (
         (event.type === "session.next.text.delta" || event.type === "message.part.delta")
         && event.properties.field !== "reasoning"
@@ -1527,7 +1574,6 @@ export class OpenCodeHarness implements AgentHarness {
       const turn: NonNullable<typeof activeTurn> = { abort: new AbortController(), interrupted: false };
       activeTurn = turn;
       emittedToolCalls.clear();
-      let turnTimeout: NodeJS.Timeout | undefined;
       try {
         const id = await ensureSession();
         if (turn.interrupted || closed) {
@@ -1542,22 +1588,19 @@ export class OpenCodeHarness implements AgentHarness {
         const done = new Promise<void>((resolve, reject) => {
           turn.waiter = { sawActivity: false, settled: false, resolve, reject };
         });
-        const turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
-        turnTimeout = setTimeout(() => {
-          settleWaiter((pending) => pending.reject(new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.`)));
-        }, turnTimeoutMs);
+        armTurnInactivityTimer(turn);
         const onAbort = (): void => settleWaiter((pending) => pending.reject(new Error("interrupted")));
         turn.abort.signal.addEventListener("abort", onAbort, { once: true });
 
-        const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
+        // OpenCode applies only the latest user message's `system`, so the
+        // system prompt (worktree rules, launch instructions) goes with every turn.
         await client().request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody({
           text,
           model: options.model,
-          systemPrompt: promptSystemPrompt,
+          systemPrompt: options.systemPrompt,
           agent: openCodeAgentForMode(currentPermissionMode),
           variant: options.reasoningEffort,
         }), { signal: turn.abort.signal });
-        systemPromptInjected = true;
         if (!lease?.streamConnected && turn.waiter) {
           void pollUntilSettled(turn.waiter, turn.abort.signal);
         }
@@ -1570,8 +1613,12 @@ export class OpenCodeHarness implements AgentHarness {
           await completeTurn({ outcome: "failed", result: errorMessage(error), startedAt });
         }
       } finally {
-        if (turnTimeout) clearTimeout(turnTimeout);
+        if (turn.inactivityTimer) clearTimeout(turn.inactivityTimer);
         if (activeTurn === turn) activeTurn = undefined;
+        // A question or approval belongs to the turn that raised it. Once the
+        // turn is over (completed, failed, aborted) it can no longer be
+        // answered, and the next prompt must start a new turn, not answer it.
+        if (currentPendingInput) resolvePendingInput(currentPendingInput.requestId);
       }
     };
 
@@ -1650,11 +1697,6 @@ export class OpenCodeHarness implements AgentHarness {
             queue.enqueue(createPromptSettledEvent());
             continue;
           }
-          if (currentPendingInput?.kind === "question") {
-            await answerPendingQuestion(text);
-            queue.enqueue(createPromptSettledEvent());
-            continue;
-          }
           await runTurn(text);
         }
       } catch (error) {
@@ -1669,11 +1711,12 @@ export class OpenCodeHarness implements AgentHarness {
 
     const abortSignal = options.abortController?.signal;
     abortSignal?.addEventListener("abort", () => {
-      if (activeTurn) {
-        activeTurn.interrupted = true;
-        activeTurn.abort.abort();
+      const turn = activeTurn;
+      if (turn) {
+        turn.interrupted = true;
+        turn.abort.abort();
       }
-      void shutdown();
+      void (turn ? abortServerTurn() : Promise.resolve()).finally(() => shutdown());
     }, { once: true });
 
     return {
@@ -1744,9 +1787,7 @@ export class OpenCodeHarness implements AgentHarness {
         if (!turn) return;
         turn.interrupted = true;
         turn.abort.abort();
-        if (sessionId && lease?.alive) {
-          await client().request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
-        }
+        await abortServerTurn();
       },
 
       async close(): Promise<void> {
@@ -1754,6 +1795,8 @@ export class OpenCodeHarness implements AgentHarness {
         if (turn) {
           turn.interrupted = true;
           turn.abort.abort();
+          // Stop the server-side turn before the lease is released.
+          await abortServerTurn();
         }
         await shutdown();
         // Consumers stop even if the caller's prompt stream stays open.

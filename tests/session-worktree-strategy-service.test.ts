@@ -2,7 +2,7 @@ import "./test-env";
 import { describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
@@ -1493,6 +1493,58 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       ]);
       assert.equal(patches.some((patch) => (patch as any).worktreeLifecycle?.state === "released"), false);
       assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("asks the user instead of auto-merging a branch that changes git hooks, naming the files (D4)", async () => {
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("hook-change");
+    try {
+      mkdirSync(join(worktreePath, ".husky"), { recursive: true });
+      writeFileSync(join(worktreePath, ".husky", "pre-commit"), "echo hook\n", "utf-8");
+      git(worktreePath, "add", ".husky/pre-commit");
+      git(worktreePath, "commit", "-m", "add hook");
+      const notifications: SessionNotificationRequest[] = [];
+      let mergeCalls = 0;
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => { Object.assign(session, patch); return true; },
+        dispatchSessionNotification: (_session, request) => { notifications.push(request); },
+        getOutputPreview: () => "",
+        originThreadLine: () => "",
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch: async () => { mergeCalls += 1; return { success: true, fastForward: true }; },
+        spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+        runAutoPr: async () => { mergeCalls += 1; return { success: true }; },
+      });
+      const session: any = {
+        id: "s-hook-change",
+        name: "hook-change",
+        harnessSessionId: "h-hook-change",
+        status: "completed",
+        worktreeStrategy: "auto-merge",
+        worktreePath,
+        worktreeBranch: branchName,
+        originalWorkdir: repoDir,
+        workdir: worktreePath,
+        worktreeBaseBranch: "main",
+        prompt: "add a hook",
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.equal(mergeCalls, 0, "nothing is merged or opened automatically");
+      assert.equal(result.notificationSent, true);
+      assert.equal(notifications.at(-1)?.label, "worktree-merge-ask");
+      assert.match(String(notifications.at(-1)?.userMessage), /`\.husky\/pre-commit`/);
+      assert.ok(notifications.at(-1)?.buttons, "the user gets the decision buttons");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

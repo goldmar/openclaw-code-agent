@@ -862,6 +862,22 @@ describe("CodexHarness turns", () => {
     assert.match(result.data.result ?? "", /exited before the turn completed/);
   });
 
+  it("ends the message stream as soon as the app server exits between turns (B17)", async () => {
+    const client = new MockCodexClient();
+    const prompts = pushableStream();
+    prompts.push({ type: "user", text: "first" });
+    const session = launch(client, { prompt: prompts.stream });
+    const collected: HarnessMessage[] = [];
+    const done = (async () => { for await (const message of session.messages) collected.push(message); })();
+    while (!collected.some((message) => message.type === "run_completed")) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    }
+    // The app server dies while the session waits for the next prompt.
+    client.closeHandler?.();
+    await done;
+    assert.equal(client.requestsFor("turn/start").length, 1, "no work starts on the dead transport");
+  });
+
   it("emits finalized plan artifacts from Codex plan notifications", async () => {
     const messages = await collectMessages(launch(new MockCodexClient({ finalPlanMarkdown: "# Plan\n\n1. Update code" }), { permissionMode: "plan" }));
     const artifact = messages.find((message): message is Extract<HarnessMessage, { type: "plan_artifact" }> => message.type === "plan_artifact");
@@ -903,15 +919,15 @@ describe("CodexHarness resume and fork", () => {
     assert.equal((messages.find((message) => message.type === "backend_ref") as { ref: { conversationId: string } }).ref.conversationId, VALID_THREAD_ID);
   });
 
-  it("starts a fresh thread instead of sending non-UUID resume ids", async () => {
+  it("refuses a non-UUID resume id instead of silently starting a fresh thread (B16)", async () => {
     const client = new MockCodexClient();
-    await collectMessages(launch(client, { resumeSessionId: "ses_plugin_owned_thread" }));
+    assert.throws(() => launch(client, { resumeSessionId: "ses_plugin_owned_thread" }), /not a Codex App Server thread id/);
     assert.equal(isCodexAppServerSessionId("ses_plugin_owned_thread"), false);
     // Codex emits plain UUID thread ids; OCA resumes only ids it stored from Codex.
     assert.equal(isCodexAppServerSessionId(`urn:uuid:${VALID_THREAD_ID}`), false);
     assert.equal(isCodexAppServerSessionId(VALID_THREAD_ID), true);
     assert.equal(client.requestsFor("thread/resume").length, 0);
-    assert.equal(client.requestsFor("thread/start").length, 1);
+    assert.equal(client.requestsFor("thread/start").length, 0);
   });
 
   it("forks once to a new thread, then keeps using the fork", async () => {

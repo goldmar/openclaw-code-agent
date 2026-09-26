@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { copyFile, lstat, mkdir, stat } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, sep } from "node:path";
+import { buildMinimalChildEnv } from "./child-env";
 import { runGit } from "./git-exec";
 import { createLogger } from "./logger";
 
@@ -15,6 +17,9 @@ const log = createLogger("worktree-provisioning");
  *    copy into the new worktree (gitignore syntax, evaluated by git itself).
  * 2. An executable `.openclaw/worktree-setup.sh` then runs inside the new
  *    worktree with a 120 s timeout.
+ *
+ * Both inputs are read from the commit the source checkout has checked out
+ * (committed content only), because an agent can write to the working tree.
  *
  * Either step failing fails the worktree creation.
  */
@@ -138,30 +143,81 @@ async function copyProvisionedFile(sourceRoot: string, worktreePath: string, rel
 }
 
 /**
- * Copy the gitignored files selected by `<sourceRoot>/.worktreeinclude` into a
- * new worktree. Only files that are both matched by `.worktreeinclude` and
- * ignored by the repository's standard excludes are copied; tracked files,
- * symlinks, unsafe paths, and existing destinations are skipped.
+ * The committed content of `relativePath` at `baseCommit` in the source
+ * checkout, with its git file mode; undefined when the commit does not track it.
+ * Worktree provisioning never reads a modified or untracked working-tree copy.
+ */
+async function readCommittedFile(
+  sourceRoot: string,
+  baseCommit: string | undefined,
+  relativePath: string,
+): Promise<{ content: Buffer; mode: string } | undefined> {
+  if (!baseCommit) return undefined;
+  let entry: string;
+  try {
+    entry = (await runGit(
+      [...HARDENED_GIT_CONFIG, "ls-tree", "-z", baseCommit, "--", relativePath],
+      { cwd: sourceRoot, timeout: PROVISION_GIT_TIMEOUT_MS },
+    )).split("\0")[0] ?? "";
+  } catch {
+    return undefined;
+  }
+  const match = entry.match(/^(\d{6}) (\w+) ([0-9a-f]+)\t/);
+  if (!match || match[2] !== "blob") return undefined;
+  const content = await new Promise<Buffer>((resolve, reject) => {
+    const child = spawn("git", [...HARDENED_GIT_CONFIG, "cat-file", "blob", match[3]!], {
+      cwd: sourceRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`git cat-file exited ${code}`))));
+  });
+  return { content, mode: match[1]! };
+}
+
+async function withPrivateTempFile<T>(content: Buffer, mode: number, fn: (path: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), "oca-provision-"));
+  try {
+    const path = join(dir, "input");
+    await writeFile(path, content, { mode });
+    return await fn(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Copy the gitignored files selected by `.worktreeinclude` into a new
+ * worktree. The include list is the version committed at `baseCommit` (the
+ * source checkout's HEAD), never an untracked or modified working-tree copy.
+ * Only files that are both matched by it and ignored by the repository's
+ * standard excludes are copied; tracked files, symlinks, unsafe paths, and
+ * existing destinations are skipped.
  *
  * @returns the relative paths that were copied, sorted.
  */
-export async function provisionWorktreeIncludes(sourceRoot: string, worktreePath: string): Promise<string[]> {
-  const includePath = join(sourceRoot, WORKTREE_INCLUDE_FILE);
-  const includeStat = await stat(includePath).catch((err: NodeJS.ErrnoException): undefined => {
-    if (err.code === "ENOENT") return undefined;
-    throw err;
-  });
-  if (!includeStat) return [];
-  if (!includeStat.isFile()) throw new Error(`${WORKTREE_INCLUDE_FILE} must resolve to a regular file`);
+export async function provisionWorktreeIncludes(
+  sourceRoot: string,
+  worktreePath: string,
+  options: { baseCommit?: string } = {},
+): Promise<string[]> {
+  const committed = await readCommittedFile(sourceRoot, options.baseCommit, WORKTREE_INCLUDE_FILE);
+  if (!committed) return [];
+  if (committed.mode === "120000") throw new Error(`${WORKTREE_INCLUDE_FILE} must be a regular file, not a symlink`);
 
-  const candidates = await listIncludedIgnoredFiles(sourceRoot, includePath);
-  const ignoredInWorktree = candidates.length > 0 ? await filterIgnoredInWorktree(worktreePath, candidates) : new Set<string>();
-  const copied: string[] = [];
-  for (const relativePath of candidates) {
-    if (!ignoredInWorktree.has(relativePath)) continue;
-    if (await copyProvisionedFile(sourceRoot, worktreePath, relativePath)) copied.push(relativePath);
-  }
-  return copied.sort();
+  return withPrivateTempFile(committed.content, 0o600, async (includePath) => {
+    const candidates = await listIncludedIgnoredFiles(sourceRoot, includePath);
+    const ignoredInWorktree = candidates.length > 0 ? await filterIgnoredInWorktree(worktreePath, candidates) : new Set<string>();
+    const copied: string[] = [];
+    for (const relativePath of candidates) {
+      if (!ignoredInWorktree.has(relativePath)) continue;
+      if (await copyProvisionedFile(sourceRoot, worktreePath, relativePath)) copied.push(relativePath);
+    }
+    return copied.sort();
+  });
 }
 
 class OutputTail {
@@ -203,9 +259,12 @@ function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void
 }
 
 /**
- * Run `<sourceRoot>/.openclaw/worktree-setup.sh` inside a new worktree when it
- * exists and is executable. The script runs directly (it needs its own
- * shebang) in its own process group with the Gateway environment plus
+ * Run `.openclaw/worktree-setup.sh` inside a new worktree when the version
+ * committed at `baseCommit` (the source checkout's HEAD) is executable
+ * (git mode 100755). A modified or untracked working-tree copy is never run.
+ * The committed script runs from a private temporary copy (it needs its own
+ * shebang) with the worktree as its working directory, in its own process
+ * group, with a minimal allowlisted environment (see child-env.ts) plus
  * `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`, no stdin, and a
  * 120 s timeout after which the whole process group is terminated.
  *
@@ -214,12 +273,19 @@ function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void
 export async function runWorktreeSetupScript(
   sourceRoot: string,
   worktreePath: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; baseCommit?: string } = {},
 ): Promise<boolean> {
-  const scriptPath = join(sourceRoot, WORKTREE_SETUP_SCRIPT);
-  const scriptStat = await stat(scriptPath).catch((): undefined => undefined);
-  if (!scriptStat?.isFile() || (scriptStat.mode & 0o111) === 0) return false;
+  const committed = await readCommittedFile(sourceRoot, options.baseCommit, WORKTREE_SETUP_SCRIPT.split(sep).join("/"));
+  if (!committed || committed.mode !== "100755") return false;
+  return withPrivateTempFile(committed.content, 0o700, (scriptPath) => runSetupScriptFile(scriptPath, sourceRoot, worktreePath, options));
+}
 
+async function runSetupScriptFile(
+  scriptPath: string,
+  sourceRoot: string,
+  worktreePath: string,
+  options: { timeoutMs?: number },
+): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? WORKTREE_SETUP_TIMEOUT_MS;
   const stdout = new OutputTail();
   const stderr = new OutputTail();
@@ -230,7 +296,7 @@ export async function runWorktreeSetupScript(
     let settled = false;
     const child = spawn(scriptPath, [], {
       cwd: worktreePath,
-      env: { ...process.env, OPENCLAW_SOURCE_TREE_PATH: sourceRoot, OPENCLAW_WORKTREE_PATH: worktreePath },
+      env: buildMinimalChildEnv(process.env, { OPENCLAW_SOURCE_TREE_PATH: sourceRoot, OPENCLAW_WORKTREE_PATH: worktreePath }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
       shell: false,

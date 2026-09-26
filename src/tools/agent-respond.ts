@@ -36,7 +36,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
         Type.Boolean({ description: "Set to true when the message comes from the user (not auto-generated). Resets the auto-respond counter and bypasses the auto-respond limit." }),
       ),
       approve: Type.Optional(
-        Type.Boolean({ description: "Set to true to escalate session permissions to bypassPermissions. Works in two scenarios: (1) approve a pending plan in plan mode, or (2) escalate a default-mode session to skip remaining OpenClaw approval checkpoints. No-op if already in bypassPermissions mode. In plan mode without a pending plan, this flag is ignored." }),
+        Type.Boolean({ description: "Set to true to escalate session permissions to bypassPermissions. Works in two scenarios: (1) approve a pending plan in plan mode, or (2) escalate a default-mode session to skip remaining OpenClaw approval checkpoints. No-op if already in bypassPermissions mode. In plan mode without a pending plan, this flag is ignored. When the session's planApproval is 'ask', only the user may approve (their button, or their own reply forwarded as text with userInitiated=true): approve=true is refused." }),
       ),
       approval_rationale: Type.Optional(
         Type.String({ description: "Optional structured rationale for a direct delegated plan approval. Use this instead of embedding the rationale in message text when approve=true for a pending plan." }),

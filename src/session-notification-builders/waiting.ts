@@ -3,6 +3,7 @@ import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
 import { buildPlanApprovalPromptContent, buildPlanReviewSummary, paginatePlanApprovalText } from "../plan-review-summary";
 import type { SessionNotificationMessage } from "../wake-dispatcher";
+import { fenceAgentOutput } from "../untrusted-output";
 
 type OriginThreadLine = string;
 type WaitingForInputPayload = {
@@ -164,7 +165,7 @@ export function buildWaitingForInputPayload(args: {
           `The preview below is truncated — you MUST read the full output before making any decision.`,
           ``,
           `Preview (truncated):`,
-          preview,
+          fenceAgentOutput(preview, "plan preview"),
           ``,
           `━━━ STEP 2 (MANDATORY): Review privately ━━━`,
           `You are the delegated decision-maker. Review the plan yourself before involving the user.`,
@@ -209,18 +210,17 @@ export function buildWaitingForInputPayload(args: {
         userMessages,
         planReviewSummary,
         wakeMessage: [
-          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
+          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been asked to approve it directly.`,
           `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
           originThreadLine,
           permissionModeLine,
           ``,
-          `DO NOT approve this plan yourself. Wait for the user's explicit approval or rejection.`,
-          `Once the user responds, forward their decision:`,
-          `  To approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
-          `  To request changes: agent_respond(session='${session.id}', message='<user feedback>')`,
+          `DO NOT approve this plan yourself: only the user can (planApproval is "ask"; agent_respond with approve=true alone is refused).`,
+          `Wait for the user's button press. If the user answers in chat instead, forward their exact words with userInitiated=true:`,
+          `  agent_respond(session='${session.id}', message='<the user's words, e.g. approve>', userInitiated=true)`,
           ``,
           `Preview (truncated):`,
-          preview,
+          fenceAgentOutput(preview, "plan preview"),
         ].join("\n"),
         buttons: userMessages ? undefined : planApprovalButtons,
       };
@@ -244,16 +244,16 @@ export function buildWaitingForInputPayload(args: {
     label: "waiting",
     userMessage,
     wakeMessage: [
-      `[SYSTEM INSTRUCTION: Follow your auto-respond rules strictly. If this is a permission request or "should I continue?" → auto-respond. For ALL other questions → forward the agent's EXACT question to the user. Do NOT add your own analysis, commentary, or interpretation. Do NOT "nudge" or "poke" the session.]`,
+      `[SYSTEM INSTRUCTION: The session is waiting for the user. Forward the agent's EXACT question to the user unless it was already shown to them with buttons. Do NOT answer it yourself, and do NOT add your own analysis, commentary, or interpretation. Do NOT "nudge" or "poke" the session.]`,
       ``,
       `${sessionType} is waiting for a genuine user reply.`,
       `Name: ${session.name} | ID: ${session.id}`,
       originThreadLine,
       ``,
       `Last output:`,
-      preview,
+      fenceAgentOutput(preview, "last output"),
       ``,
-      `Use agent_respond(session='${session.id}', message='...') to send a reply, or agent_output(session='${session.id}', full: true) to see full context before deciding.`,
+      `When the user answers, send their reply with agent_respond(session='${session.id}', message='<their answer>', userInitiated=true). Use agent_output(session='${session.id}', full: true) to see full context.`,
     ].join("\n"),
     buttons: questionButtons,
   };

@@ -136,8 +136,10 @@ export class SessionWorktreeMessageService {
     buttons?: NotificationButton[][];
     summaryLines?: string[];
     policyReason?: string;
+    /** Names changed hook / worktree-setup files; such a branch never merges automatically. */
+    hookWarning?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason } = args;
+    const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
@@ -166,6 +168,7 @@ export class SessionWorktreeMessageService {
           ? ["Summary:", ...summaryLines.map((line) => `- ${line}`), ``]
           : []),
         ...(policyReason ? [`Policy: ${policyReason}`, ``] : []),
+        ...(hookWarning ? [hookWarning, ``] : []),
         `Recent commits:`,
         ...commitLines,
         ...(moreNote ? [moreNote] : []),
@@ -197,8 +200,9 @@ export class SessionWorktreeMessageService {
     policyReason?: string;
     allowedActions?: { merge: boolean; pr: boolean };
     originThreadLine?: string;
+    hookWarning?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, policyReason, allowedActions, originThreadLine } = args;
+    const { session, branchName, baseBranch, diffSummary, policyReason, allowedActions, originThreadLine, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
@@ -227,6 +231,7 @@ export class SessionWorktreeMessageService {
         diffSummary,
         allowedActions,
         policyReason,
+        hookWarning,
       }),
       notifyUser: "never",
     };

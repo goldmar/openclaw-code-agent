@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { existsSync, statSync, writeFileSync } from "fs";
 import type {
   PersistedSessionInfo,
@@ -40,6 +41,8 @@ const log = createLogger("session-store");
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Unreferenced output files younger than this may belong to a writer that has not persisted its row yet. */
+const ORPHAN_OUTPUT_GRACE_MS = 60 * 60 * 1000;
 /** Retry interval and budget for a save deferred because another writer holds the index lock. */
 const LOCKED_SAVE_RETRY_MS = 25;
 const LOCKED_SAVE_MAX_DEFER_MS = 5_000;
@@ -97,11 +100,49 @@ function idRowKey(field: "id" | "key") {
   };
 }
 
-function toKeyedJson(rows: Iterable<unknown>, keyOf: (row: unknown) => string | undefined): Map<string, string> {
+/** JSON with object keys sorted and `undefined` members dropped, so equal content compares equal. */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(sortKeysDeep(value));
+}
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => (item === undefined ? null : sortKeysDeep(item)));
+  if (!value || typeof value !== "object") return value;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const member = (value as Record<string, unknown>)[key];
+    if (member !== undefined) sorted[key] = sortKeysDeep(member);
+  }
+  return sorted;
+}
+
+/**
+ * The one canonical form a row is compared in, whatever side it comes from:
+ * normalized the way loading normalizes it, then serialized with sorted keys.
+ * Base, local and disk rows must all go through it, or a row adopted from disk
+ * (raw key order) never equals its normalized in-memory copy and the merge
+ * mistakes it for a local change. Running rows stay raw: normalizing one
+ * recovers it (with a fresh timestamp) and they are only ever compared with
+ * copies of themselves.
+ */
+type RowCanonicalizer = (row: unknown) => string;
+
+const canonicalSessionRow: RowCanonicalizer = (row) => {
+  const running = Boolean(row && typeof row === "object" && (row as { status?: unknown }).status === "running");
+  return stableStringify(running ? row : (normalizePersistedEntry(row) ?? row));
+};
+const canonicalTokenRow: RowCanonicalizer = (row) => stableStringify(normalizeActionToken(row) ?? row);
+const canonicalPolicyRow: RowCanonicalizer = (row) => stableStringify(normalizeRepoPolicyRecord(row) ?? row);
+
+function toKeyedJson(
+  rows: Iterable<unknown>,
+  keyOf: (row: unknown) => string | undefined,
+  canonical: RowCanonicalizer,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const row of rows) {
     const key = keyOf(row);
-    if (key) map.set(key, JSON.stringify(row));
+    if (key) map.set(key, canonical(row));
   }
   return map;
 }
@@ -154,6 +195,13 @@ export class SessionStore {
    */
   private readonly carriedSessions = new Map<string, unknown>();
   private syncing = false;
+  /**
+   * Set when the index on disk was written by a newer build (a higher schema
+   * version). This store then never writes the index; its changes stay in memory.
+   */
+  private readOnlyReason: string | undefined;
+  /** Hash of the last unmergeable index this store backed up (one backup per distinct content). */
+  private lastBackedUpUnreadableHash: string | undefined;
   /** A save deferred because another writer held the lock (never blocks the event loop). */
   private deferredSave: { timer: ReturnType<typeof setTimeout>; since: number } | undefined;
   private persistWaiters: Array<() => void> = [];
@@ -221,9 +269,9 @@ export class SessionStore {
 
   private localKeyedRows() {
     return {
-      sessions: toKeyedJson(this.persistedRows(), sessionRowKey),
-      tokens: toKeyedJson(this.actionTokenStore.listForPersistence(), idRowKey("id")),
-      policies: toKeyedJson(this.repoPolicies.values(), idRowKey("key")),
+      sessions: toKeyedJson(this.persistedRows(), sessionRowKey, canonicalSessionRow),
+      tokens: toKeyedJson(this.actionTokenStore.listForPersistence(), idRowKey("id"), canonicalTokenRow),
+      policies: toKeyedJson(this.repoPolicies.values(), idRowKey("key"), canonicalPolicyRow),
     };
   }
 
@@ -243,9 +291,18 @@ export class SessionStore {
     if (signature === this.diskSignature || signature === "missing") return false;
     const read = readSessionStoreSnapshot(this.indexPath);
     if (!read) return false;
+    if ("newerSchema" in read) {
+      this.enterReadOnly(read.newerSchema);
+      this.diskSignature = signature;
+      return false;
+    }
     if ("unreadable" in read) {
-      // Never replace another writer's data without a recoverable copy.
-      backupUnmergeableSessionIndex(this.indexPath, read.unreadable);
+      // Never replace another writer's data without a recoverable copy, and
+      // keep one copy per distinct content rather than one per save.
+      const hash = createHash("sha256").update(read.unreadable).digest("hex");
+      if (hash !== this.lastBackedUpUnreadableHash && backupUnmergeableSessionIndex(this.indexPath, read.unreadable)) {
+        this.lastBackedUpUnreadableHash = hash;
+      }
       this.diskSignature = signature;
       return false;
     }
@@ -256,9 +313,9 @@ export class SessionStore {
       this.revision = Math.max(this.revision, snapshot.revision);
       this.diskSignature = signature;
       this.base = {
-        sessions: toKeyedJson(snapshot.sessions, sessionRowKey),
-        tokens: toKeyedJson(snapshot.actionTokens, idRowKey("id")),
-        policies: toKeyedJson(snapshot.repoPolicies, idRowKey("key")),
+        sessions: toKeyedJson(snapshot.sessions, sessionRowKey, canonicalSessionRow),
+        tokens: toKeyedJson(snapshot.actionTokens, idRowKey("id"), canonicalTokenRow),
+        policies: toKeyedJson(snapshot.repoPolicies, idRowKey("key"), canonicalPolicyRow),
       };
       log.debug(JSON.stringify({
         component: "SessionStore",
@@ -274,6 +331,17 @@ export class SessionStore {
     }
   }
 
+  private enterReadOnly(schemaVersion: number): void {
+    if (this.readOnlyReason) return;
+    this.readOnlyReason = `the session index was written by a newer OpenClaw Code Agent (schema v${schemaVersion})`;
+    log.warn(`[SessionStore] ${this.readOnlyReason}; this build leaves it untouched and keeps its own session changes in memory only. Upgrade the plugin to persist sessions again.`);
+  }
+
+  /** True when a newer build owns the index and this store does not write it. */
+  isReadOnly(): boolean {
+    return this.readOnlyReason !== undefined;
+  }
+
   /** Apply another writer's changes to memory; returns the number of rows taken from disk or dropped. */
   private mergeSnapshot(snapshot: SessionStoreDiskSnapshot): number {
     const local = this.localKeyedRows();
@@ -284,7 +352,7 @@ export class SessionStore {
       const key = sessionRowKey(row);
       if (key) diskSessions.set(key, row);
     }
-    const sessionChoices = mergeKeyedRows(this.base.sessions, local.sessions, toKeyedJson(snapshot.sessions, sessionRowKey));
+    const sessionChoices = mergeKeyedRows(this.base.sessions, local.sessions, toKeyedJson(snapshot.sessions, sessionRowKey, canonicalSessionRow));
     for (const [key, choice] of sessionChoices) {
       // A session another live process runs belongs to that process: its row
       // wins even over a local edit of this store's cached (stopped) copy.
@@ -313,7 +381,7 @@ export class SessionStore {
       const key = idRowKey("id")(row);
       if (key) diskTokens.set(key, row);
     }
-    const tokenChoices = mergeKeyedRows(this.base.tokens, local.tokens, toKeyedJson(snapshot.actionTokens, idRowKey("id")));
+    const tokenChoices = mergeKeyedRows(this.base.tokens, local.tokens, toKeyedJson(snapshot.actionTokens, idRowKey("id"), canonicalTokenRow));
     for (const [key, choice] of tokenChoices) {
       const localToken = this.actionTokens.get(key);
       if (choice === "local") {
@@ -353,7 +421,7 @@ export class SessionStore {
       const key = idRowKey("key")(row);
       if (key) diskPolicies.set(key, row);
     }
-    const policyChoices = mergeKeyedRows(this.base.policies, local.policies, toKeyedJson(snapshot.repoPolicies, idRowKey("key")));
+    const policyChoices = mergeKeyedRows(this.base.policies, local.policies, toKeyedJson(snapshot.repoPolicies, idRowKey("key"), canonicalPolicyRow));
     for (const [key, choice] of policyChoices) {
       if (choice === "local") continue;
       changed += 1;
@@ -388,6 +456,7 @@ export class SessionStore {
         const key = sessionRowKey(raw);
         if (key) this.carriedSessions.set(key, raw);
       },
+      onNewerSchema: (schemaVersion) => this.enterReadOnly(schemaVersion),
     });
   }
 
@@ -404,14 +473,16 @@ export class SessionStore {
     if (this.deferredSave) return;
     const since = Date.now();
     const retry = (): void => {
-      const force = Date.now() - since >= LOCKED_SAVE_MAX_DEFER_MS;
-      const result = this.writeIndex({ force });
+      const overBudget = Date.now() - since >= LOCKED_SAVE_MAX_DEFER_MS;
+      // A live writer's lock is never broken here: a lock older than
+      // SESSION_STORE_LOCK_STALE_MS is stale and broken by the lock itself.
+      const result = this.writeIndex({ force: false });
       if (result === "written") {
         this.deferredSave = undefined;
         this.resolvePersistWaiters();
         return;
       }
-      if (force && result === "failed" && this.persistWaiters.length > 0) {
+      if (overBudget && result === "failed" && this.persistWaiters.length > 0) {
         // The disk refuses the write (the lock is no longer the problem). Do not
         // hold prompts back indefinitely; keep retrying in the background.
         log.warn("[SessionStore] Session index write keeps failing; releasing waiters and retrying in the background.");
@@ -420,7 +491,7 @@ export class SessionStore {
       // Lock contention clears within milliseconds; a failing disk does not, so
       // failed writes retry every second, then every 30 s after the 5 s budget.
       const delay = result === "failed"
-        ? (force ? LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS : LOCKED_SAVE_FAILED_RETRY_MS)
+        ? (overBudget ? LOCKED_SAVE_PERSISTENT_FAILURE_RETRY_MS : LOCKED_SAVE_FAILED_RETRY_MS)
         : LOCKED_SAVE_RETRY_MS;
       this.deferredSave = { timer: setTimeout(retry, delay), since };
       this.deferredSave.timer.unref?.();
@@ -477,6 +548,8 @@ export class SessionStore {
     try {
       // Before load completes, the constructor has no base yet; write as loaded.
       if (this.diskSignature !== undefined) this.syncFromDisk("save");
+      // A newer build owns the index: never downgrade or overwrite it.
+      if (this.readOnlyReason) return "written";
       const revision = this.revision + 1;
       const written = saveSessionStoreIndex(
         this.indexPath,
@@ -738,8 +811,11 @@ export class SessionStore {
       log.warn(`[SessionStore] Failed to write output file for session ${session.id}: ${errorMessage(err)}`);
     }
 
-    const info: PersistedSessionInfo = {
+    const runtimeFields: PersistedSessionInfo = {
       sessionId: session.id,
+      // Terminal rows are owned by no runtime and carry no load-time recovery note.
+      runtimeOwner: undefined,
+      runtimeRecovery: undefined,
       harnessSessionId: session.harnessSessionId,
       backendRef: this.buildPersistedBackendRef(session),
       name: session.name,
@@ -792,6 +868,9 @@ export class SessionStore {
       worktreePath: worktree.worktreePath,
       worktreeBranch: worktree.worktreeBranch,
       worktreeStrategy: worktree.worktreeStrategy,
+      repoIntegrationPolicy: worktree.repoIntegrationPolicy,
+      repoIntegrationPolicySource: worktree.repoIntegrationPolicySource,
+      repoProvider: worktree.repoProvider,
       worktreeBaseBranch: worktree.worktreeBaseBranch,
       worktreeParentBranch: worktree.worktreeParentBranch,
       worktreePrTargetRepo: worktree.worktreePrTargetRepo,
@@ -801,6 +880,14 @@ export class SessionStore {
       worktreeLifecycle: worktree.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
+    // Fields the runtime session does not track (PR, merge, disposition,
+    // reminder and completion-wake state written through
+    // updatePersistedSession) survive a re-persist, for example when runtime
+    // GC persists the session again after it leaves memory.
+    const existing = this.getPersistedSession(session.id);
+    const info: PersistedSessionInfo = existing?.sessionId === session.id
+      ? { ...existing, ...runtimeFields }
+      : runtimeFields;
     assertNewSchemaEntry(info);
 
     this.indexPersistedEntry(info);
@@ -907,6 +994,7 @@ export class SessionStore {
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */
   cleanupSessionOutputFiles(now: number): void {
     this.actionTokenStore.purgeExpiredActionTokens(now);
+    this.syncFromDisk("output-cleanup");
     cleanupSessionOutputFiles(now, SESSION_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
@@ -969,15 +1057,34 @@ export class SessionStore {
     return false;
   }
 
+  /**
+   * Output files any row in the index refers to, including rows carried for
+   * another writer (its running sessions and rows this build cannot read).
+   */
   getReferencedOutputPaths(): string[] {
-    return [...new Set(
-      [...this.persisted.values()]
-        .map((session) => session.outputPath)
-        .filter((path): path is string => typeof path === "string" && path.length > 0),
-    )];
+    const paths = new Set<string>();
+    for (const session of this.persisted.values()) {
+      if (typeof session.outputPath === "string" && session.outputPath.length > 0) paths.add(session.outputPath);
+    }
+    for (const raw of this.carriedSessions.values()) {
+      if (!raw || typeof raw !== "object") continue;
+      const record = raw as { outputPath?: unknown; sessionId?: unknown };
+      if (typeof record.outputPath === "string" && record.outputPath.length > 0) paths.add(record.outputPath);
+      if (typeof record.sessionId === "string" && record.sessionId.length > 0) {
+        paths.add(getSessionOutputFilePath(record.sessionId));
+      }
+    }
+    return [...paths];
   }
 
-  cleanupOrphanOutputFiles(): void {
-    cleanupOrphanOutputFiles(this.getReferencedOutputPaths());
+  /**
+   * Remove output files no index row refers to. Reads the index first so rows
+   * another writer added are honored, and never touches a file modified in the
+   * last `ORPHAN_OUTPUT_GRACE_MS` (a writer that has not persisted its row yet)
+   * or a file in the legacy OS temp directory (other processes' files).
+   */
+  cleanupOrphanOutputFiles(now: number = Date.now()): void {
+    this.syncFromDisk("orphan-output-cleanup");
+    cleanupOrphanOutputFiles(this.getReferencedOutputPaths(), { now, minAgeMs: ORPHAN_OUTPUT_GRACE_MS });
   }
 }

@@ -259,6 +259,49 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
+  it("never rewinds a local PR branch that has unpushed commits the helper branch lacks (B3)", async () => {
+    const { repoDir } = initRepoWithOrigin("openclaw-agent-pr-unpushed-");
+    const rootDir = join(repoDir, "..");
+    try {
+      git(repoDir, "checkout", "-b", "agent/pr-head");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original PR work");
+      git(repoDir, "push", "-u", "origin", "agent/pr-head");
+      // The helper branch starts from the pushed PR head...
+      git(repoDir, "checkout", "-b", "agent/helper");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+      // ...while the local PR branch gained a commit that was never pushed.
+      git(repoDir, "checkout", "agent/pr-head");
+      writeFileSync(join(repoDir, "unpushed.txt"), "local only\n", "utf-8");
+      git(repoDir, "add", "unpushed.txt");
+      git(repoDir, "commit", "-m", "Unpushed local work");
+      const localHead = git(repoDir, "rev-parse", "agent/pr-head");
+      git(repoDir, "checkout", "main");
+
+      const result = await resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/helper",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/example/repo/pull/7",
+          number: 7,
+          headRefName: "agent/pr-head",
+          baseRefName: "main",
+        },
+      });
+
+      assert.equal(result.success, false);
+      assert.match("error" in result ? result.error : "", /Refusing to move agent\/pr-head/);
+      assert.equal(git(repoDir, "rev-parse", "agent/pr-head"), localHead, "the unpushed commit is kept");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses the original PR branch when it already contains follow-up helper work", async () => {
     const repoDir = initRepo("openclaw-agent-pr-represented-");
     try {

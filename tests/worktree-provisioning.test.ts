@@ -71,6 +71,8 @@ describe("worktree provisioning (.worktreeinclude)", () => {
       "untracked-not-ignored.txt",
       "",
     ].join("\n"));
+    git(repoDir, "add", ".worktreeinclude");
+    git(repoDir, "commit", "-qm", "include list");
 
     const worktreePath = await createWorktree(repoDir, "provisioned");
 
@@ -96,9 +98,11 @@ describe("worktree provisioning (.worktreeinclude)", () => {
     writeFileSync(join(repoDir, "outside.txt"), "outside\n");
     symlinkSync(join(repoDir, "outside.txt"), join(repoDir, "cache.bin"));
     writeFileSync(join(repoDir, ".worktreeinclude"), ".env\ncache.bin\n");
+    git(repoDir, "add", ".worktreeinclude");
+    git(repoDir, "commit", "-qm", "include list");
     writeFileSync(join(worktreeDir, ".env"), "EXISTING=1\n");
 
-    assert.deepEqual(await provisionWorktreeIncludes(repoDir, worktreeDir), []);
+    assert.deepEqual(await provisionWorktreeIncludes(repoDir, worktreeDir, { baseCommit: git(repoDir, "rev-parse", "HEAD") }), []);
     assert.equal(readFileSync(join(worktreeDir, ".env"), "utf8"), "EXISTING=1\n");
     assert.equal(existsSync(join(worktreeDir, "cache.bin")), false);
   });
@@ -115,6 +119,8 @@ describe("worktree provisioning (.worktreeinclude)", () => {
     mkdirSync(join(repoDir, "config"));
     writeFileSync(join(repoDir, "config", "local.json"), "{}\n");
     writeFileSync(join(repoDir, ".worktreeinclude"), ".env\nconfig/local.json\n");
+    git(repoDir, "add", ".worktreeinclude");
+    git(repoDir, "commit", "-qm", "include list");
 
     const worktreePath = await createWorktree(repoDir, "unignored", { allowExistingBranch: true });
 
@@ -129,14 +135,33 @@ describe("worktree provisioning (.worktreeinclude)", () => {
     assert.equal(normalizeProvisionedRelativePath("config/local.json"), join("config", "local.json"));
   });
 
-  it("fails worktree creation and rolls back when .worktreeinclude is not a regular file", async () => {
+  it("ignores an untracked or modified .worktreeinclude: only the committed list counts (B11)", async () => {
+    const repoDir = createRepo("oca-provision-untracked-");
+    writeFileSync(join(repoDir, ".env"), "SECRET=1\n");
+    writeFileSync(join(repoDir, ".worktreeinclude"), ".env\n");
+    const untracked = await createWorktree(repoDir, "untracked-include");
+    assert.equal(existsSync(join(untracked, ".env")), false, "an untracked include list is ignored");
+
+    writeFileSync(join(repoDir, ".worktreeinclude"), "cache.bin\n");
+    git(repoDir, "add", ".worktreeinclude");
+    git(repoDir, "commit", "-qm", "committed include list");
+    writeFileSync(join(repoDir, "cache.bin"), "cache\n");
+    writeFileSync(join(repoDir, ".worktreeinclude"), ".env\n");
+    const modified = await createWorktree(repoDir, "modified-include");
+    assert.equal(existsSync(join(modified, ".env")), false, "a modified working-tree include list is ignored");
+    assert.equal(readFileSync(join(modified, "cache.bin"), "utf8"), "cache\n", "the committed include list is used");
+  });
+
+  it("fails worktree creation and rolls back when the committed .worktreeinclude is a symlink", async () => {
     const repoDir = createRepo("oca-provision-dir-");
-    mkdirSync(join(repoDir, ".worktreeinclude"));
+    symlinkSync("README.md", join(repoDir, ".worktreeinclude"));
+    git(repoDir, "add", ".worktreeinclude");
+    git(repoDir, "commit", "-qm", "symlinked include");
     const worktreeBase = mkdtempSync(join(tmpdir(), "oca-provision-base-"));
     tempDirs.push(worktreeBase);
     process.env.OPENCLAW_WORKTREE_DIR = worktreeBase;
 
-    await assert.rejects(createWorktree(repoDir, "bad-include"), /\.worktreeinclude must resolve to a regular file/);
+    await assert.rejects(createWorktree(repoDir, "bad-include"), /\.worktreeinclude must be a regular file/);
     assert.equal(existsSync(join(worktreeBase, "openclaw-worktree-bad-include")), false);
     assert.equal(git(repoDir, "branch", "--list", "agent/bad-include"), "");
   });
@@ -159,20 +184,47 @@ describe("worktree provisioning (.openclaw/worktree-setup.sh)", () => {
     assert.equal(cwd, worktreePath);
   });
 
+  it("runs the committed script with a minimal environment, never a modified or untracked copy (B11/B12)", async () => {
+    const repoDir = createRepo("oca-setup-committed-");
+    writeSetupScript(repoDir, ["echo committed > setup-ran.txt", "echo \"gh=${GH_TOKEN:-unset}\" >> setup-ran.txt"]);
+    git(repoDir, "add", ".openclaw/worktree-setup.sh");
+    git(repoDir, "commit", "-m", "setup");
+    writeSetupScript(repoDir, ["echo modified > setup-ran.txt"]);
+    const previous = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "gh-secret";
+    try {
+      const worktreePath = await createWorktree(repoDir, "committed-setup");
+      assert.equal(readFileSync(join(worktreePath, "setup-ran.txt"), "utf8"), "committed\ngh=unset\n");
+    } finally {
+      if (previous === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previous;
+    }
+
+    const untrackedRepo = createRepo("oca-setup-untracked-");
+    writeSetupScript(untrackedRepo, ["touch should-not-exist.txt"]);
+    const untrackedWorktree = await createWorktree(untrackedRepo, "untracked-setup");
+    assert.equal(existsSync(join(untrackedWorktree, "should-not-exist.txt")), false, "an untracked script never runs");
+  });
+
   it("skips a setup script that is not executable", async () => {
     const repoDir = createRepo("oca-setup-noexec-");
     const scriptPath = writeSetupScript(repoDir, ["touch should-not-exist.txt"]);
     chmodSync(scriptPath, 0o644);
+    git(repoDir, "add", ".openclaw/worktree-setup.sh");
+    git(repoDir, "commit", "-qm", "non-executable setup");
+    chmodSync(scriptPath, 0o755);
     const worktreeDir = mkdtempSync(join(tmpdir(), "oca-setup-noexec-target-"));
     tempDirs.push(worktreeDir);
 
-    assert.equal(await runWorktreeSetupScript(repoDir, worktreeDir), false);
+    assert.equal(await runWorktreeSetupScript(repoDir, worktreeDir, { baseCommit: git(repoDir, "rev-parse", "HEAD") }), false);
     assert.equal(existsSync(join(worktreeDir, "should-not-exist.txt")), false);
   });
 
   it("fails worktree creation with the script output tail and removes the worktree and new branch", async () => {
     const repoDir = createRepo("oca-setup-fail-");
     writeSetupScript(repoDir, ["echo 'installing deps'", "echo 'npm ERR! missing token' >&2", "exit 7"]);
+    git(repoDir, "add", ".openclaw/worktree-setup.sh");
+    git(repoDir, "commit", "-qm", "failing setup");
     const worktreeBase = mkdtempSync(join(tmpdir(), "oca-setup-fail-base-"));
     tempDirs.push(worktreeBase);
     process.env.OPENCLAW_WORKTREE_DIR = worktreeBase;
@@ -190,8 +242,10 @@ describe("worktree provisioning (.openclaw/worktree-setup.sh)", () => {
 
   it("keeps an existing branch when a recreated resume worktree fails setup", async () => {
     const repoDir = createRepo("oca-setup-resume-");
-    git(repoDir, "branch", "agent/resume-me");
     writeSetupScript(repoDir, ["exit 3"]);
+    git(repoDir, "add", ".openclaw/worktree-setup.sh");
+    git(repoDir, "commit", "-qm", "failing setup");
+    git(repoDir, "branch", "agent/resume-me");
     const worktreeBase = mkdtempSync(join(tmpdir(), "oca-setup-resume-base-"));
     tempDirs.push(worktreeBase);
     process.env.OPENCLAW_WORKTREE_DIR = worktreeBase;
@@ -212,8 +266,10 @@ describe("worktree provisioning (.openclaw/worktree-setup.sh)", () => {
       "echo 'still preparing'",
       "wait",
     ]);
+    git(repoDir, "add", ".openclaw/worktree-setup.sh");
+    git(repoDir, "commit", "-qm", "slow setup");
 
-    await assert.rejects(runWorktreeSetupScript(repoDir, worktreeDir, { timeoutMs: 300 }), (err: Error) => {
+    await assert.rejects(runWorktreeSetupScript(repoDir, worktreeDir, { timeoutMs: 300, baseCommit: git(repoDir, "rev-parse", "HEAD") }), (err: Error) => {
       assert.match(err.message, /^worktree setup failed \(timed out after 0 seconds\):/);
       assert.match(err.message, /still preparing/);
       return true;

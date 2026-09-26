@@ -304,6 +304,40 @@ describe("agent_merge push behavior", () => {
     }
   });
 
+  it("refuses an orchestrator merge of a branch that changes hook files and asks the user; the user's button merges (D4)", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-hooks");
+    try {
+      const sessionName = "merge-hooks";
+      const worktreePath = await createWorktree(repoDir, sessionName);
+      const branchName = (await getBranchName(worktreePath))!;
+      writeFileSync(join(worktreePath, ".worktreeinclude"), ".env\n", "utf-8");
+      git(worktreePath, "add", ".worktreeinclude");
+      git(worktreePath, "commit", "-m", "include env");
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      const prompts: Array<{ ref: string; hookWarning?: string }> = [];
+      const { sessionManager } = await import("../src/singletons");
+      (sessionManager as any).requestWorktreeDecisionFromUser = async (ref: string, _summary: string, options: { hookWarning?: string } = {}) => {
+        prompts.push({ ref, hookWarning: options.hookWarning });
+        return "Canonical worktree decision prompt sent.";
+      };
+
+      const refused = await makeAgentMergeTool().execute("toolu_model_call", { session: sessionName });
+      const refusedText = (refused.content[0] as { text: string }).text;
+      assert.match(refusedText, /Not merged/);
+      assert.match(refusedText, /`\.worktreeinclude`/);
+      assert.equal(git(repoDir, "log", "--format=%s", "-1", "main"), "init");
+      assert.equal(prompts.length, 1);
+      assert.match(prompts[0]!.hookWarning ?? "", /\.worktreeinclude/);
+
+      const merged = await makeAgentMergeTool().execute("callback", { session: sessionName, delete_branch: false });
+      assert.doesNotMatch((merged.content[0] as { text: string }).text, /Not merged/);
+      assert.equal(git(repoDir, "log", "--format=%s", "-1", "main"), "include env");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the merged base branch local by default", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-default");
     try {
@@ -534,7 +568,7 @@ describe("agent_merge push behavior", () => {
     }
   });
 
-  it("surfaces recovery warnings when manual merge hits a rebase conflict", async () => {
+  it("reports uncommitted changes in the branch's checkout instead of stashing them into a rebase (B4)", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-rebase-warning");
     try {
       writeFileSync(join(repoDir, "local.txt"), "base\n", "utf-8");
@@ -566,8 +600,10 @@ describe("agent_merge push behavior", () => {
       const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
       const text = (result.content[0] as { text: string }).text;
 
-      assert.match(text, /Rebase conflicts/i);
-      assert.match(text, /Recovery warning: Failed to pop auto-stash during recovery/);
+      assert.match(text, /has uncommitted changes/);
+      assert.doesNotMatch(text, /Rebase conflicts/i);
+      assert.equal(git(repoDir, "branch", "--show-current"), branchName, "the checkout is left where it was");
+      assert.equal(git(repoDir, "status", "--porcelain"), "M local.txt", "the user's change is untouched");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

@@ -991,3 +991,97 @@ describe("executeRespond", () => {
     assert.equal(requests.some((request) => /Resumed/.test(request.userMessage ?? "")), false);
   });
 });
+
+describe("planApproval \"ask\": only the user approves (D2)", () => {
+  function liveAskSession(overrides: Record<string, unknown> = {}) {
+    const sent: string[] = [];
+    const switched: string[] = [];
+    const session = createStubSession({
+      id: "ask-plan",
+      name: "ask-plan",
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      approvalState: "pending",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      currentPermissionMode: "plan",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async (text: string) => { sent.push(text); return "queued"; },
+      switchPermissionMode: (mode: string) => { switched.push(mode); },
+      ...overrides,
+    });
+    return { session, sent, switched };
+  }
+
+  it("refuses an orchestrator approve=true and changes nothing", async () => {
+    const { session, sent, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved. Go ahead.", approve: true });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /reserved for the user/);
+    assert.deepEqual(sent, []);
+    assert.deepEqual(switched, []);
+  });
+
+  it("refuses approve=true even when the caller also claims userInitiated", async () => {
+    const { session, sent, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true });
+    assert.equal(result.isError, true);
+    assert.deepEqual(sent, []);
+    assert.deepEqual(switched, []);
+  });
+
+  it("accepts the Approve button", async () => {
+    const { session, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true, userApproval: "button" });
+    assert.match(result.text, /Plan approved/);
+    assert.deepEqual(switched, ["bypassPermissions"]);
+  });
+
+  it("accepts the user's typed reply (userInitiated)", async () => {
+    const { session, sent, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "approve", userInitiated: true });
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Plan approved/);
+    assert.deepEqual(switched, ["bypassPermissions"]);
+    assert.equal(sent.length, 1);
+  });
+
+  it("refuses an orchestrator approval of a suspended ask-mode plan without resuming it", async () => {
+    const sm = createStubSessionManager();
+    (sm as any).store.persisted.set("harness-ask", {
+      sessionId: "ask-suspended",
+      harnessSessionId: "harness-ask",
+      backendRef: { kind: "claude-code", conversationId: "harness-ask" },
+      name: "ask-suspended",
+      prompt: "Plan only.",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "suspended",
+      killReason: "idle-timeout",
+      resumable: true,
+      currentPermissionMode: "plan",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      costUsd: 0,
+    } as any);
+    (sm as any).store.idIndex.set("ask-suspended", "harness-ask");
+    let launched = false;
+    sm.launchSession = (() => { launched = true; return createStubSession({ id: "ask-suspended" }); }) as any;
+    const result = await executeRespond(sm, { session: "ask-suspended", message: "Approved.", approve: true });
+    assert.equal(result.isError, true);
+    assert.equal(launched, false);
+  });
+
+  it("still lets the orchestrator approve in delegate mode", async () => {
+    const { session, switched } = liveAskSession({ planApproval: "delegate" });
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true });
+    assert.match(result.text, /Plan approved/);
+    assert.deepEqual(switched, ["bypassPermissions"]);
+  });
+});

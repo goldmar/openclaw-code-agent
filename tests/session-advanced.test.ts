@@ -645,6 +645,14 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     session.kill("user"); // cleanup
   });
 
+  it("fails a session whose harness stream ends without a result instead of leaving it running (B17)", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    fakeHarness.endMessages();
+    await tick(50);
+    assert.equal(session.status, "failed");
+    assert.match(session.error ?? "", /backend stopped without finishing/);
+  });
+
   it("records costUsd from result", async () => {
     const session = await startSession({ multiTurn: false });
     fakeHarness.pushMessage({
@@ -669,8 +677,16 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     }
 
     assert.equal(session.status, "running", "heartbeat should prevent idle timeout");
+    // A working turn is not idle even without heartbeats (B14)...
     await tick(600);
-    assert.equal(session.status, "killed", "without heartbeat, idle timeout should trigger");
+    assert.equal(session.status, "running", "a turn in progress is not idle-killed");
+    // ...but a session waiting for the user is.
+    fakeHarness.pushMessage({
+      type: "pending_input",
+      state: { requestId: "req-idle", kind: "question", promptText: "Which?", options: ["a", "b"], allowsFreeText: true },
+    } as any);
+    await tick(600);
+    assert.equal(session.status, "killed", "waiting for the user, the idle timeout triggers");
     assert.equal(session.killReason, "idle-timeout");
 
     setPluginConfig({ idleTimeoutMinutes: 15, sessionGcAgeMinutes: 1440 });
@@ -882,6 +898,8 @@ describe("Session.kill() teardown", () => {
               conversationId: "reject-int-1",
             },
           } as const;
+          // A live backend keeps its stream open (a stream that ends fails the session).
+          await new Promise<void>(() => undefined);
         }
         return {
           messages: messages(),

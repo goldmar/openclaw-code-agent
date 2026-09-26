@@ -1,15 +1,16 @@
-import { assertBranchName, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
+import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
+import { repoHookGitArgs } from "../git-hooks";
 import { Type } from "../tool-parameter-schema";
 import { runGit, withRepoLock } from "../git-exec";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
+import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-pr");
@@ -83,44 +84,29 @@ export function normalizeForceNewReplacementPrStatus(
   return prStatus;
 }
 
-async function getWorktreePathForBranch(repoDir: string, branch: string): Promise<string | undefined> {
-  try {
-    const result = await runGit(["-C", repoDir, "worktree", "list", "--porcelain"], { timeout: 10_000 });
-    let worktreePath: string | undefined;
-    for (const line of result.split(/\r?\n/)) {
-      if (line.startsWith("worktree ")) {
-        worktreePath = line.slice("worktree ".length);
-        continue;
-      }
-      if (line === `branch refs/heads/${branch}`) {
-        return worktreePath;
-      }
-      if (line === "") {
-        worktreePath = undefined;
-      }
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
-
 async function moveBranchFastForward(repoDir: string, targetBranch: string, sourceRef: string): Promise<ExistingTargetPrBranchResolution> {
   await assertBranchName(targetBranch);
-  await assertBranchName(sourceRef);
+  await assertBranchOrRemoteTrackingRef(sourceRef);
   try {
-    const targetWorktreePath = await getWorktreePathForBranch(repoDir, targetBranch);
+    // Only a true fast-forward may move the local branch: a local branch with
+    // commits the source lacks (for example unpushed work) is never rewound.
+    if (!(await isBranchAncestorOfBase(repoDir, targetBranch, sourceRef))) {
+      return {
+        success: false,
+        error: `Refusing to move ${targetBranch} to ${sourceRef}: the local ${targetBranch} has commits that ${sourceRef} does not contain. Reconcile them manually, then run agent_pr again.`,
+      };
+    }
+    const sourceCommitRef = sourceRef.startsWith("refs/remotes/") ? sourceRef : await localBranchRef(sourceRef);
+    const targetWorktreePath = await getCheckoutPathForBranch(repoDir, targetBranch);
     if (targetWorktreePath) {
-      await runGit(["-C", targetWorktreePath, "merge", "--ff-only", await localBranchRef(sourceRef)], { timeout: 30_000 });
+      await runGit([...repoHookGitArgs(), "-C", targetWorktreePath, "merge", "--ff-only", sourceCommitRef], { timeout: 30_000 });
       return { success: true, branchName: targetBranch, alreadyRepresented: false };
     }
 
-    const currentBranch = await getBranchName(repoDir);
-    if (currentBranch === targetBranch) {
-      await runGit(["-C", repoDir, "merge", "--ff-only", await localBranchRef(sourceRef)], { timeout: 30_000 });
-    } else {
-      await runGit(["-C", repoDir, "branch", "-f", targetBranch, await localBranchRef(sourceRef)], { timeout: 10_000 });
-    }
+    // Not checked out anywhere: compare-and-swap the ref so a concurrent change is never overwritten.
+    const oldCommit = (await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef(targetBranch)], { timeout: 10_000 })).trim();
+    const newCommit = (await runGit(["-C", repoDir, "rev-parse", "--verify", `${sourceCommitRef}^{commit}`], { timeout: 10_000 })).trim();
+    await runGit(["-C", repoDir, "update-ref", await localBranchRef(targetBranch), newCommit, oldCommit], { timeout: 10_000 });
     return { success: true, branchName: targetBranch, alreadyRepresented: false };
   } catch (err) {
     return {
@@ -480,6 +466,18 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? await detectDefaultBranch(originalWorkdir);
+      const hookRefusal = await refuseHookChangesWithoutUser({
+        sessionManager: sm,
+        toolCallId: _id,
+        sessionRef: params.session,
+        repoDir: originalWorkdir,
+        branchName,
+        baseBranch,
+        action: "pr",
+      });
+      if (hookRefusal) {
+        return { content: [{ type: "text", text: hookRefusal }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
       const metadataProvider = options.metadataProvider ?? createRuntimePrMetadataProvider();
       const persistPrOpen = (args: {
         prUrl: string;

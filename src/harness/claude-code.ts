@@ -4,6 +4,7 @@
  */
 
 import { readFileSync, realpathSync } from "node:fs";
+import { buildHarnessChildEnv } from "../child-env";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import {
@@ -333,6 +334,25 @@ type PendingPlanRequest = {
   resolve: (result: PermissionResult) => void;
 };
 
+/** At most one activity heartbeat per interval from high-frequency progress messages. */
+const PROGRESS_ACTIVITY_INTERVAL_MS = 5_000;
+
+const CLAUDE_PROGRESS_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
+  "task_progress",
+  "task_started",
+  "task_updated",
+  "hook_started",
+  "hook_progress",
+  "thinking_tokens",
+  "api_retry",
+  "control_request_progress",
+]);
+
+function isClaudeProgressMessage(msg: SDKMessage): boolean {
+  if (msg.type === "tool_progress" || msg.type === "stream_event") return true;
+  return msg.type === "system" && CLAUDE_PROGRESS_SYSTEM_SUBTYPES.has((msg as { subtype?: string }).subtype ?? "");
+}
+
 export class ClaudeCodeHarness implements AgentHarness {
   constructor(private readonly deps: ClaudeCodeHarnessDeps = {}) {}
 
@@ -358,6 +378,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     const pendingPlanWrites = new Map<string, string>();
     const queue = new HarnessMessageQueue();
     let sawRunOutput = false;
+    let lastProgressActivityAt = 0;
     let requestCounter = 0;
     let currentSessionId = options.resumeSessionId ?? "";
     let currentPermissionMode = options.permissionMode;
@@ -541,11 +562,11 @@ export class ClaudeCodeHarness implements AgentHarness {
       // Worktree sessions keep project settings, hooks, `.mcp.json`, and
       // `.claude/` config from the trusted checkout instead of the branch.
       ...(worktreeConfigRoot ? { projectConfigRoot: worktreeConfigRoot } : {}),
-      env: {
-        ...process.env,
+      // Gateway environment minus secrets unrelated to the agent (see child-env.ts).
+      env: buildHarnessChildEnv(process.env, {
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
         CLAUDE_CODE_STARTUP_FAILURE_RESULTS: "1",
-      },
+      }),
     };
 
     if (options.resumeSessionId) {
@@ -672,6 +693,16 @@ export class ClaudeCodeHarness implements AgentHarness {
         };
 
         for await (const msg of q as AsyncIterable<SDKMessage>) {
+          if (isClaudeProgressMessage(msg)) {
+            // Heartbeats while a tool, hook, subagent, or the model is working:
+            // the session is busy, so its idle timer must not run out.
+            const now = Date.now();
+            if (now - lastProgressActivityAt >= PROGRESS_ACTIVITY_INTERVAL_MS) {
+              lastProgressActivityAt = now;
+              queue.enqueue({ type: "activity" });
+            }
+            continue;
+          }
           if (msg.type === "system" && msg.subtype === "init") {
             currentSessionId = msg.session_id ?? currentSessionId;
             queue.enqueue(createBackendRefEvent({

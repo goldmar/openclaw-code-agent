@@ -349,6 +349,8 @@ const ACTION_KINDS = {
   "plugin-update-restart": true,
   "view-output": true,
   "question-answer": true,
+  "goal-verifiers-confirm": true,
+  "goal-verifiers-decline": true,
 } satisfies Record<SessionActionKind, true>;
 
 function toOptionalActionKind(value: unknown): SessionActionKind | undefined {

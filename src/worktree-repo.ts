@@ -324,6 +324,54 @@ export async function wouldMergeBeNoop(repoDir: string, branch: string, base: st
   }
 }
 
+/** Path of the worktree (the main checkout included) that has `branch` checked out, if any. */
+export async function getCheckoutPathForBranch(repoDir: string, branch: string): Promise<string | undefined> {
+  await assertBranchName(branch);
+  try {
+    const result = await runGit(["-C", repoDir, "worktree", "list", "--porcelain"], { timeout: 10_000 });
+    let worktreePath: string | undefined;
+    for (const line of result.split(/\r?\n/)) {
+      if (line.startsWith("worktree ")) {
+        worktreePath = line.slice("worktree ".length);
+        continue;
+      }
+      if (line === `branch refs/heads/${branch}`) {
+        return worktreePath;
+      }
+      if (line === "") {
+        worktreePath = undefined;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+/** True when `branch` has an upstream or a same-named branch on any remote (it was pushed). */
+export async function isBranchPublished(repoDir: string, branch: string): Promise<boolean> {
+  await assertBranchName(branch);
+  try {
+    const refs = await runGit(
+      ["-C", repoDir, "for-each-ref", "--format=%(refname)", "refs/remotes/"],
+      { timeout: 10_000 },
+    );
+    const suffix = `/${branch}`;
+    // refs/remotes/<remote>/<branch>: what is left after the branch is exactly three segments.
+    if (refs.split(/\r?\n/).some((ref) => ref.endsWith(suffix) && ref.slice(0, -suffix.length).split("/").length === 3)) {
+      return true;
+    }
+  } catch {
+    // fall through to the upstream check
+  }
+  try {
+    await runGit(["-C", repoDir, "rev-parse", "--verify", "--quiet", `${await localBranchRef(branch)}@{upstream}`], { timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function deleteBranch(repoDir: string, branch: string): Promise<boolean> {
   await assertBranchName(branch);
 

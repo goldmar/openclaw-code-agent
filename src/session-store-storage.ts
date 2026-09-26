@@ -1,4 +1,5 @@
-import { closeSync, existsSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "fs";
+import { randomBytes } from "crypto";
+import { closeSync, existsSync, linkSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { saveJsonFile } from "openclaw/plugin-sdk/json-store";
@@ -132,6 +133,15 @@ export type SessionStoreDiskSnapshot = {
   repoPolicies: unknown[];
 };
 
+/**
+ * A schema version newer than this build writes. Such an index belongs to a
+ * newer build (for example during an upgrade overlap or after a downgrade):
+ * this build never archives, backs up, or overwrites it.
+ */
+export function newerSchemaVersion(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > STORE_SCHEMA_VERSION ? value : undefined;
+}
+
 /** Schema versions whose rows the normalizers read (the same set startup loading accepts). */
 const READABLE_SCHEMA_VERSIONS = new Set<unknown>([STORE_SCHEMA_VERSION, 6, 4]);
 
@@ -140,7 +150,9 @@ const READABLE_SCHEMA_VERSIONS = new Set<unknown>([STORE_SCHEMA_VERSION, 6, 4]);
  * of a file that exists but cannot be merged (corrupt, or an unknown schema), so
  * the caller can back it up before replacing it.
  */
-export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSnapshot | { unreadable: string } | undefined {
+export function readSessionStoreSnapshot(
+  indexPath: string,
+): SessionStoreDiskSnapshot | { unreadable: string } | { newerSchema: number } | undefined {
   let raw: string;
   try {
     raw = readFileSync(indexPath, "utf-8");
@@ -149,6 +161,8 @@ export function readSessionStoreSnapshot(indexPath: string): SessionStoreDiskSna
   }
   try {
     const parsed: unknown = JSON.parse(raw);
+    const newer = isRecord(parsed) ? newerSchemaVersion(parsed.schemaVersion) : undefined;
+    if (newer !== undefined) return { newerSchema: newer };
     if (!isRecord(parsed) || !READABLE_SCHEMA_VERSIONS.has(parsed.schemaVersion)) return { unreadable: raw };
     const list = (value: unknown): unknown[] | undefined => value === undefined ? [] : Array.isArray(value) ? value : undefined;
     const sessions = list(parsed.sessions);
@@ -199,18 +213,49 @@ export function isForeignLiveRunningRow(raw: unknown): boolean {
   return pid !== process.pid && isProcessAlive(pid);
 }
 
-const LOCK_STALE_MS = 10_000;
+/** A lock older than this is stale: a holder keeps it only for one synchronous read-merge-write. */
+export const SESSION_STORE_LOCK_STALE_MS = 10_000;
 
-function lockHolderIsGone(lockPath: string): boolean {
+function readLockFile(lockPath: string): string | undefined {
   try {
-    const [pidText, atText] = readFileSync(lockPath, "utf-8").split(" ");
-    const pid = Number.parseInt(pidText ?? "", 10);
-    const at = Number.parseInt(atText ?? "", 10);
-    if (!Number.isFinite(at) || Date.now() - at > LOCK_STALE_MS) return true;
-    return pid !== process.pid && !isProcessAlive(pid);
+    return readFileSync(lockPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+function lockHolderIsGone(content: string): boolean {
+  const [pidText, atText] = content.split(" ");
+  const pid = Number.parseInt(pidText ?? "", 10);
+  const at = Number.parseInt(atText ?? "", 10);
+  if (!Number.isFinite(at) || Date.now() - at > SESSION_STORE_LOCK_STALE_MS) return true;
+  return pid !== process.pid && !isProcessAlive(pid);
+}
+
+/**
+ * Remove the lock file only if it still holds `expected`. The lock is first
+ * renamed to a private name (atomic, so only one breaker wins), then checked:
+ * when another writer replaced the stale lock in between, its fresh lock is
+ * put back instead of being deleted. Returns true when the stale lock is gone.
+ */
+function breakLockIfUnchanged(lockPath: string, expected: string): boolean {
+  const claimed = `${lockPath}.break-${process.pid}-${randomBytes(6).toString("hex")}`;
+  try {
+    renameSync(lockPath, claimed);
   } catch (err) {
+    // Already gone (another writer broke or released it): the path is free.
     return (err as NodeJS.ErrnoException).code === "ENOENT";
   }
+  const content = readLockFile(claimed);
+  if (content === expected) {
+    try { unlinkSync(claimed); } catch { /* best-effort */ }
+    return true;
+  }
+  // We took a lock that is not the stale one we inspected: restore it (a link
+  // fails if yet another writer already created a new lock) and back off.
+  try { linkSync(claimed, lockPath); } catch { /* the path is taken again */ }
+  try { unlinkSync(claimed); } catch { /* best-effort */ }
+  return false;
 }
 
 /**
@@ -224,29 +269,35 @@ export type SessionStoreLockAttempt = { release: () => void } | "busy" | "unavai
 /**
  * Try once, without waiting, to take the exclusive lock that makes the
  * read-merge-write of a save one step across processes. A lock whose holder
- * died, or that is older than 10 s, is broken. `force` breaks a live lock too
- * (used after a save has been deferred for the full wait budget).
+ * died, or that is older than `SESSION_STORE_LOCK_STALE_MS`, is broken
+ * atomically (see `breakLockIfUnchanged`). `force` also breaks a live lock
+ * (only used for the final write at shutdown). Release removes the lock only
+ * while it still carries this holder's token.
  */
 export function tryAcquireSessionStoreLock(indexPath: string, options: { force?: boolean } = {}): SessionStoreLockAttempt {
   assertTestSafeStatePath(indexPath, "lock the session store");
   const lockPath = `${indexPath}.lock`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const token = `${process.pid} ${Date.now()} ${randomBytes(8).toString("hex")}`;
     try {
       const fd = openSync(lockPath, "wx", 0o600);
       try {
-        writeSync(fd, `${process.pid} ${Date.now()}`);
+        writeSync(fd, token);
       } finally {
         closeSync(fd);
       }
       return {
         release: () => {
+          if (readLockFile(lockPath) !== token) return;
           try { unlinkSync(lockPath); } catch { /* best-effort */ }
         },
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return "unavailable";
-      if (!options.force && !lockHolderIsGone(lockPath)) return "busy";
-      try { unlinkSync(lockPath); } catch { /* another writer broke it first */ }
+      const content = readLockFile(lockPath);
+      if (content === undefined) continue;
+      if (!options.force && !lockHolderIsGone(content)) return "busy";
+      if (!breakLockIfUnchanged(lockPath, content)) return "busy";
     }
   }
   return "busy";
@@ -338,13 +389,26 @@ export function getNextSessionOutputCleanupAt(now: number, maxAgeMs: number, ref
   }
 }
 
-export function cleanupOrphanOutputFiles(referencedPaths: Iterable<string>): void {
-  assertTestSafeStatePath(resolveSessionOutputDir(), "clean up output files in");
+/**
+ * Delete unreferenced output files in the plugin's own output directory that
+ * are older than `minAgeMs`. The legacy OS temp directory is shared with other
+ * processes (older builds, other installs), so it is only ever aged out by
+ * `cleanupSessionOutputFiles`, never swept here.
+ */
+export function cleanupOrphanOutputFiles(
+  referencedPaths: Iterable<string>,
+  options: { now?: number; minAgeMs?: number } = {},
+): void {
+  const outputDir = resolveSessionOutputDir();
+  assertTestSafeStatePath(outputDir, "clean up output files in");
+  const now = options.now ?? Date.now();
+  const minAgeMs = options.minAgeMs ?? 0;
   try {
     const referenced = new Set(referencedPaths);
-    for (const filePath of getSessionOutputFilePaths()) {
+    for (const filePath of listSessionOutputFiles(outputDir)) {
       if (referenced.has(filePath)) continue;
       try {
+        if (now - statSync(filePath).mtimeMs < minAgeMs) continue;
         unlinkSync(filePath);
       } catch {
         // best-effort
@@ -366,6 +430,8 @@ type LoadIndexArgs = {
   setRevision?: (revision: number) => void;
   /** Keep a row another live process runs, verbatim and unindexed. */
   carrySession?: (raw: unknown) => void;
+  /** The index was written by a newer build: load nothing and never write it. */
+  onNewerSchema?: (schemaVersion: number) => void;
 };
 
 export function loadSessionStoreIndex(args: LoadIndexArgs): void {
@@ -379,6 +445,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     saveIndex,
     setRevision,
     carrySession,
+    onNewerSchema,
   } = args;
 
   const archiveAndReset = (reason: string): boolean => {
@@ -393,6 +460,11 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     if (Array.isArray(parsed)) {
       if (!archiveAndReset("legacy array store")) return;
       saveIndex();
+      return;
+    }
+    const newer = isRecord(parsed) ? newerSchemaVersion(parsed.schemaVersion) : undefined;
+    if (newer !== undefined) {
+      onNewerSchema?.(newer);
       return;
     }
     if (

@@ -460,7 +460,7 @@ describe("OpenCodeHarness turns on the shared server", () => {
     await collector.done;
   });
 
-  it("sends the system prompt only on the first prompt", async () => {
+  it("sends the system prompt with every prompt: OpenCode reads only the latest message's system (B13)", async () => {
     const mock = new MockOpenCodeServer();
     const { stream, collector } = launch(harnessFor(mock), { systemPrompt: "  Stay in the worktree.  " });
     stream.push("one");
@@ -469,7 +469,7 @@ describe("OpenCodeHarness turns on the shared server", () => {
     await collector.untilCompletions(2);
     const prompts = mock.requestsTo("POST", /\/prompt_async$/);
     assert.equal(prompts[0]?.body.system, "Stay in the worktree.");
-    assert.equal(Object.hasOwn(prompts[1]?.body ?? {}, "system"), false);
+    assert.equal(prompts[1]?.body.system, "Stay in the worktree.");
     stream.end();
     await collector.done;
   });
@@ -621,13 +621,39 @@ describe("OpenCodeHarness turns on the shared server", () => {
     await collector.done;
   });
 
-  it("times out a turn that never becomes idle", async () => {
+  it("fails a turn with no activity for the limit and aborts it on the server (B15)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;
     const { stream, collector } = launch(harnessFor(mock, { turnTimeoutMs: 30 }));
     stream.push("go");
     await collector.untilCompletions(1);
-    assert.match(collector.completions()[0]?.data.result ?? "", /Timed out waiting for OpenCode session ses_1 to become idle after 30ms/);
+    assert.match(collector.completions()[0]?.data.result ?? "", /showed no activity for 0 s; the turn was aborted/);
+    await waitFor(() => mock.requestsTo("POST", /\/abort$/).length === 1, "server-side abort");
+    stream.end();
+    await collector.done;
+  });
+
+  it("restarts the turn limit on activity and pauses it while a question waits for the user (B15)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    const { stream, session, collector } = launch(harnessFor(mock, { turnTimeoutMs: 120 }));
+    stream.push("go");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    // Activity every 60 ms for 300 ms: longer than the limit in total, never idle that long.
+    for (let tick = 0; tick < 5; tick += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      mock.emit({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } });
+    }
+    mock.emit({ type: "question.asked", properties: { id: "que_wait", sessionID: "ses_1", question: "Which branch?" } });
+    await collector.until(() => collector.pending().length === 1, "question");
+    // The user takes far longer than the limit to answer.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(collector.completions().length, 0, "waiting for the user does not count");
+    assert.equal(mock.requestsTo("POST", /\/abort$/).length, 0);
+    assert.equal(await session.submitPendingInputText?.("main"), true);
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    assert.equal(collector.completions()[0]?.data.success, true);
     stream.end();
     await collector.done;
   });
@@ -755,13 +781,14 @@ describe("OpenCodeHarness shared server lifecycle", () => {
     await collector.done;
   });
 
-  it("releases the server and stops on close", async () => {
+  it("aborts the in-flight turn on the server, releases the server and stops on close (B18)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;
     const { stream, session, collector } = launch(harnessFor(mock));
     stream.push("go");
     await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
     await session.close?.();
+    assert.equal(mock.requestsTo("POST", /\/abort$/).length, 1, "the shared server stops working on the turn");
     assert.equal(mock.closed, true);
     stream.end();
     await collector.done;
@@ -1016,37 +1043,25 @@ describe("OpenCodeHarness pending input", () => {
     await collector.done;
   });
 
-  it("routes a prompt that arrives while a question is pending to the question", async () => {
+  it("clears a question when its turn ends, so the next prompt starts a new turn (B19)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;
     const { stream, collector } = launch(harnessFor(mock));
     stream.push("ask");
     await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
     mock.emit({ type: "question.asked", properties: { id: "que_3", sessionID: "ses_1", question: "Which branch?" } });
-    mock.completeTurn("ses_1");
+    await collector.until(() => collector.pending().length === 1, "question");
+    // The turn ends without an answer (failed, aborted, or the server went away).
+    mock.emit({ type: "session.error", properties: { sessionID: "ses_1", error: { name: "UnknownError", data: { message: "boom" } } } });
     await collector.untilCompletions(1);
-    stream.push("main");
-    await waitFor(() => mock.requestsTo("POST", /^\/question\/que_3\/reply$/).length === 1, "question reply");
-    assert.deepEqual(mock.requestsTo("POST", /^\/question\/que_3\/reply$/)[0]?.body, { answers: [["main"]] });
-    assert.equal(mock.requestsTo("POST", /\/prompt_async$/).length, 1, "the answer is not sent as a new prompt");
-    stream.end();
-    await collector.done;
-  });
-
-  it("emits a failed completion when an inline question reply fails", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    mock.failQuestionReplies = true;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("ask");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "question.asked", properties: { id: "que_4", sessionID: "ses_1", question: "Which branch?" } });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.push("main");
+    await collector.until((messages) => messages.some((message) => message.type === "pending_input_resolved"), "stale question resolved");
+    mock.autoComplete = true;
+    stream.push("Reply with MANGO.");
     await collector.untilCompletions(2);
-    assert.equal(collector.completions()[1]?.data.success, false);
-    assert.match(collector.completions()[1]?.data.result ?? "", /question reply failed/);
+    assert.equal(mock.requestsTo("POST", /\/prompt_async$/).length, 2, "the prompt starts a new turn");
+    assert.equal(mock.requestsTo("POST", /^\/question\/que_3\/reply$/).length, 0, "it is not swallowed as an answer");
+    assert.equal(collector.completions()[1]?.data.success, true);
+    stream.end();
     await collector.done;
   });
 });

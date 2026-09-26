@@ -313,7 +313,9 @@ export class CodexHarness implements AgentHarness {
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
     if (options.resumeSessionId && !threadId) {
-      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected a Codex thread UUID.");
+      // Never fall back to a fresh thread: the caller asked to continue a
+      // conversation, and a new thread would silently lose its context.
+      throw new Error(`Cannot resume Codex session: "${options.resumeSessionId}" is not a Codex App Server thread id (expected a thread UUID).`);
     }
     let threadReady = false;
     let forkPending = options.forkSession === true && !!threadId;
@@ -343,6 +345,10 @@ export class CodexHarness implements AgentHarness {
     const streamedAgentItemIds = new Set<string>();
     // Set once the handle or the app server closed: nothing may start afterwards.
     let closed = false;
+    let signalTransportClosed: () => void = () => {};
+    const transportClosed = new Promise<"closed">((resolve) => {
+      signalTransportClosed = () => resolve("closed");
+    });
     const promptIterable = typeof options.prompt === "string"
       ? (async function* (): AsyncGenerator<unknown> {
           yield { type: "user", text: options.prompt };
@@ -411,6 +417,9 @@ export class CodexHarness implements AgentHarness {
     client.setCloseHandler?.(() => {
       closed = true;
       finishActiveTurn({ failure: "Codex App Server exited before the turn completed." });
+      // Between turns the prompt loop waits for the next prompt: end it now so
+      // the session sees the backend is gone instead of dropping that prompt.
+      signalTransportClosed();
     });
 
     client.setNotificationHandler(async (method, params) => {
@@ -957,7 +966,11 @@ export class CodexHarness implements AgentHarness {
       try {
         await initialize();
         while (true) {
-          const next = await prompts.next();
+          const next = await Promise.race([prompts.next(), transportClosed]);
+          if (next === "closed") {
+            logCodexHarnessDiagnostic("session.transport_closed_between_turns", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
+            break;
+          }
           if (next.done) break;
           const rawMessage = next.value;
           if (closed) {
@@ -1031,6 +1044,7 @@ export class CodexHarness implements AgentHarness {
 
       async close(): Promise<void> {
         closed = true;
+        signalTransportClosed();
         await client.close();
       },
     };

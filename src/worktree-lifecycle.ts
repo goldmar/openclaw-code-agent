@@ -1,4 +1,5 @@
 import { runGit, withRepoLock } from "./git-exec";
+import { repoHookGitArgs } from "./git-hooks";
 import { randomBytes } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { relative, sep } from "path";
@@ -86,11 +87,22 @@ export async function createWorktree(
  */
 async function prepareCreatedWorktree(repoDir: string, worktreePath: string): Promise<void> {
   const sourceRoot = (await getRepoRoot(repoDir)) ?? repoDir;
-  const provisioned = await provisionWorktreeIncludes(sourceRoot, worktreePath);
+  // The committed versions on the source checkout's current commit are used, never
+  // a modified or untracked working-tree copy (and never the agent branch's copy).
+  const baseCommit = await resolveHeadCommit(sourceRoot);
+  const provisioned = await provisionWorktreeIncludes(sourceRoot, worktreePath, { baseCommit });
   if (provisioned.length > 0) {
     log.info(`[worktree] Copied ${provisioned.length} .worktreeinclude file(s) into ${worktreePath}`);
   }
-  await runWorktreeSetupScript(sourceRoot, worktreePath);
+  await runWorktreeSetupScript(sourceRoot, worktreePath, { baseCommit });
+}
+
+async function resolveHeadCommit(repoDir: string): Promise<string | undefined> {
+  try {
+    return (await runGit(["-C", repoDir, "rev-parse", "--verify", "HEAD^{commit}"], { timeout: 5_000 })).trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function rollbackCreatedWorktree(repoDir: string, created: CreatedWorktree): Promise<void> {
@@ -186,9 +198,9 @@ async function createWorktreeLocked(
   const branchAlreadyExists = await branchExists(repoDir, branchName);
   try {
     if (branchAlreadyExists) {
-      await runGit(["-C", repoDir, "worktree", "add", worktreePath, branchName], { timeout: 15_000 });
+      await runGit([...repoHookGitArgs(), "-C", repoDir, "worktree", "add", worktreePath, branchName], { timeout: 15_000 });
     } else {
-      await runGit(["-C", repoDir, "worktree", "add", "-b", branchName, worktreePath], { timeout: 15_000 });
+      await runGit([...repoHookGitArgs(), "-C", repoDir, "worktree", "add", "-b", branchName, worktreePath], { timeout: 15_000 });
     }
   } catch (err) {
     try {

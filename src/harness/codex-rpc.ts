@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { buildHarnessChildEnv } from "../child-env";
 import readline from "node:readline";
 import { createLogger } from "../logger";
 
@@ -169,7 +170,8 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     // surface here is a stdio child process rather than an in-process SDK client.
     const child = spawn(this.command, ["app-server", ...this.args], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      // Gateway environment minus secrets unrelated to the agent (see child-env.ts).
+      env: buildHarnessChildEnv(process.env),
     });
     logCodexRpcDiagnostic("process.spawn", {
       ...processLaunchDiagnosticFields(this.command, this.args),
