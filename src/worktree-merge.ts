@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { repoHookGitArgs } from "./git-hooks";
-import { getCheckoutPathForBranch, isBranchPublished } from "./worktree-repo";
+import { getBranchName, getCheckoutPathForBranch, isBranchPublished } from "./worktree-repo";
+import { pluginConfig } from "./config";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-merge");
@@ -169,6 +170,20 @@ async function isAncestor(repoDir: string, ancestor: string, descendant: string)
   }
 }
 
+/** Check `branch` out in a private temporary worktree; the directory is removed again if that fails. */
+async function addTemporaryWorktree(repoDir: string, branch: string, hooks: string[]): Promise<string> {
+  const parent = mkdtempSync(join(tmpdir(), "oca-merge-"));
+  const path = join(parent, "worktree");
+  try {
+    await runGit([...hooks, "-C", repoDir, "worktree", "add", path, branch], { timeout: 30_000 });
+  } catch (err) {
+    rmSync(parent, { recursive: true, force: true });
+    await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 }).catch(() => "");
+    throw err;
+  }
+  return path;
+}
+
 async function removeTemporaryWorktree(repoDir: string, path: string): Promise<void> {
   try {
     await runGit(["-C", repoDir, "worktree", "remove", "--force", path], { timeout: 15_000 });
@@ -210,7 +225,11 @@ async function mergeBranchLocked(
           `${branch} was already pushed; rebasing it onto ${base} rewrote its commits, so the remote copy of ${branch} still has the old ones.`,
         );
       }
-      const sessionWorktree = worktreePath && existsSync(worktreePath) ? worktreePath : undefined;
+      // Rebase only where the branch itself is checked out: the session
+      // worktree may have been switched to another branch meanwhile.
+      const sessionWorktree = worktreePath && existsSync(worktreePath) && await getBranchName(worktreePath) === branch
+        ? worktreePath
+        : undefined;
       const existingCheckout = sessionWorktree ?? await getCheckoutPathForBranch(repoDir, branch);
       let rebaseDir = existingCheckout;
       let temporaryWorktree: string | undefined;
@@ -222,8 +241,7 @@ async function mergeBranchLocked(
         });
       }
       if (!rebaseDir) {
-        temporaryWorktree = join(mkdtempSync(join(tmpdir(), "oca-merge-")), "worktree");
-        await runGit([...hooks, "-C", repoDir, "worktree", "add", temporaryWorktree, branch], { timeout: 30_000 });
+        temporaryWorktree = await addTemporaryWorktree(repoDir, branch, hooks);
         rebaseDir = temporaryWorktree;
       }
       try {
@@ -255,7 +273,15 @@ async function mergeBranchLocked(
     }
 
     // 2. Move base where it lives.
-    const baseCheckout = await getCheckoutPathForBranch(repoDir, base);
+    let baseCheckout = await getCheckoutPathForBranch(repoDir, base);
+    let temporaryBaseCheckout: string | undefined;
+    if (!baseCheckout && strategy === "squash" && pluginConfig.worktreeGitHooks !== "skip") {
+      // A squash creates a commit: make it in a temporary checkout of base so
+      // the repository's commit hooks run as they would in the user's checkout.
+      temporaryBaseCheckout = await addTemporaryWorktree(repoDir, base, hooks);
+      baseCheckout = temporaryBaseCheckout;
+    }
+    try {
     if (!baseCheckout) {
       const oldBase = await revParse(repoDir, baseRef);
       let newBase: string;
@@ -340,6 +366,9 @@ async function mergeBranchLocked(
       stashRef,
       stashPopConflict: stashPopConflict || undefined,
     });
+    } finally {
+      if (temporaryBaseCheckout) await removeTemporaryWorktree(repoDir, temporaryBaseCheckout);
+    }
   } catch (err) {
     return withWarnings({
       success: false,

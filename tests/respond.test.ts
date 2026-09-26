@@ -1024,7 +1024,24 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
     assert.deepEqual(switched, []);
   });
 
-  it("accepts the user's button or words (userInitiated)", async () => {
+  it("refuses approve=true even when the caller also claims userInitiated", async () => {
+    const { session, sent, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true });
+    assert.equal(result.isError, true);
+    assert.deepEqual(sent, []);
+    assert.deepEqual(switched, []);
+  });
+
+  it("accepts the Approve button", async () => {
+    const { session, switched } = liveAskSession();
+    const sm = createStubSessionManager({ "ask-plan": session });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true, userApproval: "button" });
+    assert.match(result.text, /Plan approved/);
+    assert.deepEqual(switched, ["bypassPermissions"]);
+  });
+
+  it("accepts the user's typed reply (userInitiated)", async () => {
     const { session, sent, switched } = liveAskSession();
     const sm = createStubSessionManager({ "ask-plan": session });
     const result = await executeRespond(sm, { session: "ask-plan", message: "approve", userInitiated: true });

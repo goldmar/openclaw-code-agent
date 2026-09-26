@@ -138,7 +138,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - Telegram and Discord buttons use the shared direct-message presentation path; if buttons are missing, a plain-text `approve` or `reject` in the same thread drives the same decision path, and any other reply is sent back as revision feedback.
 - If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - If the user rejects the plan or the session is killed, treat older plan prompts as stale and verify state with `agent_sessions` before acting.
-- Wait for the user's answer. If they answer in chat instead of with a button, forward their exact words with `agent_respond(session='...', message='<their words>', userInitiated=true)`. Never approve yourself: `approve=true` without `userInitiated=true` is refused in `ask` mode.
+- Wait for the user's answer. If they answer in chat instead of with a button, forward their exact words with `agent_respond(session='...', message='<their words>', userInitiated=true)`. Never approve yourself: `approve=true` is refused in `ask` mode.
 - Do not send a duplicate approval recap or second approval prompt.
 
 ### `planApproval: "delegate"`

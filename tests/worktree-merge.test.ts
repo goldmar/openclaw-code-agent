@@ -2,8 +2,8 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describeMergeType, mergeBranch } from "../src/worktree-merge";
 
@@ -199,6 +199,48 @@ describe("mergeBranch keeps the user's checkout (B4)", () => {
       assert.equal(result.dirtyError, true);
       assert.equal(result.rebaseConflict, undefined);
       assert.match(result.error ?? "", /uncommitted changes/);
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never rebases the branch a switched session worktree now has (it rebases the session branch elsewhere)", async () => {
+    const { repoDir, worktreePath } = setup();
+    try {
+      git(repoDir, "switch", "-q", "main");
+      writeFileSync(join(repoDir, "base.txt"), "base moved\n", "utf-8");
+      git(repoDir, "add", "base.txt");
+      git(repoDir, "commit", "-m", "base moved");
+      git(worktreePath, "switch", "-q", "-c", "other-work");
+      const otherHead = git(worktreePath, "rev-parse", "HEAD");
+
+      const result = await mergeBranch(repoDir, "agent/task", "main", "merge", worktreePath);
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(git(worktreePath, "rev-parse", "other-work"), otherHead, "the unrelated branch is untouched");
+      assert.equal(git(repoDir, "show", "main:task.txt"), "task");
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs commit hooks for a squash even when base is not checked out anywhere", async () => {
+    const { repoDir, worktreePath } = setup();
+    try {
+      mkdirSync(join(repoDir, ".git", "hooks"), { recursive: true });
+      const marker = join(repoDir, "..", `${basename(repoDir)}-hook-ran`);
+      writeFileSync(join(repoDir, ".git", "hooks", "pre-commit"), `#!/bin/sh\necho ran > '${marker}'\n`, { mode: 0o755 });
+
+      const result = await mergeBranch(repoDir, "agent/task", "main", "squash", worktreePath);
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(git(repoDir, "branch", "--show-current"), "feature-x");
+      assert.equal(existsSync(marker), true, "the pre-commit hook ran");
+      assert.match(git(repoDir, "log", "--format=%s", "-1", "main"), /Squash merge agent\/task/);
+      assert.doesNotMatch(git(repoDir, "worktree", "list"), /oca-merge-/);
+      rmSync(marker, { force: true });
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
       rmSync(repoDir, { recursive: true, force: true });

@@ -343,7 +343,7 @@ For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mo
 
 | Mode | Meaning |
 | --- | --- |
-| `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision. Only the user approves: the Approve button, or the user's own reply forwarded with `agent_respond(..., userInitiated=true)`. `agent_respond(approve=true)` without `userInitiated` is refused |
+| `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision. Only the user approves: the Approve button, or the user's own reply (for example `approve`) forwarded as text with `agent_respond(..., userInitiated=true)`. `agent_respond(approve=true)` is refused, with or without `userInitiated` |
 | `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Wake the orchestrator, which may approve without asking the user only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user with `agent_request_plan_approval` |
 
@@ -513,7 +513,7 @@ Send a follow-up, steer or redirect work, answer a pending question, approve a p
 | `message` | `string` | Yes | Follow-up text |
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | Reset the auto-respond counter |
-| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions. With `planApproval: "ask"` a plan approval needs `userInitiated=true` (the user's own words); otherwise it is refused |
+| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions. Refused for a plan with `planApproval: "ask"`: forward the user's own reply as text with `userInitiated=true` instead |
 | `approval_rationale` | `string` | No | Structured rationale for a direct delegated plan approval (use with `approve=true` instead of putting it in `message`) |
 
 Example:
@@ -643,7 +643,7 @@ Merge a worktree branch back to base.
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
 
-A merge never switches the user's checkout to another branch. `merge` rebases the branch onto base only when needed: in the session worktree, the checkout that already has the branch, or a temporary worktree. The base branch moves where it lives: when base is checked out (usually the main checkout) the fast-forward or squash commit runs there, uncommitted changes there are auto-stashed and restored on that same branch, and repository hooks run per `worktreeGitHooks`; when base is not checked out anywhere, the base ref is updated directly (compare-and-swap) and no checkout is touched. Uncommitted changes in the branch's own checkout are reported as such, not as a rebase conflict, and rebasing a branch that was already pushed adds a warning because the remote copy keeps the old commits. A branch that changes hook locations needs the user's button (see [Git Hooks](#git-hooks)).
+A merge never switches the user's checkout to another branch. `merge` rebases the branch onto base only when needed: in the session worktree, the checkout that already has the branch, or a temporary worktree. The base branch moves where it lives: when base is checked out (usually the main checkout) the fast-forward or squash commit runs there, uncommitted changes there are auto-stashed and restored on that same branch, and repository hooks run per `worktreeGitHooks`; when base is not checked out anywhere, a fast-forward updates the base ref directly (compare-and-swap) and a squash commit is made in a temporary checkout of base (so commit hooks run; with `worktreeGitHooks: "skip"` the ref is updated directly), and no user checkout is touched. The rebase runs in the session worktree only while it still has the session branch checked out. Uncommitted changes in the branch's own checkout are reported as such, not as a rebase conflict, and rebasing a branch that was already pushed adds a warning because the remote copy keeps the old commits. A branch that changes hook locations needs the user's button (see [Git Hooks](#git-hooks)).
 | `push` | `boolean` | No | Defaults to `false`; set `true` only when you want the merged base branch pushed |
 | `delete_branch` | `boolean` | No | Defaults to `true` |
 

@@ -909,6 +909,7 @@ export function createCallbackHandler(
             message: "Approved. Go ahead.",
             approve: true,
             userInitiated: true,
+            userApproval: "button",
           });
         });
         if (result.isError) {

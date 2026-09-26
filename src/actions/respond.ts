@@ -21,6 +21,12 @@ interface RespondParams {
   userInitiated?: boolean;
   approve?: boolean;
   approvalRationale?: string;
+  /**
+   * Internal: how a user approval arrived. Set only by the Approve button
+   * callback ("button") and by the user's typed "approve" reply ("text"); the
+   * agent_respond tool never sets it. Required for `planApproval: "ask"`.
+   */
+  userApproval?: "button" | "text";
 }
 
 interface RespondResult {
@@ -162,13 +168,15 @@ function approvalBlockedReason(session: PlanApprovalTarget): string | undefined 
  */
 function userOnlyApprovalReason(
   session: Pick<PlanApprovalTarget, "name" | "pendingPlanApproval"> & { planApproval?: PlanApprovalMode },
-  params: Pick<RespondParams, "userInitiated">,
+  params: Pick<RespondParams, "userInitiated" | "userApproval">,
 ): string | undefined {
-  if (params.userInitiated || !session.pendingPlanApproval) return undefined;
+  // An approve flag alone (even with userInitiated) is the caller's claim; in
+  // "ask" mode only the button or the user's own "approve" reply counts.
+  if (params.userApproval || !session.pendingPlanApproval) return undefined;
   if ((session.planApproval ?? pluginConfig.planApproval) !== "ask") return undefined;
   return [
     `Plan approval for session ${session.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused.`,
-    `Wait for the user's Approve button, or forward the user's own reply with agent_respond(session='${session.name}', message='<their words>', userInitiated=true).`,
+    `Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(session='${session.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`,
   ].join(" ");
 }
 
@@ -454,6 +462,7 @@ export async function executeRespond(
       ...params,
       message: "Approved. Go ahead.",
       approve: true,
+      userApproval: "text",
     });
   }
   if (textPlanDecision === "revise") {
