@@ -44,12 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In-process API: `SessionManager.resetRepoPolicy(ref)` now returns the removed `RepoPolicyRecord[]` instead of a boolean.
 - New `agent_session_action` tool (see Added). Agents whose tool allowlists name OCA tools individually must add it; OpenClaw does not add new plugin tools to an explicit allowlist.
 - `agent_kill` rejects parameters other than `session` and `reason` (its schema sets `additionalProperties: false`). Previously unknown fields were ignored and the call still stopped the session.
+- Codex plan review is read-only (D5): plan turns run with the `:read-only` profile and approval policy `never`, whatever `harnesses.codex.*` or the host `tools.exec.mode` select, and approval requests during a plan turn are declined without reaching chat. Plans that relied on running write commands (builds that write artifacts, test runs that write caches) before approval now see those commands fail; they run after approval as before.
+- OpenCode: OCA's own `opencode serve` always gets a random per-spawn password; `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` from the Gateway environment are no longer used. The server now runs under a watchdog process (the Gateway's Node executable) in its own process group.
+- OpenCode: the `opencode` command is no longer looked up in hard-coded Homebrew/Linuxbrew prefixes (`/home/linuxbrew/.linuxbrew/bin`, `/opt/homebrew/bin`). Put it on the Gateway's `PATH` or set `OPENCLAW_OPENCODE_COMMAND`.
+- OpenCode: a `reasoning_effort` the model has no variant for is no longer sent (it was ignored by OpenCode anyway); the session reports it as unsupported. `rewind_turns` with OpenCode requires `fork_session: true`.
+- Concurrent questions and approvals are handled the same way by every harness: the first is shown and later ones wait in order (Codex used to decline them, Claude Code and OpenCode replaced the visible one).
+- Codex questions with `isOther: false` no longer accept free text.
 
 ### Added
 
 - `worktreeGitHooks` config (`run` default, or `skip`): repository hooks during OCA's own merge, rebase, squash commit, push, and `git worktree add`; `skip` runs them with `core.hooksPath=/dev/null`.
 - `trustedVerifierCommands` config: goal verifier commands the operator pre-approves.
-- `agent_goal_launch` `max_cost_usd` / `/agent_goal --max-cost-usd`: stop a goal loop before the next iteration once its sessions cost that much.
+- `agent_goal_launch` `max_cost_usd` / `/agent_goal --max-cost-usd`: stop a goal loop before the next iteration once its sessions cost that much. Sessions that bill nothing per token (Codex with a ChatGPT login) count at the API-price estimate of their tokens.
+- `rewind_turns` for Claude Code (in place or into a fork, through the SDK's `resumeSessionAt`) and OpenCode (into a fork at the turn's first message).
+- Codex and OpenCode report structured run outcomes and error codes (`codexErrorInfo`; OpenCode `error.name`), per-model token usage and the context window fill, and Codex reports tool calls.
+- OpenCode reports the model, the applied effort (validated against the model's variants from `/config/providers`) and the context window.
+- OpenCode subagent (child session) permission prompts and questions reach the user; subagent sessions get the session's permission overlay.
+- Warnings for an allowed Codex model missing from `model/list`, and for explicit `harnesses.codex` settings that run Codex under a host `tools.exec.mode` of `deny` / `allowlist`; `openclaw doctor` flags `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` (`dangerousFlags`).
 
 - `autoUpdate` plugin config key (default `true`). When on, the daily update check and its **Update now** / **Restart Gateway** buttons work as before: OCA reinstalls itself only after an explicit **Update now** press and restarts the Gateway only after a separate **Restart Gateway** press. `false` disables update checks, installs, and restarts.
 - `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan over the exact packed file list and fails on any finding. It uses the vendored engine in `scripts/vendor/clawhub-moderation-engine.mjs` (MIT, regenerate with `pnpm sync:clawhub-scan`). The release workflow also scans the exact tarball it publishes. Two extra guards: `fetch(` may appear only in the npm release-client chunk, and no packed file may combine `process.env` with a network call.
@@ -121,6 +132,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unused `src/openclaw-paths.ts` (which still used the pre-5.0 `OPENCLAW_HOME` meaning) and unused exports: button-diagnostics payload summaries, `getDefaultCodexModelInfo`, unused `api.ts` handler-registration types and SDK re-exports, and the exported Codex wire-type guards.
 
 ### Fixed
+
+- Codex plan turns could write to the workspace: plan collaboration mode only instructs the model, and under `tools.exec.mode: "auto"` / `"ask"` sandbox escalations were approved by the `auto_review` reviewer or in chat. Plan turns now run read-only with approvals off (see Breaking changes).
+- A Codex interrupt sent before the turn id arrived was lost; it is latched and sent once the turn starts.
+- Resuming or forking a Codex thread without fast mode kept the fast (`priority`) tier it last ran with; the standard tier is now requested explicitly. Fast mode is only requested when the model's `model/list` entry offers the tier.
+- Codex startup failures said only "stdio closed": a missing command now names the command and `OPENCLAW_CODEX_APP_SERVER_COMMAND`, an exit reports its code or signal and redacted stderr, and JSON-RPC errors keep their code and data.
+- Codex non-blocking questions (`isBlocking: false`) are marked as such, and `error` notifications with `willRetry` count as activity; the final error explains a failed turn.
+- OpenCode refetched the session's whole message history after every finished step and at every turn boundary (quadratic in long sessions). Turns now read only their own messages (paged), and mid-turn cost reads only the session record.
+- The shared OpenCode server accepted unauthenticated requests from any local process.
+- OpenCode servers, Codex app-server command children, and their tool processes could outlive a killed Gateway. The OpenCode server now runs under a lifeline watchdog in its own process group, and the Codex app server in its own process group.
+- A subagent's permission prompt in an OpenCode session was never shown (events were routed by the parent session id only), and subagents ignored the session's permission overlay.
+- A second Claude Code `AskUserQuestion` while one was open replaced the first, which was then never answered; it now waits until the first is answered.
 
 - Resuming a finished or suspended session through `agent_respond` (or its Resume button) dropped the launch `system_prompt`. The launch prompt (without the worktree preamble, which is added again) is now stored on the session row and reused on resume and on a fresh relaunch.
 - The production build dropped the logger's `console.warn` fallback (esbuild `--pure:console.warn`), so warnings logged before plugin registration, or when the host logger threw, were lost. Only `console.log` / `info` / `debug` are stripped now.
@@ -204,6 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Codex default model (`gpt-6-sol`) and allowlist stay static operator policy rather than following `model/list` `isDefault`: the allowlist check runs before launch, when no catalog is loaded, and a catalog default that moves with Codex upgrades would silently change, and possibly disallow, the default model.
 - `autoUpdate` is not listed in the manifest `dangerousFlags`: those flags match explicitly configured values, and `true` is the default, so the flag could not describe the default state.
 - Orchestrator wakes still pass their params to `openclaw gateway call chat.send` as `--params <json>`, visible in `ps` for up to 30 s: the CLI has no stdin or file option for params, and the in-process alternatives would label agent output as `System:` lines (system events) or start an `agent` run instead of a `chat.send` turn (`runtime.subagent.run`). SECURITY.md recommends `hidepid=2` on shared hosts.
+- Codex keeps one app-server process per session instead of one shared connection (N26): sharing would make an app-server crash or a stuck request fail every Codex session at once, and would share one login, one `CODEX_HOME` and one notification stream across sessions. `maxSessions` bounds the process count.
+- Claude Code: fast mode (`settings.fastMode`) is not offered (billed as extra usage, needs an SDK opt-in, model-limited); the SDK's `acceptEdits`, `dontAsk` and `auto` permission modes are not exposed (no counterpart in the other harnesses); no Claude "ask" relay for `default` mode. REFERENCE.md documents how `default` differs per harness. A per-turn Codex tier (`serviceTierForTurn`) is not used because `fast_mode` is a session setting.
 - Goals: OCA keeps its cross-harness, verifier-driven goal loop and does not map Codex sessions onto native `thread/goal/*`.
 - Pre-PR review stays an explicit `agent_session_action(action: "review")` step rather than an automatic worktree-PR hook.
 - The `ultra` Codex effort is not exposed yet because OCA's effort enum is shared with Claude Code.
