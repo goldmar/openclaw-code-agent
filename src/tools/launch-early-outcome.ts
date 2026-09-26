@@ -53,6 +53,7 @@ export async function awaitLaunchEarlyOutcome(
   }
   if (!TERMINAL.has(session.status)) return undefined;
   if (readerSessionKey) session.noteOutcomeSeen(readerSessionKey);
+  // The launch result carries the outcome and asks the launching turn to report it.
   const output = truncateText(session.getOutput(20).join("\n").trim(), EARLY_OUTCOME_PREVIEW_MAX_CHARS);
   if (session.status === "failed") {
     return [

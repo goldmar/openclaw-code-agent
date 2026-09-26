@@ -1790,6 +1790,22 @@ describe("WakeDispatcher", () => {
     assert.equal(wakeFailed, 0);
   });
 
+  it("sends a held wake at once when the dispatcher stops, instead of dropping it", async () => {
+    const dispatcher = createDispatcher();
+    dispatcher.dispatchSessionNotification({ id: "held", route: buildRoute() } as any, {
+      label: "failed",
+      wakeMessage: "[held] Failed. ID: held",
+      notifyUser: "never",
+      deferWakeMs: 60_000,
+      skipDeferredWake: () => undefined,
+    });
+    await new Promise((resolve) => originalSetTimeout(resolve, 20));
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false, "still held");
+    dispatcher.dispose();
+    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "held wake sent on dispose");
+    assert.equal(asChatSend(calls.find((call) => call.kind === "chat-send")!).message, "[held] Failed. ID: held");
+  });
+
   it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {
     const delays: number[] = [];
     global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {

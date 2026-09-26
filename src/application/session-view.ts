@@ -274,7 +274,7 @@ export function getSessionOutputText(
     return `Error: Session "${ref}" not found.`;
   }
 
-  if (options.readerSessionKey) session.noteOutcomeSeen(options.readerSessionKey);
+  const ownsReport = options.readerSessionKey ? session.noteOutcomeSeen(options.readerSessionKey) : false;
   const liveOutputLines = readLiveOutputLines(session, options, linesToShow);
   const outputLines = liveOutputLines && liveOutputLines.length > 0
     ? liveOutputLines
@@ -303,6 +303,10 @@ export function getSessionOutputText(
   if (pendingPlan && !outputLines.join("\n").includes(pendingPlan)) {
     const version = session.latestPlanArtifactVersion;
     return `${body}\n${divider}\nPending plan${version ? ` (v${version})` : ""}:\n${divider}\n${pendingPlan}`;
+  }
+  if (ownsReport) {
+    // This read replaces the outcome wake (see Session.noteOutcomeSeen).
+    return `${body}\n${divider}\n[${session.name}] ended right after launch; no separate wake follows. Tell the user the outcome in this turn.`;
   }
   return body;
 }

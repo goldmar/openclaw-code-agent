@@ -155,12 +155,24 @@ describe("plan decision brief presentation", () => {
     assert.match(message, /Tests \/ verification: No tests exist/);
   });
 
-  it("shows an unterminated fence as code, and clips long code", () => {
-    const plan = ["1. Update `parser.ts` so it reads:", "```", ...Array.from({ length: 30 }, (_, i) => `line_${i} = ${i}`)].join("\n");
-    const summary = buildPlanReviewSummary({ preview: plan });
-    assert.match(summary, /Update `parser\.ts` so it reads: `line_0 = 0; line_1 = 1;/);
-    assert.match(summary, /\.\.\.`/);
-    assert.doesNotMatch(summary, /```/);
+  it("shows the plan itself when a code block is too long for one brief line, so no command is clipped", () => {
+    const plan = [
+      "1. Clean the build output:",
+      "```sh",
+      ...Array.from({ length: 12 }, (_, i) => `echo step-${i}`),
+      "rm -rf ./dist ./coverage",
+      "```",
+      "2. Rebuild with `pnpm build`.",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.doesNotMatch(message, /Decision brief/);
+    assert.match(message, /\nPlan\n1\. Clean the build output:\n```sh\n/);
+    assert.match(message, /rm -rf \.\/dist \.\/coverage/);
+  });
+
+  it("still folds a short unterminated fence into its step", () => {
+    const summary = buildPlanReviewSummary({ preview: ["1. Update `parser.ts` so it reads:", "```", "a = 1", "b = 2"].join("\n") });
+    assert.match(summary, /Update `parser\.ts` so it reads: `a = 1; b = 2`/);
   });
 
   it("shows the plan itself instead of a brief when a section heading maps to no field", () => {

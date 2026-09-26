@@ -157,6 +157,7 @@ export class WakeDispatcher {
   private readonly beforeInteractiveSend?: () => Promise<void>;
   private readonly bindInteractiveButtons?: (tokenIds: string[], route: NotificationRoute) => void;
   private disposed = false;
+  private readonly deferredWakes = new Set<{ send: () => void; timer: ReturnType<typeof setTimeout> | undefined }>();
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.beforeInteractiveSend = options.beforeInteractiveSend;
@@ -174,7 +175,27 @@ export class WakeDispatcher {
     this.executor.clearRetryTimersForSession(sessionId);
   }
 
+  /**
+   * Run a held wake after `delayMs`. On dispose (a Gateway stop or plugin
+   * restart) held wakes are sent at once instead of being dropped: the timer
+   * would otherwise lose them, since no pending wake is persisted.
+   */
+  private deferWake(send: () => void, delayMs: number): void {
+    const entry = { send, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+    entry.timer = setTimeout(() => {
+      this.deferredWakes.delete(entry);
+      if (!this.disposed) send();
+    }, delayMs);
+    entry.timer.unref?.();
+    this.deferredWakes.add(entry);
+  }
+
   dispose(): void {
+    for (const entry of this.deferredWakes) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.send();
+    }
+    this.deferredWakes.clear();
     this.disposed = true;
     this.executor.dispose();
   }
@@ -690,7 +711,7 @@ export class WakeDispatcher {
         if (!wakeText) return;
         if (request.deferConditionalWakeUntilNextTick === true || request.deferConditionalWakeMs !== undefined) {
           const delayMs = Math.max(0, Math.floor(request.deferConditionalWakeMs ?? 0));
-          setTimeout(() => sendDeferredWake(wakeText, queueOnly), delayMs).unref?.();
+          this.deferWake(() => sendDeferredWake(wakeText, queueOnly), delayMs);
           return;
         }
         sendDeferredWake(wakeText, queueOnly);
@@ -809,9 +830,7 @@ export class WakeDispatcher {
       );
     };
     if (request.deferWakeMs !== undefined && request.deferWakeMs > 0) {
-      setTimeout(() => {
-        if (!this.disposed) sendImmediateWake();
-      }, request.deferWakeMs).unref?.();
+      this.deferWake(sendImmediateWake, request.deferWakeMs);
       return;
     }
     sendImmediateWake();

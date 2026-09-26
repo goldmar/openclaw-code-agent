@@ -137,6 +137,9 @@ function backendRefDiagnosticFields(backendRef: SessionBackendRef | undefined): 
  * Owns state-machine transitions, output buffering, prompt streaming, timers,
  * and lifecycle events consumed by SessionManager.
  */
+/** A session that ends this soon after launch can end during the launching orchestrator turn. */
+export const LAUNCH_OUTCOME_WINDOW_MS = 60_000;
+
 export class Session extends EventEmitter {
   readonly id: string;
   name: string;
@@ -544,14 +547,22 @@ export class Session extends EventEmitter {
 
   get status(): SessionStatus { return this._status; }
 
-  /** Record that the origin orchestrator session read this session's output after it ended. */
-  noteOutcomeSeen(readerSessionKey: string): void {
+  /**
+   * Record that the origin orchestrator session read this session's outcome
+   * while it still owns the report: the session ended within
+   * `LAUNCH_OUTCOME_WINDOW_MS` of launch, so the launching turn is expected to
+   * tell the user and the deferred outcome wake is skipped. Returns whether this
+   * read owns the report (the caller then tells the orchestrator so).
+   */
+  noteOutcomeSeen(readerSessionKey: string): boolean {
     const origin = this.route?.sessionKey?.trim() || this.originSessionKey?.trim();
-    if (!origin || readerSessionKey.trim() !== origin) return;
-    if (this.outcomeSeenAt === undefined && (this._status === "completed" || this._status === "failed" || this._status === "killed")) {
-      this.outcomeSeenAt = Date.now();
-    }
+    if (!origin || readerSessionKey.trim() !== origin) return false;
+    if (this._status !== "completed" && this._status !== "failed" && this._status !== "killed") return false;
+    if ((this.completedAt ?? Date.now()) - this.startedAt > LAUNCH_OUTCOME_WINDOW_MS) return false;
+    this.outcomeSeenAt ??= Date.now();
+    return true;
   }
+
 
 
   get harnessName(): string { return this.harness.name; }

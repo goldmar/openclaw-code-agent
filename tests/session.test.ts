@@ -29,8 +29,15 @@ describe("Session state machine", () => {
     owned.transition("completed");
     owned.noteOutcomeSeen("agent:main:ux-driver");
     assert.equal(owned.outcomeSeenAt, undefined, "another session read it");
-    owned.noteOutcomeSeen(origin);
+    assert.equal(owned.noteOutcomeSeen(origin), true);
     assert.equal(typeof owned.outcomeSeenAt, "number");
+
+    const late = new Session({ ...BASE_CONFIG, originSessionKey: origin }, "late");
+    late.transition("running");
+    late.transition("completed");
+    late.startedAt = Date.now() - 5 * 60_000;
+    assert.equal(late.noteOutcomeSeen(origin), false, "a session that ran for minutes gets its usual wake");
+    assert.equal(late.outcomeSeenAt, undefined);
   });
 
   it("canonicalizes provider-qualified Claude models for internal session launches", () => {

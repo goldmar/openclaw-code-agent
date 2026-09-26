@@ -123,16 +123,47 @@ function normalizePlanLines(source: string): string[] {
   return result;
 }
 
+/** A fenced block longer than this is not folded into the brief: the plan is shown itself. */
 const PLAN_INLINE_CODE_MAX_CHARS = 160;
 
 /** One code block as one inline code span: `def f(a): return a` or `a; b`. */
 function formatInlineCode(lines: string[]): string {
+  return `\`${joinCodeLines(lines).replace(/`/g, "'")}\``;
+}
+
+function joinCodeLines(lines: string[]): string {
   let text = "";
   for (const line of lines) {
     text = !text ? line : /[:{(,[]$/.test(text) ? `${text} ${line}` : `${text}; ${line}`;
   }
-  const clipped = truncateText(text.replace(/`/g, "'"), PLAN_INLINE_CODE_MAX_CHARS);
-  return `\`${clipped}\``;
+  return text;
+}
+
+/**
+ * Whether the plan has a fenced block too long to fold into one brief line.
+ * Clipping it could hide a material command (a delete at the end of a shell
+ * block), so such a plan is shown itself instead of as a brief.
+ */
+function hasLongFencedBlock(source: string): boolean {
+  let fence: string | undefined;
+  let code: string[] = [];
+  for (const line of source.split("\n")) {
+    const opener = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence) {
+      if (opener) {
+        fence = opener;
+        code = [];
+      }
+      continue;
+    }
+    if (line.trim().startsWith(fence)) {
+      if (joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS) return true;
+      fence = undefined;
+      continue;
+    }
+    if (line.trim()) code.push(line.trim());
+  }
+  return fence !== undefined && joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS;
 }
 
 function pushUnique(target: string[], text: string): void {
@@ -226,8 +257,9 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
     ? `Full plan: /agent_output ${args.detailRef} --full`
     : "Reply asking for the full plan to see everything.";
 
-  if (unmappedLines > 0) {
-    // The plan does not map cleanly onto the brief: show the plan itself.
+  if (unmappedLines > 0 || hasLongFencedBlock(source)) {
+    // The plan does not map cleanly onto the brief (a section with no brief
+    // field, or code too long for one line): show the plan itself.
     const detailRefNote = args.detailRef && /^[a-zA-Z0-9_-]+$/.test(args.detailRef)
       ? `(Plan shortened. Full plan: /agent_output ${args.detailRef} --full)`
       : "(Plan shortened. Reply asking for the full plan to see everything.)";

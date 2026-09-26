@@ -17,7 +17,7 @@ import {
   hasProvablePlanReviewPrompt,
   isCurrentPendingPlanDecision,
 } from "./session-plan-approval-delivery";
-import type { Session } from "./session";
+import { LAUNCH_OUTCOME_WINDOW_MS, type Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
 import type { PendingInputQuestion, PendingInputState } from "./types";
 import type { NotificationButton } from "./session-interactions";
@@ -38,8 +38,6 @@ type WorktreeStrategyResult = {
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
 const OPTION_DESCRIPTION_MAX_CHARS = 280;
-/** A session that ends this soon after launch can end during the launching orchestrator turn. */
-const LAUNCH_OUTCOME_WINDOW_MS = 60_000;
 /** How long such an outcome wake waits for that turn to read the outcome itself. */
 const LAUNCH_OUTCOME_WAKE_DELAY_MS = 15_000;
 

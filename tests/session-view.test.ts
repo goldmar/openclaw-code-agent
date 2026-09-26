@@ -148,7 +148,7 @@ describe("session-view app layer", () => {
     const failed: any = {
       status: "failed", name: "ux-fail", id: "f1", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp",
       costUsd: 0, phase: "terminal", startedAt: now - 1000, getOutput: () => ["model_not_found"],
-      noteOutcomeSeen: (reader: string) => { seen.push(reader); },
+      noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
     };
     const sm: any = { list: () => [failed], listPersistedSessions: (): never[] => [], resolve: () => failed };
 
@@ -156,8 +156,9 @@ describe("session-view app layer", () => {
     getSessionOutputText(sm, "ux-fail");
     assert.deepEqual(seen, [], "user commands do not count");
 
-    getSessionOutputText(sm, "ux-fail", { readerSessionKey: "agent:main:telegram:direct:1" });
+    const text = getSessionOutputText(sm, "ux-fail", { readerSessionKey: "agent:main:telegram:direct:1" });
     assert.deepEqual(seen, ["agent:main:telegram:direct:1"]);
+    assert.match(text, /\[ux-fail\] ended right after launch; no separate wake follows\. Tell the user the outcome in this turn\.$/);
   });
 
   it("returns not found when output session reference is unknown", () => {
