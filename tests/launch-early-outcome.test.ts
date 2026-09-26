@@ -13,7 +13,7 @@ function fakeSession() {
     status: "running" as string,
     error: undefined as string | undefined,
     getOutput: () => ["There's an issue with the selected model."],
-    noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
+    noteOutcomeSeen: (reader: string): boolean => { seen.push(reader); return true; },
   });
   return { session, seen };
 }
