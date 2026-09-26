@@ -24,6 +24,7 @@ metadata:
 - Defaults (plugin config): `permission_mode: "plan"` (the agent plans first), `plan_approval: "delegate"` (you review the plan), `worktree_strategy: "delegate"` (the agent works on a branch; you decide what happens to it).
 - Continue a session with `agent_respond(session, message)`; it also resumes a stopped, suspended or completed one. Launch again only for independent work, never from a wake about the same task.
 - Codex mid-turn: `agent_respond` steers the running turn (`interrupt=true` restarts it). A wrong turn: `agent_launch(resume_session_id, fork_session=true, rewind_turns=1, prompt)`. Context full: `agent_session_action(action="compact")`; a review before merging: `action="review"`.
+- After a launch, tell the user once and end your turn. Do not wait for the session (no `sessions_yield`, sleep or polling) or describe its progress later in the turn: it can finish meanwhile. The plugin shows the outcome and wakes you.
 - Check state with `agent_sessions()`, `agent_sessions(status="waiting")` (what needs a decision or answer), and `agent_output(session, full=true)`.
 
 ## Messages from the user

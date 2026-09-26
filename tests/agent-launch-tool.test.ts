@@ -46,7 +46,10 @@ describe("agent_launch tool defaults", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, / · codex \| gpt-6-sol/);
     assert.match(text, /Mode: plan first, approval: delegate · worktree: delegate/);
-    assert.ok(text.split("\n").length <= 5, `compact launch summary: ${text}`);
+    const [summary, note] = text.split("\n\n");
+    assert.ok(summary!.split("\n").length <= 5, `compact launch summary: ${text}`);
+    // The session can end while the launching turn is still open: no waiting, no later progress claims.
+    assert.match(note ?? "", /OCA tells the user when \[codex-defaults\] ends or needs a decision, and wakes you then\. After announcing the launch, end this turn: do not wait for it \(no sessions_yield/);
   });
 
   it("reports a session that fails right after launch in the launch result, as read by the launching session", async () => {

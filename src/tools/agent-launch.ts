@@ -16,7 +16,7 @@ import {
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import { buildResumedPlanState } from "../plan-decision-state";
 import { createLogger } from "../logger";
-import { awaitLaunchEarlyOutcome } from "./launch-early-outcome";
+import { awaitLaunchEarlyOutcome, launchHandoffNote } from "./launch-early-outcome";
 
 const log = createLogger("agent-launch");
 
@@ -332,7 +332,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         return {
           content: [{
             type: "text",
-            text: earlyOutcome ? `${launchText}\n\n${earlyOutcome}` : launchText,
+            text: `${launchText}\n\n${earlyOutcome ?? launchHandoffNote(session.name)}`,
           }],
         };
       } catch (err: unknown) {

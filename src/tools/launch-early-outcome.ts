@@ -6,6 +6,15 @@ import { truncateText } from "../format";
 /** How long agent_launch waits for a session that ends right away (a bad model, a startup error). */
 export const LAUNCH_EARLY_OUTCOME_WAIT_MS = 4_000;
 
+/**
+ * Appended to a launch result when the session is still working: the launching
+ * turn must not wait for it or describe its state later, because the session can
+ * end while the turn is still open (a stale "still running" after ✅ Completed).
+ */
+export function launchHandoffNote(name: string): string {
+  return `OCA tells the user when [${name}] ends or needs a decision, and wakes you then. After announcing the launch, end this turn: do not wait for it (no sessions_yield, sleep or polling) and do not describe its progress later in this turn.`;
+}
+
 /** Test seam: fake-harness suites set `waitMs` to 0 so every launch does not wait. */
 export const launchEarlyOutcomeInternals = { waitMs: LAUNCH_EARLY_OUTCOME_WAIT_MS };
 const EARLY_OUTCOME_PREVIEW_MAX_CHARS = 600;
