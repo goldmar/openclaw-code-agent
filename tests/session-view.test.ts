@@ -161,7 +161,7 @@ describe("session-view app layer", () => {
   it("status=waiting lists a plan still pending after a Gateway restart (recovered as suspended)", () => {
     const now = Date.now();
     const sm: any = {
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [{
         sessionId: "7", harnessSessionId: "h7", name: "recovered-plan", prompt: "x", workdir: "/tmp", status: "killed",
         lifecycle: "suspended", pendingPlanApproval: true, planApproval: "ask", createdAt: now - 5000,
