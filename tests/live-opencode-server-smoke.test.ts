@@ -1,5 +1,5 @@
 import "./test-env";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -116,58 +116,60 @@ function assertOpenCodeVersion(): void {
 }
 
 describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
+  let routeServer: LiveServer | undefined;
+  after(async () => { await routeServer?.close(); });
+
   it("validates the real classic lifecycle route contract without model inference", async () => {
     assertOpenCodeVersion();
     const server = await startLiveServer();
-    try {
-      // `/api/*` is OpenCode's v2 surface: the web-app HTML shell on 1.16.x, a
-      // separate v2 JSON API on 1.18+. The harness uses the classic routes.
-      const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
-        method: "POST",
-        headers: { ...connectionClose, Authorization: server.authorization, "content-type": "application/json" },
-        body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
-        signal: AbortSignal.timeout(5_000),
-      });
-      await apiCreate.body?.cancel();
+    // Keep this server alive while the next test starts another one. Closing it
+    // first can leave a pooled socket for the same loopback port in this process.
+    routeServer = server;
+    // `/api/*` is OpenCode's v2 surface: the web-app HTML shell on 1.16.x, a
+    // separate v2 JSON API on 1.18+. The harness uses the classic routes.
+    const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
+      method: "POST",
+      headers: { ...connectionClose, Authorization: server.authorization, "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    await apiCreate.body?.cancel();
 
-      const permission = [
-        { permission: "edit", pattern: "*", action: "ask" },
-        { permission: "bash", pattern: "*", action: "ask" },
-      ];
-      const created = await requestJson<{ id: string }>(server, "POST", "/session", {
-        metadata: { client: "openclaw-code-agent-route-smoke" },
-        permission,
-      });
-      assert.equal(created.status, 200);
-      assert.match(created.data.id, /^ses/);
+    const permission = [
+      { permission: "edit", pattern: "*", action: "ask" },
+      { permission: "bash", pattern: "*", action: "ask" },
+    ];
+    const created = await requestJson<{ id: string }>(server, "POST", "/session", {
+      metadata: { client: "openclaw-code-agent-route-smoke" },
+      permission,
+    });
+    assert.equal(created.status, 200);
+    assert.match(created.data.id, /^ses/);
 
-      const messages = await requestJson<unknown[]>(server, "GET", `/session/${created.data.id}/message`);
-      assert.equal(Array.isArray(messages.data), true);
+    const messages = await requestJson<unknown[]>(server, "GET", `/session/${created.data.id}/message`);
+    assert.equal(Array.isArray(messages.data), true);
 
-      const statuses = await requestJson<Record<string, unknown>>(server, "GET", "/session/status");
-      assert.equal(typeof statuses.data, "object");
+    const statuses = await requestJson<Record<string, unknown>>(server, "GET", "/session/status");
+    assert.equal(typeof statuses.data, "object");
 
-      const forked = await requestJson<{ id: string }>(server, "POST", `/session/${created.data.id}/fork`, {});
-      assert.match(forked.data.id, /^ses/);
+    const forked = await requestJson<{ id: string }>(server, "POST", `/session/${created.data.id}/fork`, {});
+    assert.match(forked.data.id, /^ses/);
 
-      await requestNoContent(server, "POST", `/session/${created.data.id}/prompt_async`, {
-        noReply: true,
-        parts: [{ type: "text", text: "OPENCLAW_OPENCODE_ROUTE_SMOKE" }],
-      });
+    await requestNoContent(server, "POST", `/session/${created.data.id}/prompt_async`, {
+      noReply: true,
+      parts: [{ type: "text", text: "OPENCLAW_OPENCODE_ROUTE_SMOKE" }],
+    });
 
-      const abort = await requestJson<boolean>(server, "POST", `/session/${created.data.id}/abort`);
-      assert.equal(abort.data, true);
+    const abort = await requestJson<boolean>(server, "POST", `/session/${created.data.id}/abort`);
+    assert.equal(abort.data, true);
 
-      // The harness demultiplexes one shared stream for every project directory.
-      const events = await fetch(`${server.baseUrl}/global/event`, {
-        headers: { ...connectionClose, Authorization: server.authorization },
-        signal: AbortSignal.timeout(5_000),
-      });
-      assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
-      await events.body?.cancel();
-    } finally {
-      await server.close();
-    }
+    // The harness demultiplexes one shared stream for every project directory.
+    const events = await fetch(`${server.baseUrl}/global/event`, {
+      headers: { ...connectionClose, Authorization: server.authorization },
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
+    await events.body?.cancel();
   });
 
   it("runs a trivial prompt through opencode serve", { skip: !RUN_COMPLETION }, async () => {
