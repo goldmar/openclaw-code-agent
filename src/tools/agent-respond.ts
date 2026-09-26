@@ -31,7 +31,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
       message: Type.String(),
       interrupt: Type.Optional(Type.Boolean({ description: "Stop the current turn first" })),
       userInitiated: Type.Optional(
-        Type.Boolean({ description: "true when forwarding the user's own words. Then 'approve', 'reject' or 'revise' decide a pending plan; other text is feedback." }),
+        Type.Boolean({ description: "true when forwarding the user's own words. Forward each user message whole, in one call. For a pending plan, a message that is only 'approve', 'reject' or 'revise' decides it; any other message (including 'revise …' with the changes) is one revision with that feedback." }),
       ),
       approve: Type.Optional(
         Type.Boolean({ description: "Approve the pending plan (delegate/approve modes). Refused when planApproval is 'ask': only the user approves there. On a default-mode session: switch to bypassPermissions." }),
@@ -55,6 +55,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
         userInitiated: params.userInitiated,
         approve: params.approve,
         approvalRationale: params.approval_rationale,
+        fromOrchestratorTurn: true,
       });
 
       return {

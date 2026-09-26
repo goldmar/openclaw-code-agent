@@ -8,6 +8,8 @@ import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
+import { EventEmitter } from "node:events";
+import { launchEarlyOutcomeInternals } from "../src/tools/launch-early-outcome";
 
 describe("agent_launch tool defaults", () => {
   beforeEach(() => {
@@ -45,6 +47,39 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, / · codex \| gpt-6-sol/);
     assert.match(text, /Mode: plan first, approval: delegate · worktree: delegate/);
     assert.ok(text.split("\n").length <= 5, `compact launch summary: ${text}`);
+  });
+
+  it("reports a session that fails right after launch in the launch result, as read by the launching session", async () => {
+    const seen: string[] = [];
+    const session = Object.assign(new EventEmitter(), {
+      id: "sess-fail", name: "ux-fail", model: "claude-nonexistent-9", status: "running",
+      error: undefined as string | undefined,
+      getOutput: () => ["There's an issue with the selected model."],
+      noteOutcomeSeen: (reader: string) => { seen.push(reader); },
+    });
+    setSessionManager({
+      resolveBackendConversationId: (id: string) => id,
+      launchSession() {
+        setTimeout(() => {
+          session.status = "failed";
+          session.error = "model_not_found";
+          session.emit("statusChange", session, "failed");
+        }, 10);
+        return session;
+      },
+    } as any);
+    const saved = launchEarlyOutcomeInternals.waitMs;
+    launchEarlyOutcomeInternals.waitMs = 2_000;
+    try {
+      const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true, sessionKey: "agent:main:telegram:direct:5551234" } as any);
+      const result = await tool.execute("tool-id", { prompt: "Ship it", harness: "claude-code", model: "sonnet" });
+      const text = (result.content[0] as { text: string }).text;
+      assert.match(text, /\[ux-fail\] failed right after launch/);
+      assert.match(text, /model_not_found/);
+      assert.deepEqual(seen, ["agent:main:telegram:direct:5551234"]);
+    } finally {
+      launchEarlyOutcomeInternals.waitMs = saved;
+    }
   });
 
   it("prefers an explicit model and the configured Codex reasoning effort", async () => {

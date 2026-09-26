@@ -175,7 +175,7 @@ export function buildWaitingForInputPayload(args: {
         planReviewSummary,
         wakeMessage: [
           `${header} It is with the user (planApproval: ask); do not approve it yourself (approve=true is refused).`,
-          `If the user answers in chat, forward their words: agent_respond(session='${session.id}', message='<their words>', userInitiated=true).`,
+          `If the user answers in chat, forward their whole message in one call: agent_respond(session='${session.id}', message='<their words>', userInitiated=true).`,
         ].join("\n"),
         buttons: userMessages ? undefined : planApprovalButtons,
       };

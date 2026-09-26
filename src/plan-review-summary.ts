@@ -141,13 +141,22 @@ function pushUnique(target: string[], text: string): void {
   if (!target.some((item) => item.toLowerCase() === normalized.toLowerCase())) target.push(normalized);
 }
 
-function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanArtifact; detailRef?: string }): string {
+type PlanSummary = { text: string; verbatim: boolean };
+
+const PLAN_VERBATIM_MAX_CHARS = 2_400;
+
+function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanArtifact; detailRef?: string }): PlanSummary {
   const source = args.artifact?.markdown?.trim() || args.preview.trim();
   const sections: Record<DecisionSection, string[]> = {
     objective: [], approach: [], affected: [], verification: [], effects: [], risks: [], unknowns: [], costs: [], rollback: [],
   };
   let activeSection: DecisionSection | undefined;
   let unclassifiedCount = 0;
+  // Under a Markdown section heading that maps to no brief field ("## Current
+  // file", "## Commit"), lines are not fields: the brief would mislabel them.
+  let underUnmappedHeading = false;
+  let unmappedLines = 0;
+  let seenBody = false;
 
   if (args.artifact?.explanation?.trim()) pushUnique(sections.objective, formatPlanApprovalSummary(args.artifact.explanation));
   for (const step of args.artifact?.steps ?? []) {
@@ -165,6 +174,14 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
 
     if (isHeading(trimmed)) {
       activeSection = classifyDecisionSection(`${text.replace(/:\s*$/, "")}:`);
+      // A leading `# Title` is the plan's name, not a section.
+      const isTitle = /^#\s/.test(trimmed) && !seenBody;
+      underUnmappedHeading = !activeSection && /^#{1,6}\s/.test(trimmed) && !isTitle;
+      continue;
+    }
+    seenBody = true;
+    if (underUnmappedHeading) {
+      unmappedLines += 1;
       continue;
     }
 
@@ -209,7 +226,18 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
     ? `Full plan: /agent_output ${args.detailRef} --full`
     : "Reply asking for the full plan to see everything.";
 
-  return [
+  if (unmappedLines > 0) {
+    // The plan does not map cleanly onto the brief: show the plan itself.
+    const detailRefNote = args.detailRef && /^[a-zA-Z0-9_-]+$/.test(args.detailRef)
+      ? `(Plan shortened. Full plan: /agent_output ${args.detailRef} --full)`
+      : "(Plan shortened. Reply asking for the full plan to see everything.)";
+    const text = source.length > PLAN_VERBATIM_MAX_CHARS
+      ? `${truncateText(source, PLAN_VERBATIM_MAX_CHARS)}\n\n${detailRefNote}`
+      : source;
+    return { text, verbatim: true };
+  }
+
+  const brief = [
     ...renderSection("objective"),
     "",
     ...renderSection("approach"),
@@ -232,6 +260,7 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
       `(${detailNotes.join("; ")}. ${detailAction})`,
     ] : []),
   ].join("\n").replace(/\n{3,}/g, "\n\n").trim() || "Plan context: No concrete plan content was available. Request the complete plan before deciding.";
+  return { text: brief, verbatim: false };
 }
 
 export function formatPlanApprovalSummary(summary: string): string {
@@ -276,7 +305,7 @@ function splitPlanBodyIntoChunks(text: string, maxChars: number): string[] {
   const units: string[] = [];
   let headings: string[] = [];
   for (const line of lines) {
-    if (isHeading(line.trim()) || line.trim() === "Decision brief") {
+    if (isHeading(line.trim()) || line.trim() === "Decision brief" || line.trim() === "Plan") {
       headings.push(line);
     } else if (line.trim()) {
       units.push([...headings, line].join("\n"));
@@ -365,7 +394,7 @@ export function buildPlanReviewSummary(args: {
   preview: string;
   artifact?: PlanArtifact;
 }): string {
-  return buildDecisionGradePlanSummary(args);
+  return buildDecisionGradePlanSummary(args).text;
 }
 
 export function buildPlanApprovalPromptContent(args: {
@@ -381,10 +410,11 @@ export function buildPlanApprovalPromptContent(args: {
   const heading = args.heading ?? "ready for approval";
   const displaySessionName = formatPlanApprovalSessionName(sessionName);
   const planSummary = buildDecisionGradePlanSummary({ preview, artifact, detailRef: sessionName });
+  const summaryHeading = planSummary.verbatim ? "Plan" : "Decision brief";
   const rationale = formatPlanApprovalSummary(escalationRationale ?? "");
   const reviewSummary = rationale
-    ? `Why this was escalated: ${rationale}\n\nDecision brief\n${planSummary}`
-    : `Decision brief\n${planSummary}`;
+    ? `Why this was escalated: ${rationale}\n\n${summaryHeading}\n${planSummary.text}`
+    : `${summaryHeading}\n${planSummary.text}`;
   const singleMessage = `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ${heading}\n\n${reviewSummary}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`;
   if (singleMessage.length > PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
     return {

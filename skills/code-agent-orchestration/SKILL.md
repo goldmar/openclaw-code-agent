@@ -30,7 +30,7 @@ metadata:
 
 When you forward the user's own words, set `userInitiated=true`: `agent_respond(session, message='<their words>', userInitiated=true)`. Then:
 - a question is answered with the option number or label (several comma-separated for multi-select) or free text;
-- for a pending plan, `approve`, `reject` or `revise` decide it and any other text is revision feedback.
+- for a pending plan, a message that is only `approve`, `reject` or `revise` decides it; forward any other message whole, including `revise …` with the changes, as one revision. Never split one message into several calls.
 
 Never answer the agent's questions or make design, scope, destructive or credential decisions for the user. Forward them.
 

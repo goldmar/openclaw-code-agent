@@ -712,6 +712,28 @@ describe("executeRespond", () => {
     assert.equal(session.actionablePlanDecisionVersion, undefined);
     assert.equal(sm.getActionToken(reviseToken.id), undefined);
     assert.equal(patches[0].patch.approvalState, "changes_requested");
+    assert.equal("planApprovalContext" in patches[0].patch, false, "a change request keeps the plan context, so the revision is the next version");
+
+  });
+
+  it("gives the orchestrator the next step for a forwarded bare Revise in the tool result, not a next-turn note", async () => {
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).updatePersistedSession = () => true;
+    const queued: string[] = [];
+    (sm as any).queueOrchestratorContext = (_ref: string, label: string) => { queued.push(label); return true; };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "revise", userInitiated: true, fromOrchestratorTurn: true });
+    assert.deepEqual(queued, [], "a next-turn note would arrive after the revised plan");
+    assert.match(result.text, /Plan v1 is set for revision\. Forward the user's requested change with agent_respond\(session='test-id'/);
+    assert.equal(session.approvalState, "changes_requested");
   });
 
   for (const userInitiated of [true, false]) {

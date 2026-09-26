@@ -151,7 +151,8 @@ for (const name of BACKEND_NAMES) {
 
       const before = fixture.notifications.length;
       const v2 = await nextPlanRound(PLAN_V2);
-      assert.ok(v2.version > v1.version, `plan version advances (v${v1.version} -> v${v2.version})`);
+      assert.equal(v2.version, v1.version + 1, `the user sees the next plan number (v${v1.version} -> v${v2.version})`);
+      assert.match(fixture.lastNotification("plan-approval")?.request.userMessage ?? fixture.lastNotification("plan-approval")?.request.userMessages?.[0]?.text ?? "", new RegExp(`Plan v${v1.version + 1} `));
       const v2Buttons = await planButtons(before);
       assert.notDeepEqual(v2Buttons.map((button) => button.callbackData), v1Buttons.map((button) => button.callbackData));
 

@@ -1686,7 +1686,6 @@ describe("createCallbackHandler()", () => {
       approvalState: "changes_requested",
       lifecycle: "awaiting_user_input",
       pendingPlanApproval: false,
-      planApprovalContext: undefined,
       planDecisionVersion: 5,
       actionablePlanDecisionVersion: undefined,
       canonicalPlanPromptVersion: undefined,

@@ -162,4 +162,24 @@ describe("plan decision brief presentation", () => {
     assert.match(summary, /\.\.\.`/);
     assert.doesNotMatch(summary, /```/);
   });
+
+  it("shows the plan itself instead of a brief when a section heading maps to no field", () => {
+    const plan = [
+      "# Add mul(a, b) to calc.py", "",
+      "## Current file", "```python", "def add(a, b):", "    return a + b", "```", "",
+      "## Change", "Append `mul(a, b)` returning `a * b` to `calc.py`.", "",
+      "## Commit", "Commit `calc.py` with a short message.",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.doesNotMatch(message, /Decision brief|Files \/ systems affected: `def add/);
+    assert.match(message, /\nPlan\n# Add mul\(a, b\) to calc\.py\n\n## Current file\n```python\ndef add\(a, b\):/);
+    assert.match(message, /## Commit\nCommit `calc\.py` with a short message\./);
+  });
+
+  it("keeps the decision brief when every section heading maps to a field", () => {
+    const plan = ["# Add mul", "", "## Goal", "Add `mul(a, b)`.", "", "## Steps", "1. Edit `calc.py`.", "", "## Verification", "Run the tests."].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /Decision brief\nObjective \/ scope: Add `mul\(a, b\)`\./);
+    assert.match(message, /Tests \/ verification: Run the tests\./);
+  });
 });

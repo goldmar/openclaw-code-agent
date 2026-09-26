@@ -27,6 +27,12 @@ interface RespondParams {
    * agent_respond tool never sets it. Required for `planApproval: "ask"`.
    */
   userApproval?: "button" | "text";
+  /**
+   * Internal: the orchestrator forwarded this message in its current turn (the
+   * agent_respond tool). A bare "revise" then gets its next step in the tool
+   * result instead of a next-turn note that would arrive after the revision.
+   */
+  fromOrchestratorTurn?: boolean;
 }
 
 interface RespondResult {
@@ -250,7 +256,6 @@ function buildPlanDecisionClosedPatch(
     approvalState,
     lifecycle: approvalState === "rejected" ? "terminal" : "awaiting_user_input",
     pendingPlanApproval: false,
-    planApprovalContext: undefined,
     planDecisionVersion: nextPlanDecisionVersion(session),
     actionablePlanDecisionVersion: undefined,
     canonicalPlanPromptVersion: undefined,
@@ -264,8 +269,11 @@ function buildPlanDecisionClosedPatch(
     approvalPromptFailedAt: undefined,
   };
   if (approvalState === "rejected") {
+    patch.planApprovalContext = undefined;
     patch.runtimeState = "stopped";
   }
+  // A change request keeps the plan context: the revised plan the agent submits
+  // next is the version this request opened, not one more (N35: v1 -> v2).
   return patch;
 }
 
@@ -304,7 +312,11 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
   return { text: `Plan rejected for [${name}]. Session remains stopped.` };
 }
 
-export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string): RespondResult {
+export function requestPlanDecisionChanges(
+  sm: SessionManager,
+  sessionId: string,
+  options: { fromOrchestratorTurn?: boolean } = {},
+): RespondResult {
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
@@ -325,6 +337,11 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
   // for its next turn in that chat, where to forward it (N35). Covers the Revise
   // button, "/agent_respond <session> revise", and a forwarded "revise".
   const ref = active?.id ?? persisted?.sessionId ?? sessionId;
+  if (options.fromOrchestratorTurn) {
+    return {
+      text: `[${name}] Plan v${reviewedVersion ?? "?"} is set for revision. Forward the user's requested change with agent_respond(session='${ref}', message='<their words>', userInitiated=true); if they have not said it yet, ask them.`,
+    };
+  }
   sm.queueOrchestratorContext?.(
     ref,
     "plan-revise-requested",
@@ -502,7 +519,9 @@ export async function executeRespond(
     });
   }
   if (textPlanDecision === "revise") {
-    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session);
+    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session, {
+      fromOrchestratorTurn: params.fromOrchestratorTurn,
+    });
   }
   if (textPlanDecision === "reject") {
     return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session);
