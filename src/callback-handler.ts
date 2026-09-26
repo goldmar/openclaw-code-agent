@@ -245,7 +245,8 @@ const DECISION_NOTE_LABELS: Partial<Record<SessionActionKind, { button: string; 
  * Revise queues its own note (the next message is the change).
  */
 function queueDecisionPressedNote(
-  sm: { queueOrchestratorContext?: (ref: string, label: string, text: string, idempotencyKey?: string) => boolean },
+  // The service may have stopped while the button ran (Gateway shutdown).
+  sm: { queueOrchestratorContext?: (ref: string, label: string, text: string, idempotencyKey?: string) => boolean } | null | undefined,
   kind: SessionActionKind,
   sessionId: string,
   sessionName: string,
@@ -253,7 +254,7 @@ function queueDecisionPressedNote(
 ): void {
   const decided = DECISION_NOTE_LABELS[kind];
   if (!decided) return;
-  sm.queueOrchestratorContext?.(
+  sm?.queueOrchestratorContext?.(
     sessionId,
     "decision-button-pressed",
     `[${sessionName}] The user pressed ${decided.button} for the ${decided.subject}; earlier notes about that pending decision no longer apply.`,
