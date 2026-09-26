@@ -142,6 +142,22 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /old-persisted \[old-persisted\]/);
   });
 
+  it("status=waiting shows a session after Revise as waiting for the user's plan changes, not a question", () => {
+    const now = Date.now();
+    const base = { multiTurn: true, workdir: "/tmp", costUsd: 0, duration: 1000, prompt: "x", status: "running" };
+    const sm: any = {
+      list: () => [
+        { ...base, name: "revising", id: "1", phase: "awaiting_user_input", approvalState: "changes_requested", startedAt: now - 1000 },
+        { ...base, name: "asking", id: "2", phase: "awaiting_user_input", startedAt: now - 2000 },
+      ],
+      listPersistedSessions: (): never[] => [],
+    };
+    const text = getSessionsListingText(sm, "waiting");
+    assert.match(text, /revising \[1\][^\n]*\n(?:.*\n)*?   👉 Plan revision requested: waiting for the user's changes/);
+    assert.doesNotMatch(text.split("asking [2]")[0]!, /Question waiting for an answer/);
+    assert.match(text, /asking \[2\](?:.*\n)*?.*Question waiting for an answer/);
+  });
+
   it("records that the orchestrator read a terminal session only for agent_output, not listings or user commands", () => {
     const now = Date.now();
     const seen: string[] = [];

@@ -157,6 +157,7 @@ export class WakeDispatcher {
   private readonly beforeInteractiveSend?: () => Promise<void>;
   private readonly bindInteractiveButtons?: (tokenIds: string[], route: NotificationRoute) => void;
   private disposed = false;
+  private stopping = false;
   private readonly deferredWakes = new Set<{ send: () => void; timer: ReturnType<typeof setTimeout> | undefined }>();
 
   constructor(options: WakeDispatcherOptions = {}) {
@@ -191,6 +192,9 @@ export class WakeDispatcher {
   }
 
   dispose(): void {
+    // Held wakes go out now, through the in-process system-event queue: a CLI
+    // `chat.send` against a stopping Gateway could fail with no retry left.
+    this.stopping = true;
     for (const entry of this.deferredWakes) {
       if (entry.timer) clearTimeout(entry.timer);
       entry.send();
@@ -248,12 +252,13 @@ export class WakeDispatcher {
     const shouldContinue = shouldDispatch;
     if (shouldContinue?.() === false) return;
     const sessionKey = route?.sessionKey?.trim();
-    if (!sessionKey) {
+    if (!sessionKey || this.stopping) {
       this.sendSystemEvent(session, text, {
-        label: `${label}-system`,
+        label: `${label}-${sessionKey ? "on-stop" : "system"}`,
         phase,
         messageKind: "wake",
         wakeNow: true,
+        sessionKey,
         onSuccess,
         onFinalFailure,
         shouldContinue,

@@ -1790,7 +1790,7 @@ describe("WakeDispatcher", () => {
     assert.equal(wakeFailed, 0);
   });
 
-  it("sends a held wake at once when the dispatcher stops, instead of dropping it", async () => {
+  it("hands a held wake to the system-event queue when the dispatcher stops, instead of dropping it", async () => {
     const dispatcher = createDispatcher();
     dispatcher.dispatchSessionNotification({ id: "held", route: buildRoute() } as any, {
       label: "failed",
@@ -1802,8 +1802,12 @@ describe("WakeDispatcher", () => {
     await new Promise((resolve) => originalSetTimeout(resolve, 20));
     assert.equal(calls.some((call) => call.kind === "chat-send"), false, "still held");
     dispatcher.dispose();
-    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "held wake sent on dispose");
-    assert.equal(asChatSend(calls.find((call) => call.kind === "chat-send")!).message, "[held] Failed. ID: held");
+    // Handed to the in-process system-event queue, not a CLI chat.send that a stopping Gateway could refuse.
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "held wake enqueued on dispose");
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
+    const event = calls.find((call) => call.kind === "system-event") as { text: string; sessionKey: string };
+    assert.equal(event.text, "[held] Failed. ID: held");
+    assert.equal(event.sessionKey, buildRoute().sessionKey);
   });
 
   it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {

@@ -144,7 +144,10 @@ export class SessionWorktreeMessageService {
       : `\`${branchName}\` → \`${baseBranch}\``;
     // Name only the buttons the user actually got (no Open PR without a PR provider).
     const buttonLabels = (buttons ?? []).flat().map((button) => button.label.trim()).filter(Boolean);
-    const prOffered = buttons ? buttonLabels.some((label) => /\bPR\b/.test(label)) : true;
+    // An actionable PR choice (Open PR / Sync PR); a `View PR` link is not one.
+    const prOffered = buttons
+      ? buttons.flat().some((button) => Boolean(button.callbackData) && !button.url && /\bPR\b/.test(button.label))
+      : true;
     const choicesLine = buttonLabels.length > 0 ? `${buttonLabels.join(" / ")} buttons` : "the decision buttons";
 
     return {

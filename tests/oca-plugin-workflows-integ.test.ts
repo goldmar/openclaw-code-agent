@@ -379,6 +379,14 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /The user has Merge \/ Open PR \/ Later \/ Discard buttons for/u);
       assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /Do not merge or open a PR yourself unless they ask/u);
 
+      // A View PR link (an existing PR, no Sync needed) is not a PR choice.
+      const viewOnly = [[{ label: "Merge", callbackData: "m" }, { label: "View PR", callbackData: "", url: "https://github.com/example/repo/pull/1" }], [{ label: "Later", callbackData: "l" }, { label: "Discard", callbackData: "d" }]];
+      const askViewOnly = new SessionWorktreeMessageService().buildAskNotification({
+        session, branchName: "agent/workflow-coverage", baseBranch: "main", diffSummary, buttons: viewOnly as any,
+      });
+      assert.match(askViewOnly.wakeMessageOnNotifySuccess ?? "", /Do not merge yourself unless they ask/u);
+      assert.doesNotMatch(askViewOnly.wakeMessageOnNotifyFailed ?? "", /open a PR|agent_pr/u);
+
       const delegated = new SessionWorktreeMessageService().buildDelegateNotification({
         session,
         branchName: "agent/workflow-coverage",

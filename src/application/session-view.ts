@@ -85,6 +85,7 @@ interface SessionListingItem {
   runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
   planApproval?: PlanApprovalMode;
   approvalPromptStatus?: PersistedSessionInfo["approvalPromptStatus"];
+  approvalState?: PersistedSessionInfo["approvalState"];
   pendingWorktreeDecisionSince?: string;
 }
 
@@ -359,6 +360,10 @@ export function describeWaiting(session: SessionListingItem): string | undefined
       ? "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)"
       : "Plan waiting for the orchestrator's review: approve it or agent_escalate(kind='plan')";
   }
+  if (session.phase === "awaiting_user_input" && session.approvalState === "changes_requested") {
+    // After Revise: the plan waits for the user's requested changes, not a question.
+    return "Plan revision requested: waiting for the user's changes (forward them with agent_respond, userInitiated=true)";
+  }
   if (session.phase === "awaiting_user_input") {
     return "Question waiting for an answer (agent_output shows it; answer with agent_respond)";
   }
@@ -433,6 +438,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       runtimeRecovery: p.runtimeRecovery,
       planApproval: p.planApproval,
       approvalPromptStatus: p.approvalPromptStatus,
+      approvalState: p.approvalState,
       pendingWorktreeDecisionSince: p.pendingWorktreeDecisionSince,
     });
   }
@@ -474,6 +480,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       recovered: false,
       planApproval: session.planApproval,
       approvalPromptStatus: session.approvalPromptStatus,
+      approvalState: session.approvalState,
       pendingWorktreeDecisionSince: persistedMatch?.pendingWorktreeDecisionSince,
     });
   }
