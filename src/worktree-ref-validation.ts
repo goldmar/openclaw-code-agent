@@ -52,12 +52,12 @@ export async function branchOrRemoteTrackingRef(value: unknown): Promise<string>
 
 /**
  * A GitHub repository for `gh --repo`: `OWNER/REPO` or `HOST/OWNER/REPO`
- * (GitHub Enterprise). Owners follow GitHub's user and organization name rules
+ * (GitHub Enterprise; the host may be a single label such as `ghe`). Owners follow GitHub's user and organization name rules
  * (letters, digits, single hyphens, no leading hyphen, at most 39 characters);
  * repository names use letters, digits, `.`, `_`, and `-` (no leading `-`), and are not `.` or
  * `..`. Nothing that could read as a `gh` option or a URL is accepted (N5).
  */
-const TARGET_REPO_PATTERN = /^(?:(?<host>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)\/)?(?<owner>[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38})\/(?<repo>[A-Za-z0-9._][A-Za-z0-9._-]{0,99})$/u;
+const TARGET_REPO_PATTERN = /^(?:(?<host>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)\/)?(?<owner>[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38})\/(?<repo>[A-Za-z0-9._][A-Za-z0-9._-]{0,99})$/u;
 
 export function targetRepoValidationError(value: unknown): string | undefined {
   const match = typeof value === "string" ? TARGET_REPO_PATTERN.exec(value) : null;

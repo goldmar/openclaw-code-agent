@@ -3276,10 +3276,12 @@ describe("createCallbackHandler()", () => {
     let buttonsCleared = 0;
     const ctx = {
       channel: "telegram" as const,
+      conversationId: `${TELEGRAM_FORUM_TARGET}:topic:${TELEGRAM_FORUM_THREAD_ID}`,
       auth: { isAuthorizedSender: true },
       callback: {
         data: "code-agent:plan-token",
         payload: "plan-token",
+        chatId: TELEGRAM_FORUM_TARGET,
         messageText: "OpenClaw release monitor: v2026.6.1",
       },
       respond: {
