@@ -332,8 +332,8 @@ export async function startOpenCodeServer(options: OpenCodeServerStartOptions = 
   // every local user or process could drive the agent. Each spawn gets its own
   // random password, known only to this Gateway process.
   const password = randomBytes(24).toString("base64url");
-  // N27: the server runs under a lifeline watchdog in its own process group,
-  // so it (and its tool processes) stops with the Gateway, even on SIGKILL.
+  // N27: the server leads its own process group, watched by a parent-death
+  // watchdog, so it (and its tool processes) stops with the Gateway, even on SIGKILL.
   const lifeline = spawnWithLifeline(command, args, {
     cwd: serverCwd,
     // Gateway environment minus secrets unrelated to the agent (see child-env.ts).

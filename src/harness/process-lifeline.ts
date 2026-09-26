@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 
 /**
  * N27: a backend server that must not outlive the Gateway.
@@ -6,60 +6,72 @@ import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStd
  * `opencode serve` keeps running when its parent dies (it does not watch its
  * stdin), so a Gateway that is killed (SIGKILL, OOM, crash) would leave the
  * shared server and every tool process it started behind. Node cannot set a
- * parent-death signal, so the server runs under a tiny watchdog: a second
- * Node process (this same executable) that
+ * parent-death signal, so:
  *
- * - is the leader of its own process group, so the server and its tool
- *   subprocesses are in that group too, and closing the server stops all of
- *   them (`process.kill(-pid)`), not only the direct child;
- * - reads its stdin, a pipe from the Gateway: when the Gateway exits for any
- *   reason the pipe closes and the watchdog terminates the whole group;
- * - forwards the server's stdout/stderr unchanged and exits with its status.
- *
- * The watchdog source is fixed; the server command and arguments are passed
- * as separate argv entries, never interpolated into code.
+ * - the server is spawned as the leader of its own process group; its tool
+ *   subprocesses join that group, and closing the server signals the whole
+ *   group (`process.kill(-pid)`), not only the direct child;
+ * - a tiny watchdog (a second process of this Node executable) holds a pipe
+ *   from the Gateway on its stdin. When the Gateway exits for any reason the
+ *   pipe closes, and the watchdog terminates the server's process group. The
+ *   watchdog starts nothing itself: its fixed source only signals the group
+ *   id it was given.
  */
-const LIFELINE_SOURCE = [
-  "const cp = require('node:child_process');",
-  "const [command, ...args] = process.argv.slice(1);",
-  "const child = cp.spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });",
+const WATCHDOG_SOURCE = [
+  "const group = Number(process.argv[1]);",
   "let stopping = false;",
-  "const stopGroup = () => {",
+  "const stop = () => {",
   "  if (stopping) return; stopping = true;",
-  "  try { process.kill(-process.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }",
-  "  setTimeout(() => { try { process.kill(-process.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }, 3000).unref();",
+  "  try { process.kill(-group, 'SIGTERM'); } catch {}",
+  "  setTimeout(() => { try { process.kill(-group, 'SIGKILL'); } catch {} process.exit(0); }, 3000);",
   "};",
-  "process.on('SIGTERM', () => { if (!stopping) { stopping = true; child.kill('SIGTERM'); setTimeout(() => { try { process.kill(-process.pid, 'SIGKILL'); } catch {} }, 3000).unref(); } });",
-  "process.stdin.on('end', stopGroup); process.stdin.on('close', stopGroup); process.stdin.on('error', stopGroup); process.stdin.resume();",
-  "child.on('error', (error) => { process.stderr.write(String(error && error.message || error) + '\\n'); process.exit(127); });",
-  // Tool processes the server left in the group are asked to stop too.
-  "child.on('exit', (code, signal) => { stopping = true; try { process.kill(-process.pid, 'SIGTERM'); } catch {} process.exit(code ?? (signal ? 128 : 1)); });",
+  "process.stdin.on('end', stop); process.stdin.on('close', stop); process.stdin.on('error', stop);",
+  "process.stdin.resume();",
 ].join("\n");
 
 export interface LifelineChild {
-  /** The watchdog process (group leader). Its stdout/stderr carry the server's output. */
+  /** The server process (leader of its own process group). */
   process: ChildProcessWithoutNullStreams;
   /** Stop the server and everything in its process group (TERM, then KILL after the grace period). */
   terminate(graceMs?: number): Promise<void>;
 }
 
-/** Whether the lifeline watchdog is available on this platform (POSIX process groups). */
+/** Whether process groups and the watchdog are available on this platform (POSIX). */
 export function lifelineSupported(platform: NodeJS.Platform = process.platform): boolean {
   return platform !== "win32";
 }
 
-function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (!pid) return;
+function signalGroup(pid: number | undefined, signal: NodeJS.Signals): boolean {
+  if (!pid) return false;
   try {
     process.kill(-pid, signal);
+    return true;
   } catch {
-    // The group is already gone.
+    return false; // The group is already gone.
+  }
+}
+
+function startWatchdog(group: number): ChildProcess | undefined {
+  try {
+    const watchdog = spawn(process.execPath, ["-e", WATCHDOG_SOURCE, String(group)], {
+      // Its own group, so signals for the server's group (or the Gateway's) never reach it.
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    watchdog.on("error", () => undefined);
+    watchdog.stdin?.on("error", () => undefined);
+    // Neither the watchdog nor its pipe keeps the Gateway's event loop alive.
+    watchdog.unref();
+    (watchdog.stdin as unknown as { unref?: () => void } | null)?.unref?.();
+    return watchdog;
+  } catch {
+    return undefined;
   }
 }
 
 /**
- * Spawn `command args` under the lifeline watchdog. On platforms without
- * process groups the command is spawned directly (no watchdog).
+ * Spawn `command args` in its own process group with a parent-death watchdog.
+ * On platforms without process groups the command is spawned directly.
  */
 export function spawnWithLifeline(
   command: string,
@@ -67,37 +79,43 @@ export function spawnWithLifeline(
   options: Omit<SpawnOptionsWithoutStdio, "stdio" | "detached">,
 ): LifelineChild {
   const supported = lifelineSupported();
-  const child = (supported
-    ? spawn(process.execPath, ["-e", LIFELINE_SOURCE, command, ...args], { ...options, detached: true, stdio: ["pipe", "pipe", "pipe"] })
-    : spawn(command, [...args], { ...options, stdio: ["pipe", "pipe", "pipe"] })) as ChildProcessWithoutNullStreams;
-  // The lifeline pipe must never raise in the Gateway (EPIPE after the watchdog exited).
-  child.stdin.on("error", () => undefined);
+  const child = spawn(command, [...args], {
+    ...options,
+    detached: supported,
+    stdio: ["ignore", "pipe", "pipe"],
+  }) as unknown as ChildProcessWithoutNullStreams;
+  const watchdog = supported && child.pid ? startWatchdog(child.pid) : undefined;
+  const stopWatchdog = (): void => {
+    if (watchdog && watchdog.exitCode === null && watchdog.signalCode === null) watchdog.kill("SIGKILL");
+  };
+  child.once("exit", () => {
+    // Tool processes the server left in its group are stopped with it.
+    if (supported) signalGroup(child.pid, "SIGTERM");
+    stopWatchdog();
+  });
+  child.once("error", stopWatchdog);
+
   const terminate = async (graceMs = 2_000): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) {
-      // The watchdog is gone; make sure nothing of its group survived it.
       if (supported) signalGroup(child.pid, "SIGKILL");
+      stopWatchdog();
       return;
     }
     await new Promise<void>((resolve) => {
       let killTimer: NodeJS.Timeout | undefined;
-      const done = (): void => {
-        clearTimeout(forceTimer);
-        if (killTimer) clearTimeout(killTimer);
-        resolve();
-      };
       const forceTimer = setTimeout(() => {
-        if (supported) signalGroup(child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
+        if (!(supported && signalGroup(child.pid, "SIGKILL"))) child.kill("SIGKILL");
         killTimer = setTimeout(resolve, 1_000);
       }, graceMs);
       child.once("exit", () => {
-        // Tool subprocesses of the server may still be running in the group.
+        clearTimeout(forceTimer);
+        if (killTimer) clearTimeout(killTimer);
         if (supported) signalGroup(child.pid, "SIGKILL");
-        done();
+        resolve();
       });
-      if (supported) signalGroup(child.pid, "SIGTERM");
-      else child.kill("SIGTERM");
+      if (!(supported && signalGroup(child.pid, "SIGTERM"))) child.kill("SIGTERM");
     });
+    stopWatchdog();
   };
   return { process: child, terminate };
 }
