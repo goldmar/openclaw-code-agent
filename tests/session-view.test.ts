@@ -158,6 +158,18 @@ describe("session-view app layer", () => {
     assert.match(text, /asking \[2\](?:.*\n)*?.*Question waiting for an answer/);
   });
 
+  it("status=waiting lists a plan still pending after a Gateway restart (recovered as suspended)", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: () => [],
+      listPersistedSessions: () => [{
+        sessionId: "7", harnessSessionId: "h7", name: "recovered-plan", prompt: "x", workdir: "/tmp", status: "killed",
+        lifecycle: "suspended", pendingPlanApproval: true, planApproval: "ask", createdAt: now - 5000,
+      }],
+    };
+    assert.match(getSessionsListingText(sm, "waiting"), /recovered-plan \[7\](?:.*\n)*?.*Plan waiting for the user: Approve \/ Revise \/ Reject/);
+  });
+
   it("records that the orchestrator read a terminal session only for agent_output, not listings or user commands", () => {
     const now = Date.now();
     const seen: string[] = [];

@@ -242,6 +242,7 @@ describe("SessionLifecycleService", () => {
     assert.equal(earlyRequest.label, "failed");
     assert.equal(earlyRequest.deferWakeMs, 15_000);
     assert.equal(earlyRequest.skipDeferredWake(), undefined);
+    assert.equal(typeof early.outcomeWakeSentAt, "number", "a wake that goes out is recorded");
     early.outcomeSeenAt = Date.now();
     assert.equal(earlyRequest.skipDeferredWake(), "the launching orchestrator turn already read the failure");
 

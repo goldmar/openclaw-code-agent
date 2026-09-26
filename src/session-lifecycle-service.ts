@@ -848,9 +848,14 @@ export class SessionLifecycleService {
     kind: "failed" | "completed",
   ): Pick<SessionNotificationRequest, "deferWakeMs" | "deferConditionalWakeMs" | "skipDeferredWake"> {
     if (Date.now() - session.startedAt > LAUNCH_OUTCOME_WINDOW_MS) return {};
-    const skipDeferredWake = () => session.outcomeSeenAt !== undefined
-      ? `the launching orchestrator turn already read the ${kind === "failed" ? "failure" : "result"}`
-      : undefined;
+    const skipDeferredWake = (): string | undefined => {
+      if (session.outcomeSeenAt !== undefined) {
+        return `the launching orchestrator turn already read the ${kind === "failed" ? "failure" : "result"}`;
+      }
+      // The wake goes out: from now on a read does not replace it.
+      session.outcomeWakeSentAt ??= Date.now();
+      return undefined;
+    };
     return kind === "failed"
       ? { deferWakeMs: LAUNCH_OUTCOME_WAKE_DELAY_MS, skipDeferredWake }
       : { deferConditionalWakeMs: LAUNCH_OUTCOME_WAKE_DELAY_MS, skipDeferredWake };

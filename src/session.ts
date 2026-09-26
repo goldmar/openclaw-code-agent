@@ -225,6 +225,8 @@ export class Session extends EventEmitter {
    * the launching turn already read the outcome.
    */
   outcomeSeenAt?: number;
+  /** When the held outcome wake went out; a later read no longer replaces it. */
+  outcomeWakeSentAt?: number;
 
   // Abort
   private abortController: AbortController;
@@ -559,6 +561,7 @@ export class Session extends EventEmitter {
     if (!origin || readerSessionKey.trim() !== origin) return false;
     if (this._status !== "completed" && this._status !== "failed" && this._status !== "killed") return false;
     if ((this.completedAt ?? Date.now()) - this.startedAt > LAUNCH_OUTCOME_WINDOW_MS) return false;
+    if (this.outcomeWakeSentAt !== undefined) return false;
     this.outcomeSeenAt ??= Date.now();
     return true;
   }

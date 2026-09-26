@@ -86,6 +86,7 @@ interface SessionListingItem {
   planApproval?: PlanApprovalMode;
   approvalPromptStatus?: PersistedSessionInfo["approvalPromptStatus"];
   approvalState?: PersistedSessionInfo["approvalState"];
+  pendingPlanApproval?: boolean;
   pendingWorktreeDecisionSince?: string;
 }
 
@@ -355,7 +356,8 @@ const WORKTREE_DECISION_STATES = new Set(["pending_decision"]);
  */
 export function describeWaiting(session: SessionListingItem): string | undefined {
   const escalated = session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered";
-  if (session.phase === "awaiting_plan_decision") {
+  // A plan pending when the Gateway restarted is recovered as suspended but still waits for its decision.
+  if (session.phase === "awaiting_plan_decision" || (session.pendingPlanApproval === true && session.status !== "running")) {
     return session.planApproval === "ask" || escalated
       ? "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)"
       : "Plan waiting for the orchestrator's review: approve it or agent_escalate(kind='plan')";
@@ -439,6 +441,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       planApproval: p.planApproval,
       approvalPromptStatus: p.approvalPromptStatus,
       approvalState: p.approvalState,
+      pendingPlanApproval: p.pendingPlanApproval,
       pendingWorktreeDecisionSince: p.pendingWorktreeDecisionSince,
     });
   }
@@ -481,6 +484,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       planApproval: session.planApproval,
       approvalPromptStatus: session.approvalPromptStatus,
       approvalState: session.approvalState,
+      pendingPlanApproval: session.pendingPlanApproval,
       pendingWorktreeDecisionSince: persistedMatch?.pendingWorktreeDecisionSince,
     });
   }

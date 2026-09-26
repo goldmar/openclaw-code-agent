@@ -37,6 +37,12 @@ describe("Session state machine", () => {
     late.transition("completed");
     late.startedAt = Date.now() - 5 * 60_000;
     assert.equal(late.noteOutcomeSeen(origin), false, "a session that ran for minutes gets its usual wake");
+
+    const wokeFirst = new Session({ ...BASE_CONFIG, originSessionKey: origin }, "woke");
+    wokeFirst.transition("running");
+    wokeFirst.transition("completed");
+    wokeFirst.outcomeWakeSentAt = Date.now();
+    assert.equal(wokeFirst.noteOutcomeSeen(origin), false, "a read after the held wake went out does not replace it");
     assert.equal(late.outcomeSeenAt, undefined);
   });
 

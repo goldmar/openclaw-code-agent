@@ -294,7 +294,7 @@ export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requested
   return [
     `Repo policy is not set for ${identity.repoRoot} (requested worktree strategy: ${requestedStrategy}${prAvailable ? "" : "; PRs unavailable"}).`,
     `Ask the user how branches should land: ${options.map((option) => `${option.title} (${option.policy}): ${option.description}`).join(" ")}`,
-    `Then set it: agent_repo_policy(workdir='${identity.repoRoot}', policy='${options.map((option) => option.policy).join("|")}'). A single pending launch continues automatically; otherwise launch again.`,
+    `Then set their choice: agent_repo_policy(workdir='${identity.repoRoot}', policy='<one of: ${options.map((option) => option.policy).join(", ")}>'). A single pending launch continues automatically; otherwise launch again.`,
   ].join("\n");
 }
 

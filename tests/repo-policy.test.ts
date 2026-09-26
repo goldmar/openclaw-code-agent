@@ -1,4 +1,5 @@
 import "./test-env";
+import { formatUnknownRepoPolicyMessage } from "../src/repo-policy";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -1008,5 +1009,15 @@ describe("SessionWorktreeActionService repo policy planning", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("repo policy fallback instruction", () => {
+  it("names one policy value per call, not a pipe-joined list the tool would refuse", () => {
+    const text = formatUnknownRepoPolicyMessage({ repoRoot: "/tmp/repo", provider: "unsupported" } as any, "delegate", false);
+    const call = /agent_repo_policy\(workdir='\/tmp\/repo', policy='([^']*)'\)/.exec(text);
+    assert.ok(call, text);
+    assert.doesNotMatch(call![1]!, /\|/);
+    assert.match(call![1]!, /^<one of: never-pr, manual>$/);
   });
 });
