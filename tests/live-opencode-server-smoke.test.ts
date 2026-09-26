@@ -176,7 +176,11 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
     }));
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
-    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.success, true, JSON.stringify({
+      outcome: result?.data.outcome,
+      errorCode: result?.data.errorCode,
+      result: result?.data.result?.slice(0, 300),
+    }));
     assert.match(result?.data.result ?? messages.map((message) => message.type === "text_delta" ? message.text : "").join(""), /OPENCLAW_OPENCODE_SMOKE/);
   });
 });
