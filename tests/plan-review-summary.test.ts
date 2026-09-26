@@ -89,7 +89,7 @@ describe("plan decision brief presentation", () => {
     assert.doesNotMatch(summary, /routine helper 90/);
     for (const text of ["more routine step", "delete the legacy bucket permanently", tail, "Include all 12 readers", "Option A or Option B", "Expand scope to cover audio", "Verify fixture 11", "Restore the backup"])
       assert.ok(summary.includes(text), text.slice(0, 60));
-    assert.match(summary, /reply asking for the complete plan for this version/);
+    assert.match(summary, /Reply asking for the full plan to see everything/);
   });
 
   it("never compacts late validation or affected-system steps, in metadata or Markdown", () => {
