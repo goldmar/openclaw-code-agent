@@ -38,6 +38,7 @@ import {
   createRunStartedEvent,
   createSettingsChangedEvent,
   createTextDeltaEvent,
+  createToolCallEvent,
   HarnessMessageQueue,
   PromptReader,
 } from "./harness-events";
@@ -55,15 +56,18 @@ import {
   buildTurnSteerParams,
   buildUserInputRequest,
   classifyTurnOutcome,
+  CODEX_FAST_SERVICE_TIER,
   CODEX_COMMAND_APPROVAL_METHOD,
   CODEX_FILE_CHANGE_APPROVAL_METHOD,
   CODEX_PERMISSIONS_APPROVAL_METHOD,
   CODEX_USER_INPUT_METHOD,
+  codexErrorCode,
   codexRequest,
   codexVersionError,
   codexVersionFromUserAgent,
   mapTurnPlanSteps,
   matchApprovalChoiceFromText,
+  toolCallFromThreadItem,
   readOpenClawExecMode,
   resolveCodexExecutionSettings,
   turnErrorMessage,
@@ -83,6 +87,7 @@ import type { AccountRateLimitsUpdatedNotification } from "./codex-app-server-pr
 import type { AgentMessageDeltaNotification } from "./codex-app-server-protocol/v2/AgentMessageDeltaNotification";
 import type { CommandExecutionRequestApprovalParams } from "./codex-app-server-protocol/v2/CommandExecutionRequestApprovalParams";
 import type { DynamicToolCallResponse } from "./codex-app-server-protocol/v2/DynamicToolCallResponse";
+import type { ErrorNotification } from "./codex-app-server-protocol/v2/ErrorNotification";
 import type { FileChangeRequestApprovalParams } from "./codex-app-server-protocol/v2/FileChangeRequestApprovalParams";
 import type { ItemCompletedNotification } from "./codex-app-server-protocol/v2/ItemCompletedNotification";
 import type { McpServerElicitationRequestResponse } from "./codex-app-server-protocol/v2/McpServerElicitationRequestResponse";
@@ -121,6 +126,11 @@ type ActiveTurn = {
   kind: "user" | "compact" | "review";
   turnId?: string;
   interruptRequested: boolean;
+  /** `turn/interrupt` was sent (a latched interrupt fires once the turn id arrives). */
+  interruptSent?: boolean;
+  /** Last non-retried `error` notification of this turn (fallback failure text). */
+  lastError?: string;
+  lastErrorCode?: string;
   terminal?: Turn;
   failure?: string;
   resolve: () => void;
@@ -197,7 +207,10 @@ function errorMessage(error: unknown): string {
 
 /** Lifecycle events log at debug; declines, failures, and anomalies at warn. */
 const WARN_HARNESS_EVENTS = new Set([
-  "pending_input.concurrent_declined",
+  "plan_review.approval_declined",
+  "turn.retrying",
+  "model.fast_mode.unsupported",
+  "model.allowlist.unknown",
   "server_request.unsupported",
   "model.list.unavailable",
   "account.read.unavailable",
@@ -273,6 +286,31 @@ function updateCodexWizardState(
   };
 }
 
+/** Allowed Codex models already reported missing from `model/list` (warned once per process). */
+const warnedUnknownAllowedModels = new Set<string>();
+
+/**
+ * N31: an allowed Codex model that this Codex's `model/list` does not know is
+ * probably misspelled or retired. Codex allowlists match exact model ids
+ * (other harnesses match substrings), so warn instead of silently rejecting
+ * every launch that names it.
+ */
+function warnAllowedModelsMissingFromCatalog(models: CodexModelInfo[]): void {
+  if (models.length === 0) return;
+  const allowed = getHarnessConfig("codex")?.allowedModels ?? [];
+  const known = new Set(models.flatMap((entry) => [entry.id.toLowerCase(), entry.model.toLowerCase()]));
+  for (const entry of allowed) {
+    const model = canonicalizeModelForHarness("codex", entry)?.toLowerCase();
+    if (!model || known.has(model) || warnedUnknownAllowedModels.has(model)) continue;
+    warnedUnknownAllowedModels.add(model);
+    logCodexHarnessDiagnostic("model.allowlist.unknown", { model });
+  }
+}
+
+export function resetCodexAllowlistWarningsForTests(): void {
+  warnedUnknownAllowedModels.clear();
+}
+
 const DECLINED_ELICITATION: McpServerElicitationRequestResponse = { action: "decline", content: null, _meta: null };
 const DECLINED_DYNAMIC_TOOL: DynamicToolCallResponse = {
   contentItems: [{ type: "inputText", text: "OpenClaw Code Agent does not register dynamic tools; this call was declined." }],
@@ -336,9 +374,16 @@ export class CodexHarness implements AgentHarness {
     // CODEX_HOME, account, or version) may support different efforts.
     let connectionModels: CodexModelInfo[] | undefined;
     let currentPendingInput: CodexPendingInput | undefined;
+    // N20: one visible request at a time; later ones wait here in arrival order.
+    const queuedPendingInputs: CodexPendingInput[] = [];
     let activeTurn: ActiveTurn | undefined;
+    // N29: an interrupt that arrives while a turn is being set up (before its
+    // id is known) is latched and sent as soon as the id arrives.
+    let turnSetupInProgress = false;
+    let interruptLatched = false;
     let runCounter = 0;
     let cumulativeCostUsd = 0;
+    let cumulativeEstimatedCostUsd = 0;
     let lastPricedTotalTokens: number | undefined;
     let planExplanation = "";
     let planSteps: PlanArtifactStep[] = [];
@@ -366,8 +411,21 @@ export class CodexHarness implements AgentHarness {
       }));
     };
 
+    const sendInterrupt = (turn: ActiveTurn): void => {
+      if (closed || !threadId || !turn.turnId || turn.interruptSent || turn.terminal) return;
+      turn.interruptSent = true;
+      void codexRequest(client, "turn/interrupt", { threadId, turnId: turn.turnId }, timeoutMs)
+        .catch((): undefined => undefined);
+    };
+
     const noteTurnId = (turnId: string): void => {
-      if (activeTurn && !activeTurn.turnId) activeTurn.turnId = turnId;
+      if (activeTurn && !activeTurn.turnId) {
+        activeTurn.turnId = turnId;
+        if (activeTurn.interruptRequested) {
+          logCodexHarnessDiagnostic("turn.interrupt.latched", threadDiagnosticFields({ threadId, turnId }));
+          sendInterrupt(activeTurn);
+        }
+      }
       if (lastTurnId !== turnId) {
         lastTurnId = turnId;
         emitBackendRef();
@@ -386,12 +444,63 @@ export class CodexHarness implements AgentHarness {
       activeTurn.resolve();
     };
 
+    const declinePayload = (pending: CodexPendingInput): unknown => (
+      pending.request.kind === "approval" ? pending.request.declineResponse : { answers: {} }
+    );
+
+    /** Show the next queued request, if any (N20). */
+    const showNextPendingInput = (): void => {
+      if (currentPendingInput) return;
+      const next = queuedPendingInputs.shift();
+      if (!next) return;
+      currentPendingInput = next;
+      queue.enqueue(createPendingInputEvent(next.state));
+    };
+
     const resolvePendingInput = (payload: unknown): void => {
       const pending = currentPendingInput;
       if (!pending) return;
       currentPendingInput = undefined;
       pending.resolveResponse(payload);
       queue.enqueue(createPendingInputResolvedEvent(pending.requestId));
+      showNextPendingInput();
+    };
+
+    /** Settle a request Codex resolved itself, visible or still queued. */
+    const dropPendingInput = (requestId: string): void => {
+      if (currentPendingInput?.requestId === requestId) {
+        resolvePendingInput(declinePayload(currentPendingInput));
+        return;
+      }
+      const index = queuedPendingInputs.findIndex((entry) => entry.requestId === requestId);
+      if (index >= 0) {
+        const [dropped] = queuedPendingInputs.splice(index, 1);
+        dropped.resolveResponse(declinePayload(dropped));
+      }
+    };
+
+    /** A turn's requests end with it: decline the visible one and every queued one. */
+    const releaseAllPendingInput = (): void => {
+      for (const queued of queuedPendingInputs.splice(0)) queued.resolveResponse(declinePayload(queued));
+      if (currentPendingInput) resolvePendingInput(declinePayload(currentPendingInput));
+    };
+
+    /**
+     * N17: the context the latest request used and the model's window. The
+     * last response's total (prompt, cache and output) is what the next
+     * request carries, as in Codex's own context indicator.
+     */
+    const reportContextUsage = (params: ThreadTokenUsageUpdatedNotification): void => {
+      const contextTokens = params.tokenUsage.last.totalTokens;
+      const contextWindow = params.tokenUsage.modelContextWindow;
+      if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
+      queue.enqueue({
+        type: "usage_updated",
+        usage: {
+          contextTokens,
+          ...(typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
+        },
+      });
     };
 
     const priceTokenUsage = (params: ThreadTokenUsageUpdatedNotification): void => {
@@ -403,11 +512,17 @@ export class CodexHarness implements AgentHarness {
       }
       if (lastPricedTotalTokens !== undefined && total <= lastPricedTotalTokens) return;
       lastPricedTotalTokens = total;
-      if (accountType !== "apiKey") return;
       const usage = tokenUsageFromBreakdown(params.tokenUsage.last);
       if (!usage) return;
       const cost = estimateCodexApiCostUsd({ model: effectiveModel ?? threadModel, serviceTier, usage });
       if (cost === undefined) return;
+      if (accountType !== "apiKey") {
+        // A ChatGPT login is not billed per token: keep an API-price estimate
+        // apart from the reported cost, for spend limits (goal max_cost_usd).
+        cumulativeEstimatedCostUsd += cost;
+        queue.enqueue({ type: "usage_updated", usage: { estimatedCostUsd: cumulativeEstimatedCostUsd } });
+        return;
+      }
       cumulativeCostUsd += cost;
       // Report the running total so status views show spend mid-turn (for
       // example while the turn waits on an approval or a question).
@@ -442,12 +557,24 @@ export class CodexHarness implements AgentHarness {
         }
         case "serverRequest/resolved": {
           const { requestId } = params as ServerRequestResolvedNotification;
-          if (currentPendingInput && currentPendingInput.requestId === String(requestId)) {
-            // Codex resolved the request itself (e.g. the turn was interrupted);
-            // our late answer is ignored by the server.
-            resolvePendingInput(currentPendingInput.request.kind === "approval"
-              ? currentPendingInput.request.declineResponse
-              : { answers: {} });
+          // Codex resolved the request itself (the turn was interrupted, or a
+          // non-blocking question timed out); our late answer is ignored.
+          dropPendingInput(String(requestId));
+          return;
+        }
+        case "error": {
+          // N22: `willRetry` errors are transient (Codex retries the request);
+          // only a final one explains a failed turn.
+          const { error, willRetry, turnId } = params as ErrorNotification;
+          const code = codexErrorCode(error.codexErrorInfo);
+          if (willRetry) {
+            logCodexHarnessDiagnostic("turn.retrying", { ...threadDiagnosticFields({ threadId, turnId }), ...(code ? { errorCode: code } : {}) });
+            queue.enqueue({ type: "activity" });
+            return;
+          }
+          if (activeTurn && (!activeTurn.turnId || activeTurn.turnId === turnId)) {
+            activeTurn.lastError = turnErrorMessage({ error }) ?? error.message;
+            activeTurn.lastErrorCode = code;
           }
           return;
         }
@@ -463,6 +590,7 @@ export class CodexHarness implements AgentHarness {
           return;
         }
         case "thread/tokenUsage/updated":
+          reportContextUsage(params as ThreadTokenUsageUpdatedNotification);
           priceTokenUsage(params as ThreadTokenUsageUpdatedNotification);
           return;
         case "account/rateLimits/updated":
@@ -504,6 +632,9 @@ export class CodexHarness implements AgentHarness {
             emitMessageSeparator();
             emittedText = true;
             queue.enqueue(createTextDeltaEvent("[Codex] Conversation context compacted."));
+          } else {
+            const toolCall = toolCallFromThreadItem(item);
+            if (toolCall) queue.enqueue(createToolCallEvent(toolCall.name, toolCall.input));
           }
           return;
         }
@@ -512,34 +643,53 @@ export class CodexHarness implements AgentHarness {
       }
     });
 
+    /**
+     * N20 (one policy for every harness): the first request is shown; a
+     * concurrent one waits in arrival order and is shown once the visible one
+     * is answered. Requests still open when their turn ends are declined.
+     */
     const awaitPendingInput = (requestId: JsonRpcId, request: CodexPendingRequest): Promise<unknown> => {
-      if (currentPendingInput) {
-        // Codex serializes interactive requests per turn; decline a second
-        // concurrent one rather than silently replacing the visible prompt.
-        logCodexHarnessDiagnostic("pending_input.concurrent_declined", { requestKind: request.kind });
-        return Promise.resolve(request.kind === "approval" ? request.declineResponse : { answers: {} });
-      }
       return new Promise<unknown>((resolve) => {
-        currentPendingInput = {
+        const pending: CodexPendingInput = {
           requestId: String(requestId),
           request,
           state: request.state,
           answers: {},
           resolveResponse: resolve,
         };
+        if (currentPendingInput) {
+          logCodexHarnessDiagnostic("pending_input.queued", { requestKind: request.kind, queued: queuedPendingInputs.length + 1 });
+          queuedPendingInputs.push(pending);
+          return;
+        }
+        currentPendingInput = pending;
         queue.enqueue(createPendingInputEvent(request.state));
       });
+    };
+
+    /**
+     * D5 (defense in depth): plan turns run with `:read-only` and approval
+     * policy `never`, so Codex should never ask; any approval that still
+     * arrives while a plan is being written or reviewed is declined without
+     * reaching the user or the orchestrator.
+     */
+    const awaitApproval = async (id: JsonRpcId, method: string, request: CodexPendingRequest): Promise<unknown> => {
+      if (currentPermissionMode === "plan" && request.kind === "approval") {
+        logCodexHarnessDiagnostic("plan_review.approval_declined", { method, ...threadDiagnosticFields({ threadId, turnId: activeTurn?.turnId }) });
+        return request.declineResponse;
+      }
+      return await awaitPendingInput(id, request);
     };
 
     client.setRequestHandler(async (method, params, id) => {
       const requestId = String(id);
       switch (method) {
         case CODEX_COMMAND_APPROVAL_METHOD:
-          return await awaitPendingInput(id, buildCommandApprovalRequest(requestId, params as CommandExecutionRequestApprovalParams));
+          return await awaitApproval(id, method, buildCommandApprovalRequest(requestId, params as CommandExecutionRequestApprovalParams));
         case CODEX_FILE_CHANGE_APPROVAL_METHOD:
-          return await awaitPendingInput(id, buildFileChangeApprovalRequest(requestId, params as FileChangeRequestApprovalParams));
+          return await awaitApproval(id, method, buildFileChangeApprovalRequest(requestId, params as FileChangeRequestApprovalParams));
         case CODEX_PERMISSIONS_APPROVAL_METHOD:
-          return await awaitPendingInput(id, buildPermissionsApprovalRequest(requestId, params as PermissionsRequestApprovalParams));
+          return await awaitApproval(id, method, buildPermissionsApprovalRequest(requestId, params as PermissionsRequestApprovalParams));
         case CODEX_USER_INPUT_METHOD: {
           let request: CodexPendingRequest;
           try {
@@ -598,6 +748,7 @@ export class CodexHarness implements AgentHarness {
       ]);
       if (models.status === "fulfilled") {
         connectionModels = models.value;
+        warnAllowedModelsMissingFromCatalog(models.value);
       } else {
         logCodexHarnessDiagnostic("model.list.unavailable", { error: errorMessage(models.reason) });
       }
@@ -629,9 +780,26 @@ export class CodexHarness implements AgentHarness {
       emitBackendRef();
     };
 
+    /**
+     * N30: fast mode is Codex's `priority` service tier. It is only requested
+     * when this connection's catalog lists that tier for the model (Codex
+     * accepts an unknown tier without an error and silently ignores it).
+     */
+    const resolveFastMode = (): boolean | undefined => {
+      if (options.fastMode !== true) return options.fastMode;
+      const model = runtimeModel?.toLowerCase();
+      const info = model ? connectionModels?.find((entry) => entry.id.toLowerCase() === model || entry.model.toLowerCase() === model) : undefined;
+      if (info && !info.serviceTiers.includes(CODEX_FAST_SERVICE_TIER)) {
+        logCodexHarnessDiagnostic("model.fast_mode.unsupported", { model: runtimeModel, serviceTiers: info.serviceTiers });
+        queue.enqueue({ type: "backend_info", info: { fastModeSupported: false } });
+        return false;
+      }
+      return true;
+    };
+
     const threadOptions = () => ({
       model: runtimeModel,
-      fastMode: options.fastMode,
+      fastMode: resolveFastMode(),
       developerInstructions: options.systemPrompt,
       execution,
     });
@@ -762,8 +930,9 @@ export class CodexHarness implements AgentHarness {
       effectiveModel = runtimeModel;
 
       const completion = new Promise<void>((resolve) => {
-        activeTurn = { kind, interruptRequested: false, resolve };
+        activeTurn = { kind, interruptRequested: interruptLatched, resolve };
       });
+      interruptLatched = false;
       const turn = activeTurn!;
       try {
         const startedTurnId = await start();
@@ -771,8 +940,12 @@ export class CodexHarness implements AgentHarness {
         await completion;
         if (turn.failure && !turn.terminal) throw new Error(turn.failure);
         const outcome = classifyTurnOutcome(turn.terminal);
-        let resultText = turnErrorMessage(turn.terminal);
+        let resultText = turnErrorMessage(turn.terminal) ?? (outcome === "failed" ? turn.lastError : undefined);
         const errorInfo = turn.terminal?.error?.codexErrorInfo;
+        // N16: Codex classifies its own outcomes; the structured code travels too.
+        const errorCode = outcome === "failed"
+          ? codexErrorCode(errorInfo) ?? turn.lastErrorCode
+          : undefined;
         if (errorInfo === "usageLimitExceeded" || errorInfo === "rateLimitExceeded") {
           const resetHint = rateLimitAccountKey ? describeCodexLimitReset(rateLimitAccountKey) : undefined;
           if (resetHint) resultText = resultText ? `${resultText}\n${resetHint}` : resetHint;
@@ -786,6 +959,8 @@ export class CodexHarness implements AgentHarness {
         queue.enqueue(createRunCompletedEvent({
           success: outcome === "completed",
           outcome,
+          outcomeAuthoritative: true,
+          ...(errorCode ? { errorCode } : {}),
           duration_ms: turn.terminal?.durationMs ?? 0,
           total_cost_usd: cumulativeCostUsd,
           num_turns: runCounter,
@@ -809,11 +984,7 @@ export class CodexHarness implements AgentHarness {
         }));
       } finally {
         if (activeTurn === turn) activeTurn = undefined;
-        if (currentPendingInput) {
-          resolvePendingInput(currentPendingInput.request.kind === "approval"
-            ? currentPendingInput.request.declineResponse
-            : { answers: {} });
-        }
+        releaseAllPendingInput();
       }
     };
 
@@ -841,18 +1012,27 @@ export class CodexHarness implements AgentHarness {
 
     const runUserTurn = async (prompt: string): Promise<void> => {
       assertOpen("a new turn");
-      await ensureThread();
-      const model = resolveTurnModel();
-      await runTrackedTurn("user", async () => {
-        const started = await codexRequest(client, "turn/start", buildTurnStartParams({
-          threadId: threadId!,
-          prompt,
-          model,
-          reasoningEffort: resolveTurnEffort(model),
-          permissionMode: currentPermissionMode,
-        }), timeoutMs);
-        return started.turn.id;
-      });
+      turnSetupInProgress = true;
+      try {
+        await ensureThread();
+        const model = resolveTurnModel();
+        await runTrackedTurn("user", async () => {
+          const started = await codexRequest(client, "turn/start", buildTurnStartParams({
+            threadId: threadId!,
+            prompt,
+            model,
+            reasoningEffort: resolveTurnEffort(model),
+            permissionMode: currentPermissionMode,
+            // D5: plan turns switch to read-only/never; every other turn
+            // restores the configured posture (turn overrides are sticky).
+            execution,
+          }), timeoutMs);
+          return started.turn.id;
+        });
+      } finally {
+        turnSetupInProgress = false;
+        interruptLatched = false;
+      }
     };
 
     const runThreadAction = async (action: ThreadAction): Promise<void> => {
@@ -1035,9 +1215,17 @@ export class CodexHarness implements AgentHarness {
       steer,
 
       async interrupt(): Promise<void> {
+        if (closed) return;
         const turn = activeTurn;
-        if (closed || !threadId || !turn?.turnId) return;
+        if (!turn) {
+          // The thread or turn is still being set up: latch the interrupt.
+          if (turnSetupInProgress) interruptLatched = true;
+          return;
+        }
         turn.interruptRequested = true;
+        if (!turn.turnId || !threadId) return; // sent by noteTurnId
+        if (turn.interruptSent) return;
+        turn.interruptSent = true;
         await codexRequest(client, "turn/interrupt", { threadId, turnId: turn.turnId }, timeoutMs)
           .catch((): undefined => undefined);
       },

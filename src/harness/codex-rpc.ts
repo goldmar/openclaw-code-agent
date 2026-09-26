@@ -20,6 +20,7 @@ export type JsonRpcEnvelope = {
 };
 
 type PendingRequest = {
+  method?: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -41,6 +42,24 @@ export class JsonRpcResponseError extends Error {
     super(message);
     this.name = "JsonRpcResponseError";
   }
+}
+
+/**
+ * N28: a JSON-RPC error response from the app server, with its `code` and
+ * `data` kept for callers instead of being flattened into the message.
+ */
+export class JsonRpcRemoteError extends Error {
+  constructor(readonly method: string, readonly code: number | undefined, readonly remoteMessage: string, readonly data?: unknown) {
+    super(`codex app server rpc error (${code ?? "unknown"}) on ${method}: ${remoteMessage}${describeErrorData(data)}`);
+    this.name = "JsonRpcRemoteError";
+  }
+}
+
+function describeErrorData(data: unknown): string {
+  if (data === undefined || data === null) return "";
+  const text = typeof data === "string" ? data : JSON.stringify(data);
+  if (!text || text === "{}") return "";
+  return ` (${text.length > 300 ? `${text.slice(0, 300)}…` : text})`;
 }
 
 export type JsonRpcClient = {
@@ -105,7 +124,12 @@ export async function dispatchJsonRpcEnvelope(
     clearTimeout(pending.timer);
     params.pending.delete(key);
     if (payload.error) {
-      pending.reject(new Error(`codex app server rpc error (${payload.error.code ?? "unknown"}): ${payload.error.message ?? "unknown error"}`));
+      pending.reject(new JsonRpcRemoteError(
+        pending.method ?? "request",
+        payload.error.code,
+        payload.error.message ?? "unknown error",
+        payload.error.data,
+      ));
       return;
     }
     pending.resolve(payload.result);
@@ -138,6 +162,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
   private process: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private stderrTail = "";
+  private startError: Error | undefined;
   private counter = 0;
   private onNotification: JsonRpcNotificationHandler = () => undefined;
   private onClose: () => void = () => undefined;
@@ -172,6 +197,10 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
       // Gateway environment minus secrets unrelated to the agent (see child-env.ts).
       env: buildHarnessChildEnv(process.env),
+      // N27: its own process group, so closing the session also stops the
+      // commands Codex started. A dead Gateway closes the stdio pipe, and the
+      // app server exits on that end of input.
+      detached: process.platform !== "win32",
     });
     logCodexRpcDiagnostic("process.spawn", {
       ...processLaunchDiagnosticFields(this.command, this.args),
@@ -203,6 +232,10 @@ export class StdioJsonRpcClient implements JsonRpcClient {
         pid: child.pid,
         error: errorMessage(error),
       });
+      // N28: a spawn failure (for example ENOENT) otherwise surfaces only as
+      // an opaque "stdio closed" on the first request.
+      this.startError = error;
+      this.flushPending(new Error(this.describeStartFailure(error)));
     });
     child.on("close", (code, signal) => {
       logCodexRpcDiagnostic("process.close", {
@@ -212,7 +245,9 @@ export class StdioJsonRpcClient implements JsonRpcClient {
         pendingRequests: this.pending.size,
         recentStderr: sanitizeTimeoutStderr(this.stderrTail.trim()),
       });
-      this.flushPending(new Error("codex app server stdio closed"));
+      this.flushPending(new Error(this.startError
+        ? this.describeStartFailure(this.startError)
+        : this.describeExit(code, signal)));
       this.process = null;
       this.onClose();
     });
@@ -240,12 +275,14 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       const forceKillTimer = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
           logCodexRpcDiagnostic("process.force_kill", { pid: child.pid });
-          child.kill("SIGKILL");
+          signalProcessGroup(child, "SIGKILL");
         }
       }, Math.max(1, this.shutdownGraceMs));
       forceKillTimer.unref?.();
-      child.kill("SIGTERM");
+      signalProcessGroup(child, "SIGTERM");
     });
+    // Commands Codex started may outlive it in the group.
+    signalProcessGroup(child, "SIGKILL");
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
@@ -273,7 +310,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
         reject(new Error(this.buildTimeoutErrorMessage(method, effectiveTimeoutMs)));
       }, effectiveTimeoutMs);
       timer.unref?.();
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { method, resolve, reject, timer });
     });
   }
 
@@ -310,12 +347,45 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     }
   }
 
+  /** Why the app server could not be started, with what to do about it. */
+  private describeStartFailure(error: Error): string {
+    const code = (error as NodeJS.ErrnoException).code;
+    const hint = code === "ENOENT"
+      ? ` The \`${this.command}\` command was not found: install the Codex CLI (for example \`npm install -g @openai/codex\`) or set OPENCLAW_CODEX_APP_SERVER_COMMAND to its path.`
+      : "";
+    return `Could not start the Codex App Server (\`${this.command} app-server\`): ${error.message}.${hint}`;
+  }
+
+  /** The app server exited: say how, and include its last stderr lines (redacted). */
+  private describeExit(code: number | null, signal: NodeJS.Signals | null): string {
+    const how = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
+    const stderr = sanitizeTimeoutStderr(this.stderrTail.trim());
+    return `codex app server exited (${how}) before it answered${stderr ? `; recent stderr: ${stderr}` : ""}`;
+  }
+
   private buildTimeoutErrorMessage(method: string, timeoutMs: number): string {
     const stderr = this.stderrTail.trim();
     const stderrSuffix = stderr
       ? `; recent stderr: ${sanitizeTimeoutStderr(stderr)}`
       : "";
     return `codex app server timeout after ${timeoutMs}ms: ${method}${stderrSuffix}`;
+  }
+}
+
+/** Signal the app server's process group (POSIX), or the process itself. */
+function signalProcessGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group is gone (or was never created); fall back to the child.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Already exited.
   }
 }
 
