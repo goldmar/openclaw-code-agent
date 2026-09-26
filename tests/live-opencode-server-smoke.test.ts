@@ -20,6 +20,10 @@ type LiveServer = {
   close(): Promise<void>;
 };
 
+// The next smoke starts another server, usually on the same port. Keep this
+// test's raw fetches out of Undici's connection pool after that server closes.
+const connectionClose = { connection: "close" };
+
 /** Start the real server exactly as the harness does (`--port 0`, URL from stdout). */
 async function startLiveServer(): Promise<LiveServer> {
   const cwd = await mkdtemp(join(tmpdir(), "openclaw-opencode-smoke-"));
@@ -51,6 +55,7 @@ async function requestJson<T>(
   const response = await fetch(url, {
     method,
     headers: {
+      ...connectionClose,
       Authorization: server.authorization,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
@@ -79,6 +84,7 @@ async function requestNoContent(
   const response = await fetch(url, {
     method,
     headers: {
+      ...connectionClose,
       Authorization: server.authorization,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
@@ -118,7 +124,7 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
       // separate v2 JSON API on 1.18+. The harness uses the classic routes.
       const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
         method: "POST",
-        headers: { Authorization: server.authorization, "content-type": "application/json" },
+        headers: { ...connectionClose, Authorization: server.authorization, "content-type": "application/json" },
         body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
         signal: AbortSignal.timeout(5_000),
       });
@@ -154,7 +160,7 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
 
       // The harness demultiplexes one shared stream for every project directory.
       const events = await fetch(`${server.baseUrl}/global/event`, {
-        headers: { Authorization: server.authorization },
+        headers: { ...connectionClose, Authorization: server.authorization },
         signal: AbortSignal.timeout(5_000),
       });
       assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
@@ -180,6 +186,7 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
       outcome: result?.data.outcome,
       errorCode: result?.data.errorCode,
       result: result?.data.result?.slice(0, 300),
+      messageTypes: messages.map((message) => message.type),
     }));
     assert.match(result?.data.result ?? messages.map((message) => message.type === "text_delta" ? message.text : "").join(""), /OPENCLAW_OPENCODE_SMOKE/);
   });
