@@ -9,10 +9,8 @@ import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
 import { registerAgentRespondCommand } from "../src/commands/agent-respond";
 import { registerAgentSessionsCommand } from "../src/commands/agent-sessions";
 import { registerAgentStatsCommand } from "../src/commands/agent-stats";
+import { registerAgentStatusCommand } from "../src/commands/agent-status";
 import { registerGoalCommand } from "../src/commands/goal";
-import { registerGoalStatusCommand } from "../src/commands/goal-status";
-import { registerGoalStopCommand } from "../src/commands/goal-stop";
-import { registerGoalEditCommand } from "../src/commands/goal-edit";
 
 interface RegisteredCommand {
   name: string;
@@ -42,10 +40,8 @@ describe("chat command auth surface", () => {
       captureCommand(registerAgentSessionsCommand),
       captureCommand(registerAgentStatsCommand),
       captureCommand(registerAgentPolicyCommand),
+      captureCommand(registerAgentStatusCommand),
       captureCommand(registerGoalCommand),
-      captureCommand(registerGoalStatusCommand),
-      captureCommand(registerGoalStopCommand),
-      captureCommand(registerGoalEditCommand),
     ];
 
     assert.deepEqual(
@@ -58,10 +54,8 @@ describe("chat command auth surface", () => {
         ["agent_sessions", true],
         ["agent_stats", true],
         ["agent_policy", true],
+        ["agent_status", true],
         ["agent_goal", true],
-        ["agent_goal_status", true],
-        ["agent_goal_stop", true],
-        ["agent_goal_edit", true],
       ],
     );
   });

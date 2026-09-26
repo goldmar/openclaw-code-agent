@@ -1,9 +1,21 @@
-import { goalController } from "../singletons";
+import { goalController, sessionManager } from "../singletons";
 import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
+import {
+  GOAL_CONTROLLER_MISSING_MESSAGE,
+  renderGoalEditResult,
+  renderGoalStatus,
+  renderGoalStopResult,
+} from "../application/goal-view";
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
-import { tokenizeCommandArgs } from "./args";
+import { consumeFirstCommandArg, tokenizeCommandArgs } from "./args";
 
-const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N (max 25)] [--max-cost-usd N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>";
+const GOAL_USAGE = [
+  "Usage:",
+  "/agent_goal [launch] [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N (max 25)] [--max-cost-usd N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>",
+  "/agent_goal status [<task>]",
+  "/agent_goal stop <task>",
+  "/agent_goal edit <task> <new goal>",
+].join("\n");
 
 interface GoalCommandContext extends Partial<OpenClawPluginToolContext> {
   args?: string;
@@ -22,17 +34,39 @@ interface CommandApi {
 export function registerGoalCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_goal",
-    description: "Launch an explicit goal task (Ralph-style completion loop or verifier-driven loop)",
+    description: "Goal loops: /agent_goal <goal> launches; /agent_goal status|stop|edit <task> manage one",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx: GoalCommandContext) => {
       if (!goalController) {
-        return { text: "Error: GoalController not initialized. The code-agent service must be running." };
+        return { text: GOAL_CONTROLLER_MISSING_MESSAGE };
       }
 
-      const raw = (ctx.args ?? "").trim();
+      let raw = (ctx.args ?? "").trim();
       if (!raw) {
         return { text: GOAL_USAGE };
+      }
+
+      const first = consumeFirstCommandArg(raw);
+      const subcommand = first?.value.toLowerCase();
+      if (subcommand === "status") {
+        return { text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), first!.rest) };
+      }
+      if (subcommand === "stop") {
+        const ref = first!.rest.trim();
+        if (!ref) return { text: "Usage: /agent_goal stop <task>" };
+        return { text: renderGoalStopResult(goalController.stopTask(ref), ref) };
+      }
+      if (subcommand === "edit") {
+        const target = consumeFirstCommandArg(first!.rest);
+        const ref = target?.value.trim();
+        const replacementGoal = target?.rest.trim();
+        if (!ref || !replacementGoal) return { text: "Usage: /agent_goal edit <task> <new goal>" };
+        return { text: renderGoalEditResult(goalController.editTask(ref, replacementGoal), ref) };
+      }
+      if (subcommand === "launch") {
+        raw = first!.rest.trim();
+        if (!raw) return { text: GOAL_USAGE };
       }
 
       const tokens = tokenizeCommandArgs(raw);

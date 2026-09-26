@@ -28,7 +28,7 @@ describe("literal worktree ref boundary", () => {
   });
 
   it("accepts only OWNER/REPO or HOST/OWNER/REPO PR target repositories (N5)", async () => {
-    for (const value of ["octo-org/octo-repo", "a/b", "octo/repo.name_1", "github.example.com/octo/repo"]) {
+    for (const value of ["octo-org/octo-repo", "a/b", "octo/repo.name_1", "github.example.com/octo/repo", "ghe/octo/repo"]) {
       assert.equal(targetRepoValidationError(value), undefined, value);
     }
     const badRepos: unknown[] = [undefined, 3, "", "repo", "-R/x", "--repo=evil/x", "octo/-x", "octo/..", "octo/.", "-octo/repo", "octo-/repo",

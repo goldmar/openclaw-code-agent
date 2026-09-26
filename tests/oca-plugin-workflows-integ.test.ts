@@ -160,7 +160,7 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.deepEqual(buttonLabels(request.buttons), [["Approve", "Revise", "Reject"]]);
       assert.match(request.userMessage, /Plan v3 ready for approval/u);
       assert.match(request.userMessage, /Add callback coverage/u);
-      assert.match(request.wakeMessageOnNotifySuccess, /do NOT approve or reject this plan yourself/u);
+      assert.match(request.wakeMessageOnNotifySuccess, /Do not approve or reject it yourself/u);
 
       const approveToken = request.buttons[0][0].callbackData;
       const rejectToken = request.buttons[0][2].callbackData;
@@ -211,7 +211,7 @@ describe("OCA plugin workflow integration coverage", () => {
         message: "Revise",
         userInitiated: true,
       });
-      assert.match(revise.text, /Type your revision feedback/u);
+      assert.match(revise.text, /Reply with the changes you want/u);
       assert.equal(session.pendingPlanApproval, false);
       assert.equal(session.approvalState, "changes_requested");
       assert.equal(session.lifecycle, "awaiting_user_input");
@@ -302,9 +302,9 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.equal(delegatedRequest.label, "plan-approval");
       assert.equal(delegatedRequest.notifyUser, "never");
       assert.equal(delegatedRequest.buttons, undefined);
-      assert.match(delegatedRequest.wakeMessage, /DELEGATED PLAN APPROVAL/u);
+      assert.match(delegatedRequest.wakeMessage, /You review it \(planApproval: delegate\)/u);
       assert.match(delegatedRequest.wakeMessage, /agent_output\(session='delegate-plan-session', full=true\)/u);
-      assert.match(delegatedRequest.wakeMessage, /agent_request_plan_approval/u);
+      assert.match(delegatedRequest.wakeMessage, /agent_escalate\(session='delegate-plan-session', kind='plan'/u);
       assert.match(delegatedRequest.wakeMessage, /approval_rationale/u);
 
       const result = sm.requestPlanApprovalFromUser(
@@ -361,11 +361,31 @@ describe("OCA plugin workflow integration coverage", () => {
       });
 
       assert.equal(ask.label, "worktree-merge-ask");
-      assert.deepEqual(buttonLabels(ask.buttons), [["Merge", "Later"], ["Discard"]]);
+      assert.deepEqual(buttonLabels(ask.buttons), [["Merge"], ["Later", "Discard"]]);
       assert.doesNotMatch(ask.userMessage ?? "", /Open PR|Sync PR/u);
-      assert.match(ask.userMessage ?? "", /Commits: 2 \| Files: 4 \| \+120 \/ -8/u);
+      assert.match(ask.userMessage ?? "", /2 commits, 4 files, \+120\/-8/u);
       assert.match(ask.userMessage ?? "", /PR automation unavailable/u);
-      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /do NOT act on this worktree yourself/u);
+      // The next-turn note names only the buttons the user got: no Open PR without a PR provider.
+      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /The user has Merge \/ Later \/ Discard buttons for/u);
+      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /Do not merge yourself unless they ask/u);
+      assert.doesNotMatch(ask.wakeMessageOnNotifySuccess ?? "", /Open PR|open a PR/u);
+      assert.doesNotMatch(ask.wakeMessageOnNotifyFailed ?? "", /open a PR|agent_pr/u);
+
+      // Fixed labels: whether the real builder offers Open PR depends on the host's gh state.
+      const prButtons = [[{ label: "Merge", callbackData: "m" }, { label: "Open PR", callbackData: "p" }], [{ label: "Later", callbackData: "l" }, { label: "Discard", callbackData: "d" }]];
+      const askWithPr = new SessionWorktreeMessageService().buildAskNotification({
+        session, branchName: "agent/workflow-coverage", baseBranch: "main", diffSummary, buttons: prButtons,
+      });
+      assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /The user has Merge \/ Open PR \/ Later \/ Discard buttons for/u);
+      assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /Do not merge or open a PR yourself unless they ask/u);
+
+      // A View PR link (an existing PR, no Sync needed) is not a PR choice.
+      const viewOnly = [[{ label: "Merge", callbackData: "m" }, { label: "View PR", callbackData: "", url: "https://github.com/example/repo/pull/1" }], [{ label: "Later", callbackData: "l" }, { label: "Discard", callbackData: "d" }]];
+      const askViewOnly = new SessionWorktreeMessageService().buildAskNotification({
+        session, branchName: "agent/workflow-coverage", baseBranch: "main", diffSummary, buttons: viewOnly as any,
+      });
+      assert.match(askViewOnly.wakeMessageOnNotifySuccess ?? "", /Do not merge yourself unless they ask/u);
+      assert.doesNotMatch(askViewOnly.wakeMessageOnNotifyFailed ?? "", /open a PR|agent_pr/u);
 
       const delegated = new SessionWorktreeMessageService().buildDelegateNotification({
         session,
@@ -374,12 +394,12 @@ describe("OCA plugin workflow integration coverage", () => {
         diffSummary,
         allowedActions: { merge: true, pr: false },
         policyReason: "PR automation unavailable for this repo policy.",
-        originThreadLine: "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-100123\",\"threadId\":\"42\"}",
+        originThreadLine: "originRoute: {\"provider\":\"telegram\",\"target\":\"-100123\",\"threadId\":\"42\"}",
       });
       assert.equal(delegated.notifyUser, "never");
       assert.match(delegated.wakeMessage ?? "", /agent_output\(session='worktree-decision-session', full=true\)/u);
-      assert.match(delegated.wakeMessage ?? "", /Never call agent_pr\(\) autonomously in delegate mode/u);
-      assert.match(delegated.wakeMessage ?? "", /if it differs from the current chat/u);
+      assert.match(delegated.wakeMessage ?? "", /Do not call agent_pr yourself/u);
+      assert.match(delegated.wakeMessage ?? "", /originRoute: \{"provider":"telegram"/u);
       assert.match(delegated.wakeMessage ?? "", /PR automation unavailable/u);
       assert.doesNotMatch(delegated.wakeMessage ?? "", /undefined|NaN/u);
     } finally {

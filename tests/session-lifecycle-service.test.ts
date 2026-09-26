@@ -211,6 +211,56 @@ describe("SessionLifecycleService", () => {
     }
   });
 
+  it("holds outcome wakes right after launch and skips them once the orchestrator read the outcome", () => {
+    const requests: Array<Record<string, any>> = [];
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => { requests.push(request as any); },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    const early = createStubSession({ id: "early", name: "ux-fail", status: "failed", startedAt: Date.now() - 2_000 }) as any;
+    service.emitFailed(early, "model_not_found", false);
+    const earlyRequest = requests.at(-1)!;
+    assert.equal(earlyRequest.label, "failed");
+    assert.equal(earlyRequest.deferWakeMs, 15_000);
+    assert.equal(earlyRequest.skipDeferredWake(), undefined);
+    assert.equal(typeof early.outcomeWakeSentAt, "number", "a wake that goes out is recorded");
+    early.outcomeSeenAt = Date.now();
+    assert.equal(earlyRequest.skipDeferredWake(), "the launching orchestrator turn already read the failure");
+
+    const quick = createStubSession({ id: "quick", name: "ux-route", status: "completed", startedAt: Date.now() - 7_000 }) as any;
+    service.emitCompleted(quick);
+    const quickRequest = requests.at(-1)!;
+    assert.equal(quickRequest.label, "completed");
+    assert.equal(quickRequest.deferConditionalWakeMs, 15_000);
+    assert.equal(quickRequest.skipDeferredWake(), undefined);
+    quick.outcomeSeenAt = Date.now();
+    assert.equal(quickRequest.skipDeferredWake(), "the launching orchestrator turn already read the result");
+
+    const late = createStubSession({ id: "late", name: "long-run", status: "failed", startedAt: Date.now() - 10 * 60_000 }) as any;
+    service.emitFailed(late, "rate limit", false);
+    assert.equal(requests.at(-1)!.deferWakeMs, undefined);
+    assert.equal(requests.at(-1)!.skipDeferredWake, undefined);
+  });
+
   it("emits completion wakes with an explicit follow-up contract and success diagnostics", () => {
     const requests: Array<Record<string, unknown>> = [];
     const infoLogs: string[] = [];
@@ -268,11 +318,10 @@ describe("SessionLifecycleService", () => {
     };
     assert.equal(request.wakeMessage, undefined);
     assert.equal(request.requireDirectUserNotification, true);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Plugin requested short factual follow-up summary: yes/);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences what was done/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /The user saw: ✅ \[complete-session\] Completed/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
-    assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/);
+    assert.match(request.wakeMessageOnNotifyFailed ?? "", /did NOT reach the user/);
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_notify_succeeded\"") && line.includes("\"requestedShortFactualSummary\":true")));
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_wake_succeeded\"") && line.includes("\"canonicalStatusDelivered\":true")));
   });
@@ -388,10 +437,9 @@ describe("SessionLifecycleService", () => {
       wakeMessageOnNotifyFailed?: string;
     };
     assert.equal(request.completionWakeSummaryRequired, true);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences what was done/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
-    assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/i);
+    assert.match(request.wakeMessageOnNotifyFailed ?? "", /did NOT reach the user/);
   });
 
   it("does not re-enter ask-mode prompt delivery once the current plan prompt is already proven", () => {
@@ -455,7 +503,9 @@ describe("SessionLifecycleService", () => {
       userMessages?: unknown[];
     };
     assert.equal(request.notifyUser, "never");
-    assert.match(request.wakeMessage ?? "", /USER APPROVAL REQUESTED/);
+    assert.match(request.wakeMessage ?? "", /It is with the user \(planApproval: ask\)/);
+    // The user already has the prompt: only next-turn context for the orchestrator (N37).
+    assert.equal((request as { wakeDelivery?: string }).wakeDelivery, "next-turn");
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.onUserNotifyFailed, undefined);
     assert.equal(request.userMessage, undefined);
@@ -1205,5 +1255,33 @@ describe("SessionLifecycleService", () => {
       (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
       [["Staging", "Production"]],
     );
+  });
+});
+
+describe("question prompt text", () => {
+  it("numbers every option and explains multi-select, which has no buttons", async () => {
+    const { buildActiveQuestionPrompt } = await import("../src/session-lifecycle-service");
+    const text = buildActiveQuestionPrompt({
+      question: {
+        id: "fruits",
+        header: "Fruits",
+        question: "Which fruits do you like?",
+        multiSelect: true,
+        options: [{ label: "apple" }, { label: "banana", description: "Yellow" }, { label: "cherry" }],
+      } as any,
+      index: 1,
+      total: 2,
+      optionDescriptions: [{ label: "banana", description: "Yellow" }],
+    });
+    assert.equal(text, [
+      "Question 2 - Fruits",
+      "Which fruits do you like?",
+      "",
+      "1. apple",
+      "2. banana - Yellow",
+      "3. cherry",
+      "",
+      "Several answers allowed: reply with them, for example 1,3.",
+    ].join("\n"));
   });
 });

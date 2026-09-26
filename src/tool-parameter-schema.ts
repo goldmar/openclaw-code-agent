@@ -1,4 +1,4 @@
-import { Array, Boolean, Literal, Number, Object, Optional, String, Union } from "typebox/type";
+import { Array, Boolean, Enum, Literal, Number, Object, Optional, String, Union } from "typebox/type";
 
 export type { TLiteral } from "typebox/type";
 
@@ -11,4 +11,12 @@ export type { TLiteral } from "typebox/type";
  * The schemas are plain TypeBox output, the same JSON Schema the OpenClaw
  * plugin SDK types tool parameters with.
  */
-export const Type = { Array, Boolean, Literal, Number, Object, Optional, String, Union };
+/**
+ * A string enum as `{ type: "string", enum: [...] }`, the compact form OpenClaw's
+ * own tools use; a `Union` of literals renders one `anyOf` entry per value.
+ */
+function StringEnum<const T extends readonly [string, ...string[]]>(values: T, options: { description?: string } = {}) {
+  return Enum([...values] as unknown as T, { type: "string", ...options });
+}
+
+export const Type = { Array, Boolean, Literal, Number, Object, Optional, String, StringEnum, Union };

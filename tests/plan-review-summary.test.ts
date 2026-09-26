@@ -87,9 +87,9 @@ describe("plan decision brief presentation", () => {
         "## Scope", "- Include all 12 readers.", "## Tests", ...Array.from({ length: 12 }, (_, i) => `- Verify fixture ${i}.`),
         "## Rollback", "- Restore the backup."].join("\n") } });
     assert.doesNotMatch(summary, /routine helper 90/);
-    for (const text of ["additional routine implementation step", "delete the legacy bucket permanently", tail, "Include all 12 readers", "Option A or Option B", "Expand scope to cover audio", "Verify fixture 11", "Restore the backup"])
+    for (const text of ["more routine step", "delete the legacy bucket permanently", tail, "Include all 12 readers", "Option A or Option B", "Expand scope to cover audio", "Verify fixture 11", "Restore the backup"])
       assert.ok(summary.includes(text), text.slice(0, 60));
-    assert.match(summary, /reply asking for the complete plan for this version/);
+    assert.match(summary, /Reply asking for the full plan to see everything/);
   });
 
   it("never compacts late validation or affected-system steps, in metadata or Markdown", () => {
@@ -106,7 +106,7 @@ describe("plan decision brief presentation", () => {
       assert.match(summary, /Tests \/ verification: Step 9: Run integration tests/);
       assert.match(summary, /Files \/ systems affected: Step 10: change `src\/video-reader.ts` and `src\/audio-reader.ts`/);
       assert.doesNotMatch(summary, /ordinary helper behavior 8/);
-      assert.match(summary, /2 additional routine implementation step/);
+      assert.match(summary, /2 more routine steps not shown/);
     }
   });
 
@@ -133,5 +133,90 @@ describe("plan decision brief presentation", () => {
     assert.ok(fallback.every((m) => !m.buttons && m.requiredForSequenceSuccess));
     assertPresentation(fallback.map((m) => m.text));
     assert.equal(fallback.map((m) => m.text).join("\n").split('Reply "approve"').length - 1, 1);
+  });
+
+  it("keeps multiline code verbatim instead of changing its executable meaning", () => {
+    const plan = [
+      "## Plan", "",
+      "1. Edit `calc.py` to add:",
+      "   ```python",
+      "   def mul(a, b):",
+      '       """Return the product of a and b."""',
+      "       return a * b",
+      "   ```",
+      "   appended after the existing `add` function.",
+      "2. Commit the change with git.", "",
+      "No tests exist in the repo to run; verification is visual (read file back).",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /```python\n   def mul\(a, b\):\n       """Return the product of a and b\."""\n       return a \* b\n   ```/);
+    assert.doesNotMatch(message, /def mul\(a, b\): .*; return a \* b/);
+    assert.match(message, /No tests exist in the repo to run/);
+  });
+
+  it("shows the plan itself when a code block is too long for one brief line, so no command is clipped", () => {
+    const plan = [
+      "1. Clean the build output:",
+      "```sh",
+      ...Array.from({ length: 12 }, (_, i) => `echo step-${i}`),
+      "rm -rf ./dist ./coverage",
+      "```",
+      "2. Rebuild with `pnpm build`.",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.doesNotMatch(message, /Decision brief/);
+    assert.match(message, /\nPlan\n1\. Clean the build output:\n```sh\n/);
+    assert.match(message, /rm -rf \.\/dist \.\/coverage/);
+  });
+
+  it("keeps shell substitution and multiline comments literal in an approval plan", () => {
+    const plan = [
+      "1. Run the cleanup script:",
+      "```sh",
+      "echo `rm -rf /tmp/cache`",
+      "echo safe # explanation",
+      "rm -rf /tmp/cache",
+      "```",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "shell-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /```sh\necho `rm -rf \/tmp\/cache`\necho safe # explanation\nrm -rf \/tmp\/cache\n```/);
+    assert.doesNotMatch(message, /echo 'rm -rf \/tmp\/cache'|echo safe # explanation; rm -rf/);
+  });
+
+  it("shows late effects before approval even when the verbatim plan spans messages", () => {
+    const plan = [
+      "## Current state", "The current reader is local.",
+      "## Proposed changes", "Keep the explanation complete. ".repeat(110),
+      "## Final effect", "Delete the production archive after the rollout.",
+    ].join("\n");
+    const prompt = buildPlanApprovalPromptContent({ sessionName: "long-plan", actionableVersion: 1, preview: plan, hasButtons: true });
+    assert.equal(prompt.displayMode, "chunked-summary");
+    assert.match(prompt.userMessages.join("\n"), /Delete the production archive after the rollout/);
+    assert.equal(prompt.userMessages.join("\n").split("Choose Approve, Revise, or Reject below.").length - 1, 1);
+  });
+
+  it("keeps a short unterminated multiline fence verbatim", () => {
+    const summary = buildPlanReviewSummary({ preview: ["1. Update `parser.ts` so it reads:", "```", "a = 1", "b = 2"].join("\n") });
+    assert.match(summary, /Update `parser\.ts` so it reads:\n```\na = 1\nb = 2/);
+  });
+
+  it("shows the plan itself instead of a brief when a section heading maps to no field", () => {
+    const plan = [
+      "# Add mul(a, b) to calc.py", "",
+      "## Current file", "```python", "def add(a, b):", "    return a + b", "```", "",
+      "## Change", "Append `mul(a, b)` returning `a * b` to `calc.py`.", "",
+      "## Commit", "Commit `calc.py` with a short message.",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.doesNotMatch(message, /Decision brief|Files \/ systems affected: `def add/);
+    assert.match(message, /\nPlan\n# Add mul\(a, b\) to calc\.py\n\n## Current file\n```python\ndef add\(a, b\):/);
+    assert.match(message, /## Commit\nCommit `calc\.py` with a short message\./);
+  });
+
+  it("keeps the decision brief when every section heading maps to a field", () => {
+    const plan = ["# Add mul", "", "## Goal", "Add `mul(a, b)`.", "", "## Steps", "1. Edit `calc.py`.", "", "## Verification", "Run the tests."].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /Decision brief\nObjective \/ scope: Add `mul\(a, b\)`\./);
+    assert.match(message, /Tests \/ verification: Run the tests\./);
   });
 });

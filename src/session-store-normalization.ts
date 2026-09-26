@@ -654,6 +654,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     worktreePrNumber: toOptionalNumber(raw.worktreePrNumber),
     pendingWorktreeDecisionSince: toOptionalString(raw.pendingWorktreeDecisionSince),
     lastWorktreeReminderAt: toOptionalString(raw.lastWorktreeReminderAt),
+    worktreeReminderCount: toOptionalNumber(raw.worktreeReminderCount),
     worktreeBaseBranch: toOptionalString(raw.worktreeBaseBranch),
     worktreeParentBranch: toOptionalString(raw.worktreeParentBranch),
     worktreePrTargetRepo: toOptionalString(raw.worktreePrTargetRepo),

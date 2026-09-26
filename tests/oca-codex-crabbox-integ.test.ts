@@ -513,7 +513,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       requests[0]?.userMessage,
       "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/331 (3 files, +14/-2)",
     );
-    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /Canonical outcome status:\n✅ PR updated: .* \(3 files, \+14\/-2\)/u);
+    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /The user saw: ✅ PR updated: .* \(3 files, \+14\/-2\)/u);
     assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/331\./u);
     assert.equal(requests[1]?.userMessage, "✅ Merged: agent/notify-integ → main (3 files, +14/-2)");
     assert.equal(patches.some(({ patch }) => patch.completionWakeSummaryRequired === true), true);

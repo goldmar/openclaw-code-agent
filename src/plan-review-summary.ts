@@ -91,6 +91,23 @@ function normalizePlanLines(source: string): string[] {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
     const next = lines[index + 1];
+    const fence = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      // A fenced code block is one literal item: its lines are not headings or
+      // fields. It joins the line that introduced it ("…to add:") as inline code.
+      const code: string[] = [];
+      while (index + 1 < lines.length && !lines[index + 1]!.trim().startsWith(fence)) {
+        const codeLine = lines[++index]!.trim();
+        if (codeLine) code.push(codeLine);
+      }
+      index += 1; // the closing fence (or the end of the plan)
+      if (code.length === 0) continue;
+      const inline = formatInlineCode(code);
+      const previous = result.length ? result[result.length - 1]! : "";
+      if (previous.trim() && !isHeading(previous)) result[result.length - 1] = `${previous.trimEnd()} ${inline}`;
+      else result.push(`- ${inline}`);
+      continue;
+    }
     if (line.includes("|") && next && cells(next).every((cell) => /^:?-+:?$/.test(cell))) {
       const headers = cells(line);
       index += 1;
@@ -106,19 +123,71 @@ function normalizePlanLines(source: string): string[] {
   return result;
 }
 
+/** A fenced block longer than this is not folded into the brief: the plan is shown itself. */
+const PLAN_INLINE_CODE_MAX_CHARS = 160;
+
+/** One code block as one inline code span: `def f(a): return a` or `a; b`. */
+function formatInlineCode(lines: string[]): string {
+  const content = joinCodeLines(lines);
+  const delimiter = "`".repeat(Math.max(1, ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1)));
+  return `${delimiter}${content}${delimiter}`;
+}
+
+function joinCodeLines(lines: string[]): string {
+  let text = "";
+  for (const line of lines) {
+    text = !text ? line : /[:{(,[]$/.test(text) ? `${text} ${line}` : `${text}; ${line}`;
+  }
+  return text;
+}
+
+/**
+ * Multiline code, code with backticks, and long blocks stay verbatim. Joining
+ * lines or changing backtick quoting can change an executable command's
+ * meaning, and clipping a block can hide a material command.
+ */
+function requiresVerbatimFencedBlock(source: string): boolean {
+  let fence: string | undefined;
+  let code: string[] = [];
+  for (const line of source.split("\n")) {
+    const opener = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence) {
+      if (opener) {
+        fence = opener;
+        code = [];
+      }
+      continue;
+    }
+    if (line.trim().startsWith(fence)) {
+      if (code.length > 1 || code.some((item) => item.includes("`")) || joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS) return true;
+      fence = undefined;
+      continue;
+    }
+    if (line.trim()) code.push(line.trim());
+  }
+  return fence !== undefined && (code.length > 1 || code.some((item) => item.includes("`")) || joinCodeLines(code).length > PLAN_INLINE_CODE_MAX_CHARS);
+}
+
 function pushUnique(target: string[], text: string): void {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return;
   if (!target.some((item) => item.toLowerCase() === normalized.toLowerCase())) target.push(normalized);
 }
 
-function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanArtifact; detailRef?: string }): string {
+type PlanSummary = { text: string; verbatim: boolean };
+
+function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanArtifact; detailRef?: string }): PlanSummary {
   const source = args.artifact?.markdown?.trim() || args.preview.trim();
   const sections: Record<DecisionSection, string[]> = {
     objective: [], approach: [], affected: [], verification: [], effects: [], risks: [], unknowns: [], costs: [], rollback: [],
   };
   let activeSection: DecisionSection | undefined;
   let unclassifiedCount = 0;
+  // Under a Markdown section heading that maps to no brief field ("## Current
+  // file", "## Commit"), lines are not fields: the brief would mislabel them.
+  let underUnmappedHeading = false;
+  let unmappedLines = 0;
+  let seenBody = false;
 
   if (args.artifact?.explanation?.trim()) pushUnique(sections.objective, formatPlanApprovalSummary(args.artifact.explanation));
   for (const step of args.artifact?.steps ?? []) {
@@ -136,6 +205,14 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
 
     if (isHeading(trimmed)) {
       activeSection = classifyDecisionSection(`${text.replace(/:\s*$/, "")}:`);
+      // A leading `# Title` is the plan's name, not a section.
+      const isTitle = /^#\s/.test(trimmed) && !seenBody;
+      underUnmappedHeading = !activeSection && /^#{1,6}\s/.test(trimmed) && !isTitle;
+      continue;
+    }
+    seenBody = true;
+    if (underUnmappedHeading) {
+      unmappedLines += 1;
       continue;
     }
 
@@ -172,15 +249,24 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
   };
 
   const detailNotes: string[] = [];
-  if (approachOmitted > 0) detailNotes.push(`${approachOmitted} additional routine implementation step(s)`);
-  if (!args.artifact) detailNotes.push("a version-matched structured plan artifact was unavailable; this brief uses the available plan preview");
-  if (unclassifiedCount > PLAN_APPROVAL_APPROACH_MAX_ITEMS) detailNotes.push("unclassified plan detail was compacted into the implementation section");
+  // N42: only say what was left out; whether a structured plan artifact existed is not the user's concern.
+  if (approachOmitted > 0) detailNotes.push(`${approachOmitted} more routine step${approachOmitted === 1 ? "" : "s"} not shown`);
+  if (unclassifiedCount > PLAN_APPROVAL_APPROACH_MAX_ITEMS) detailNotes.push("some detail was condensed");
 
   const detailAction = args.detailRef && /^[a-zA-Z0-9_-]+$/.test(args.detailRef)
-    ? `Inspect available full output before deciding: /agent_output ${args.detailRef} --full. Request the complete plan if it is unavailable there.`
-    : "To inspect these details before deciding, reply asking for the complete plan for this version.";
+    ? `Full plan: /agent_output ${args.detailRef} --full`
+    : "Reply asking for the full plan to see everything.";
 
-  return [
+  if (unmappedLines > 0 || requiresVerbatimFencedBlock(source)) {
+    // The plan does not map cleanly onto the brief (a section with no brief
+    // field, or code too long for one line): show the plan itself.
+    // The approval controls can appear after paginated messages. Keep the
+    // complete source so a late effect or command remains visible before the
+    // user decides.
+    return { text: source, verbatim: true };
+  }
+
+  const brief = [
     ...renderSection("objective"),
     "",
     ...renderSection("approach"),
@@ -200,10 +286,10 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
     ...renderSection("rollback"),
     ...(detailNotes.length > 0 ? [
       "",
-      "Full-plan detail:",
-      `- ${detailNotes.join("; ")}. ${detailAction}`,
+      `(${detailNotes.join("; ")}. ${detailAction})`,
     ] : []),
   ].join("\n").replace(/\n{3,}/g, "\n\n").trim() || "Plan context: No concrete plan content was available. Request the complete plan before deciding.";
+  return { text: brief, verbatim: false };
 }
 
 export function formatPlanApprovalSummary(summary: string): string {
@@ -248,7 +334,7 @@ function splitPlanBodyIntoChunks(text: string, maxChars: number): string[] {
   const units: string[] = [];
   let headings: string[] = [];
   for (const line of lines) {
-    if (isHeading(line.trim()) || line.trim() === "Decision brief") {
+    if (isHeading(line.trim()) || line.trim() === "Decision brief" || line.trim() === "Plan") {
       headings.push(line);
     } else if (line.trim()) {
       units.push([...headings, line].join("\n"));
@@ -337,7 +423,7 @@ export function buildPlanReviewSummary(args: {
   preview: string;
   artifact?: PlanArtifact;
 }): string {
-  return buildDecisionGradePlanSummary(args);
+  return buildDecisionGradePlanSummary(args).text;
 }
 
 export function buildPlanApprovalPromptContent(args: {
@@ -353,10 +439,11 @@ export function buildPlanApprovalPromptContent(args: {
   const heading = args.heading ?? "ready for approval";
   const displaySessionName = formatPlanApprovalSessionName(sessionName);
   const planSummary = buildDecisionGradePlanSummary({ preview, artifact, detailRef: sessionName });
+  const summaryHeading = planSummary.verbatim ? "Plan" : "Decision brief";
   const rationale = formatPlanApprovalSummary(escalationRationale ?? "");
   const reviewSummary = rationale
-    ? `Why this was escalated: ${rationale}\n\nDecision brief\n${planSummary}`
-    : `Decision brief\n${planSummary}`;
+    ? `Why this was escalated: ${rationale}\n\n${summaryHeading}\n${planSummary.text}`
+    : `${summaryHeading}\n${planSummary.text}`;
   const singleMessage = `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ${heading}\n\n${reviewSummary}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`;
   if (singleMessage.length > PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
     return {

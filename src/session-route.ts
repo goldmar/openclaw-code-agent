@@ -334,23 +334,32 @@ function compactRouteObject(route: Record<string, string | undefined>): Record<s
   );
 }
 
+/**
+ * How the orchestrator reaches the user from a wake. A plain reply to an OCA
+ * wake is not a reliable delivery path: the wake is a `chat.send` turn without
+ * an originating route (that needs the operator.admin scope), so the host keeps
+ * the reply internal for session keys that do not name the chat's channel
+ * (dmScope `per-peer`, cron, sub-agent, ACP or custom keys), and runtimes whose
+ * visible replies default to the message tool (the Codex runtime) never
+ * deliver a plain reply at all. The message tool to the origin route works in
+ * every case; NO_REPLY then keeps the turn's final answer silent.
+ */
+export const ROUTED_REPLY_RULE =
+  "To tell the user anything, send it with the message tool to originRoute (channel = provider, target, accountId and threadId only when originRoute has them), then answer NO_REPLY.";
+
 export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const route = canonicalizeSessionRoute(source);
   if (!isDirectSessionRoute(route)) return "";
 
+  // The session key is left out: it is not an address the message tool takes.
   const originRoute = compactRouteObject({
     provider: route?.provider,
     accountId: route?.accountId,
     target: route?.target,
     threadId: route?.threadId ?? (source.originThreadId != null ? String(source.originThreadId) : undefined),
-    sessionKey: route?.sessionKey ?? source.originSessionKey,
   });
 
   if (Object.keys(originRoute).length === 0) return "";
 
-  return [
-    `Session origin route (authoritative for human follow-ups):`,
-    `originRoute: ${JSON.stringify(originRoute)}`,
-    `Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`,
-  ].join("\n");
+  return [`originRoute: ${JSON.stringify(originRoute)}`, ROUTED_REPLY_RULE].join("\n");
 }

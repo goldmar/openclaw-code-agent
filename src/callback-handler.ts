@@ -227,6 +227,41 @@ function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
 
+/** Decision buttons whose press makes the prompt's queued next-turn note stale. */
+const DECISION_NOTE_LABELS: Partial<Record<SessionActionKind, { button: string; subject: string }>> = {
+  "plan-approve": { button: "Approve", subject: "plan" },
+  "plan-reject": { button: "Reject", subject: "plan" },
+  "worktree-merge": { button: "Merge", subject: "branch" },
+  "worktree-create-pr": { button: "Open PR", subject: "branch" },
+  "worktree-update-pr": { button: "Sync PR", subject: "branch" },
+  "worktree-decide-later": { button: "Later", subject: "branch" },
+  "worktree-dismiss": { button: "Discard", subject: "branch" },
+};
+
+/**
+ * Next-turn notes queued with a decision prompt ("Plan v2 is with the user",
+ * "the user has Merge / Later / Discard buttons") cannot be withdrawn from the
+ * host queue: after a decision button, queue a note that they no longer apply.
+ * Revise queues its own note (the next message is the change).
+ */
+function queueDecisionPressedNote(
+  // The service may have stopped while the button ran (Gateway shutdown).
+  sm: { queueOrchestratorContext?: (ref: string, label: string, text: string, idempotencyKey?: string) => boolean } | null | undefined,
+  kind: SessionActionKind,
+  sessionId: string,
+  sessionName: string,
+  tokenId: string,
+): void {
+  const decided = DECISION_NOTE_LABELS[kind];
+  if (!decided) return;
+  sm?.queueOrchestratorContext?.(
+    sessionId,
+    "decision-button-pressed",
+    `[${sessionName}] The user pressed ${decided.button} for the ${decided.subject}; earlier notes about that pending decision no longer apply.`,
+    `decision-button-pressed:${sessionId}:${tokenId}`,
+  );
+}
+
 const WORKTREE_DECISION_ACTIONS: ReadonlySet<SessionActionKind> = new Set([
   "worktree-merge",
   "worktree-create-pr",
@@ -490,7 +525,19 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
   await ctx.respond.reply({ text, ephemeral: true });
 }
 
-const staleActionMessage = "⚠️ This action is stale or has already been used.";
+/** Confirmation after a question-answer button (N41): names the session and the chosen option. */
+function formatAnswerConfirmation(
+  sessionName: string,
+  token: Pick<SessionActionToken, "label">,
+  state: { forwardedToResumedSession: boolean; moreInputRequired: boolean },
+): string {
+  const choice = typeof token.label === "string" && token.label.trim() ? `: ${token.label.trim()}` : "";
+  if (state.forwardedToResumedSession) return `✅ [${sessionName}] Answer sent${choice}. The session resumed.`;
+  if (state.moreInputRequired) return `✅ [${sessionName}] Answer sent${choice}. Next question below.`;
+  return `✅ [${sessionName}] Answer sent${choice}.`;
+}
+
+const staleActionMessage = "⚠️ This button has expired or was already used.";
 
 async function rejectStaleAction(
   ctx: InteractiveCallbackContext,
@@ -658,13 +705,13 @@ export function createCallbackHandler(
         isAuthorizedSender: ctx.auth.isAuthorizedSender,
       });
       if (!tokenId) {
-        await replyText(ctx, "⚠️ Unrecognized callback payload.");
+        await replyText(ctx, "⚠️ This button is not recognized. Use the buttons on the latest message.");
         return { handled: true };
       }
 
       // Guard service initialization
       if (!sessionManager) {
-        await replyText(ctx, "⚠️ Code agent service not running.");
+        await replyText(ctx, "⚠️ The code agent is not running right now. Try again in a moment.");
         return { handled: true };
       }
 
@@ -732,7 +779,7 @@ export function createCallbackHandler(
 
       if (token.kind === "question-answer" && token.consumedAt != null) {
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-        await replyText(ctx, "⚠️ That question button is no longer active. Use the latest question prompt.");
+        await replyText(ctx, "⚠️ This question was already answered or replaced.");
         return { handled: true };
       }
 
@@ -786,7 +833,7 @@ export function createCallbackHandler(
           }
           sessionManager.consumeActionToken(tokenId);
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          await replyText(ctx, "⚠️ That question is no longer waiting for an answer.");
+          await replyText(ctx, "⚠️ This question was already answered or replaced.");
           return { handled: true };
         }
 
@@ -853,22 +900,14 @@ export function createCallbackHandler(
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
           const moreInputRequired = !forwardedToResumedSession
             && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
-          await replyText(ctx, forwardedToResumedSession
-            ? `✅ Answer forwarded to the resumed session.`
-            : moreInputRequired
-              ? `✅ Question step answered; more input is required.`
-              : `✅ Pending input request submitted.`);
+          await replyText(ctx, formatAnswerConfirmation(actionSessionName, token, { forwardedToResumedSession, moreInputRequired }));
           return { handled: true };
         }
 
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         const moreInputRequired = !forwardedToResumedSession
           && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
-        await replyText(ctx, forwardedToResumedSession
-          ? `✅ Answer forwarded to the resumed session.`
-          : moreInputRequired
-            ? `✅ Question step answered; more input is required.`
-            : `✅ Pending input request submitted.`);
+        await replyText(ctx, formatAnswerConfirmation(actionSessionName, token, { forwardedToResumedSession, moreInputRequired }));
         return { handled: true };
       }
 
@@ -984,6 +1023,7 @@ export function createCallbackHandler(
         }
 
         await clearApprovalPrompt(true);
+        queueDecisionPressedNote(sessionManager, "plan-approve", sessionId, actionSessionName, tokenId);
         return { handled: true };
       }
 
@@ -1036,7 +1076,9 @@ export function createCallbackHandler(
           if (consumedToken.kind === "plan-reject") {
             const result = rejectPlanDecision(sessionManager, sessionId);
             await replyText(ctx, `❌ ${result.text}`);
+            queueDecisionPressedNote(sessionManager, "plan-reject", sessionId, actionSessionName, tokenId);
           } else {
+            // Also queues the orchestrator note that the next message is the change (N35).
             const result = requestPlanDecisionChanges(sessionManager, sessionId);
             await replyText(ctx, `✏️ ${result.text}`);
           }
@@ -1045,8 +1087,12 @@ export function createCallbackHandler(
       }
 
       // Merge, PR, Later, and Discard on one worktree must not run concurrently:
-      // Discard could delete the branch a Merge is working on.
-      const worktreeLockKey = WORKTREE_DECISION_ACTIONS.has(token.kind) ? sessionId : undefined;
+      // Discard could delete the branch a Merge is working on. A resume of a
+      // session with a worktree (Commit changes) takes the same lock, so Discard
+      // cannot remove the worktree while the resume starts.
+      const resumesWorktree = (token.kind === "session-resume" || token.kind === "session-restart")
+        && Boolean(actionSession?.worktreePath);
+      const worktreeLockKey = WORKTREE_DECISION_ACTIONS.has(token.kind) || resumesWorktree ? sessionId : undefined;
       if (worktreeLockKey && inFlightWorktreeDecisions.has(worktreeLockKey)) {
         await replyText(ctx, `⚠️ Another decision for [${actionSessionName}]'s worktree is still being processed. Try again when it finishes.`);
         return { handled: true };
@@ -1062,6 +1108,20 @@ export function createCallbackHandler(
           sessionManager.consumeActionToken(tokenId);
           await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
           await replyText(ctx, `⚠️ This worktree decision was already resolved (${settledWorktree}) for [${actionSessionName}]. No action taken.`);
+          return { handled: true };
+        }
+
+        // Read-only buttons (N47): they keep the message's other buttons and stay
+        // usable, so they are neither consumed nor cleared.
+        if (token.kind === "view-output") {
+          const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
+          await replyText(ctx, toolResultText(result));
+          return { handled: true };
+        }
+        if (token.kind === "worktree-view-pr") {
+          // Older builds sent View PR as a callback; current prompts use a link button.
+          const url = token.targetUrl ?? sessionManager.getPersistedSession?.(sessionId)?.worktreePrUrl;
+          await replyText(ctx, url ? `PR: ${url}` : "⚠️ The PR link is no longer available.");
           return { handled: true };
         }
 
@@ -1093,6 +1153,7 @@ export function createCallbackHandler(
         }
 
         // Route action
+        let worktreeDecisionSucceeded = false;
         switch (consumedToken.kind) {
           case "plugin-update-install": {
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
@@ -1162,7 +1223,7 @@ export function createCallbackHandler(
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
             const text = autoUpdateService
               ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
-              : "Dismissed OpenClaw Code Agent update reminder.";
+              : "Skipped this update.";
             await replyText(ctx, `✅ ${text}`);
             break;
           }
@@ -1171,7 +1232,7 @@ export function createCallbackHandler(
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
             const text = autoUpdateService
               ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
-              : "Will remind later about OpenClaw Code Agent update reminder.";
+              : "OK. The update will be offered again tomorrow.";
             await replyText(ctx, `✅ ${text}`);
             break;
           }
@@ -1181,6 +1242,7 @@ export function createCallbackHandler(
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
               break;
             }
             await replyText(ctx, text);
@@ -1192,9 +1254,13 @@ export function createCallbackHandler(
             const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
             const succeeded = worktreeActionTextSucceeded(result);
             if (succeeded) {
-              const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
+              // After the final reminder, Later schedules nothing more (see snoozeWorktreeDecision).
+              const confirmation = result.startsWith("⏭️ Kept for later")
+                ? `⏭️ Kept for later [${actionSessionName}]. No more reminders; /agent_status lists it.`
+                : `⏭️ Snoozed 24h for [${actionSessionName}]`;
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               await replyText(ctx, confirmation);
+              worktreeDecisionSucceeded = true;
             } else {
               await replyText(ctx, result);
             }
@@ -1206,6 +1272,7 @@ export function createCallbackHandler(
             const succeeded = worktreeActionTextSucceeded(result);
             if (succeeded) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
             }
             await replyText(ctx, succeeded ? "✅ Discarded" : result);
             if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, undefined, callbackAcknowledged);
@@ -1225,18 +1292,11 @@ export function createCallbackHandler(
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              worktreeDecisionSucceeded = true;
               break;
             }
             await replyText(ctx, text);
             await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
-            break;
-          }
-
-          case "worktree-view-pr": {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            const persisted = sessionManager.getPersistedSession?.(sessionId);
-            const url = token.targetUrl ?? persisted?.worktreePrUrl;
-            await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
             break;
           }
 
@@ -1413,25 +1473,23 @@ export function createCallbackHandler(
             await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
             const result = await executeRespond(sessionManager, {
               session: sessionId,
-              message: "Continue where you left off.",
+              // A resume button may carry its own instruction (for example "commit your changes").
+              message: consumedToken.launchPrompt ?? "Continue where you left off.",
               userInitiated: true,
             });
-            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ ${result.text}`);
-            break;
-          }
-
-          case "view-output": {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
-            await replyText(ctx, toolResultText(result));
+            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ [${actionSessionName}] Resumed.`);
             break;
           }
 
           default: {
             await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            await replyText(ctx, `⚠️ Unknown callback action.`);
+            await replyText(ctx, `⚠️ This button is not supported by the running version of the code agent.`);
             break;
           }
+        }
+
+        if (worktreeDecisionSucceeded) {
+          queueDecisionPressedNote(sessionManager, token.kind, sessionId, actionSessionName, tokenId);
         }
 
         return { handled: true };

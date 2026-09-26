@@ -343,3 +343,27 @@ export function formatWorktreePreserveReason(reason: string): string {
       return reason.replaceAll("_", " ");
   }
 }
+
+const OUTCOME_SUMMARY_MAX_CHARS = 400;
+
+/** The orchestrator's `summary` shown under a merge/PR outcome line. */
+export function withOutcomeSummary(outcomeLine: string, summary?: string): string {
+  const text = summary?.replace(/\s+/g, " ").trim();
+  if (!text) return outcomeLine;
+  const clipped = text.length > OUTCOME_SUMMARY_MAX_CHARS ? `${text.slice(0, OUTCOME_SUMMARY_MAX_CHARS - 1)}…` : text;
+  return `${outcomeLine}\n${clipped}`;
+}
+
+/** Tool-result note for a caller that passed `summary`, so it does not restate the outcome. */
+export function summaryShownNote(summary?: string): string {
+  return summary?.trim() ? "\nThe user saw this outcome with your summary; do not repeat it." : "";
+}
+
+/**
+ * A caller that passed `summary` tells the user what changed in the outcome
+ * line itself, so no follow-up summary wake is sent once that line is
+ * delivered. If the line cannot be delivered, the orchestrator is still woken.
+ */
+export function summaryOwnership(summary?: string): { outcomeSummaryShown?: true } {
+  return summary?.trim() ? { outcomeSummaryShown: true } : {};
+}

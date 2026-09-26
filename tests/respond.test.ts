@@ -65,6 +65,33 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
+  it("resumes a live worktree session from its original checkout, not the worktree path", async () => {
+    const session = createStubSession({
+      status: "killed",
+      lifecycle: "suspended",
+      runtimeState: "stopped",
+      isExplicitlyResumable: true,
+      killReason: "idle-timeout",
+      harnessSessionId: "harness-wt",
+      backendRef: { kind: "claude-code", conversationId: "harness-wt" },
+      name: "worktree-session",
+      workdir: "/repo/.worktrees/agent-worktree-session",
+      originalWorkdir: "/repo",
+      worktreeStrategy: "ask",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    let capturedConfig: any;
+    sm.launchSession = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "worktree-session", id: "test-id" });
+    };
+
+    await executeRespond(sm, { session: "test-id", message: "continue" });
+    // The repo policy and worktree reuse resolve against the checkout; the worktree path broke the lookup.
+    assert.equal(capturedConfig.workdir, "/repo");
+    assert.equal(capturedConfig.resumeWorktreeFrom, "test-id");
+  });
+
   it("preserves routing and harness metadata during explicit resume", async () => {
     const session = createStubSession({
       status: "killed",
@@ -400,6 +427,26 @@ describe("executeRespond", () => {
     assert.match(result.text, /Pending input request submitted/);
   });
 
+  it("does not echo the user's own words back to the chat (N46)", async () => {
+    const notifications: string[] = [];
+    const running = createStubSession({ status: "running", sendMessage: async () => {} });
+    const answering = createStubSession({
+      pendingInputState: {
+        requestId: "req-echo", kind: "question", promptText: "Which?", options: [],
+        allowsFreeText: true, activeQuestionIndex: 0,
+        questions: [{ id: "q", question: "Which?", options: [] }],
+      },
+      submitPendingInputText: async () => true,
+    });
+    const sm = createStubSessionManager({ "follow-up": running, "answer": answering });
+    (sm as any).notifySession = (_session: unknown, text: string) => { notifications.push(text); };
+
+    await executeRespond(sm, { session: "follow-up", message: "Also add tests.", userInitiated: true });
+    await executeRespond(sm, { session: "answer", message: "the second one", userInitiated: true });
+
+    assert.deepEqual(notifications, [], "4.x posted ↪️ [name] \"<the user's words>\" for each");
+  });
+
   it("truthfully reports an answered wizard step while another question remains", async () => {
     const session = createStubSession({
       pendingInputState: {
@@ -467,7 +514,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
+    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (session resumed)\nWhy: The plan stays in bounds and only touches low-risk files.");
     assert.equal(
       notifications[0].idempotencyKey,
       "agent-respond-plan-approved-resumed:dead-plan-shutdown:1780000003000:harness-plan-shutdown:vunknown",
@@ -640,15 +687,24 @@ describe("executeRespond", () => {
       patches.push({ ref, patch });
       return true;
     };
+    const queued: Array<{ ref: string; label: string; text: string }> = [];
+    (sm as any).queueOrchestratorContext = (ref: string, label: string, text: string) => {
+      queued.push({ ref, label, text });
+      return true;
+    };
 
     const result = await executeRespond(sm, {
       session: "test-id",
       message: "Revise",
       userInitiated: true,
     });
+    // N35: the orchestrator learns, for its next turn, that the user's next message is the change.
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0]!.label, "plan-revise-requested");
+    assert.match(queued[0]!.text, /Their next message is the requested change: forward it with agent_respond\(session='test-id'/);
 
     assert.equal(result.isError, undefined);
-    assert.match(result.text, /Type your revision feedback/);
+    assert.match(result.text, /Reply with the changes you want/);
     assert.equal(sentMessage, undefined);
     assert.equal(session.approvalState, "changes_requested");
     assert.equal(session.pendingPlanApproval, false);
@@ -656,6 +712,28 @@ describe("executeRespond", () => {
     assert.equal(session.actionablePlanDecisionVersion, undefined);
     assert.equal(sm.getActionToken(reviseToken.id), undefined);
     assert.equal(patches[0].patch.approvalState, "changes_requested");
+    assert.equal("planApprovalContext" in patches[0].patch, false, "a change request keeps the plan context, so the revision is the next version");
+
+  });
+
+  it("gives the orchestrator the next step for a forwarded bare Revise in the tool result, not a next-turn note", async () => {
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).updatePersistedSession = () => true;
+    const queued: string[] = [];
+    (sm as any).queueOrchestratorContext = (_ref: string, label: string) => { queued.push(label); return true; };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "revise", userInitiated: true, fromOrchestratorTurn: true });
+    assert.deepEqual(queued, [], "a next-turn note would arrive after the revised plan");
+    assert.match(result.text, /Plan v1 is set for revision\. Forward the user's requested change with agent_respond\(session='test-id'/);
+    assert.equal(session.approvalState, "changes_requested");
   });
 
   for (const userInitiated of [true, false]) {
@@ -745,7 +823,8 @@ describe("executeRespond", () => {
     assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
+    // N36: the user sees why the orchestrator approved, without a separate message.
+    assert.equal(notifications[0].text, "👍 [test-session] Plan approved\nWhy: The scope matches the request and the change is low risk.");
   });
 
   it("persists active plan approval state before notifying", async () => {

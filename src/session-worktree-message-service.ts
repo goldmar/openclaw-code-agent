@@ -82,20 +82,15 @@ export class SessionWorktreeMessageService {
       : remoteOutcome === "pr-opened"
       ? "PR opened; no local worktree changes remained to merge"
       : "Session completed with no worktree changes to merge";
-    const completedWakeSummary = remoteOutcome === "pr-updated"
-      ? `PR updated; no local worktree changes remained to merge — ${cleanupSummary}`
-      : remoteOutcome === "pr-opened"
-      ? `PR opened; no local worktree changes remained to merge — ${cleanupSummary}`
-      : undefined;
     const failedSummary = remoteOutcome === "pr-updated"
       ? "PR updated; no local worktree changes remained to merge"
       : remoteOutcome === "pr-opened"
       ? "PR opened; no local worktree changes remained to merge"
       : "Session completed with no worktree changes to merge";
     const wakeHeadline = remoteOutcome === "pr-updated"
-      ? "Coding agent session updated a PR; no local worktree changes remained to merge."
+      ? "Updated a PR; no local branch changes remained to merge."
       : remoteOutcome === "pr-opened"
-      ? "Coding agent session opened a PR; no local worktree changes remained to merge."
+      ? "Opened a PR; no local branch changes remained to merge."
       : undefined;
 
     return {
@@ -112,7 +107,7 @@ export class SessionWorktreeMessageService {
         sessionName: session.name,
         sessionId: session.id,
         headline: wakeHeadline,
-        cleanupSummary: completedWakeSummary ?? cleanupSummary,
+        cleanupSummary,
         preview,
         originThreadLine,
         requestedPermissionMode: session.requestedPermissionMode,
@@ -142,11 +137,18 @@ export class SessionWorktreeMessageService {
     const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
-      .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
-    const moreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
+      .map((commit) => `• ${commit.hash} ${commit.message}`);
+    const moreNote = diffSummary.commits > 5 ? `…and ${diffSummary.commits - 5} more` : "";
     const branchLine = session.worktreePrTargetRepo
-      ? `Branch: \`${branchName}\` → \`${baseBranch}\` | PR target: ${session.worktreePrTargetRepo}`
-      : `Branch: \`${branchName}\` → \`${baseBranch}\``;
+      ? `\`${branchName}\` → \`${baseBranch}\` (PR target: ${session.worktreePrTargetRepo})`
+      : `\`${branchName}\` → \`${baseBranch}\``;
+    // Name only the buttons the user actually got (no Open PR without a PR provider).
+    const buttonLabels = (buttons ?? []).flat().map((button) => button.label.trim()).filter(Boolean);
+    // An actionable PR choice (Open PR / Sync PR); a `View PR` link is not one.
+    const prOffered = buttons
+      ? buttons.flat().some((button) => Boolean(button.callbackData) && !button.url && /\bPR\b/.test(button.label))
+      : true;
+    const choicesLine = buttonLabels.length > 0 ? `${buttonLabels.join(" / ")} buttons` : "the decision buttons";
 
     return {
       label: "worktree-merge-ask",
@@ -159,35 +161,26 @@ export class SessionWorktreeMessageService {
         diffSummary.commitMessages.map((commit) => commit.hash).join(","),
       ].join(":"),
       userMessage: [
-        `🔀 Worktree decision required for session \`${session.name}\``,
+        `🔀 [${session.name}] Finished on ${branchLine}: ${diffSummary.commits} commit${diffSummary.commits === 1 ? "" : "s"}, ${diffSummary.filesChanged} file${diffSummary.filesChanged === 1 ? "" : "s"}, +${diffSummary.insertions}/-${diffSummary.deletions}`,
+        ...(summaryLines.length > 0 ? ["", ...summaryLines.map((line) => `- ${line}`)] : []),
+        ...(policyReason ? ["", `Policy: ${policyReason}`] : []),
+        ...(hookWarning ? ["", hookWarning] : []),
+        ...(commitLines.length > 0 ? ["", ...commitLines, ...(moreNote ? [moreNote] : [])] : []),
         ``,
-        branchLine,
-        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-        ``,
-        ...(summaryLines.length > 0
-          ? ["Summary:", ...summaryLines.map((line) => `- ${line}`), ``]
-          : []),
-        ...(policyReason ? [`Policy: ${policyReason}`, ``] : []),
-        ...(hookWarning ? [hookWarning, ``] : []),
-        `Recent commits:`,
-        ...commitLines,
-        ...(moreNote ? [moreNote] : []),
-        ``,
-        `⚠️ Discard will permanently delete branch \`${branchName}\` and all local changes. This cannot be undone.`,
+        `Discard deletes the branch and its changes for good.`,
       ].join("\n"),
       notifyUser: "always",
       buttons,
+      // Context for the orchestrator's next turn; nothing to do now (N37).
       wakeMessageOnNotifySuccess: [
-        `Worktree decision buttons delivered to the user.`,
-        `Session: ${session.name} | ID: ${session.id}`,
-        branchLine,
-        `Wait for their button callback — do NOT act on this worktree yourself.`,
+        `[${session.name}] The user has ${choicesLine} for ${branchLine}. Do not ${prOffered ? "merge or open a PR" : "merge"} yourself unless they ask. ID: ${session.id}`,
       ].join("\n"),
+      wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: [
-        `🔀 Worktree decision required for session \`${session.name}\``,
-        ``,
-        branchLine,
-        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+        `[${session.name}] Finished on ${branchLine} (${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
+        prOffered
+          ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`
+          : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,
       ].join("\n"),
     };
   }

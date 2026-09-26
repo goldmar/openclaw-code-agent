@@ -125,74 +125,57 @@ function formatWorktreeResolutionStatus(session: SessionListRenderable): string 
   return "[not merged]";
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  starting: "starting",
+  active: "running",
+  running: "running",
+  awaiting_plan_decision: "waiting for plan approval",
+  awaiting_user_input: "waiting for an answer",
+  awaiting_worktree_decision: "waiting for a merge / PR decision",
+  suspended: "suspended (a message resumes it)",
+  completed: "completed",
+  failed: "failed",
+  killed: "stopped",
+};
+
+/** Plain-language state for a listing row (never an internal state name). */
+export function describeSessionPhase(session: Pick<SessionListRenderable, "phase" | "status">): string {
+  if (session.phase === "terminal") return PHASE_LABELS[session.status] ?? session.status;
+  return PHASE_LABELS[session.phase] ?? PHASE_LABELS[session.status] ?? session.status;
+}
+
 /** Render a human-readable session row for `agent_sessions`. */
-export function formatSessionListing(session: SessionListRenderable): string {
-  const icon = STATUS_ICONS[session.phase] ?? STATUS_ICONS[session.status] ?? "❓";
+export function formatSessionListing(session: SessionListRenderable, options: { nextStep?: string } = {}): string {
+  const icon = (session.phase === "terminal" ? undefined : STATUS_ICONS[session.phase]) ?? STATUS_ICONS[session.status] ?? "❓";
   const duration = formatDuration(session.duration);
-  const mode = session.multiTurn ? "multi-turn" : "single";
   const promptSummary =
     session.prompt.length > 80 ? session.prompt.slice(0, 80) + "..." : session.prompt;
 
-  const costStr = session.costUsd > 0 ? ` | $${session.costUsd.toFixed(2)}` : "";
+  const costStr = session.costUsd > 0 ? ` · $${session.costUsd.toFixed(2)}` : "";
+  const harnessLabel = session.harness
+    ? formatHarnessModelLabel({ harness: session.harness, model: session.model, reasoningEffort: session.reasoningEffort })
+    : session.model;
   const lines = [
-    `${icon} ${session.name} [${session.id}] (${duration}${costStr}) — ${mode}`,
-    `   📁 ${session.workdir}`,
+    `${icon} ${session.name} [${session.id}] — ${describeSessionPhase(session)} · ${duration}${costStr}`,
+    `   📁 ${session.workdir}${harnessLabel ? ` · ${harnessLabel}` : ""}`,
     `   📝 "${promptSummary}"`,
   ];
 
-  // F1 + F5: Show branch name, merge status, and PR info when worktree is used
   if (session.worktreePath && session.worktreeBranch) {
-    lines.push(`   🌿 Worktree: ${session.worktreeBranch} ${formatWorktreeResolutionStatus(session)}`);
+    lines.push(`   🌿 ${session.worktreeBranch} ${formatWorktreeResolutionStatus(session)}`);
   }
-
-  if (session.phase !== session.status) {
-    lines.push(`   ⚙️  Phase: ${session.phase}`);
+  if (options.nextStep) {
+    lines.push(`   👉 ${options.nextStep}`);
   }
-  if (session.lifecycle && session.lifecycle !== session.phase) {
-    lines.push(`   🔄 Lifecycle: ${session.lifecycle}`);
-  }
-  if (session.requestedPermissionMode || session.currentPermissionMode || session.approvalExecutionState) {
-    lines.push(
-      `   🔐 Approval: ${session.approvalExecutionState ?? "unknown"} ` +
-      `(requested=${session.requestedPermissionMode ?? "unknown"}, effective=${session.currentPermissionMode ?? "unknown"})`,
-    );
-  }
-  if (session.resumable) {
-    lines.push(`   ↩️  Resumable: yes`);
+  if (session.approvalExecutionState === "implemented_without_required_approval") {
+    lines.push(`   ⚠️ Implemented without the required plan approval`);
   }
   if (session.recovered && session.runtimeRecovery) {
-    const reason = session.runtimeRecovery?.reason
-      ? ` (${session.runtimeRecovery.reason})`
-      : "";
-    lines.push(`   ♻️  Recovered: persisted metadata only; no live process to kill${reason}`);
-    lines.push(
-      `   🩺 Recovery: raw=${session.runtimeRecovery.rawStatus ?? "unknown"}` +
-      `/${session.runtimeRecovery.rawLifecycle ?? "unknown"}` +
-      `/${session.runtimeRecovery.rawRuntimeState ?? "unknown"}` +
-      ` → normalized=${session.runtimeRecovery.normalizedStatus}` +
-      `/${session.runtimeRecovery.normalizedLifecycle ?? "unknown"}` +
-      `/${session.runtimeRecovery.normalizedRuntimeState ?? "unknown"}`,
-    );
-  } else if (session.recovered) {
-    lines.push(`   💾 Persisted: no live runtime process in this Gateway`);
-  }
-
-  if (session.harness) {
-    lines.push(`   🧰 Harness | model: ${formatHarnessModelLabel({
-      harness: session.harness,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
-    })}`);
-  } else if (session.model) {
-    lines.push(`   🧰 Harness | model: ${session.model}`);
-  }
-
-  const backendConversationId = getBackendConversationId(session);
-  if (backendConversationId) {
-    lines.push(`   🔗 Backend ID: ${backendConversationId}`);
+    const reason = session.runtimeRecovery.reason ? ` (${session.runtimeRecovery.reason})` : "";
+    lines.push(`   ♻️ Recovered after a Gateway restart; no live process${reason}`);
   }
   if (session.resumeSessionId) {
-    lines.push(`   ↩️  Resumed from: ${session.resumeSessionId}${session.forkSession ? " (forked)" : ""}`);
+    lines.push(`   ↩️ Resumed from ${session.resumeSessionId}${session.forkSession ? " (forked)" : ""}`);
   }
 
   return lines.join("\n");

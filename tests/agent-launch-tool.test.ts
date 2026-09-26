@@ -8,6 +8,8 @@ import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
+import { EventEmitter } from "node:events";
+import { launchEarlyOutcomeInternals } from "../src/tools/launch-early-outcome";
 
 describe("agent_launch tool defaults", () => {
   beforeEach(() => {
@@ -42,11 +44,45 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.fastMode, undefined);
     assert.equal("codexApprovalPolicy" in (spawnConfig ?? {}), false);
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Harness: codex/);
-    assert.match(text, /Permission mode: plan/);
-    assert.match(text, /Plan approval: delegate/);
-    assert.match(text, /Worktree strategy: delegate/);
-    assert.match(text, /Model: gpt-6-sol/);
+    assert.match(text, / · codex \| gpt-6-sol/);
+    assert.match(text, /Mode: plan first, approval: delegate · worktree: delegate/);
+    const [summary, note] = text.split("\n\n");
+    assert.ok(summary!.split("\n").length <= 5, `compact launch summary: ${text}`);
+    // The session can end while the launching turn is still open: no waiting, no later progress claims.
+    assert.match(note ?? "", /OCA tells the user when \[codex-defaults\] ends or needs a decision, and wakes you then\. After announcing the launch, end this turn: do not wait for it \(no sessions_yield/);
+  });
+
+  it("reports a session that fails right after launch in the launch result, as read by the launching session", async () => {
+    const seen: string[] = [];
+    const session = Object.assign(new EventEmitter(), {
+      id: "sess-fail", name: "ux-fail", model: "claude-nonexistent-9", status: "running",
+      error: undefined as string | undefined,
+      getOutput: () => ["There's an issue with the selected model."],
+      noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
+    });
+    setSessionManager({
+      resolveBackendConversationId: (id: string) => id,
+      launchSession() {
+        setTimeout(() => {
+          session.status = "failed";
+          session.error = "model_not_found";
+          session.emit("statusChange", session, "failed");
+        }, 10);
+        return session;
+      },
+    } as any);
+    const saved = launchEarlyOutcomeInternals.waitMs;
+    launchEarlyOutcomeInternals.waitMs = 2_000;
+    try {
+      const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true, sessionKey: "agent:main:telegram:direct:5551234" } as any);
+      const result = await tool.execute("tool-id", { prompt: "Ship it", harness: "claude-code", model: "sonnet" });
+      const text = (result.content[0] as { text: string }).text;
+      assert.match(text, /\[ux-fail\] failed right after launch/);
+      assert.match(text, /model_not_found/);
+      assert.deepEqual(seen, ["agent:main:telegram:direct:5551234"]);
+    } finally {
+      launchEarlyOutcomeInternals.waitMs = saved;
+    }
   });
 
   it("prefers an explicit model and the configured Codex reasoning effort", async () => {
@@ -250,7 +286,7 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal((spawnConfig?.route as { provider?: string } | undefined)?.provider, "system");
     assert.equal((spawnConfig?.route as { target?: string } | undefined)?.target, "system");
-    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /^Launched /);
   });
 
   it("fails closed for the route-less context produced by the standalone deferred plugin-tool bridge", async () => {
@@ -454,7 +490,7 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
     assert.equal(spawnConfig?.forkSession, true);
     assert.equal(spawnConfig?.rewindTurns, 1);
-    assert.match((result.content[0] as { text: string }).text, /Rewind: forking before the last 1 turn/);
+    assert.match((result.content[0] as { text: string }).text, /Rewind: forked before the last 1 turn/);
   });
 
   it("rejects rewind_turns without a resume target, for other harnesses, or with invalid counts", async () => {
@@ -538,7 +574,7 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.sessionIdOverride, "sess-stable");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
-    assert.match((result.content[0] as { text: string }).text, /ID: sess-stable/);
+    assert.match((result.content[0] as { text: string }).text, /\[sess-stable\]/);
   });
 
   it("preserves a suspended pending plan when a stable-ID resume is not an approval", async () => {
@@ -665,9 +701,9 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
     assert.equal(spawnConfig?.name, "oca-auto-update-feature");
     assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
-    assert.match(text, /Name: oca-auto-update-feature/);
-    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
-    assert.doesNotMatch(text, /Follow-up label:/);
+    assert.match(text, /^Launched oca-auto-update-feature \[/);
+    assert.match(text, /Resumed: oca-auto-update-feature \[_QDNlLZr\]/);
+    assert.doesNotMatch(text, /now labelled/);
   });
 
   it("labels explicit names on resumed sessions as follow-up labels", async () => {
@@ -707,9 +743,8 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
     assert.equal(spawnConfig?.name, "oca-pr-341-bundle-size-fix");
     assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
-    assert.match(text, /Name: oca-pr-341-bundle-size-fix/);
-    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
-    assert.match(text, /Follow-up label: oca-pr-341-bundle-size-fix/);
+    assert.match(text, /^Launched oca-pr-341-bundle-size-fix \[/);
+    assert.match(text, /Resumed: oca-auto-update-feature \[_QDNlLZr\] \(now labelled oca-pr-341-bundle-size-fix\)/);
   });
 
   it("preserves the original resumed identity when relabeling an already relabeled session", async () => {
@@ -750,10 +785,9 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
     assert.equal(spawnConfig?.name, "oca-pr-342-tests");
     assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
-    assert.match(text, /Name: oca-pr-342-tests/);
-    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
-    assert.match(text, /Follow-up label: oca-pr-342-tests/);
-    assert.doesNotMatch(text, /Resume: oca-pr-341-bundle-size-fix/);
+    assert.match(text, /^Launched oca-pr-342-tests \[/);
+    assert.match(text, /Resumed: oca-auto-update-feature \[_QDNlLZr\] \(now labelled oca-pr-342-tests\)/);
+    assert.doesNotMatch(text, /Resumed: oca-pr-341-bundle-size-fix/);
   });
 
   it("allows non-fork resume attempts for completed Codex App Server sessions", async () => {
@@ -791,7 +825,7 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
     assert.equal(spawnConfig?.sessionIdOverride, "sess-done");
-    assert.match(text, /ID: sess-done/);
+    assert.match(text, /\[sess-done\]/);
   });
 
   it("forwards per-session plan_approval override to spawn", async () => {
@@ -961,7 +995,7 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.prompt, "New independent task");
-    assert.match((result.content[0] as { text: string }).text, /Force new session: true/);
+    assert.match((result.content[0] as { text: string }).text, /New session forced/);
   });
 });
 
@@ -994,7 +1028,7 @@ describe("agent_launch allowedModels validation", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-opus-4-6");
-    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /^Launched /);
   });
 
   it("allows model when allowedModels is empty array", async () => {
@@ -1020,7 +1054,7 @@ describe("agent_launch allowedModels validation", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-opus-4-6");
-    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /^Launched /);
   });
 
   it("allows explicit model matching allowedModels pattern (case-insensitive)", async () => {
@@ -1039,7 +1073,7 @@ describe("agent_launch allowedModels validation", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-SONNET-4-6");
-    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /^Launched /);
   });
 
   it("allows explicit model with substring match", async () => {
@@ -1058,7 +1092,7 @@ describe("agent_launch allowedModels validation", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-sonnet-4-6");
-    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /^Launched /);
   });
 
   it("blocks explicit model not in allowedModels", async () => {
@@ -1131,7 +1165,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Session launched successfully/);
+    assert.match(text, /^Launched /);
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-sonnet-4-7");
   });
@@ -1158,7 +1192,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", harness: "codex", model: "openai/gpt-5.5" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Session launched successfully/);
+    assert.match(text, /^Launched /);
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "gpt-5.5");
   });
@@ -1220,7 +1254,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", model: "claude-sonnet-4-6" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Session launched successfully/);
+    assert.match(text, /^Launched /);
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-sonnet-4-6");
   });
@@ -1240,7 +1274,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-sonnet-4-7" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Session launched successfully/);
+    assert.match(text, /^Launched /);
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig.model, "claude-sonnet-4-7");
   });

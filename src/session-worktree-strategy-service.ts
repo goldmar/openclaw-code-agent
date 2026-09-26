@@ -87,6 +87,8 @@ export class SessionWorktreeStrategyService {
         allowedActions: AllowedWorktreeActions,
       ) => Awaitable<NotificationButton[][] | undefined>;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
+      /** Commit changes (resume with a commit instruction) / View output / Discard for a dirty worktree (N44). */
+      makeDirtyWorktreeButtons?: (sessionId: string) => NotificationButton[][];
       isPrAvailable?: (repoDir: string) => Awaitable<boolean>;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => Awaitable<boolean>;
       getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => Awaitable<PRStatus>;
@@ -588,15 +590,19 @@ export class SessionWorktreeStrategyService {
       label: "worktree-dirty-uncommitted",
       idempotencyKey: `worktree-dirty-uncommitted:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
-        `⚠️ [${session.name}] Session completed with uncommitted worktree changes.`,
-        ``,
-        `Branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, so merge/PR follow-through is blocked until the worktree is fixed.`,
+        `⚠️ [${session.name}] Finished with uncommitted changes and no commits on \`${branchName}\`, so there is nothing to merge yet.`,
         `Worktree: ${worktreePath}`,
+        ...(dirtyPreview.length > 0 ? [``, ...dirtyPreview, ...moreLine] : []),
         ``,
-        ...(dirtyPreview.length > 0
-          ? [`Dirty entries:`, ...dirtyPreview, ...moreLine, ``]
-          : []),
-        `Resume the session or inspect the worktree, then commit real task changes or clean temporary files. Discard only if these local changes should be permanently removed.`,
+        `Commit changes resumes the session to commit its work. Discard deletes the branch and these changes for good.`,
+      ].join("\n"),
+      notifyUser: "always",
+      buttons: this.deps.makeDirtyWorktreeButtons?.(session.id),
+      // The buttons could not be shown: the orchestrator asks the user instead.
+      wakeMessageOnNotifyFailed: [
+        `[${session.name}] Finished with uncommitted changes and no commits on \`${branchName}\`; the Commit changes / Discard buttons could not be shown. ID: ${session.id}`,
+        ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
+        `Ask the user whether to commit the changes (agent_respond(session='${session.id}', message='Commit the task's real changes with a clear message.', userInitiated=true)) or discard them (agent_worktree_cleanup(session='${session.name}', dismiss_session=true)).`,
       ].join("\n"),
     });
     return { notificationSent: true, worktreeRemoved: false };
@@ -622,6 +628,7 @@ export class SessionWorktreeStrategyService {
 
     const outcomeLine = formatWorktreeOutcomeLine({
       kind: "merge",
+      sessionName: session.name,
       branch: branchName,
       base: baseBranch,
       filesChanged: diffSummary.filesChanged,

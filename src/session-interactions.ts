@@ -14,8 +14,11 @@ import { getRepoPolicyOptionsForPrAvailability } from "./repo-policy";
 
 export type NotificationButton = {
   label: string;
+  /** Action token id; empty for a link button. */
   callbackData: string;
   style?: "primary" | "secondary" | "success" | "danger";
+  /** A link button: opens this URL instead of sending a callback. */
+  url?: string;
 };
 
 type ButtonSource = {
@@ -142,6 +145,11 @@ export class SessionInteractionService {
     }
   }
 
+  /**
+   * Merge / PR / Later / Discard in one fixed layout (N48): the first row holds
+   * the actions that land the branch, the second row Later and Discard. An
+   * existing PR turns Open PR into Sync PR and adds a View PR link button.
+   */
   async getWorktreeDecisionButtons(
     sessionId: string,
     session: Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource | undefined,
@@ -150,40 +158,24 @@ export class SessionInteractionService {
     if (!session) return [];
 
     const prButtons = allowedActions.pr && await this.isGitHubCliAvailable();
-    const rows: NotificationButton[][] = [];
-    const primaryRow: NotificationButton[] = [];
+    const landRow: NotificationButton[] = [];
     if (allowedActions.merge) {
-      primaryRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
+      landRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
     }
     if (prButtons) {
-      if (session.worktreePrUrl) {
-        primaryRow.push(this.makeActionButton(sessionId, "worktree-view-pr", "View PR", {
-          targetUrl: session.worktreePrUrl,
-        }));
-        if (primaryRow.length > 0) rows.push(primaryRow);
-        rows.push([
-          this.makeActionButton(sessionId, "worktree-update-pr", "Sync PR"),
-          this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
-        ]);
-      } else {
-        primaryRow.push(this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"));
-        if (primaryRow.length > 0) rows.push(primaryRow);
-        rows.push([
-          this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
-          this.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
-        ]);
-      }
-    } else {
-      rows.push([...primaryRow, this.makeActionButton(sessionId, "worktree-decide-later", "Later")]);
-      rows.push([this.makeActionButton(sessionId, "worktree-dismiss", "Discard")]);
-      return rows;
+      landRow.push(session.worktreePrUrl
+        ? this.makeActionButton(sessionId, "worktree-update-pr", "Sync PR")
+        : this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"));
     }
-
     if (session.worktreePrUrl) {
-      rows.push([this.makeActionButton(sessionId, "worktree-dismiss", "Discard")]);
-      return rows;
+      landRow.push({ label: "View PR", callbackData: "", url: session.worktreePrUrl });
     }
-
+    const rows: NotificationButton[][] = [];
+    if (landRow.length > 0) rows.push(landRow);
+    rows.push([
+      this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
+      this.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
+    ]);
     return rows;
   }
 

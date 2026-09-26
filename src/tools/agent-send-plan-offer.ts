@@ -1,5 +1,4 @@
 import { Type } from "../tool-parameter-schema";
-import type { TLiteral } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
 import { WORKTREE_STRATEGIES, WORKTREE_STRATEGY_SET } from "../types";
@@ -9,11 +8,8 @@ function isWorktreeStrategy(value: unknown): value is WorktreeStrategy {
   return typeof value === "string" && WORKTREE_STRATEGY_SET.has(value as WorktreeStrategy);
 }
 
-const WORKTREE_STRATEGY_SCHEMA = Type.Union(
-  WORKTREE_STRATEGIES.map((strategy) => Type.Literal(strategy)) as [
-    TLiteral<WorktreeStrategy>,
-    ...TLiteral<WorktreeStrategy>[],
-  ],
+const WORKTREE_STRATEGY_SCHEMA = Type.StringEnum(
+  WORKTREE_STRATEGIES,
   { description: "Optional worktree strategy for the planning session. Use auto-pr when the follow-up should branch and open/update a PR after approved implementation." },
 );
 

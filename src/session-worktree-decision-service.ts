@@ -1,13 +1,14 @@
 import { existsSync } from "fs";
 
 import type { PersistedSessionInfo } from "./types";
+import { SessionReminderService } from "./session-reminder-service";
 import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { deleteBranch, removeWorktree } from "./worktree";
 
 type WorktreeDecisionSession = Pick<
   Session,
-  "id" | "name" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "originalWorkdir"
+  "id" | "name" | "status" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "originalWorkdir"
 >;
 
 export class SessionWorktreeDecisionService {
@@ -36,6 +37,10 @@ export class SessionWorktreeDecisionService {
     const activeSession = this.deps.resolveActiveSession(ref);
     const session = activeSession ?? persistedSession;
     if (!session) return `Error: Session "${ref}" not found.`;
+    // A resumed session (for example after Commit changes) is working in this worktree.
+    if (activeSession && (activeSession.status === "running" || activeSession.status === "starting")) {
+      return `Error: [${activeSession.name}] is running in this worktree. Discard it after the session ends, or stop the session first.`;
+    }
 
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
     const repoDir = await this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);
@@ -103,11 +108,18 @@ export class SessionWorktreeDecisionService {
       this.deps.updatePersistedSession(mutationRef, {
         worktreeDecisionSnoozedUntil: snoozedUntil,
         lastWorktreeReminderAt: new Date(now).toISOString(),
+        // A snooze is not a reminder: keep the count so the backoff continues.
+        worktreeReminderCount: persistedSession.lastWorktreeReminderAt ? persistedSession.worktreeReminderCount ?? 1 : 0,
       } as Partial<PersistedSessionInfo>);
     }
 
     const branchName = persistedSession.worktreeBranch ?? "unknown";
-    const msg = `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
+    // After the final reminder no further reminder is scheduled: do not promise one.
+    const remindersDone = Boolean(persistedSession.lastWorktreeReminderAt)
+      && (persistedSession.worktreeReminderCount ?? 1) >= SessionReminderService.MAX_REMINDERS;
+    const msg = remindersDone
+      ? `⏭️ Kept for later: \`${branchName}\` (session: ${persistedSession.name}). No more reminders; /agent_status lists it.`
+      : `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
 
     if (options.notifyUser !== false) {
       this.deps.dispatchNotification(

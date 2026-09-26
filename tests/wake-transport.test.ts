@@ -40,6 +40,21 @@ describe("WakeTransport", () => {
 });
 
 describe("buildPresentation", () => {
+  it("renders a link button as a url action instead of a callback (N47)", () => {
+    assert.deepEqual(buildPresentation([[
+      { label: "Sync PR", callbackData: "token-sync", style: "primary" },
+      { label: "View PR", callbackData: "", url: "https://github.com/example/repo/pull/7" },
+    ]]), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Sync PR", value: "code-agent:token-sync", style: "primary" },
+          { label: "View PR", action: { type: "url", url: "https://github.com/example/repo/pull/7" } },
+        ],
+      }],
+    });
+  });
+
   it("encodes Telegram and Discord buttons as shared presentation blocks", () => {
     assert.deepEqual(buildPresentation([[
       { label: "Approve", callbackData: "token-approve", style: "primary" },

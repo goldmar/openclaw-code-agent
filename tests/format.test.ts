@@ -152,15 +152,13 @@ function makeSession(overrides: Record<string, any> = {}) {
 }
 
 describe("formatSessionListing", () => {
-  it("shows status icon, name, id, duration, mode", () => {
+  it("shows status icon, name, id, a plain-language state and duration (N53)", () => {
     const result = formatSessionListing(
       makeSession({ name: "test-session", id: "abc123", duration: 60000, prompt: "do something" }),
     );
-    assert.ok(result.includes("🟢"), "should have running icon");
-    assert.ok(result.includes("test-session"), "should have name");
-    assert.ok(result.includes("abc123"), "should have id");
-    assert.ok(result.includes("1m0s"), "should have duration");
-    assert.ok(result.includes("multi-turn"), "should show multi-turn mode");
+    assert.equal(result.split("\n")[0], "🟢 test-session [abc123] — running · 1m0s");
+    // 4.x printed "multi-turn" on every row, and internal phase/lifecycle names.
+    assert.doesNotMatch(result, /multi-turn|single|Phase:|Lifecycle:/);
   });
 
   it("truncates prompt at 80 chars", () => {
@@ -168,52 +166,47 @@ describe("formatSessionListing", () => {
       makeSession({ status: "completed", prompt: "x".repeat(100), multiTurn: false }),
     );
     assert.ok(result.includes("..."), "should truncate long prompt");
-    assert.ok(result.includes("single"), "should show single mode");
+    assert.match(result.split("\n")[0]!, /— completed ·/);
   });
 
-  it("shows session ID when present", () => {
+  it("does not show backend conversation ids", () => {
     const result = formatSessionListing(makeSession({
       harnessSessionId: "session-123",
       backendRef: { kind: "claude-code", conversationId: "session-123" },
     }));
-    assert.ok(result.includes("session-123"));
+    assert.doesNotMatch(result, /session-123|Backend ID/);
   });
 
-  it("shows harness and model when present", () => {
+  it("shows harness and model next to the directory", () => {
     const result = formatSessionListing(makeSession({ harness: "codex", model: "gpt-5.5" }));
-    assert.ok(result.includes("Harness | model: codex | gpt-5.5"));
+    assert.match(result, /📁 \/tmp · codex \| gpt-5\.5/);
   });
 
-  it("shows deterministic approval context when present", () => {
-    const result = formatSessionListing(makeSession({
+  it("shows approval state only for an anomaly", () => {
+    const normal = formatSessionListing(makeSession({
       requestedPermissionMode: "plan",
       currentPermissionMode: "bypassPermissions",
       approvalExecutionState: "approved_then_implemented",
     }));
-    assert.ok(result.includes("Approval: approved_then_implemented"));
-    assert.ok(result.includes("requested=plan"));
-    assert.ok(result.includes("effective=bypassPermissions"));
+    assert.doesNotMatch(normal, /approved_then_implemented|requested=|Approval/);
+    const anomaly = formatSessionListing(makeSession({ approvalExecutionState: "implemented_without_required_approval" }));
+    assert.match(anomaly, /⚠️ Implemented without the required plan approval/);
   });
 
-  it("shows phase for running session in plan mode", () => {
-    const result = formatSessionListing(
-      makeSession({ status: "running", phase: "active" }),
-    );
-    assert.ok(result.includes("Phase: active"), "should show active phase");
+  it("describes waiting states in plain language", () => {
+    assert.match(formatSessionListing(makeSession({ status: "running", phase: "active" })), /— running ·/);
+    assert.match(formatSessionListing(makeSession({ status: "running", phase: "awaiting_plan_decision" })), /📋 s \[x\] — waiting for plan approval ·/);
+    assert.match(formatSessionListing(makeSession({ status: "running", phase: "awaiting_user_input" })), /— waiting for an answer ·/);
+    assert.match(formatSessionListing(makeSession({ status: "killed", phase: "suspended" })), /— suspended \(a message resumes it\) ·/);
   });
 
-  it("shows phase for session awaiting plan approval", () => {
-    const result = formatSessionListing(
-      makeSession({ status: "running", phase: "awaiting_plan_decision" }),
-    );
-    assert.ok(result.includes("awaiting_plan_decision"), "should show awaiting phase");
+  it("shows the next step when given", () => {
+    const result = formatSessionListing(makeSession({ status: "running", phase: "awaiting_user_input" }), { nextStep: "Answer it" });
+    assert.match(result, /👉 Answer it$/);
   });
 
-  it("does not show phase for completed session", () => {
-    const result = formatSessionListing(
-      makeSession({ status: "completed", phase: "completed" }),
-    );
-    assert.ok(!result.includes("Phase:"), "should not show Phase for completed");
+  it("uses the status icon for terminal rows", () => {
+    assert.match(formatSessionListing(makeSession({ status: "completed", phase: "terminal" })), /^✅ /);
   });
 
   it("uses worktree lifecycle state when rendering merged worktrees", () => {
@@ -226,7 +219,7 @@ describe("formatSessionListing", () => {
       worktreeLifecycle: { state: "merged", updatedAt: "2026-05-26T10:00:00.000Z" },
     }));
 
-    assert.match(result, /Worktree: agent\/fix \[merged ✓\]/);
+    assert.match(result, /🌿 agent\/fix \[merged ✓\]/);
     assert.doesNotMatch(result, /\[not merged\]/);
   });
 
@@ -239,7 +232,7 @@ describe("formatSessionListing", () => {
       worktreeState: "released",
     }));
 
-    assert.match(result, /Worktree: agent\/released \[released\]/);
+    assert.match(result, /🌿 agent\/released \[released\]/);
     assert.doesNotMatch(result, /\[not merged\]/);
   });
 });

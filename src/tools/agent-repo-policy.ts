@@ -63,18 +63,13 @@ export function formatUnresolvedRepoPolicy(
 export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_repo_policy",
-    description: "Inspect or set the repository integration policy that governs OpenClaw Code Agent worktree merge/PR follow-through.",
+    description: "Show or set how a repository's worktree branches land: pr-required (PR only), pr-allowed (merge or PR), never-pr (merge only), manual (no automatic merge or PR).",
     parameters: Type.Object({
-      workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory. Reset also accepts a stored path or key." })),
-      policy: Type.Optional(Type.Union([
-        Type.Literal("pr-required"),
-        Type.Literal("pr-allowed"),
-        Type.Literal("never-pr"),
-        Type.Literal("manual"),
-      ], { description: "Policy to set for this repo." })),
-      reset: Type.Optional(Type.Boolean({ description: "Remove the stored policy for this repo." })),
-      list: Type.Optional(Type.Boolean({ description: "List all stored repo policies." })),
-      cleanup: Type.Optional(Type.Boolean({ description: "Remove stored repo policies whose repoRoot no longer exists on disk." })),
+      workdir: Type.Optional(Type.String({ description: "Default: the current workspace. reset also accepts a stored path." })),
+      policy: Type.Optional(Type.StringEnum(["pr-required", "pr-allowed", "never-pr", "manual"])),
+      reset: Type.Optional(Type.Boolean()),
+      list: Type.Optional(Type.Boolean({ description: "All stored policies" })),
+      cleanup: Type.Optional(Type.Boolean({ description: "Remove policies of repositories that no longer exist" })),
     }),
     async execute(_id: string, params: AgentRepoPolicyParams | unknown) {
       if (!sessionManager) {

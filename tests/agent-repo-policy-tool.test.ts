@@ -9,9 +9,9 @@ describe("agent_repo_policy tool", () => {
     setSessionManager(null);
   });
 
-  it("uses the full plugin name in its customer-facing description", () => {
+  it("describes the policies in its description without the OCA abbreviation", () => {
     const tool = makeAgentRepoPolicyTool();
-    assert.match(tool.description, /OpenClaw Code Agent worktree merge\/PR follow-through/);
+    assert.match(tool.description, /pr-required \(PR only\), pr-allowed \(merge or PR\), never-pr \(merge only\), manual/);
     assert.doesNotMatch(tool.description, /\bOCA\b/);
   });
 

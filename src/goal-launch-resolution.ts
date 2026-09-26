@@ -218,7 +218,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     ``,
     `Controller iteration progress advances only when the goal controller starts another agent turn; internal agent review passes are reported in the completion summary.`,
     ``,
-    `Use /agent_goal_status to follow progress or /agent_goal_stop to terminate the task in chat.`,
+    `Follow it with agent_goal(action='status', task='${task.name}') or /agent_goal status ${task.name}; stop it with action 'stop' or /agent_goal stop ${task.name}.`,
   ];
 
   return lines.join("\n");

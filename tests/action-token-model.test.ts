@@ -155,7 +155,7 @@ function createReal(): Real {
 
 /** Replies that mean a non-worktree token acted. */
 function nonWorktreeActions(replies: string[]): number {
-  return replies.filter((text) => text === "✅ Dismissed." || text.startsWith("✅ Dismissed OpenClaw Code Agent update")).length;
+  return replies.filter((text) => text === "✅ Dismissed." || text.startsWith("✅ Skipped this update")).length;
 }
 
 function assertStoreMatchesModel(model: Model, real: Real): void {
@@ -207,7 +207,7 @@ function applyClick(model: Model, token: TokenModel | undefined, wasLive: boolea
   assert.ok(acted <= 1, `${label}: one click ran ${acted} actions`);
   if (!token || !wasLive) {
     assert.equal(acted, 0, `${label}: a stale or unknown token acted`);
-    assert.ok(replies.length === 1 && /stale|Unrecognized|no longer|already resolved/i.test(replies[0]), `${label}: ${JSON.stringify(replies)}`);
+    assert.ok(replies.length === 1 && /stale|Unrecognized|not recognized|expired|already answered|no longer|already resolved/i.test(replies[0]), `${label}: ${JSON.stringify(replies)}`);
     return;
   }
   // A live token is consumed by the click, whether or not the action succeeds.
@@ -375,6 +375,6 @@ describe("action tokens and worktree decisions (model-based)", () => {
     const replies: string[] = [];
     await real.handler(buildCtx(token.id, "telegram", replies));
     assert.deepEqual(real.actions, []);
-    assert.deepEqual(replies, ["⚠️ This action is stale or has already been used."]);
+    assert.deepEqual(replies, ["⚠️ This button has expired or was already used."]);
   });
 });

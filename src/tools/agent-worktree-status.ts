@@ -31,9 +31,9 @@ function statusField(label: string, value: string): string {
 export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_worktree_status",
-    description: "Show lifecycle-first worktree status for coding agent sessions. Displays product-facing lifecycle state, released handling, cleanup safety, and retained reasons.",
+    description: "Worktree state per session: lifecycle (active, pending decision, PR open, merged, released, dismissed, no change), whether cleanup is safe, and why a worktree is kept.",
     parameters: Type.Object({
-      session: Type.Optional(Type.String({ description: "Session name or ID to show status for (optional, shows all if omitted)" })),
+      session: Type.Optional(Type.String({ description: "Session name or ID; omit for all" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {

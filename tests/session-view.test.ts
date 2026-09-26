@@ -28,6 +28,56 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /🟢 s6 \[6\]/);
   });
 
+  it("status=waiting lists only sessions that need a decision or answer, each with its next step (N52)", () => {
+    const now = Date.now();
+    const base = { multiTurn: true, workdir: "/tmp", costUsd: 0, duration: 1000, prompt: "x" };
+    const sm: any = {
+      list: () => [
+        { ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now - 1000 },
+        { ...base, status: "running", name: "plan-ask", id: "2", phase: "awaiting_plan_decision", planApproval: "ask", startedAt: now - 2000 },
+        { ...base, status: "running", name: "plan-delegate", id: "3", phase: "awaiting_plan_decision", planApproval: "delegate", startedAt: now - 3000 },
+        { ...base, status: "running", name: "question", id: "4", phase: "awaiting_user_input", startedAt: now - 4000 },
+      ],
+      listPersistedSessions: () => [
+        {
+          sessionId: "5", harnessSessionId: "h5", name: "branch", prompt: "x", workdir: "/tmp", status: "completed",
+          lifecycle: "awaiting_worktree_decision", worktreeStrategy: "ask", worktreeState: "pending_decision",
+          worktreePath: "/tmp/.worktrees/b", worktreeBranch: "agent/b", createdAt: now - 5000, completedAt: now - 4500,
+          pendingWorktreeDecisionSince: new Date(now - 4000).toISOString(),
+        },
+        {
+          sessionId: "6", harnessSessionId: "h6", name: "merged", prompt: "x", workdir: "/tmp", status: "completed",
+          lifecycle: "terminal", worktreeStrategy: "ask", worktreeState: "merged", worktreeMerged: true,
+          createdAt: now - 6000, completedAt: now - 5500,
+        },
+      ],
+    };
+
+    const text = getSessionsListingText(sm, "waiting");
+    assert.doesNotMatch(text, /busy|merged \[6\]/);
+    assert.match(text, /plan-ask \[2\][^\n]*\n(?:.*\n)*?   👉 Plan waiting for the user: Approve \/ Revise \/ Reject/);
+    assert.match(text, /👉 Plan waiting for the orchestrator's review/);
+    assert.match(text, /question \[4\] — waiting for an answer/);
+    assert.match(text, /👉 Question waiting for an answer/);
+    assert.match(text, /branch \[5\][\s\S]*👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
+
+    // A branch with an existing PR that is pending again (new commits) still waits.
+    const withPr: any = {
+      list: (): never[] => [],
+      listPersistedSessions: () => [{
+        sessionId: "7", harnessSessionId: "h7", name: "resync", prompt: "x", workdir: "/tmp", status: "completed",
+        lifecycle: "awaiting_worktree_decision", worktreeStrategy: "ask", worktreeState: "pending_decision",
+        worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() },
+        worktreePrUrl: "https://github.com/example/repo/pull/3", worktreePath: "/tmp/.worktrees/r", worktreeBranch: "agent/r",
+        createdAt: now - 3000, completedAt: now - 2000,
+      }],
+    };
+    assert.match(getSessionsListingText(withPr, "waiting"), /resync \[7\][\s\S]*👉 Branch waiting for the user: Merge \/ Sync PR \/ Later \/ Discard/);
+
+    const idle: any = { list: () => [{ ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now }], listPersistedSessions: (): never[] => [] };
+    assert.equal(getSessionsListingText(idle, "waiting"), "Nothing is waiting for a decision or an answer.");
+  });
+
   it("includes harness and model metadata for active sessions in the listing text", () => {
     const now = Date.now();
     const sm: any = {
@@ -51,7 +101,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
-    assert.match(text, /🧰 Harness \| model: codex \| gpt-5\.5/);
+    assert.match(text, /📁 \/tmp · codex \| gpt-5\.5/);
   });
 
   it("shows all sessions from the last 24h when full is enabled", () => {
@@ -90,6 +140,53 @@ describe("session-view app layer", () => {
     assert.match(text, /recent-active \[1\]/);
     assert.match(text, /recent-persisted \[recent-persisted\]/);
     assert.doesNotMatch(text, /old-persisted \[old-persisted\]/);
+  });
+
+  it("status=waiting shows a session after Revise as waiting for the user's plan changes, not a question", () => {
+    const now = Date.now();
+    const base = { multiTurn: true, workdir: "/tmp", costUsd: 0, duration: 1000, prompt: "x", status: "running" };
+    const sm: any = {
+      list: () => [
+        { ...base, name: "revising", id: "1", phase: "awaiting_user_input", approvalState: "changes_requested", startedAt: now - 1000 },
+        { ...base, name: "asking", id: "2", phase: "awaiting_user_input", startedAt: now - 2000 },
+      ],
+      listPersistedSessions: (): never[] => [],
+    };
+    const text = getSessionsListingText(sm, "waiting");
+    assert.match(text, /revising \[1\][^\n]*\n(?:.*\n)*?   👉 Plan revision requested: waiting for the user's changes/);
+    assert.doesNotMatch(text.split("asking [2]")[0]!, /Question waiting for an answer/);
+    assert.match(text, /asking \[2\](?:.*\n)*?.*Question waiting for an answer/);
+  });
+
+  it("status=waiting lists a plan still pending after a Gateway restart (recovered as suspended)", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: (): never[] => [],
+      listPersistedSessions: () => [{
+        sessionId: "7", harnessSessionId: "h7", name: "recovered-plan", prompt: "x", workdir: "/tmp", status: "killed",
+        lifecycle: "suspended", pendingPlanApproval: true, planApproval: "ask", createdAt: now - 5000,
+      }],
+    };
+    assert.match(getSessionsListingText(sm, "waiting"), /recovered-plan \[7\](?:.*\n)*?.*Plan waiting for the user: Approve \/ Revise \/ Reject/);
+  });
+
+  it("records that the orchestrator read a terminal session only for agent_output, not listings or user commands", () => {
+    const now = Date.now();
+    const seen: string[] = [];
+    const failed: any = {
+      status: "failed", name: "ux-fail", id: "f1", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp",
+      costUsd: 0, phase: "terminal", startedAt: now - 1000, getOutput: () => ["model_not_found"],
+      noteOutcomeSeen: (reader: string) => { seen.push(reader); return true; },
+    };
+    const sm: any = { list: () => [failed], listPersistedSessions: (): never[] => [], resolve: () => failed };
+
+    getSessionsListingText(sm, "all");
+    getSessionOutputText(sm, "ux-fail");
+    assert.deepEqual(seen, [], "user commands do not count");
+
+    const text = getSessionOutputText(sm, "ux-fail", { readerSessionKey: "agent:main:telegram:direct:1" });
+    assert.deepEqual(seen, ["agent:main:telegram:direct:1"]);
+    assert.match(text, /\[ux-fail\] ended right after launch; no separate wake follows\. Tell the user the outcome in this turn\.$/);
   });
 
   it("returns not found when output session reference is unknown", () => {
@@ -174,7 +271,7 @@ describe("session-view app layer", () => {
     };
     const text = getSessionsListingText(sm, "completed");
     assert.match(text, /✅ done-job \[s-persisted\]/);
-    assert.match(text, /Persisted: no live runtime process in this Gateway/);
+    assert.doesNotMatch(text, /Persisted: no live runtime process/);
   });
 
   it("shows runtime recovery diagnostics for persisted rows recovered from running state", () => {
@@ -209,8 +306,9 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "killed");
-    assert.match(text, /Recovered: persisted metadata only; no live process to kill \(persisted-running-without-runtime\)/);
-    assert.match(text, /Recovery: raw=running\/active\/live → normalized=killed\/suspended\/stopped/);
+    assert.match(text, /♻️ Recovered after a Gateway restart; no live process \(persisted-running-without-runtime\)/);
+    // The raw → normalized state dump was internal diagnostics (N53).
+    assert.doesNotMatch(text, /raw=running/);
   });
 
   it("does not crash when persisted rows are missing prompt/workdir fields", () => {
@@ -378,7 +476,7 @@ describe("session-view app layer", () => {
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
     assert.match(text, /fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/);
-    assert.match(text, /Worktree: agent\/fix-fresh-broker-proof-observation-scope \[merged ✓\]/);
+    assert.match(text, /🌿 agent\/fix-fresh-broker-proof-observation-scope \[merged ✓\]/);
     assert.doesNotMatch(text, /\[not merged\]/);
     assert.equal((text.match(/fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/g) ?? []).length, 1);
   });

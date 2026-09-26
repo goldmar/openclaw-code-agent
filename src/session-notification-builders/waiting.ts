@@ -29,10 +29,10 @@ function buildQuestionUserMessage(args: {
   const questionText = normalizeQuestionText(args.questionText) ?? "The session is waiting for your reply.";
   const contextSummary = normalizeQuestionText(args.contextSummary);
   if (!contextSummary) {
-    return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
+    return `❓ [${args.sessionName}] The agent asks\n\n${questionText}`;
   }
   return [
-    `❓ [${args.sessionName}] Question waiting for reply:`,
+    `❓ [${args.sessionName}] The agent asks`,
     ``,
     questionText,
     ``,
@@ -145,7 +145,9 @@ export function buildWaitingForInputPayload(args: {
 
   if (isPlanApproval) {
     const resolvedMode = resolvedPlanApprovalMode;
-    const permissionModeLine = `Permission mode: plan → will switch to bypassPermissions on approval`;
+    const header = `[${session.name}] Plan v${actionableVersion ?? "?"} ready. ID: ${session.id}`;
+    const approveCall = `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line: why it is safe>')`;
+    const escalateCall = `agent_escalate(session='${session.id}', kind='plan', summary='<why, what changes, risk>')`;
     if (resolvedMode === "delegate") {
       return {
         label: "plan-approval",
@@ -153,52 +155,14 @@ export function buildWaitingForInputPayload(args: {
         userMessages,
         planReviewSummary,
         wakeMessage: [
-          `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
-          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
-          originThreadLine,
-          permissionModeLine,
-          ``,
-          `⚠️ YOU MUST COMPLETE THESE STEPS IN ORDER. Do NOT skip any step.`,
-          ``,
-          `━━━ STEP 1 (MANDATORY): Read the full plan ━━━`,
-          `Call agent_output(session='${session.id}', full=true) to read the FULL plan output.`,
-          `The preview below is truncated — you MUST read the full output before making any decision.`,
-          ``,
-          `Preview (truncated):`,
+          `${header} You review it (planApproval: delegate).`,
+          ...(originThreadLine ? [originThreadLine] : []),
+          `Preview (truncated; read the whole plan first: agent_output(session='${session.id}', full=true)):`,
           fenceAgentOutput(preview, "plan preview"),
-          ``,
-          `━━━ STEP 2 (MANDATORY): Review privately ━━━`,
-          `You are the delegated decision-maker. Review the plan yourself before involving the user.`,
-          `If you approve directly, you own the user-facing explanation of what was approved and why.`,
-          `Keep it short and user-facing: one sentence is usually enough.`,
-          ``,
-          `━━━ STEP 3 (ONLY AFTER steps 1 and 2): Decide ━━━`,
-          `Choose ONE:`,
-          ``,
-          `APPROVE the plan directly if ALL of the following are true:`,
-          `- You have read the FULL plan (not just the preview)`,
-          `- The plan scope matches the original task request`,
-          `- The changes are low-risk (no destructive operations, no credential handling, no production deployments)`,
-          `- The plan is clear and well-scoped (no ambiguous requirements or open design questions)`,
-          `- No architectural decisions that the user should weigh in on`,
-          `- The working directory and codebase are correct`,
-          ``,
-          `ESCALATE to the user and WAIT if ANY of the following are true:`,
-          `- The plan involves destructive operations (deleting files, dropping tables, force-pushing)`,
-          `- The plan involves credentials, secrets, or production environments`,
-          `- The plan requires architectural decisions not covered by the original task`,
-          `- The scope has expanded beyond the original request`,
-          `- The requirements are ambiguous or the plan makes assumptions the user should confirm`,
-          `- You are unsure — when in doubt, always escalate`,
-          ``,
-          `If approving: call agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<brief reason>').`,
-          `That rationale should say why approval was safe: for example scope match, low risk, or no meaningful ambiguity.`,
-          `After approving directly, send the user a short plain-text follow-up explaining what was approved and why.`,
-          `The plugin's thumbs-up line is only the minimal approval acknowledgment, not the explanation.`,
-          `If escalating: call agent_request_plan_approval(session='${session.id}', summary='...') exactly once so the plugin posts the single canonical Approve / Revise / Reject prompt.`,
-          `That summary must concisely explain why this was escalated, plus changed files/components, risk level and why, scope match/expansion, and any concerns or assumptions.`,
-          `After the canonical prompt exists, WAIT for the user's button click or explicit response and do NOT send a second plain-text recap.`,
-          `To request changes without user escalation: call agent_respond(session='${session.id}', message='<your feedback>') and do NOT set approve=true. The agent will revise the plan.`,
+          `Then decide:`,
+          `- Approve when it matches the task, is low risk and leaves no design question open: ${approveCall}. The user sees your rationale in the approval notice; no other message is needed.`,
+          `- Escalate when it deletes data, touches credentials, CI/release or production, grows the scope, or you are unsure: ${escalateCall}, then wait for the user.`,
+          `- Ask for changes: agent_respond(session='${session.id}', message='<feedback>').`,
         ].join("\n"),
       };
     }
@@ -210,17 +174,8 @@ export function buildWaitingForInputPayload(args: {
         userMessages,
         planReviewSummary,
         wakeMessage: [
-          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been asked to approve it directly.`,
-          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
-          originThreadLine,
-          permissionModeLine,
-          ``,
-          `DO NOT approve this plan yourself: only the user can (planApproval is "ask"; agent_respond with approve=true alone is refused).`,
-          `Wait for the user's button press. If the user answers in chat instead, forward their exact words with userInitiated=true:`,
-          `  agent_respond(session='${session.id}', message='<the user's words, e.g. approve>', userInitiated=true)`,
-          ``,
-          `Preview (truncated):`,
-          fenceAgentOutput(preview, "plan preview"),
+          `${header} It is with the user (planApproval: ask); do not approve it yourself (approve=true is refused).`,
+          `If the user answers in chat, forward their whole message in one call: agent_respond(session='${session.id}', message='<their words>', userInitiated=true).`,
         ].join("\n"),
         buttons: userMessages ? undefined : planApprovalButtons,
       };
@@ -231,29 +186,24 @@ export function buildWaitingForInputPayload(args: {
       userMessage,
       planReviewSummary,
       wakeMessage: [
-        `[PLAN READY] Session has a plan ready. planApproval is "approve": you may approve without asking the user, but only after verifying the plan.`,
-        `1. Read the full plan: agent_output(session='${session.id}', full=true).`,
-        `2. If it deletes or rewrites data or history, touches credentials, secrets, CI/release, or production, runs destructive or irreversible commands, or goes beyond the requested task, send it to the user instead: agent_request_plan_approval(session='${session.id}', summary='<why you are escalating>').`,
-        `3. Otherwise approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<why this plan is in scope and safe>').`,
+        `${header} You may approve it, but only after verifying the plan (planApproval: approve).`,
+        ...(originThreadLine ? [originThreadLine] : []),
+        `1. Read it: agent_output(session='${session.id}', full=true).`,
+        `2. If it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task: ${escalateCall}.`,
+        `3. Otherwise: ${approveCall}.`,
       ].join("\n"),
     };
   }
 
-  const sessionType = session.multiTurn ? "Multi-turn session" : "Session";
   return {
     label: "waiting",
     userMessage,
     wakeMessage: [
-      `[SYSTEM INSTRUCTION: The session is waiting for the user. Forward the agent's EXACT question to the user unless it was already shown to them with buttons. Do NOT answer it yourself, and do NOT add your own analysis, commentary, or interpretation. Do NOT "nudge" or "poke" the session.]`,
-      ``,
-      `${sessionType} is waiting for a genuine user reply.`,
-      `Name: ${session.name} | ID: ${session.id}`,
-      originThreadLine,
-      ``,
-      `Last output:`,
+      `[${session.name}] The agent is waiting for the user's answer, and the question could not be shown to them. ID: ${session.id}`,
+      ...(originThreadLine ? [originThreadLine] : []),
+      `Show the user the question below exactly, without answering or commenting on it:`,
       fenceAgentOutput(preview, "last output"),
-      ``,
-      `When the user answers, send their reply with agent_respond(session='${session.id}', message='<their answer>', userInitiated=true). Use agent_output(session='${session.id}', full: true) to see full context.`,
+      `Forward their answer: agent_respond(session='${session.id}', message='<their answer>', userInitiated=true).`,
     ].join("\n"),
     buttons: questionButtons,
   };

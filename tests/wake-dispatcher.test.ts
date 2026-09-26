@@ -9,6 +9,7 @@ import {
 import { setPluginRuntime } from "../src/runtime-store";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { ROUTED_REPLY_RULE } from "../src/session-route";
 
 type FakeSession = {
   id: string;
@@ -70,6 +71,7 @@ type DeliveryRule = {
   outcome: "ok" | "failed" | "throw" | "hang";
   error?: string;
   delayMs?: number;
+  admit?: boolean;
   once?: boolean;
 };
 
@@ -106,6 +108,7 @@ async function fakeSendDurableMessageBatch(params: Record<string, any>): Promise
   calls.push(call);
   const rule = takeRule(call);
   await delay(rule?.delayMs);
+  if (rule?.admit) params.onDeliveryIntent?.({ id: "test-durable-intent" });
   if (rule?.outcome === "hang") await new Promise<void>(() => {});
   if (rule?.outcome === "throw") throw new Error(rule.error ?? "durable send threw");
   if (rule?.outcome === "failed") {
@@ -230,15 +233,18 @@ describe("WakeDispatcher", () => {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
-  it("does not accept NO_REPLY even when a completion marker appears elsewhere in the payload", () => {
-    const failure = validateCompletionFollowupWakeSuccess(JSON.stringify({
-      request: {
-        message: "Prompt mentions COMPLETION_FOLLOWUP_DELIVERED as an instruction.",
-      },
-      finalResponse: "NO_REPLY",
-    }));
-
-    assert.deepEqual(failure, { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" });
+  it("accepts NO_REPLY after a routed send, rejects it for a plain-reply wake, and fails an empty answer", () => {
+    // Routed wakes end with NO_REPLY after the message tool delivered the summary.
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), true), { outcome: "success" });
+    // Without a route the plain reply is the summary: NO_REPLY means none was produced.
+    assert.deepEqual(
+      validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), false),
+      { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" },
+    );
+    assert.deepEqual(
+      validateCompletionFollowupWakeSuccess("  \n"),
+      { outcome: "failure", reason: "completion follow-up wake produced no final response" },
+    );
   });
 
   it("accepts marker-free completion follow-up final text", () => {
@@ -591,6 +597,65 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
   });
 
+  it("queues a next-turn success wake as a system event without chat.send or a heartbeat (N37)", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-next-turn", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "ask-user-question",
+      userMessage: "❓ [s] Which greeting?",
+      notifyUser: "always",
+      wakeMessageOnNotifySuccess: "[s] The user was asked this question.",
+      wakeDelivery: "next-turn",
+      wakeMessageOnNotifyFailed: "[s] Show the user this question.",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "queued context");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(asDurableSend(calls[0]).text, "❓ [s] Which greeting?");
+    assert.deepEqual(findCall("system-event"), systemEvent("[s] The user was asked this question.", "session-next-turn"));
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false, "a next-turn wake must not start an orchestrator turn");
+    assert.deepEqual(heartbeats, []);
+  });
+
+  it("still wakes now when the user notification of a next-turn request fails", async () => {
+    chatSendStdout = "Relayed.\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-next-turn-failed", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "chat not found" });
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-merge-ask",
+      userMessage: "🔀 [s] Finished on branch",
+      notifyUser: "always",
+      buttons: [[{ label: "Merge", callbackData: "tok" }]],
+      wakeMessageOnNotifySuccess: "[s] The user has buttons.",
+      wakeDelivery: "next-turn",
+      wakeMessageOnNotifyFailed: "[s] Ask the user what to do with the branch.",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "failure wake");
+    assert.equal(asChatSend(findCall("chat-send")).message, "[s] Ask the user what to do with the branch.");
+    assert.equal(calls.some((call) => call.kind === "system-event" && call.text.includes("has buttons")), false);
+  });
+
+  it("queues a plain next-turn wake message without a user notification", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-revise", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-revise-requested",
+      wakeMessage: "[s] The user pressed Revise.",
+      wakeDelivery: "next-turn",
+      notifyUser: "never",
+    });
+
+    await waitFor(() => calls.length > 0, "queued note");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(calls, [systemEvent("[s] The user pressed Revise.", "session-revise")]);
+    assert.deepEqual(heartbeats, []);
+  });
+
   it("hands Telegram topic direct notifications to the host durable outbound queue", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
@@ -686,6 +751,39 @@ describe("WakeDispatcher", () => {
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.deepEqual(heartbeats, []);
     assert.equal(notifyFailed, 1);
+    dispatcher.dispose();
+  });
+
+  it("reports durable admission separately from a later unknown delivery outcome", async () => {
+    rules.push({
+      match: (call) => call.kind === "durable-send",
+      outcome: "failed",
+      admit: true,
+      error: "platform delivery failed after durable admission",
+    });
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-admitted-send", route: buildRoute() };
+    let admitted = 0;
+    let ambiguous = 0;
+    let failed = 0;
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "stale-reminder",
+      userMessage: "⏰ decision pending",
+      notifyUser: "always",
+      requireDirectUserNotification: true,
+      hooks: {
+        onNotifyAdmitted: () => { admitted += 1; },
+        onNotifyAmbiguous: () => { ambiguous += 1; },
+        onNotifyFailed: () => { failed += 1; },
+      },
+    });
+
+    await waitFor(() => ambiguous === 1, "admitted send outcome");
+    assert.equal(admitted, 1);
+    assert.equal(failed, 0);
+    assert.equal(calls.filter((call) => call.kind === "durable-send").length, 1);
+    assert.equal(calls.some((call) => call.kind === "system-event"), false);
     dispatcher.dispose();
   });
 
@@ -1706,11 +1804,11 @@ describe("WakeDispatcher", () => {
     assert.equal(params.threadId, "13832");
   });
 
-  it("does not accept a NO_REPLY completion follow-up wake and falls back to a session system event", async () => {
+  it("accepts a NO_REPLY completion wake (the summary went out with the message tool) without a fallback", async () => {
     chatSendStdout = "NO_REPLY\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
-      id: "session-no-visible-followup",
+      id: "session-routed-followup",
       route: buildRoute(),
     };
     let wakeSucceeded = 0;
@@ -1718,7 +1816,7 @@ describe("WakeDispatcher", () => {
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
-      wakeMessage: "Coding agent session completed. Send the user a short factual completion summary.",
+      wakeMessage: `Coding agent session completed.\n${ROUTED_REPLY_RULE}`,
       notifyUser: "never",
       completionWakeSummaryRequired: true,
       hooks: {
@@ -1727,23 +1825,80 @@ describe("WakeDispatcher", () => {
       },
     });
 
-    const calls = await waitForCalls(2);
-    await waitFor(() => wakeSucceeded === 1, "system event fallback after NO_REPLY");
-
-    assert.equal(calls[0]?.kind, "chat-send");
-    assert.deepEqual(calls[1], systemEvent(
-      "Coding agent session completed. Send the user a short factual completion summary.",
-      "session-no-visible-followup",
-      "agent:main:telegram:group:-1001234567890:topic:11239",
-    ));
-    assert.deepEqual(heartbeats, [{
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
-    }]);
-    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
+    await waitFor(() => wakeSucceeded === 1, "routed completion wake accepted");
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send"]);
+    assert.deepEqual(heartbeats, []);
     assert.equal(wakeFailed, 0);
+  });
+
+  it("hands a held wake to the system-event queue when the dispatcher stops, instead of dropping it", async () => {
+    const dispatcher = createDispatcher();
+    dispatcher.dispatchSessionNotification({ id: "held", route: buildRoute() } as any, {
+      label: "failed",
+      wakeMessage: "[held] Failed. ID: held",
+      notifyUser: "never",
+      deferWakeMs: 60_000,
+      skipDeferredWake: () => undefined,
+    });
+    await new Promise((resolve) => originalSetTimeout(resolve, 20));
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false, "still held");
+    dispatcher.dispose();
+    // Handed to the in-process system-event queue, not a CLI chat.send that a stopping Gateway could refuse.
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "held wake enqueued on dispose");
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
+    const event = calls.find((call) => call.kind === "system-event") as { text: string; sessionKey: string };
+    assert.equal(event.text, "[held] Failed. ID: held");
+    assert.equal(event.sessionKey, buildRoute().sessionKey);
+  });
+
+  it("falls back to a system-event wake when a plain-reply completion wake ends with NO_REPLY", async () => {
+    chatSendStdout = "NO_REPLY\n";
+    const dispatcher = createDispatcher();
+    let wakeSucceeded = 0;
+    dispatcher.dispatchSessionNotification({ id: "plain-followup", route: buildRoute() } as any, {
+      label: "completed",
+      wakeMessage: "Coding agent session completed. Your reply is sent to the user; do not answer NO_REPLY.",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      hooks: { onWakeSucceeded: () => { wakeSucceeded += 1; } },
+    });
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "system-event fallback after NO_REPLY");
+    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
+    await waitFor(() => wakeSucceeded === 1, "fallback wake counted");
+  });
+
+  it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {
+    const delays: number[] = [];
+    global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
+      delays.push(delay ?? 0);
+      if (delay !== 15_000) return originalSetTimeout(fn, delay);
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    const dispatcher = createDispatcher();
+    const skipped: string[] = [];
+    let seen = true;
+    const request = (id: string) => ({
+      label: "failed",
+      userMessage: "❌ [fail] Failed",
+      wakeMessage: `[fail] Failed. ID: ${id}`,
+      notifyUser: "always" as const,
+      deferWakeMs: 15_000,
+      skipDeferredWake: () => seen ? "the launching orchestrator turn already saw the failure" : undefined,
+      hooks: { onWakeSkipped: (reason: string) => { skipped.push(reason); } },
+    });
+
+    dispatcher.dispatchSessionNotification({ id: "seen", route: buildRoute() } as any, request("seen"));
+    await waitFor(() => skipped.length === 1, "deferred wake skipped");
+    assert.equal(delays.includes(15_000), true);
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
+    assert.equal(calls.some((call) => call.kind === "durable-send"), true, "the user still gets the failure notice");
+
+    seen = false;
+    dispatcher.dispatchSessionNotification({ id: "unseen", route: buildRoute() } as any, request("unseen"));
+    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "deferred wake sent");
+    assert.equal(asChatSend(calls.find((call) => call.kind === "chat-send")!).message, "[fail] Failed. ID: unseen");
+    assert.deepEqual(skipped, ["the launching orchestrator turn already saw the failure"]);
   });
 
   it("marks completion follow-up wakes successful after normal marker-free final text", async () => {

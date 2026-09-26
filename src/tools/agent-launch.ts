@@ -16,6 +16,7 @@ import {
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import { buildResumedPlanState } from "../plan-decision-state";
 import { createLogger } from "../logger";
+import { awaitLaunchEarlyOutcome, launchHandoffNote } from "./launch-early-outcome";
 
 const log = createLogger("agent-launch");
 
@@ -99,59 +100,42 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_launch",
     description:
-      "Launch a coding agent session in background to execute a development task. Sessions are multi-turn — they stay open for follow-up messages via agent_respond. Supports resuming previous sessions. Returns a session ID and name for tracking.",
+      "Start a coding agent session in the background. Sessions keep their conversation: continue one with agent_respond instead of launching again.",
     parameters: Type.Object({
-      prompt: Type.String({ description: "The task prompt to execute" }),
-      name: Type.Optional(
-        Type.String({ description: "Short human-readable name for the session (kebab-case, e.g. 'fix-auth'). Auto-generated from prompt if omitted." }),
-      ),
-      workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
-      model: Type.Optional(Type.String({ description: "Model name to use" })),
-      reasoning_effort: Type.Optional(Type.Union(
-        REASONING_EFFORTS.map((level) => Type.Literal(level)),
-        { description: "Reasoning effort override for this launch. Otherwise retains the resumed/forked session setting, then uses the harness default. Only supported harness/model combinations apply it." },
+      prompt: Type.String({ description: "Task for the agent" }),
+      name: Type.Optional(Type.String({ description: "Short kebab-case name (default: from the prompt)" })),
+      workdir: Type.Optional(Type.String({ description: "Repository directory (default: the configured workdir)" })),
+      model: Type.Optional(Type.String({ description: "Default: the harness default" })),
+      reasoning_effort: Type.Optional(Type.StringEnum(
+        REASONING_EFFORTS,
+        { description: "Default: the resumed session's, else the harness default" },
       )),
-      system_prompt: Type.Optional(Type.String({ description: "Additional system prompt" })),
-      allowed_tools: Type.Optional(Type.Array(Type.String(), { description: "List of allowed tools" })),
-      resume_session_id: Type.Optional(
-        Type.String({ description: "Session reference to continue or fork from. Prefer the plugin session ID shown by agent_launch or agent_sessions; persisted backend conversation IDs also resolve when available." }),
-      ),
-      fork_session: Type.Optional(
-        Type.Boolean({ description: "When resuming, fork to a new session instead of continuing the existing one. Use with resume_session_id." }),
-      ),
+      system_prompt: Type.Optional(Type.String({ description: "Extra system prompt" })),
+      allowed_tools: Type.Optional(Type.Array(Type.String())),
+      resume_session_id: Type.Optional(Type.String({ description: "Session to continue (or fork with fork_session=true)" })),
+      fork_session: Type.Optional(Type.Boolean({ description: "With resume_session_id: start a new session from its context" })),
       rewind_turns: Type.Optional(
-        Type.Number({ minimum: 1, description: "Integer, with resume_session_id: drop the latest N turns of the backend conversation before continuing (Codex, Claude Code; OpenCode only with fork_session=true). With fork_session=true the fork is created before those turns (the original conversation is untouched); without it the resumed conversation continues from before them. Conversation history only — files changed by those turns are NOT reverted." }),
+        Type.Number({ minimum: 1, description: "With resume_session_id: drop the last N turns first (Codex, Claude Code; OpenCode only with fork_session=true, which keeps the original). Files are not reverted." }),
       ),
-      force_new_session: Type.Optional(
-        Type.Boolean({ description: "Bypass resume-first protection and start a brand-new linked session even when a resumable or active linked session already exists." }),
-      ),
+      force_new_session: Type.Optional(Type.Boolean({ description: "Start a new session even if a linked one could be resumed" })),
       permission_mode: Type.Optional(
-        Type.Union(
-          [Type.Literal("default"), Type.Literal("plan"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode: 'default' (plugin-managed interactive execution), 'plan' (present the plan first and block implementation until approval), 'bypassPermissions' (fully autonomous execution). Defaults to plugin config ('plan' by default)." },
+        Type.StringEnum(["default", "plan", "bypassPermissions"],
+          { description: "'plan': the agent plans first; work starts after approval. 'default': no plan gate; the harness's own permission rules apply (Claude Code allows tools, Codex follows its sandbox settings, OpenCode asks). 'bypassPermissions': no gate, no prompts. Default: plugin config (plan)." },
         ),
       ),
       plan_approval: Type.Optional(
-        Type.Union(
-          [Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("approve")],
-          { description: "Plan approval policy for this session: 'ask' (send a decision-grade plan brief to the user with Approve/Revise/Reject buttons), 'delegate' (orchestrator must review the full plan, then either approve directly or escalate back to the user with the same decision brief and buttons), 'approve' (the orchestrator may approve after verifying the full plan; destructive or out-of-scope plans still go to the user). Overrides the plugin-level planApproval setting." },
+        Type.StringEnum(["ask", "delegate", "approve"],
+          { description: "Who approves plans. 'ask': the user, with buttons. 'delegate': you review; approve or agent_escalate. 'approve': you may approve after checking the full plan. Default: plugin config (delegate)." },
         ),
       ),
-      harness: Type.Optional(
-        Type.String({ description: "Agent harness to use ('claude-code', 'codex', or experimental 'opencode'). Defaults to the plugin defaultHarness." }),
-      ),
+      harness: Type.Optional(Type.String({ description: "claude-code, codex or opencode (default: plugin config)" })),
       worktree_strategy: Type.Optional(
-        Type.Union(
-          [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
-          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with Merge/Open PR/Later/Discard buttons), 'delegate' (orchestrator decides), 'auto-merge' (merge automatically), 'auto-pr' (open/update a PR automatically). Defaults to the plugin config when unset." },
+        Type.StringEnum(["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
+          { description: "Branch isolation. 'delegate': you decide merge or escalate. 'ask': the user gets Merge / PR buttons. 'auto-merge', 'auto-pr': automatic. 'manual': kept for later. 'off': work in the checkout. Default: plugin config (delegate)." },
         ),
       ),
-      worktree_base_branch: Type.Optional(
-        Type.String({ description: "Literal Git branch name for worktree merge/PR operations; options and revision expressions are rejected (default: auto-detected or 'main')" }),
-      ),
-      worktree_pr_target_repo: Type.Optional(
-        Type.String({ description: "Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). If not set, auto-detected from 'upstream' remote or defaults to 'origin'." }),
-      ),
+      worktree_base_branch: Type.Optional(Type.String({ description: "Branch to merge or PR into (default: detected)" })),
+      worktree_pr_target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
@@ -344,10 +328,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               originalWorkdir: session.originalWorkdir,
             });
 
+        const earlyOutcome = await awaitLaunchEarlyOutcome(session, originSessionKey);
         return {
           content: [{
             type: "text",
-            text: launchText,
+            text: `${launchText}\n\n${earlyOutcome ?? launchHandoffNote(session.name)}`,
           }],
         };
       } catch (err: unknown) {

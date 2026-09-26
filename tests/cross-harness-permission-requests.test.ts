@@ -82,7 +82,7 @@ for (const name of BACKEND_NAMES) {
         fixture = await start(name);
         const { decided } = await requestAndWait();
         const click = await clickButton(buttonNamed(await permissionButtons(), label));
-        assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+        assert.deepEqual(click.replies, [`✅ [${fixture!.session.name}] Answer sent: ${label}.`]);
         assert.deepEqual(await decided, { decision });
         await waitUntil(() => !fixture!.session.pendingInputState, "request cleared");
       });
@@ -93,11 +93,11 @@ for (const name of BACKEND_NAMES) {
       const { decided } = await requestAndWait();
       const buttons = await permissionButtons();
       const click = await clickButton(buttonNamed(buttons, labels.once), "discord");
-      assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+      assert.deepEqual(click.replies, [`✅ [${fixture.session.name}] Answer sent: ${labels.once}.`]);
       assert.deepEqual(await decided, { decision: "accept" });
 
       const again = await clickButton(buttonNamed(buttons, labels.decline), "discord");
-      assert.match(again.replies.join("\n"), /no longer active/);
+      assert.match(again.replies.join("\n"), /already answered or replaced/);
     });
 
     for (const [reply, decision] of [["yes", "accept"], ["always", "acceptForSession"], ["no", "decline"], ["2", "acceptForSession"]] as const) {

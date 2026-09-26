@@ -11,8 +11,7 @@
       "agent_output",
       "agent_respond",
       "agent_session_action",
-      "agent_request_plan_approval",
-      "agent_request_worktree_decision",
+      "agent_escalate",
       "agent_send_plan_offer",
       "agent_stats",
       "agent_repo_policy",
@@ -20,10 +19,7 @@
       "agent_pr",
       "agent_worktree_cleanup",
       "agent_worktree_status",
-      "agent_goal_launch",
-      "agent_goal_status",
-      "agent_goal_stop",
-      "agent_goal_edit"
+      "agent_goal"
     ]
   },
   "configContracts": {
@@ -64,10 +60,8 @@
       "agent_sessions",
       "agent_stats",
       "agent_policy",
-      "agent_goal",
-      "agent_goal_status",
-      "agent_goal_stop",
-      "agent_goal_edit"
+      "agent_status",
+      "agent_goal"
     ]
   },
   "setup": {
@@ -249,6 +243,11 @@
         "items": { "type": "string" },
         "description": "Goal verifier commands the operator pre-approves (exact strings). A goal launched by the orchestrator whose verifier commands are all in this list starts without the one-time user confirmation; any other model-supplied verifier command needs the user's confirmation button first."
       },
+      "planOfferTool": {
+        "type": "boolean",
+        "default": false,
+        "description": "Register the agent_send_plan_offer tool, which posts a message with Start plan / Dismiss buttons for external workflows. Off by default so orchestrators do not see it."
+      },
       "autoUpdate": {
         "type": "boolean",
         "default": true,
@@ -311,6 +310,11 @@
     "worktreeGitHooks": {
       "label": "Repository git hooks in OCA git operations",
       "help": "'run' (default) or 'skip' repository hooks (for example husky) when OCA merges, rebases, commits, pushes, or creates worktrees. Merges and PRs that change hook files always ask the user first.",
+      "advanced": true
+    },
+    "planOfferTool": {
+      "label": "Plan offer tool",
+      "help": "Register agent_send_plan_offer for external workflows that offer a plan-only session with Start plan / Dismiss buttons.",
       "advanced": true
     },
     "trustedVerifierCommands": {

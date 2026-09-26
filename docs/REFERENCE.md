@@ -59,7 +59,8 @@ The current `openclaw-code-agent` package requires, is built against, and is val
 - **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)). OCA's `permissionMode` no longer affects Codex execution: in 4.x `bypassPermissions` always meant `danger-full-access` with no approvals, while in 5.0 a host with `tools.exec.mode` `auto` or `ask` runs Codex in the `:workspace` sandbox even for `bypassPermissions` sessions, and `deny` / `allowlist` refuse Codex launches. Set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` to keep the 4.x behavior on such hosts. Codex CLI `0.156.1` or newer is required: older App Servers (or ones whose version cannot be read) fail the launch with an error naming both versions.
 - **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override, so state lives in `$OPENCLAW_HOME/.openclaw`). If you set `OPENCLAW_HOME` to point OCA at a state directory, set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead. Output transcripts moved from `/tmp/openclaw-agent-<id>.txt`, and auto-update state from `<stateDir>/openclaw-code-agent-auto-update.json`, to `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
 - **Minimum host.** OpenClaw `2026.9.6` is required for installation, the plugin API, the Gateway, and the peer dependency; upgrade the host first.
-- **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review). If an agent's tool allowlist names OCA tools individually, add it.
+- **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review) and merges tools: the four `agent_goal_*` tools are now `agent_goal`, and `agent_request_plan_approval` / `agent_request_worktree_decision` are now `agent_escalate`. `agent_send_plan_offer` is registered only with `planOfferTool: true`. If an agent's tool allowlist names OCA tools individually, update it; the [CHANGELOG](../CHANGELOG.md) has the full migration table.
+- **Chat commands.** `/agent_goal_status`, `/agent_goal_stop` and `/agent_goal_edit` are now `/agent_goal status`, `/agent_goal stop` and `/agent_goal edit`. New: `/agent_status`.
 - **Stricter tools.** `agent_kill` accepts only `session` and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
 - **Safety defaults.** Goal loops start with the configured `permissionMode` (plan) and wait for the user to confirm orchestrator-supplied verifier commands (pre-approve fixed ones in `trustedVerifierCommands`). With `planApproval: "ask"` only the user approves plans. `.worktreeinclude` and `.openclaw/worktree-setup.sh` must be committed to take effect, and the setup script and verifiers get a minimal environment. Branches that change git hooks or those files need the user's Merge / Open PR button. Coding agents no longer see `GH_TOKEN` and similar unrelated secrets; see [Child process environments](#child-process-environments).
 - **Removed knobs.** `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` and the startup sweep of unmanaged `openclaw-worktree-*` directories are gone, a launch that needs a worktree outside a git repository fails instead of using the OS temp directory, and OCA no longer copies `~/.claude.json` MCP servers into Claude Code launches.
@@ -81,7 +82,7 @@ The current `openclaw-code-agent` package requires, is built against, and is val
 - A question button for a question the session no longer shows (answered in text, timed out, or cancelled) replies that the question is no longer waiting and does nothing. When the session was suspended or stopped by a Gateway restart, the button resumes it with the selected answer instead. A worktree decision button (Merge, Open PR, Sync PR, Later, Discard) on a decision that was already settled (merged or discarded) replies that it was already resolved and does nothing.
 - A Gateway restart keeps a pending plan decision: pressing Approve, Revise, or Reject after the restart resumes the session the same way as after an idle suspension. Stopping the session any other way (`agent_kill`) rejects the plan.
 - Plan approval and pending-input question callbacks use apply-then-consume token semantics. If a decision fails before state is applied, the token remains retryable and the buttons stay active; once approval state is applied, a later delivery failure leaves the token treated as terminal so it cannot replay a completed decision. Approve, reject, and request-changes callbacks are serialized per session/version, so sibling clicks re-validate and report stale or already handled.
-- Completion wakes deliver the canonical plugin status first and request at most one orchestrator follow-up when `completionWakeSummaryRequired=true`; `NO_REPLY` or an empty response is not delivery proof. PR update completion summaries are deduplicated by material outcome, so later updates with new commits still produce a fresh summary.
+- Completion wakes deliver the canonical plugin status first and request at most one orchestrator follow-up when `completionWakeSummaryRequired=true`; an empty response is not delivery proof. A wake with an origin route tells the orchestrator to reach the user with the message tool to `originRoute` and then answer `NO_REPLY`. A plain reply to a wake is not reliable: the wake is a `chat.send` turn without an originating route, so the host keeps the reply internal for session keys that do not name the chat's channel (`dmScope: "per-peer"` keys such as `agent:<id>:direct:<peer>`, cron, sub-agent, ACP or custom keys), and runtimes whose visible replies default to the message tool (the Codex runtime) do not deliver a plain reply at all. `originRoute` lists provider, account, target and thread, not the session key. PR update completion summaries are deduplicated by material outcome, so later updates with new commits still produce a fresh summary.
 
 ## Install
 
@@ -194,7 +195,7 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, approvals, steering, rewind/fork, compaction, and inline review |
 | `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
-Codex allowlists match the exact model id, ignoring case, after an `openai/` prefix is removed. Claude Code and OpenCode allowlists match any model whose name contains an entry (substring, ignoring case), so `sonnet` allows every Sonnet model and `deepseek-flash` also allows `deepseek-flash-2`. If the resolved model is not allowed, `agent_launch` fails immediately. Because a Codex entry must be an exact id, each Codex connection compares `harnesses.codex.allowedModels` with its `model/list` catalog and logs a warning (once per model and Gateway process) for an allowed model the catalog does not know, which is usually a typo or a retired model.
+Codex allowlists match the exact model id, ignoring case, after an `openai/` prefix is removed. Claude Code and OpenCode allowlists match any model whose name contains an entry (substring, ignoring case), so `sonnet` allows every Sonnet model and `deepseek-flash` also allows `deepseek-flash-2`. If the resolved model is not allowed, `agent_launch` fails immediately. After a launch, `agent_launch` waits up to 4 seconds (it returns as soon as the agent calls a tool or waits for a plan decision or an answer); a session that already failed or finished is reported in the result, so the launching turn tells the user, and that outcome's wake is skipped. Because a Codex entry must be an exact id, each Codex connection compares `harnesses.codex.allowedModels` with its `model/list` catalog and logs a warning (once per model and Gateway process) for an allowed model the catalog does not know, which is usually a typo or a retired model.
 
 ### Behavior shared by every harness, and where harnesses differ
 
@@ -258,7 +259,7 @@ Codex harness details:
 - `agent_session_action` runs `compact` (`thread/compact/start`) or an inline `review` (`review/start`) on a running Codex session.
 - Rate limits: ChatGPT-login sessions read `account/rateLimits/read` at startup and track `account/rateLimits/updated`. Snapshots are kept per account (never merged across accounts; account ids are not displayed; a connection whose account id is unknown keeps its own snapshot only while it is open); `agent_stats` shows each account's current windows, and usage-limit turn failures include the reset time unless it already passed.
 - Permission approval prompts list every requested filesystem entry (path or glob and access mode) and network access before a grant is offered. Plain free-text replies (`yes`, `no`, `always`) never select an "Always allow/deny" policy amendment; use its button or option number.
-- Goals: OCA keeps its own cross-harness goal loop (`agent_goal_*`, verifier-driven) and does not map it onto Codex's native `thread/goal/*`, which is Codex-only and judges completion by the model rather than by verifier commands.
+- Goals: OCA keeps its own cross-harness goal loop (`agent_goal`, verifier-driven) and does not map it onto Codex's native `thread/goal/*`, which is Codex-only and judges completion by the model rather than by verifier commands.
 
 Claude Code harness details:
 
@@ -365,7 +366,7 @@ These should remain manual or follow-up configuration:
 
 | Mode | Meaning |
 | --- | --- |
-| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns. Codex-side approvals follow `harnesses.codex.approvalPolicy` and `approvalsReviewer`, or the host `tools.exec.mode` when those are unset (none by default) |
+| `default` | No plan gate; the harness's own permission rules apply. Claude Code allows its tools, Codex follows `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer` (or the host `tools.exec.mode` when those are unset: no prompts by default), and OpenCode asks before edits and commands, with the prompts sent to the chat. The session can still ask questions |
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
@@ -379,7 +380,7 @@ For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mo
 | --- | --- |
 | `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision. Only the user approves: the Approve button, or the user's own reply (for example `approve`) forwarded as text with `agent_respond(..., userInitiated=true)`. `agent_respond(approve=true)` is refused, with or without `userInitiated` |
 | `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
-| `approve` | Wake the orchestrator, which may approve without asking the user only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user with `agent_request_plan_approval` |
+| `approve` | Wake the orchestrator, which may approve without asking the user only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user with `agent_escalate(kind='plan')` |
 
 In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available. The user-facing message is a bounded decision brief with objective/scope, implementation approach, affected files or systems, verification, destructive or external effects, material risks, and unknowns or decisions. Only routine implementation detail is counted and compacted. Scope, affected systems, verification, destructive/external actions, costs, risks, choices, and rollback remain explicit and paginate when necessary. The detail notice provides `/agent_output <session-name> --full` for available full output (or a request for the complete plan when a command-safe name is unavailable). Inspect details before approval; requesting a revision remains available. Empty sections are absent, each section label shares a line with its first item, and Markdown tables become labeled fields on both Telegram and Discord. Pagination keeps a heading with its first body item; supporting pages have no decision controls. Telegram and Discord both use OpenClaw's shared direct-message presentation contract for the outbound button UI. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. For a multi-message brief, delivery is successful only after the final action-bearing message is confirmed; an earlier informational chunk cannot prove canonical delivery. When a newer review state supersedes an older one, the plugin invalidates older plan-decision tokens and clears old controls where the transport supports edits; an already-visible old callback can still be acknowledged as stale. If buttons are unavailable, hidden by the client, or fail to deliver, the same flow still works through plain replies: `Approve` approves and resumes implementation, `Revise` records changes requested for the current review version, and `Reject` kills the pending plan session instead of forwarding the word as normal task input. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
 
@@ -437,13 +438,14 @@ GitHub is the only PR provider supported in this release. OCA calls `gh` only wh
 
 ### Worktree Decision Buttons
 
-When a session completes with changes under `ask` or `delegate`, users receive explicit decision buttons:
+When a session completes with changes under `ask`, or when the orchestrator escalates a `delegate` worktree with `agent_escalate(kind='worktree')`, the user gets decision buttons in a fixed layout: the actions that land the branch on the first row, **Later** and **Discard** on the second.
 
 | Button | Action |
 | --- | --- |
 | **Merge** | Merge branch into base locally |
 | **Open PR** | Create a GitHub PR when none exists |
-| **View PR / Sync PR** | Shown instead of `Open PR` once a PR already exists |
+| **Sync PR** | Replaces **Open PR** once a PR exists: push new commits and comment on the PR |
+| **View PR** | Link button that opens the existing PR; it leaves the other buttons in place |
 | **Later** | Snooze reminders for 24h |
 | **Discard** | Permanently delete branch and worktree (irreversible) |
 
@@ -469,7 +471,7 @@ Notes:
 - Explicit per-launch `worktree_strategy` wins over the plugin default, but repo policy can downgrade unsafe or impossible follow-through.
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
-- Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
+- Stale-decision reminders back off: the first comes 3h after the decision was requested, the second 24h later, the third a week after that, and then they stop. **Later** snoozes the next one for 24h. Delegated decisions remind the orchestrator instead of the user.
 - Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. If a resumed session's worktree directory is gone, OCA recreates it from the stored `agent/*` branch; if that fails, the launch fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
@@ -546,19 +548,18 @@ Send a follow-up, steer or redirect work, answer a pending question, approve a p
 | `session` | `string` | Yes | Prefer the plugin session ID or name. Persisted backend conversation IDs are accepted only for recovery/diagnostics |
 | `message` | `string` | Yes | Follow-up text |
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
-| `userInitiated` | `boolean` | No | Reset the auto-respond counter |
-| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions. Refused for a plan with `planApproval: "ask"`: forward the user's own reply as text with `userInitiated=true` instead |
-| `approval_rationale` | `string` | No | Structured rationale for a direct delegated plan approval (use with `approve=true` instead of putting it in `message`) |
+| `userInitiated` | `boolean` | No | `true` when the message is the user's own words. It resets the auto-respond counter, and for a pending plan the words `approve`, `reject` and `revise` decide it (any other text is revision feedback) |
+| `approve` | `boolean` | No | Approve a pending plan (`delegate` or `approve` mode) or escalate `default` mode permissions. Refused for a plan with `planApproval: "ask"`, even with `userInitiated`: only the user's button or their forwarded words approve there |
+| `approval_rationale` | `string` | No | With `approve=true`: one line on why the plan is safe. It is shown to the user under the `👍 [name] Plan approved` notice (`Why: <rationale>`), so no separate explanation is needed |
 
-Example:
+Examples:
 
 ```text
-agent_respond(
-  session: "fix-auth",
-  message: "Approved. Go ahead.",
-  approve: true
-)
+agent_respond(session: "fix-auth", message: "Approved. Go ahead.", approve: true, approval_rationale: "Two-file fix within the task, tests included.")
+agent_respond(session: "fix-auth", message: "approve", userInitiated: true)   # the user typed "approve" (planApproval: ask)
 ```
+
+The user's own messages are not echoed back to the chat. After the user presses **Revise**, the orchestrator gets a queued note that the user's next message is the requested change.
 
 ### `agent_session_action`
 
@@ -575,27 +576,19 @@ Run a backend thread action on a running session. Supported by Codex only; other
 
 A pre-PR review is an explicit orchestrator step: call `agent_session_action(session, action: "review")` before `agent_pr` when a review pass is wanted. OCA does not insert reviews automatically into worktree PR flows.
 
-### `agent_request_plan_approval`
+### `agent_escalate`
 
-Escalate a `delegate` or `approve` mode plan review to the user with the normal Approve / Revise / Reject buttons. In `ask` mode the user already has the prompt, so the call is refused.
-
-| Parameter | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `session` | `string` | Yes | Session waiting on a `delegate` or `approve` mode plan review |
-| `summary` | `string` | Yes | Concise scope/risk summary shown with the approval prompt |
-
-### `agent_request_worktree_decision`
-
-Escalate a delegated worktree decision to the user with the state-aware worktree decision buttons (for example Merge, Open PR, Later, Discard).
+Hand a delegated decision to the user with buttons, once per decision, then wait for the user.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Delegated session awaiting a worktree decision |
-| `summary` | `string` | Yes | Concise user-facing summary of scope, risk, and why a human choice is needed |
+| `session` | `string` | Yes | Session name or ID |
+| `kind` | `plan \| worktree` | Yes | `plan`: Approve / Revise / Reject for a session waiting on a `delegate` or `approve` mode plan review (refused in `ask` mode, where the user already has the prompt). `worktree`: Merge / Open PR / Later / Discard for a finished `delegate` worktree session |
+| `summary` | `string` | Yes | Shown to the user: why you escalate, what changes, risk, and open questions |
 
 ### `agent_send_plan_offer`
 
-Send a user-facing message with `Start Plan` / `Dismiss` inline buttons. `Start Plan` launches a plan-gated code-agent session from the supplied prompt while preserving the chosen route, Telegram/Discord thread, and optional worktree strategy.
+Registered only with `planOfferTool: true` in the plugin config (off by default, so orchestrators do not see it). Send a user-facing message with `Start Plan` / `Dismiss` inline buttons. `Start Plan` launches a plan-gated code-agent session from the supplied prompt while preserving the chosen route, Telegram/Discord thread, and optional worktree strategy.
 
 Use this as the primary generic primitive for external/local automation that wants to offer a human-gated follow-up plan from a notification.
 
@@ -627,10 +620,10 @@ List active and recent sessions.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `status` | `all \| running \| completed \| failed \| killed` | No | Filter by runtime state |
+| `status` | `all \| running \| waiting \| completed \| failed \| killed` | No | Filter by runtime state. `waiting` lists every session that waits for a plan decision, an answer, or a merge / PR decision, with the next step (the `/agent_status` command shows the same list) |
 | `full` | `boolean` | No | Show the broader recent view instead of the short default |
 
-`agent_sessions` merges active runtime sessions and persisted sessions into one view.
+`agent_sessions` merges active runtime sessions and persisted sessions into one view. Each row shows the session name and ID, a plain-language state (for example `waiting for plan approval`), duration, cost, directory, harness and model, and the worktree branch; recovered rows and approval anomalies add a line.
 
 ### `agent_kill`
 
@@ -649,18 +642,18 @@ Show session counts (from the persisted store), estimated cost, average duration
 
 This tool takes no parameters.
 
-### Goal Tools
+### `agent_goal`
 
-Explicit goal tools use the same `agent_goal_*` public namespace as the chat commands. The previous unprefixed `goal_*` public tool names are not registered as aliases.
+One tool for explicit goal loops. `action` selects the operation.
 
-| Tool | Purpose |
-| --- | --- |
-| `agent_goal_launch` | Start an explicit verifier or Ralph-style goal loop |
-| `agent_goal_status` | Show one goal task (by `task`, `name`, or id) or list all goal tasks |
-| `agent_goal_edit` | Change the goal text for an active goal task |
-| `agent_goal_stop` | Stop a running goal task |
+| `action` | Required | Purpose |
+| --- | --- | --- |
+| `launch` | `goal` | Start a verifier or Ralph-style goal loop |
+| `status` | — | Show one goal task (`task`) or list all |
+| `edit` | `task`, `goal` | Replace the goal text of an active goal task |
+| `stop` | `task` | Stop a goal task |
 
-`agent_goal_launch` accepts `goal`, optional `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `max_cost_usd`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
+`launch` also accepts `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `max_cost_usd`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
 
 - **Verifier confirmation.** Verifier commands the orchestrator supplies run only after the user confirms them once: the task waits (`awaiting_verifier_confirmation`) and the user gets a message listing the exact commands with **Run these checks** / **Cancel** buttons; nothing runs before that. Commands the user typed in `/agent_goal` and commands listed in the `trustedVerifierCommands` config need no confirmation.
 - **Plan gate.** The first iteration uses the configured `permissionMode` (default `plan`), so its plan goes through the normal plan approval (`planApproval`); the goal loop never approves its own plan. Later iterations continue within the approved scope (`bypassPermissions`). A plan that waits past the idle timeout keeps the task waiting (`waiting_for_plan_approval`) until the decision resumes the session.
@@ -676,6 +669,7 @@ Merge a worktree branch back to base.
 | `session` | `string` | Yes | Must resolve to a session with worktree metadata |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
+| `summary` | `string` | No | One or two lines for the user on what changed. Shown under the merge outcome line; then no follow-up summary wake is sent |
 
 A merge never switches the user's checkout to another branch. `merge` rebases the branch onto base only when needed: in the session worktree, the checkout that already has the branch, or a temporary worktree. The base branch moves where it lives: when base is checked out (usually the main checkout) the fast-forward or squash commit runs there, uncommitted changes there are auto-stashed and restored on that same branch, and repository hooks run per `worktreeGitHooks`; when base is not checked out anywhere, a fast-forward updates the base ref directly (compare-and-swap) and a squash commit is made in a temporary checkout of base (so commit hooks run; with `worktreeGitHooks: "skip"` the ref is updated directly), and no user checkout is touched. The rebase runs in the session worktree only while it still has the session branch checked out. When a commit hook rejects a squash commit after changing files, the error names a patch file in the repository's git directory that holds those changes. Uncommitted changes in the branch's own checkout are reported as such, not as a rebase conflict, and rebasing a branch that was already pushed adds a warning because the remote copy keeps the old commits. A branch that changes hook locations needs the user's button (see [Git Hooks](#git-hooks)).
 | `push` | `boolean` | No | Defaults to `false`; set `true` only when you want the merged base branch pushed |
@@ -683,7 +677,7 @@ A merge never switches the user's checkout to another branch. `merge` rebases th
 
 `agent_merge` does not start a conflict resolver: with `strategy: merge`, rebase conflicts are reported with manual resolution steps, and a conflicting `strategy: squash` merge is reported as a merge failure. Only the `auto-merge` worktree strategy starts a conflict-resolver session for rebase conflicts.
 
-After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route; a good summary inside that output is not itself visible delivery. The generic terminal completion path must not emit a second completion follow-up for that same worktree outcome. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the routed wake transport succeeds with a non-empty final response that is not `NO_REPLY`. For PR outcomes, the canonical status is the only message that carries the raw PR URL; follow-up summaries should refer to PR number, repository, and branch instead.
+Merge outcome lines name the session (`✅ [fix-auth] Merged: agent/fix-auth → main (3 files, +40/-2)`). With `summary`, the summary is shown under that line and the outcome counts as summarized: no follow-up wake is sent and no pending-summary flag is stored. Without it (a **Merge** button press, or an auto-merge), the plugin sends the outcome line and then wakes the orchestrator with `completionWakeSummaryRequired=true`, the outcome facts, and the session's origin route; the orchestrator sends one short factual summary to that route. The persisted `completionWakeSummaryRequired` bit is cleared only after the wake gets a non-empty final response (`NO_REPLY` counts when the wake asked for a routed send). A failed `push=true` is reported as such and always wakes the orchestrator. PR outcomes carry the raw PR URL only in the outcome line; follow-ups refer to the PR by number.
 
 ### `agent_pr`
 
@@ -697,14 +691,14 @@ Create or update a GitHub PR for a worktree branch.
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 | `update_metadata` | `boolean` | No | For an open PR, refresh the title and body. By default only OpenClaw-generated bodies and fallback titles are refreshed |
-| `update_body` | `boolean` | No | Alias for `update_metadata` |
 | `target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from the `upstream` remote. Must be `OWNER/REPO` or `HOST/OWNER/REPO`; anything else is rejected |
+| `summary` | `string` | No | One or two lines for the user on what changed; shown under the PR outcome line, and no follow-up summary wake is sent |
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. When session metadata already points at an open PR, `agent_pr` treats that PR's head branch as authoritative; a follow-up/helper worktree branch is fast-forwarded into the original PR branch when safe, and divergent branches are rejected instead of creating a sibling PR. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
 
 When `title` or `body` is omitted, `agent_pr` prefers LLM-generated PR metadata from the host's `api.runtime.llm.complete(...)`. It also reads a bounded, redacted preview of active or persisted coding-session output. If no metadata provider is configured, or if the provider fails or returns invalid/unsafe output, structured `Root cause`, `Fix`/`Changes`, and `Validation` sections from the completed session report provide task-specific metadata; the commit subject supplies the title. If neither source is usable while creating a new PR, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete. Existing generated PR metadata refreshes are non-destructive: unavailable task-specific evidence preserves the current generated PR title/body and reports the refresh failure instead of replacing richer metadata with generic fallback text.
 
-PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken with the authoritative session origin route/thread block and must send one concise factual summary in that route/topic.
+PR opened and PR updated outcomes follow the same rules as merge outcomes: with `summary` the user gets one message; otherwise the outcome line comes first and the orchestrator is woken for one concise summary in the session's origin route.
 
 ### `agent_worktree_status`
 
@@ -729,10 +723,7 @@ Clean managed worktree lifecycle state safely, or dismiss one pending worktree d
 | --- | --- | --- | --- |
 | `workdir` | `string` | No | Repository to inspect |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
-| `mode` | `preview_safe \| clean_safe \| preview_all` | No | Defaults to `preview_safe` when `dry_run=true`, otherwise `clean_safe` |
-| `skip_session_check` | `boolean` | No | Deprecated; safe cleanup still never removes live sessions |
-| `force` | `boolean` | No | Deprecated alias for `skip_session_check` |
-| `dry_run` | `boolean` | No | Backward-compatible alias for `mode="preview_safe"` |
+| `mode` | `preview_safe \| clean_safe \| preview_all` | No | Defaults to `clean_safe`. `preview_safe` lists what would be removed; `preview_all` also lists kept worktrees and why |
 | `session` | `string` | No | Restrict cleanup to one session |
 | `dismiss_session` | `boolean` | No | With `session`, permanently dismiss that worktree instead of resolving by repo evidence |
 
@@ -791,17 +782,18 @@ Have oca handle the failing dashboard smoke test.
 
 | Command | Usage | Purpose |
 | --- | --- | --- |
-| `/agent` | `/agent [--name <name>] <prompt>` | Launch a session from chat |
+| `/agent` | `/agent [--name <name>] [--workdir <dir>] [--harness <name>] [--model <model>] <prompt>` | Launch a session from chat; the reply is the single launch message |
+| `/agent_status` | `/agent_status` | Sessions waiting for a plan decision, an answer, or a merge / PR decision, with the next step |
 | `/agent_sessions` | `/agent_sessions [--full]` | List sessions |
 | `/agent_output` | `/agent_output <id-or-name> [--full] [--lines N]` | Show recent output |
 | `/agent_respond` | `/agent_respond [--interrupt] <id-or-name> <message>` | Send a reply |
 | `/agent_kill` | `/agent_kill <name-or-id>` | Stop a session |
 | `/agent_stats` | `/agent_stats` | Show aggregate metrics |
 | `/agent_policy` | `/agent_policy [pr-required\|pr-allowed\|never-pr\|manual\|reset [repo-path]\|list\|cleanup]` | Set or inspect repository worktree/PR policy; no argument shows the current repo |
-| `/agent_goal` | `/agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode ralph\|verifier] [--completion-promise <text>] [--max-iterations N] [--max-cost-usd N] [--permission-mode <mode>] [--verify <cmd> ...] <goal>` | Launch an explicit goal task (commands typed here need no extra confirmation) |
-| `/agent_goal_status` | `/agent_goal_status [<task-id-or-name>]` | Show one goal task or list all goal tasks |
-| `/agent_goal_edit` | `/agent_goal_edit <task-id-or-name> <replacement-goal>` | Change the goal text for an active goal task |
-| `/agent_goal_stop` | `/agent_goal_stop <task-id-or-name>` | Stop a running goal task |
+| `/agent_goal` | `/agent_goal [launch] [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode ralph\|verifier] [--completion-promise <text>] [--max-iterations N] [--max-cost-usd N] [--permission-mode <mode>] [--verify <cmd> ...] <goal>` | Launch an explicit goal task (commands typed here need no extra confirmation). Write `launch` first when the goal text starts with `status`, `edit` or `stop` |
+| `/agent_goal status` | `/agent_goal status [<task>]` | Show one goal task or list all goal tasks |
+| `/agent_goal edit` | `/agent_goal edit <task> <new goal>` | Change the goal text for an active goal task |
+| `/agent_goal stop` | `/agent_goal stop <task>` | Stop a running goal task |
 
 Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the normal continuation path; `agent_launch(resume_session_id=...)` without `fork_session` also continues a stopped session in place (needed for `rewind_turns`) and refuses a running one.
 
@@ -870,21 +862,29 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 
 | Event | User Message |
 | --- | --- |
-| Launch | `🚀` session launched |
-| Waiting for input | `❓` session asked a real question |
-| Plan ready | `📋` plan ready for review |
-| Reply or redirect sent | `↪️` follow-up delivered |
-| Plan approved | `👍` plan approved |
-| Resumed | `▶️` session resumed from persisted context |
-| Turn completed | `⏸️` paused after turn |
-| Completed | `✅` done with cost and duration |
-| Failed | `❌` failed, with recovery guidance |
-| Idle timeout | `💤` idle kill |
+| Launch | `🚀 [name] Launched \| <dir> \| <harness \| model>` (from `/agent`, this is the command reply) |
+| Waiting for input | `❓ [name]` the agent's question, with option buttons when it has simple options |
+| Plan ready (`ask`, or escalated) | `📋 [name] Plan vN ready for approval` decision brief with Approve / Revise / Reject |
+| Plan approved | `👍 [name] Plan approved`, with `Why: <rationale>` on the next line when the orchestrator approved with `approval_rationale` |
+| Resumed | `▶️ [name] Resumed` |
+| Turn completed | `⏸️ [name]` paused after a turn |
+| Completed | `✅ [name] Completed` with cost and duration |
+| Merge / PR outcome | `✅ [name] Merged: <branch> → <base>` or `✅ [name] PR opened: <url>`, with the orchestrator's `summary` under it when given |
+| Failed | `❌ [name] Failed` with the error, plus **Resume** (when the session can resume) and **View output** buttons |
+| Uncommitted changes, nothing to merge | `⚠️ [name]` with **Commit changes**, **View output** and **Discard** buttons |
+| Idle timeout | `💤 [name] Suspended` with **Resume** / **View output** buttons |
 | Stopped | `⛔` stopped by user or shutdown |
-| Worktree decision in `ask` | Inline `Merge` / `Open PR` / `Later` / `Discard` buttons (state-aware) |
-| Worktree decision in `delegate` | Orchestrator wake only |
+| Worktree decision in `ask` | `🔀 [name] Finished on <branch> → <base>` with Merge / Open PR / Later / Discard buttons |
+| Worktree decision in `delegate` | Orchestrator wake only, until the orchestrator escalates |
+| Stale worktree decision | `⏰ [name] Branch … still waits for your decision` (3h, then 24h, then a week later, then no more) |
+
+The user's own messages forwarded with `agent_respond` are not echoed back. **View output** buttons stay usable and do not remove the message's other buttons.
 
 `ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.
+
+### Orchestrator wakes
+
+The orchestrator is woken (an agent turn through `chat.send`) only when it has something to do: a delegated plan or worktree decision, a completion or outcome summary, a failure, or a user prompt that could not be delivered. Context it needs only if the user answers in chat (a question or plan prompt that reached the user, a worktree prompt with buttons, a Revise press) is queued as a system event without a turn (`wakeDelivery: "next-turn"`); OpenClaw prepends it to the orchestrator's next turn in that chat. A plan-approval reminder for a prompt the user already has, and the repo-policy "buttons delivered" note, are not sent at all. Wakes name the session as `[name]`, fence agent output as untrusted data, and state the origin route once.
 
 ## OpenClaw Host Integration
 
@@ -896,7 +896,7 @@ OCA uses only public plugin-SDK surfaces that OpenClaw grants untrusted external
 | Tool parameter schemas | `typebox` (bundled) | Tool parameters are TypeBox schemas, the format the plugin SDK types tool parameters with. |
 | Direct user notifications | `openclaw/plugin-sdk/channel-outbound` `sendDurableMessageBatch` | Text plus a channel-agnostic `presentation` (buttons) goes through the host's durable outbound queue with `durability: "required"`. Core renders Telegram inline keyboards / Discord components and owns retry and crash recovery for an admitted send, so OCA sends each notification once and never re-sends it to the user. When the host reports a definite failure for a text-only notification that does not require direct delivery, OCA hands the text to the agent session as a system event instead; notifications with buttons or that require direct delivery are reported as failed. A send that times out with an unknown outcome is reported as a delivery failure without any system-event fallback. There is no `openclaw message send` CLI fallback. |
 | Orchestrator wakes | `openclaw gateway call chat.send` subprocess | Stays a subprocess: in-process `runtime.gateway.request` with operator scopes is trusted-only. |
-| Wake fallback / system notices | `api.runtime.system.enqueueSystemEvent` + `requestHeartbeat` (wakes only) | Replaces `openclaw system event --mode now`. Events always target the session's origin session key. A wake fallback (a failed or `NO_REPLY` `chat.send`, or a session without a chat route) also requests an immediate `notifications-event` heartbeat, because the orchestrator must act on it now. A text-only notice whose direct send failed is only enqueued when the same dispatch also sends an OCA wake: the host prepends the notice to that wake's `chat.send` turn. A notice with no following wake (for example a launch or stop notice) still requests the heartbeat, because otherwise nothing guarantees a turn that shows it. The trade-off is cost against delivery: OpenClaw 2026.9.6 has no plugin-usable wake that handles a generic system event without the heartbeat routine. Every `requestHeartbeat` intent runs the agent's configured heartbeat prompt (its `HEARTBEAT.md` checklist, with any memory reads and workspace checks it asks for) with the queued events attached. Only exec completions and `cron:` events get an event-only prompt, and those belong to their host producers. `intent: "event"` uses the same prompt with cooldown gating and is not admitted for agents without a heartbeat schedule. Operators can make wake-fallback heartbeats cheaper with the host's `heartbeat.lightContext` / `heartbeat.isolatedSession` settings. OCA never falls back to the bare `main` alias (a multi-agent host rejects it, and on a single-agent host it would land in the user's direct-message session): a session without an origin key, or a key the host refuses, logs a warning and skips the system event. |
+| Wake fallback / system notices | `api.runtime.system.enqueueSystemEvent` + `requestHeartbeat` (wakes only) | Replaces `openclaw system event --mode now`. Events always target the session's origin session key. A wake fallback (a failed or empty `chat.send`, or a session without a chat route) also requests an immediate `notifications-event` heartbeat, because the orchestrator must act on it now. A text-only notice whose direct send failed is only enqueued when the same dispatch also sends an OCA wake: the host prepends the notice to that wake's `chat.send` turn. A notice with no following wake (for example a launch or stop notice) still requests the heartbeat, because otherwise nothing guarantees a turn that shows it. The trade-off is cost against delivery: OpenClaw 2026.9.6 has no plugin-usable wake that handles a generic system event without the heartbeat routine. Every `requestHeartbeat` intent runs the agent's configured heartbeat prompt (its `HEARTBEAT.md` checklist, with any memory reads and workspace checks it asks for) with the queued events attached. Only exec completions and `cron:` events get an event-only prompt, and those belong to their host producers. `intent: "event"` uses the same prompt with cooldown gating and is not admitted for agents without a heartbeat schedule. Operators can make wake-fallback heartbeats cheaper with the host's `heartbeat.lightContext` / `heartbeat.isolatedSession` settings. OCA never falls back to the bare `main` alias (a multi-agent host rejects it, and on a single-agent host it would land in the user's direct-message session): a session without an origin key, or a key the host refuses, logs a warning and skips the system event. |
 | LLM summaries | `api.runtime.llm.complete` | Worktree decision summaries, question context summaries, and PR metadata send `messages`, `systemPrompt`, `purpose` (`openclaw-code-agent.*`), `maxTokens`, and `reasoning: "low"`, and parse `LlmCompleteResult.text`. OCA requests no model/agent/profile override, so no `plugins.entries.openclaw-code-agent.llm.*` opt-in is needed; an operator `llm.allowedCompletionModels` allowlist can still deny the default model (`LLM_COMPLETION_NOT_AUTHORIZED`). Completions run in a context detached from the tool call that started the session, because the host rejects work scheduled from a request scope that has already closed (`Async work scope is closed`). Every summary keeps its deterministic fallback. Question summaries have a 5 s budget and abort the completion when it expires. `runtime.subagent.complete` is not used: it is only bound inside a Gateway request scope, and these summaries run from background session events. |
 | Session lifecycle mirror | `api.runtime.tasks.async.managedFlows` (no `runtime.taskFlow` or synchronous fallback) | Creates flows with `tryCreateManaged` (no mirror when the host cannot persist), mirrors progress with `setWaiting`/`resume`, and finishes with `finish`/`fail`. A user stop records `requestCancel` (retried against the host's current revision after a concurrent update, and repeated by restart reconciliation if it was never recorded), so the host settles the flow as `cancelled`. `openclaw tasks flow cancel <flow>` is honored: live mirrors re-read their flow every 15 s (and inspect every mutation result) and stop the session when a cancel intent appears. `getTaskSummary` is not used because OCA flows never own child tasks. |
 | State paths | `openclaw/plugin-sdk/state-paths` `resolveStateDir` | Follows the Gateway's `OPENCLAW_STATE_DIR` / `OPENCLAW_HOME` rules. |

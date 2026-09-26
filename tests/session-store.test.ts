@@ -490,8 +490,7 @@ describe("SessionStore persisted compatibility", () => {
 
       assert.equal(persisted?.name, "oca-pr-341-bundle-size-fix");
       assert.equal(persisted?.resumedFromSessionName, "oca-auto-update-feature");
-      assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
-      assert.match(text, /Follow-up label: oca-pr-341-bundle-size-fix/);
+      assert.match(text, /Resumed: oca-auto-update-feature \[_QDNlLZr\] \(now labelled oca-pr-341-bundle-size-fix\)/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

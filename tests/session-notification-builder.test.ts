@@ -12,6 +12,7 @@ import {
   buildGoalTaskSucceededFollowupWake,
   buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
+import { formatOriginRouteWakeBlock } from "../src/session-route";
 
 describe("session-notification-builder", () => {
   it("builds plugin-owned review summaries for explicit plan approvals", () => {
@@ -36,7 +37,8 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.userMessage ?? "", /Should I proceed\?/);
     assert.equal(payload.buttons, buttons);
     assert.match(payload.planReviewSummary ?? "", /Objective \/ scope:/);
-    assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
+    assert.match(payload.wakeMessage, /It is with the user \(planApproval: ask\); do not approve it yourself/);
+    assert.match(payload.wakeMessage, /userInitiated=true/);
   });
 
   it("requires verification and escalation rules in approve-mode plan wakes", () => {
@@ -56,7 +58,7 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.wakeMessage, /AUTO-APPROVE|Approve it now/);
     assert.match(payload.wakeMessage, /only after verifying the plan/);
     assert.match(payload.wakeMessage, /agent_output\(session='session-approve', full=true\)/);
-    assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-approve'/);
+    assert.match(payload.wakeMessage, /agent_escalate\(session='session-approve', kind='plan'/);
     assert.match(payload.wakeMessage, /approval_rationale=/);
   });
 
@@ -130,7 +132,7 @@ describe("session-notification-builder", () => {
     });
 
     assert.match(payload.userMessage ?? "", /Decision brief/);
-    assert.match(payload.userMessage ?? "", /Full-plan detail:/);
+    assert.match(payload.userMessage ?? "", /more routine steps? not shown/);
     assert.equal(payload.userMessages, undefined);
     assert.deepEqual(payload.buttons, buttons);
     assert.match(payload.planReviewSummary ?? "", /Implementation approach:/);
@@ -203,10 +205,9 @@ describe("session-notification-builder", () => {
       ].join("\n"),
     });
 
-    assert.match(payload.wakeMessageOnNotifySuccess, /Treat the completed session output as source material, not visible delivery/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Do this even when agent_output already contains a good final summary/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Send at most one orchestrator-owned human summary/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /only the plugin's terse status line/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /The user saw: ✅ \[completed-summary\] Completed/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /do not answer NO_REPLY/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
   });
 
@@ -219,13 +220,11 @@ describe("session-notification-builder", () => {
       canonicalStatusDelivered: true,
     });
 
-    assert.match(wake, /plugin's terse status line/);
-    assert.match(wake, /send the user one short factual outcome summary/);
-    assert.match(wake, /Do this even when agent_output already contains a good final summary/);
-    assert.match(wake, /Do not include raw PR URLs/);
-    assert.match(wake, /Send a normal concise final response/);
-    assert.match(wake, /Send at most one human-visible summary/);
-    assert.match(wake, /foreground assistant turn or routed message tools/);
+    assert.match(wake, /The user saw: /);
+    assert.match(wake, /Tell the user in one or two sentences what changed/);
+    assert.match(wake, /if there is no output, state only the facts above/);
+    assert.match(wake, /refer to PRs by number, not URL/);
+    assert.match(wake, /do not answer NO_REPLY/);
     assert.doesNotMatch(wake, /COMPLETION_FOLLOWUP_/);
     assert.doesNotMatch(wake, /already summarized by completed session/);
   });
@@ -415,7 +414,7 @@ describe("session-notification-builder", () => {
     });
 
     assert.ok((payload.userMessage ?? "").length <= 3_200);
-    assert.match(payload.userMessage ?? "", /Full-plan detail:/);
+    assert.match(payload.userMessage ?? "", /more routine steps? not shown/);
     assert.deepEqual(payload.buttons, buttons);
   });
 
@@ -463,13 +462,12 @@ describe("session-notification-builder", () => {
     });
 
     assert.equal(payload.userMessage, undefined);
-    assert.match(payload.wakeMessage, /Review privately/);
-    assert.match(payload.wakeMessage, /you own the user-facing explanation of what was approved and why/i);
-    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<brief reason>'\)/);
-    assert.match(payload.wakeMessage, /minimal approval acknowledgment, not the explanation/i);
-    assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
-    assert.match(payload.wakeMessage, /must concisely explain why this was escalated/i);
-    assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
+    assert.match(payload.wakeMessage, /You review it \(planApproval: delegate\)/);
+    assert.match(payload.wakeMessage, /read the whole plan first: agent_output\(session='session-delegate', full=true\)/);
+    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<one line: why it is safe>'\)/);
+    // N36: the rationale is shown to the user, so no separate explanation is requested.
+    assert.match(payload.wakeMessage, /The user sees your rationale in the approval notice; no other message is needed/);
+    assert.match(payload.wakeMessage, /agent_escalate\(session='session-delegate', kind='plan', summary='<why, what changes, risk>'\), then wait for the user/);
   });
 
   it("suppresses extra ask-mode plan summaries once a user-visible prompt is proven", () => {
@@ -528,22 +526,15 @@ describe("session-notification-builder", () => {
     assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s");
     assert.equal(payload.followupContract.requiresShortFactualSummary, true);
     assert.equal(payload.followupContract.appliesToOrdinaryTerminalCompletions, true);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Coding agent session completed\./);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Output preview:/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Canonical completion status delivered to user: yes/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Treat the completed session output as source material, not visible delivery/i);
-    assert.match(payload.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /^\[done-session\] Completed\. ID: session-2/);
+    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Requested permission mode|approved_then_implemented/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Output \(end\):/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /The user saw: ✅ \[done-session\] Completed/);
+    assert.match(payload.wakeMessageOnNotifyFailed, /did NOT reach the user/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
-    assert.match(payload.wakeMessageOnNotifySuccess, /honor the Session origin route block above/i);
-    assert.match(payload.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
-    assert.match(payload.wakeMessageOnNotifyFailed, /Canonical completion status delivered to user: no/);
-    assert.match(payload.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
-    assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Do not repeat the status line/);
+    assert.match(payload.wakeMessageOnNotifyFailed, /The status line did NOT reach the user: .* — include the outcome in your message\./);
   });
 
   it("includes harness and model in terminal completion status lines", () => {
@@ -577,11 +568,34 @@ describe("session-notification-builder", () => {
       preview: "Final output",
     });
 
-    assert.match(payload.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
-    assert.match(payload.wakeMessageOnNotifySuccess, /Do this even when agent_output already contains a good final summary/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
-    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Session origin route block above/i);
-    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
+    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute/);
+  });
+
+  it("asks for a message-tool send to originRoute, and a plain reply only without a route", () => {
+    const session = { id: "session-r", name: "routed", status: "completed", costUsd: 0, duration: 1_000 } as any;
+    // A dmScope per-peer key: the host never delivers a plain wake reply here.
+    const routed = buildCompletedPayload({
+      session,
+      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:direct:5551234" } }),
+      preview: "Done",
+    }).wakeMessageOnNotifySuccess;
+    assert.match(routed, /To tell the user anything, send it with the message tool to originRoute/);
+    assert.match(routed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
+    assert.doesNotMatch(routed, /Your reply is sent to the user/);
+
+    const unrouted = buildCompletedPayload({ session, originThreadLine: "", preview: "Done" }).wakeMessageOnNotifySuccess;
+    assert.match(unrouted, /Your reply is sent to the user; do not answer NO_REPLY\.$/);
+
+    const failed = buildFailedPayload({
+      session: { ...session, status: "failed" },
+      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:ux-f" } }),
+      errorSummary: "model_not_found",
+      preview: "",
+      worktreeAutoCleaned: false,
+    }).wakeMessage;
+    assert.match(failed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
   });
 
   it("builds marker-free goal success follow-up wakes", () => {
@@ -602,14 +616,11 @@ describe("session-notification-builder", () => {
       canonicalStatusDelivered: true,
     });
 
-    assert.match(message, /Goal task succeeded\./);
+    assert.match(message, /Goal task trading-platform-readiness-gate-fix-restart succeeded\./);
     assert.doesNotMatch(message, /COMPLETION_FOLLOWUP_/);
-    assert.match(message, /Send a normal concise final response/);
-    assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
-    assert.match(message, /Do this even when agent_output already contains a good final summary/);
-    assert.match(message, /Send at most one human-visible summary for this goal success outcome/i);
+    assert.match(message, /do not answer NO_REPLY/);
+    assert.match(message, /Tell the user in one or two sentences what was achieved/);
     assert.match(message, /"threadId":"32947"/);
-    assert.match(message, /originRoute differs from the current chat/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
   });
 
@@ -629,7 +640,7 @@ describe("session-notification-builder", () => {
 
     assert.doesNotMatch(message, /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/);
     assert.match(message, /PR #185/);
-    assert.match(message, /Do not include raw PR URLs/);
+    assert.match(message, /refer to PRs by number, not URL/);
     assert.doesNotMatch(message, /COMPLETION_FOLLOWUP_/);
   });
 
@@ -654,8 +665,7 @@ describe("session-notification-builder", () => {
 
     assert.match(payload.wakeMessage, /agent_respond\(session='session-2'/);
     assert.match(payload.wakeMessage, /agent_launch\(resume_session_id='session-2', fork_session=true/);
-    assert.match(payload.wakeMessage, /Backend conversation ID: backend-thread-1/);
-    assert.match(payload.wakeMessage, /Deterministic approval\/execution state: implemented_without_required_approval/);
+    assert.match(payload.wakeMessage, /⚠️ Approval: the session implemented changes without the required plan approval/);
   });
 
   it("preserves delegate worktree wake instructions", () => {
@@ -674,10 +684,12 @@ describe("session-notification-builder", () => {
       },
     });
 
-    assert.match(message, /Branch: agent\/feature-session → main/);
+    assert.match(message, /Finished on agent\/feature-session → main/);
     assert.match(message, /agent_output\(session='session-3', full=true\)/);
-    assert.match(message, /Never call agent_pr\(\) autonomously in delegate mode/);
-    assert.doesNotMatch(message, /Session origin route above/);
+    assert.match(message, /Do not call agent_pr yourself/);
+    assert.match(message, /agent_merge\(session='feature-session', summary=/);
+    assert.match(message, /agent_escalate\(session='feature-session', kind='worktree'/);
+    assert.doesNotMatch(message, /originRoute/);
   });
 
   it("includes routed follow-up guidance in delegate worktree wakes with an origin route block", () => {
@@ -697,8 +709,7 @@ describe("session-notification-builder", () => {
       },
     });
 
-    assert.match(message, /Session origin route above/);
-    assert.match(message, /do not use a plain final assistant reply/);
+    assert.equal((message.match(/originRoute/g) ?? []).length, 1, "the route is stated once (N51)");
   });
 
   it("builds deterministic no-change worktree wakes with preview context", () => {
@@ -713,19 +724,13 @@ describe("session-notification-builder", () => {
       approvalExecutionState: "approved_then_implemented",
     });
 
-    assert.match(message, /completed with no worktree changes to merge/);
-    assert.match(message, /Worktree outcome: worktree cleaned up/);
-    assert.match(message, /Requested permission mode: plan/);
-    assert.match(message, /Deterministic approval\/execution state: approved_then_implemented/);
-    assert.match(message, /Output preview:/);
+    assert.match(message, /Completed with no branch changes to merge\. Worktree cleaned up\./);
+    assert.doesNotMatch(message, /Requested permission mode|approved_then_implemented/);
+    assert.match(message, /Output \(end\):/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
-    assert.match(message, /plugin already sent the canonical completion status/i);
-    assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
-    assert.match(message, /send the user one short factual completion summary/i);
+    assert.match(message, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
-    assert.match(message, /ordinary terminal\/manual completions too/i);
-    assert.match(message, /honor the Session origin route block above/i);
-    assert.match(message, /do NOT repeat the plugin's status line/i);
+    assert.match(message, /Do not repeat the status line/);
   });
 
   it("omits route-block follow-up guidance when no-change wakes have no origin route block", () => {
@@ -736,11 +741,9 @@ describe("session-notification-builder", () => {
       preview: "Built the project and verified the binary prints hello world.",
     });
 
-    assert.match(message, /completed with no worktree changes to merge/);
-    assert.match(message, /send the user one short factual completion summary/i);
-    assert.match(message, /Do this even when agent_output already contains a good final summary/);
+    assert.match(message, /Completed with no branch changes to merge/);
+    assert.match(message, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
-    assert.doesNotMatch(message, /Session origin route block above/i);
-    assert.doesNotMatch(message, /originRoute differs from the current chat/i);
+    assert.doesNotMatch(message, /originRoute/);
   });
 });

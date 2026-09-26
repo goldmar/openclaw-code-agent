@@ -16,9 +16,6 @@ interface AgentWorktreeCleanupParams {
   workdir?: string;
   base_branch?: string;
   mode?: "preview_safe" | "clean_safe" | "preview_all";
-  skip_session_check?: boolean;
-  force?: boolean;
-  dry_run?: boolean;
   session?: string;
   dismiss_session?: boolean;
 }
@@ -30,29 +27,27 @@ function isAgentWorktreeCleanupParams(value: unknown): value is AgentWorktreeCle
 export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_worktree_cleanup",
-    description: "Manage worktree cleanup with lifecycle-aware safety rules. Use preview_safe to list what Clean all safe would remove, clean_safe to execute it, or preview_all to see both safe and retained sandboxes with kept reasons.",
+    description: "Remove finished worktrees that are safe to delete (merged, released, no changes); never removes pending, dirty, PR-open or running ones. With session + dismiss_session=true, permanently discards that session's branch and worktree.",
     parameters: Type.Object({
-      workdir: Type.Optional(Type.String({ description: "Restrict cleanup to sessions rooted in this repository" })),
-      base_branch: Type.Optional(Type.String({ description: "Override literal Git branch name for lifecycle resolution; options and revision expressions are rejected" })),
-      mode: Type.Optional(Type.Union([
-        Type.Literal("preview_safe"),
-        Type.Literal("clean_safe"),
-        Type.Literal("preview_all"),
-      ], {
-        description: "Cleanup mode. preview_safe shows what Clean all safe would remove, clean_safe performs that cleanup, preview_all shows both safe and retained worktrees. Defaults to preview_safe when dry_run=true, otherwise clean_safe.",
+      workdir: Type.Optional(Type.String({ description: "Only this repository" })),
+      base_branch: Type.Optional(Type.String({ description: "Base branch for the merged check (default: detected)" })),
+      mode: Type.Optional(Type.StringEnum(["preview_safe", "clean_safe", "preview_all"], {
+        description: "clean_safe (default) removes; preview_safe lists what would be removed; preview_all also lists kept worktrees and why",
       })),
-      skip_session_check: Type.Optional(Type.Boolean({ description: "Deprecated. Safe cleanup never removes live sessions." })),
-      force: Type.Optional(Type.Boolean({ description: "Deprecated alias for skip_session_check." })),
-      dry_run: Type.Optional(Type.Boolean({ description: "Show what would be cleaned without deleting anything." })),
-      session: Type.Optional(Type.String({ description: "Session name or ID to clean or dismiss." })),
-      dismiss_session: Type.Optional(Type.Boolean({ description: "When true and session is provided, permanently dismiss the worktree." })),
+      session: Type.Optional(Type.String({ description: "Only this session" })),
+      dismiss_session: Type.Optional(Type.Boolean({ description: "With session: delete its branch and worktree even if unmerged (cannot be undone)" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
       if (!isAgentWorktreeCleanupParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, dry_run?, session?, dismiss_session? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, session?, dismiss_session? }." }] };
+      }
+      // A 4.x dry_run=true call must never silently become a 5.0 clean_safe
+      // deletion when a host forwards extra properties to execute().
+      if ("dry_run" in params) {
+        return { content: [{ type: "text", text: "Error: dry_run was removed. Use mode=preview_safe to inspect worktrees before cleanup." }] };
       }
 
       if (params.base_branch !== undefined) {
@@ -61,7 +56,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       const sessionRef = params.session;
-      const mode = params.mode ?? (params.dry_run === true ? "preview_safe" : "clean_safe");
+      const mode = params.mode ?? "clean_safe";
       const dryRun = mode !== "clean_safe";
       const includeRetained = mode === "preview_all" || mode === "clean_safe";
       if (sessionRef && params.dismiss_session === true) {

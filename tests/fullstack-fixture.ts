@@ -30,6 +30,7 @@ import type { SessionManager } from "../src/session-manager";
 import { goalController, sessionManager } from "../src/singletons";
 import type { GoalController } from "../src/goal-controller";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { launchEarlyOutcomeInternals } from "../src/tools/launch-early-outcome";
 import { createFakeHost, type DurableSendParams, type DurableSendResult, type FakeHost, type LlmReply } from "./fake-host";
 import { createBackend, waitUntil, type BackendDriver, type BackendName } from "./harness-backends";
 import { buildCallbackContext, type CallbackChannel } from "./user-interaction-fixture";
@@ -84,6 +85,8 @@ export type FullStackOptions = {
   sendResult?: (params: DurableSendParams) => DurableSendResult | Promise<DurableSendResult>;
   /** How `openclaw gateway call chat.send` answers (default: a final reply). */
   wakeReply?: (call: WakeCall) => WakeReply;
+  /** agent_launch early-outcome wait (default 0 here; production waits 4 s). */
+  launchEarlyOutcomeWaitMs?: number;
 };
 
 export type LaunchOptions = {
@@ -202,6 +205,9 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
   const originalLoadSender = directNotificationTransportInternals.loadSendDurableMessageBatch;
   const originalExecFile = wakeDeliveryExecutorInternals.execFile;
   const originalTimeouts = { ...runtimeLlmTimeoutsMs };
+  const originalLaunchWaitMs = launchEarlyOutcomeInternals.waitMs;
+  // Fake backends rarely call a tool at once; do not hold every agent_launch for the early-outcome wait.
+  launchEarlyOutcomeInternals.waitMs = options.launchEarlyOutcomeWaitMs ?? 0;
   directNotificationTransportInternals.loadSendDurableMessageBatch = async () => host.sendDurableMessageBatch;
   const fakeExecFile = (
     file: string,
@@ -227,6 +233,7 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
     setPluginConfig({});
     directNotificationTransportInternals.loadSendDurableMessageBatch = originalLoadSender;
     wakeDeliveryExecutorInternals.execFile = originalExecFile;
+    launchEarlyOutcomeInternals.waitMs = originalLaunchWaitMs;
     Object.assign(runtimeLlmTimeoutsMs, originalTimeouts);
     stores.restore();
   };

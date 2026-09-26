@@ -20,7 +20,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget } from "./worktree-tool-context";
+import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -31,6 +31,7 @@ interface AgentMergeParams {
   strategy?: "merge" | "squash";
   push?: boolean;
   delete_branch?: boolean;
+  summary?: string;
 }
 
 function isAgentMergeParams(value: unknown): value is AgentMergeParams {
@@ -125,17 +126,18 @@ export function formatCleanupOutcome(args: {
 export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_merge",
-    description: "Merge a worktree branch back to the base branch. Resolves session (active or persisted), gets worktree path, and performs the merge. On conflict, spawns a conflict-resolver session using the configured default harness.",
+    description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user. Squash conflicts start a conflict-resolver session.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID to merge" }),
-      base_branch: Type.Optional(Type.String({ description: "Literal Git branch name to merge into; options and revision expressions are rejected (default: main)" })),
+      session: Type.String({ description: "Session name or ID" }),
+      base_branch: Type.Optional(Type.String({ description: "Default: the repository's detected default branch" })),
       strategy: Type.Optional(
-        Type.Union([Type.Literal("merge"), Type.Literal("squash")], {
-          description: "Merge strategy: 'merge' (default: rebase the branch onto base, then fast-forward) or 'squash' (squashes all commits into one)",
+        Type.StringEnum(["merge", "squash"], {
+          description: "merge (default): rebase onto base, then fast-forward. squash: one commit.",
         }),
       ),
-      push: Type.Optional(Type.Boolean({ description: "Push the base branch after successful merge (default: false)" })),
-      delete_branch: Type.Optional(Type.Boolean({ description: "Delete the worktree branch after successful merge (default: true)" })),
+      push: Type.Optional(Type.Boolean({ description: "Push the base branch afterwards (default false)" })),
+      delete_branch: Type.Optional(Type.Boolean({ description: "Default true" })),
+      summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
@@ -146,7 +148,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
       if (!isAgentMergeParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch?, summary? }." }] };
       }
 
       if (params.base_branch !== undefined) {
@@ -261,7 +263,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Push base branch if requested
           if (shouldPush) {
             if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
-              const pushFailedText = `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
+              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
               sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
                 pushFailedText,
@@ -323,6 +325,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Send unified confirmation notification
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "merge",
+            sessionName: target.sessionName,
             branch: branchName,
             base: resolvedBaseBranch,
             filesChanged: diffSummary?.filesChanged,
@@ -331,8 +334,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           });
           sm.notifyWorktreeOutcome(
             target.notificationTarget!,
-            outcomeLine,
+            withOutcomeSummary(outcomeLine, params.summary),
             {
+              ...summaryOwnership(params.summary),
               detailLines: [
                 `Merge type: ${describeMergeType(mergeResult)}.`,
                 shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
@@ -353,7 +357,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           } else if (mergeResult.stashed) {
             successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
           }
-          successText = appendMergeWarnings(successText, mergeResult);
+          successText = appendMergeWarnings(successText, mergeResult) + summaryShownNote(params.summary);
           toolResult = { content: [{ type: "text", text: successText }] };
         } else if (mergeResult.rebaseConflict) {
           // Rebase conflicts require manual resolution — surface instructions to the user

@@ -433,6 +433,9 @@ describe("agent_worktree_cleanup", () => {
       } as any);
 
       const tool = makeAgentWorktreeCleanupTool();
+      const legacyPreview = await tool.execute("tool-id", { dry_run: true });
+      assert.match((legacyPreview.content[0] as { text: string }).text, /dry_run was removed.*mode=preview_safe/);
+      assert.equal(existsSync(merged.worktreePath), true, "a 4.x preview call must not delete the worktree");
       const result = await tool.execute("tool-id", { mode: "clean_safe" });
       const text = (result.content[0] as { text: string }).text;
 

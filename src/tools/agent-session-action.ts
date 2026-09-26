@@ -77,17 +77,15 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_session_action",
     description:
-      "Run a backend thread action on a running coding agent session (currently Codex only). 'compact' summarizes the conversation to free context. 'review' runs Codex's built-in code reviewer inline in the session; findings arrive like a normal turn (use agent_output). Worktree sessions default to reviewing the branch against its base. Actions queue behind a running turn.",
+      "Codex only, running session: 'compact' frees context; 'review' runs Codex's code reviewer in the session (worktree sessions: branch vs base; else uncommitted changes). Queued behind a running turn; read results with agent_output.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID (must be running)" }),
-      action: Type.Union([Type.Literal("compact"), Type.Literal("review")], { description: "Thread action to run" }),
-      review_target: Type.Optional(Type.Union(
-        [Type.Literal("uncommitted"), Type.Literal("base_branch"), Type.Literal("commit"), Type.Literal("custom")],
-        { description: "What to review (review only). Defaults to base_branch for worktree sessions, otherwise uncommitted." },
+      session: Type.String({ description: "Session name or ID" }),
+      action: Type.StringEnum(["compact", "review"]),
+      review_target: Type.Optional(Type.StringEnum(["uncommitted", "base_branch", "commit", "custom"],
       )),
-      base_branch: Type.Optional(Type.String({ description: "Branch to diff against for review_target 'base_branch'" })),
-      commit_sha: Type.Optional(Type.String({ description: "Commit to review for review_target 'commit'" })),
-      instructions: Type.Optional(Type.String({ description: "Reviewer instructions for review_target 'custom'" })),
+      base_branch: Type.Optional(Type.String({ description: "For base_branch" })),
+      commit_sha: Type.Optional(Type.String({ description: "For commit" })),
+      instructions: Type.Optional(Type.String({ description: "For custom" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {

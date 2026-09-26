@@ -10,14 +10,11 @@ Start a job from Telegram, Discord, or any other OpenClaw channel, approve the p
 
 ## What's New In 5.0
 
-5.0 is a leaner, faster OCA built on OpenClaw's own public plugin APIs, with each coding agent running on its native protocol.
-
-- **Thinner and faster.** Notifications go through the host's durable delivery queue, wake fallbacks and notices use in-process system events instead of an `openclaw system event` subprocess, diagnostics land in the Gateway log, `openclaw tasks flow cancel` stops a mirrored session, and state lives in the host's state directory. Worktree `git` and `gh` calls are asynchronous, so they no longer block the Gateway.
-- **Codex, fully wired.** The system prompt, reasoning effort, and fast mode travel through the App Server's native fields. OCA speaks the App Server protocol through generated types, can steer a running turn, rewind or fork from an earlier turn, compact context, and run an inline code review. Sandboxed approvals reviewed by Codex's `auto_review` subagent turn on with your host's `tools.exec.mode: "auto"` (or explicitly under `harnesses.codex`), approvals can also come to chat as buttons, and `agent_stats` shows your usage-limit windows.
-- **Claude Code, native.** Plans arrive through Claude Code's own `ExitPlanMode` request and your decision goes back as its answer. `AskUserQuestion` prompts can be answered with `agent_respond`, completed sessions can be resumed, and `agent_output` shows per-model cost and context usage.
-- **OpenCode, event-driven.** One shared `opencode serve` process serves every session, and completion comes from its event stream. Plans run on OpenCode's built-in `plan` agent. OCA also supports multi-select questions and reasoning variants, and reports tokens and cost.
-- **Worktrees that fit your repo.** `.worktreeinclude` copies gitignored files such as `.env` into new worktrees, and `.openclaw/worktree-setup.sh` bootstraps them. The `manual` strategy now keeps its worktree, and repo policies can be reset after the repository was deleted.
-- **Built for trust.** Every release must pass ClawHub's static scan over the exact files it ships, the security review ships in the package, and the test suite is hermetic: it runs against a throwaway state directory, never your own `~/.openclaw`.
+- **Fewer, clearer messages.** A default task now reaches you as a plan-approved line with the reason, the finished status, and one merge line with a short summary. Questions, plan prompts and merge prompts name the session, reminders back off (3 hours, a day, a week, then stop), and `/agent_status` lists everything that is waiting for you.
+- **A smaller tool surface for your agent.** 14 tools instead of 19 (goal loops in one `agent_goal` tool, hand-offs to you in one `agent_escalate` tool), with shorter descriptions, so each agent turn spends about 2,000 fewer tokens on OCA's tool definitions.
+- **Each coding agent on its native protocol.** Codex gets its system prompt, reasoning effort and fast mode through the App Server and can be steered, rewound, compacted and asked for a code review. Claude Code plans through its own `ExitPlanMode` step. OpenCode shares one server and supports multi-select questions.
+- **Worktrees that fit your repository.** `.worktreeinclude` copies files such as `.env` into new worktrees and `.openclaw/worktree-setup.sh` prepares them.
+- **Faster and safer.** Messages go through OpenClaw's durable delivery queue, git and GitHub calls no longer block the Gateway, and every release passes ClawHub's static scan over the files it ships.
 
 **Upgrading from 4.x?** 5.0 is a major release. Before upgrading, read the [upgrade steps](docs/REFERENCE.md#upgrading-from-4x) and the breaking changes in the 5.0.0 section of the [CHANGELOG](CHANGELOG.md), and back up your session store so you can roll back. The ones most likely to affect you:
 
@@ -28,6 +25,7 @@ Start a job from Telegram, Discord, or any other OpenClaw channel, approve the p
 - `agent_kill` accepts only `session` and `reason`.
 - With `harnesses.codex.permissionProfile`, `approvalPolicy`, and `approvalsReviewer` unset, Codex follows the host `tools.exec.mode`, whatever the OCA `permissionMode`: `bypassPermissions` no longer gives Codex full access on its own. Hosts on `auto` get the `:workspace` sandbox with reviewed escalations instead of full access.
 - Restrictive tool allowlists need the new `agent_session_action` tool added.
+- Tools were merged: `agent_goal_launch`, `agent_goal_status`, `agent_goal_edit` and `agent_goal_stop` became `agent_goal(action=...)`; `agent_request_plan_approval` and `agent_request_worktree_decision` became `agent_escalate(kind='plan'|'worktree')`. `agent_send_plan_offer` needs `planOfferTool: true`. `/agent_goal_status`, `/agent_goal_stop` and `/agent_goal_edit` became `/agent_goal status|stop|edit`. Update tool allowlists, and see the migration table in the CHANGELOG.
 
 ## Highlights
 
@@ -71,7 +69,7 @@ The user can approve, request a revision, or reject the plan from the originatin
 
 ### Worktree Decisions
 
-In `ask`, the user controls branch follow-through after the agent finishes. Current buttons adapt to state: new branches can show **Merge**, **Open PR**, **Later**, and **Discard**; branches with an existing PR can show **View PR** and **Sync PR** instead of **Open PR**.
+In `ask`, the user controls branch follow-through after the agent finishes, with **Merge** and **Open PR** on the first row and **Later** and **Discard** on the second. Once a PR exists, **Open PR** becomes **Sync PR** and a **View PR** link button opens it.
 
 ![Ask-mode worktree decisions](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-ask.png)
 
@@ -79,7 +77,7 @@ In `ask`, the user controls branch follow-through after the agent finishes. Curr
 
 In `delegate`, the orchestrator reviews the completed worktree and attempts the merge follow-through when the change is clean. The agent edits files in the managed worktree so the main checkout is not touched during implementation; after review, delegated follow-through merges the finished branch back to the base branch unless a conflict, error, or explicit policy requires escalation. Before a PR, the orchestrator can ask Codex for an inline review of the branch diff with `agent_session_action`; a finished session is resumed with `agent_respond` first, because session actions need a running session.
 
-After merge or PR follow-through, the plugin sends the canonical status line and wakes the orchestrator to read the full session output and send the routed factual summary. That summary is orchestrator-owned, so it preserves the original chat or thread instead of depending on whichever route handled the tool call.
+The orchestrator merges with a one- or two-line `summary`, which appears under the merge line, so the user gets one message for the outcome. Without a summary (for example after the user pressed **Merge**), the orchestrator is asked for a short follow-up in the original chat or thread.
 
 ![Delegated worktree flow](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-delegate.png)
 
@@ -233,11 +231,11 @@ Session notification headings include a concise `| reasoning: medium` field when
 
 New sessions use delegated worktree follow-through unless configured otherwise. That keeps changes in an isolated branch and wakes the orchestrator with diff context. In `ask` mode, user-facing buttons depend on state:
 
-| State | Buttons |
-| --- | --- |
-| New branch and GitHub CLI available | `Merge`, `Open PR`, `Later`, `Discard` |
-| Existing PR | `Merge`, `View PR`, `Sync PR`, `Later`, `Discard` |
-| GitHub CLI unavailable | `Merge`, `Later`, `Discard` |
+| State | First row | Second row |
+| --- | --- | --- |
+| New branch and GitHub CLI available | `Merge`, `Open PR` | `Later`, `Discard` |
+| Existing PR | `Merge`, `Sync PR`, `View PR` (link) | `Later`, `Discard` |
+| GitHub CLI unavailable | `Merge` | `Later`, `Discard` |
 
 Ask OpenClaw for worktree status before cleaning resolved sandboxes.
 
@@ -245,7 +243,7 @@ New worktrees honor the same repository conventions as OpenClaw managed worktree
 
 Merge and PR follow-through is governed by a per-repository integration policy (`pr-required`, `pr-allowed`, `never-pr`, or `manual`). `agent_repo_policy` and `/agent_policy` show, set, and reset it, also for a repository whose directory was deleted.
 
-Merge, PR, ordinary terminal, and no-change worktree outcomes use a two-step completion contract: the plugin delivers the canonical terse status, then wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`. The orchestrator must read the full output, treat any final summary inside `agent_output` as source material rather than visible delivery, avoid repeating the status line, and send at most one short factual summary to the session origin route for the terminal/worktree outcome.
+After a completion, merge or PR the plugin posts the status line first, then asks the orchestrator for one short factual summary in the session's original chat or thread. A merge or PR the orchestrator made with `summary` already carries it, so no second message follows.
 
 ### Goal Tasks
 
@@ -263,7 +261,7 @@ Change the auth goal to also update the smoke tests.
 Stop the auth goal.
 ```
 
-OpenClaw agents can use the goal tools directly when they need explicit loop control; humans can usually describe the goal in plain language.
+OpenClaw agents can use the `agent_goal` tool directly when they need explicit loop control; humans can usually describe the goal in plain language.
 
 ## Security
 
@@ -281,26 +279,22 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | Agent-facing tool | Purpose |
 | --- | --- |
 | `agent_launch` | Start a background coding session, or resume, fork, or rewind an earlier one |
-| `agent_respond` | Reply, steer, answer a question, redirect, approve a plan, or escalate permissions |
+| `agent_respond` | Reply, steer, answer a question, forward the user's plan decision, or approve a delegated plan |
 | `agent_session_action` | Compact context or run an inline review in a running Codex session |
-| `agent_request_plan_approval` | Escalate a delegated (`delegate` or `approve` mode) plan review to the user |
-| `agent_request_worktree_decision` | Escalate a delegated worktree decision to the user with decision buttons |
-| `agent_send_plan_offer` | Send a message with Start Plan / Dismiss buttons for a plan-gated follow-up |
+| `agent_escalate` | Hand a delegated plan (`kind='plan'`) or worktree decision (`kind='worktree'`) to the user with buttons |
 | `agent_output` | Read buffered session output |
-| `agent_sessions` | List active and recent sessions |
+| `agent_sessions` | List active and recent sessions; `status="waiting"` lists what needs a decision or answer |
 | `agent_kill` | Stop or mark a session completed |
 | `agent_stats` | Show aggregate usage, cost, and Codex usage-limit windows |
 | `agent_repo_policy` | Show, set, reset, or clean up the per-repository merge and PR policy |
-| `agent_merge` | Merge a worktree branch back to base |
-| `agent_pr` | Create or update a GitHub PR |
+| `agent_merge` | Merge a worktree branch back to base, optionally with a `summary` for the user |
+| `agent_pr` | Create or update a GitHub PR, optionally with a `summary` for the user |
 | `agent_worktree_status` | Show worktree lifecycle state and cleanup safety |
 | `agent_worktree_cleanup` | Clean safe worktrees or dismiss one pending decision |
-| `agent_goal_launch` | Start an explicit verifier or Ralph-style goal loop |
-| `agent_goal_status` | Show one goal task or list all goal tasks |
-| `agent_goal_edit` | Change the goal text for an active goal task |
-| `agent_goal_stop` | Stop a running goal task |
+| `agent_goal` | Launch, inspect, edit or stop an explicit verifier or Ralph-style goal loop |
+| `agent_send_plan_offer` | Opt-in (`planOfferTool: true`): send a message with Start Plan / Dismiss buttons for a plan-gated follow-up |
 
-Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/agent_policy`, `/agent_goal`, `/agent_goal_status`, `/agent_goal_edit`, and `/agent_goal_stop`.
+Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_status`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/agent_policy`, and `/agent_goal` (with `status`, `edit` and `stop` subcommands).
 
 ## Docs
 

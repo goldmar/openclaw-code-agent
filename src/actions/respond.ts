@@ -27,6 +27,12 @@ interface RespondParams {
    * agent_respond tool never sets it. Required for `planApproval: "ask"`.
    */
   userApproval?: "button" | "text";
+  /**
+   * Internal: the orchestrator forwarded this message in its current turn (the
+   * agent_respond tool). A bare "revise" then gets its next step in the tool
+   * result instead of a next-turn note that would arrive after the revision.
+   */
+  fromOrchestratorTurn?: boolean;
 }
 
 interface RespondResult {
@@ -62,6 +68,16 @@ function getSessionRef(session: ResumableSession): string {
 function getResumeWorktreeRef(session: ResumableSession): string | undefined {
   if (!session.worktreeStrategy || session.worktreeStrategy === "off") return undefined;
   return getStableSessionId(session) ?? getPrimarySessionLookupRef(session) ?? getBackendConversationId(session);
+}
+
+/**
+ * The repository a resumed session launches from. A live worktree session's
+ * `workdir` is its worktree; the launch (repo policy, worktree reuse) must see
+ * the original checkout. Persisted rows already store the original workdir.
+ */
+function resumeWorkdir(session: ResumableSession): string {
+  const original = "originalWorkdir" in session ? session.originalWorkdir : undefined;
+  return original?.trim() ? original : session.workdir;
 }
 
 function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
@@ -104,7 +120,7 @@ async function spawnFreshRelaunch(
     const freshConfig: SessionConfig = {
       prompt: session.prompt,
       sessionIdOverride: getStableSessionId(session),
-      workdir: session.workdir,
+      workdir: resumeWorkdir(session),
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
@@ -146,6 +162,16 @@ async function spawnFreshRelaunch(
  */
 const RESUMED_PLAN_APPROVAL_PREFIX =
   "The user approved your plan while this session was suspended. Implement the approved plan now; do not ask for further confirmation.\n\n";
+
+/**
+ * "👍 [name] Plan approved" with the orchestrator's rationale on the next line
+ * (N36): the user sees why without a separate message. The status metadata
+ * stays on the first line.
+ */
+export function formatPlanApprovedLine(sessionName: string, rationale?: string, resumed = false): string {
+  const base = `👍 [${sessionName}] Plan approved${resumed ? " (session resumed)" : ""}`;
+  return rationale ? `${base}\nWhy: ${rationale}` : base;
+}
 
 function normalizeApprovalRationale(rationale?: string): string | undefined {
   const normalized = rationale?.replace(/\s+/g, " ").trim();
@@ -230,7 +256,6 @@ function buildPlanDecisionClosedPatch(
     approvalState,
     lifecycle: approvalState === "rejected" ? "terminal" : "awaiting_user_input",
     pendingPlanApproval: false,
-    planApprovalContext: undefined,
     planDecisionVersion: nextPlanDecisionVersion(session),
     actionablePlanDecisionVersion: undefined,
     canonicalPlanPromptVersion: undefined,
@@ -244,8 +269,11 @@ function buildPlanDecisionClosedPatch(
     approvalPromptFailedAt: undefined,
   };
   if (approvalState === "rejected") {
+    patch.planApprovalContext = undefined;
     patch.runtimeState = "stopped";
   }
+  // A change request keeps the plan context: the revised plan the agent submits
+  // next is the version this request opened, not one more (N35: v1 -> v2).
   return patch;
 }
 
@@ -284,7 +312,11 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
   return { text: `Plan rejected for [${name}]. Session remains stopped.` };
 }
 
-export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string): RespondResult {
+export function requestPlanDecisionChanges(
+  sm: SessionManager,
+  sessionId: string,
+  options: { fromOrchestratorTurn?: boolean } = {},
+): RespondResult {
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
@@ -292,6 +324,7 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
 
   sm.clearPlanDecisionTokens?.(sessionId);
 
+  const reviewedVersion = target ? (target.actionablePlanDecisionVersion ?? target.planDecisionVersion) : undefined;
   if (target) {
     const patch = buildPlanDecisionClosedPatch(target, "changes_requested");
     if (active) {
@@ -300,7 +333,23 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
     sm.updatePersistedSession?.(sessionId, patch);
   }
 
-  return { text: `Type your revision feedback for [${name}] and I'll forward it to the agent.` };
+  // The user's next chat message is the requested change. Tell the orchestrator,
+  // for its next turn in that chat, where to forward it (N35). Covers the Revise
+  // button, "/agent_respond <session> revise", and a forwarded "revise".
+  const ref = active?.id ?? persisted?.sessionId ?? sessionId;
+  if (options.fromOrchestratorTurn) {
+    return {
+      text: `[${name}] Plan v${reviewedVersion ?? "?"} is set for revision. Forward the user's requested change with agent_respond(session='${ref}', message='<their words>', userInitiated=true); if they have not said it yet, ask them.`,
+    };
+  }
+  sm.queueOrchestratorContext?.(
+    ref,
+    "plan-revise-requested",
+    `[${name}] The user asked to revise plan v${reviewedVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(session='${ref}', message='<their words>', userInitiated=true).`,
+    `plan-revise-requested:${ref}:v${reviewedVersion ?? "?"}`,
+  );
+
+  return { text: `[${name}] Reply with the changes you want; they go to the agent.` };
 }
 
 async function tryAutoResume(
@@ -336,7 +385,7 @@ async function tryAutoResume(
       // re-presenting the plan.
       prompt: isPlanApproval ? RESUMED_PLAN_APPROVAL_PREFIX + message : message,
       sessionIdOverride: assessment.stableSessionId,
-      workdir: session.workdir,
+      workdir: resumeWorkdir(session),
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
@@ -391,7 +440,7 @@ async function tryAutoResume(
     if (isPlanApproval) {
       sm.notifySession(
         resumed,
-        `👍 [${resumed.name}] Plan approved (resumed)`,
+        formatPlanApprovedLine(resumed.name, approvalRationale, true),
         "plan-approved",
         `agent-respond-plan-approved-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}:v${session.planDecisionVersion ?? "unknown"}`,
       );
@@ -470,7 +519,9 @@ export async function executeRespond(
     });
   }
   if (textPlanDecision === "revise") {
-    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session);
+    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session, {
+      fromOrchestratorTurn: params.fromOrchestratorTurn,
+    });
   }
   if (textPlanDecision === "reject") {
     return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session);
@@ -551,10 +602,7 @@ export async function executeRespond(
       && (await session.submitPendingInputText?.(params.message)) === true;
 
     if (submittedPendingText) {
-      if (params.userInitiated) {
-        const notifyPreview = truncateText(params.message, 100);
-        sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
-      }
+      // No "↪️" echo of the user's own words (N46).
       if (!params.userInitiated) {
         session.incrementAutoRespond();
       }
@@ -604,15 +652,11 @@ export async function executeRespond(
       persistPlanApprovalState(sm, session);
     }
 
-    // Single notification: plan approval gets a dedicated icon; everything else
-    // (including interrupt/redirect) collapses into one ↪️ message with preview.
+    // Plan approval is announced with the orchestrator's rationale (N36). Other
+    // messages are not echoed back to the user, who wrote them (N46).
     if (isPlanApproval) {
-      sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
-    } else if (params.userInitiated) {
-      const notifyPreview = truncateText(params.message, 100);
-      sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
+      sm.notifySession(session, formatPlanApprovedLine(session.name, approvalRationale), "plan-approved");
     }
-    // else: silent auto-respond — no notification
 
     if (!params.userInitiated) {
       session.incrementAutoRespond();

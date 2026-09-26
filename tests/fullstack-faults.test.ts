@@ -67,7 +67,7 @@ type IndexFile = { sessions: IndexRow[]; actionTokens: IndexToken[] };
 const WORKTREE_DECISION_KINDS = new Set(["worktree-merge", "worktree-decide-later", "worktree-dismiss", "worktree-create-pr", "worktree-update-pr"]);
 const RESOLVED_LIFECYCLE = new Set(["merged", "released", "dismissed", "no_change"]);
 /** Replies of a click that acted. A consumed button must never produce one. */
-const ACTED = /Pending input request submitted|Snoozed 24h|✅ Discarded|Repo policy saved|^▶️/m;
+const ACTED = /Answer sent|Snoozed 24h|✅ Discarded|Repo policy saved|^▶️/m;
 
 describe("restart from every saved store snapshot", () => {
   it("keeps pending prompts, never re-runs a used button, and leaves no orphan worktree state", async () => {
@@ -173,15 +173,16 @@ describe("saves that fail", () => {
       }
       originalSaveJsonFile(path, payload);
     };
-    const view = buttonIn(suspended, "View output");
-    const click = await s.click(view);
+    // Resume consumes its button (View output is read-only and never consumed).
+    const resume = buttonIn(suspended, "Resume");
+    const click = await s.click(resume);
     assert.equal(failures, 0, "the save after the click failed once");
     assert.equal(click.replies.length, 1);
-    assert.doesNotMatch(click.replies[0]!, /stale/);
+    assert.doesNotMatch(click.replies[0]!, /expired|stale/);
     const disk = JSON.parse(readFileSync(sessionsIndexPath(), "utf-8")) as IndexFile;
-    assert.equal(typeof disk.actionTokens.find((token) => token.id === view.payload)?.consumedAt, "number", "the retried save persisted the consumption");
-    const again = await s.click(view);
-    assert.match(again.replies.join("\n"), /stale or has already been used/);
+    assert.equal(typeof disk.actionTokens.find((token) => token.id === resume.payload)?.consumedAt, "number", "the retried save persisted the consumption");
+    const again = await s.click(resume);
+    assert.match(again.replies.join("\n"), /expired or was already used/);
   });
 
   it("keeps changes in memory while every save fails and writes them when the Gateway stops", async () => {

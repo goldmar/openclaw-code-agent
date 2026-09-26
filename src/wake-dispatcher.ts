@@ -9,6 +9,7 @@ import {
   type DispatchSuccessValidationResult,
 } from "./wake-delivery-executor";
 import { WakeRouteResolver, type NotificationRoute } from "./wake-route-resolver";
+import { ROUTED_REPLY_RULE } from "./session-route";
 import {
   RuntimeSystemEventTransport,
   WakeTransport,
@@ -35,6 +36,15 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  /**
+   * How `wakeMessage` and `wakeMessageOnNotifySuccess` reach the orchestrator.
+   * "now" (default) runs an orchestrator turn (`chat.send`). "next-turn" only
+   * queues the text as a system event on the origin session, without a
+   * heartbeat: the host prepends it to that session's next turn (for example
+   * the user's reply). Use it for context the orchestrator needs later but
+   * must not act on now. A wake for a failed user notification always runs now.
+   */
+  wakeDelivery?: "now" | "next-turn";
   /** Whether a failure-report wake proves the preceding user notification was delivered. */
   failureWakeConfirmsNotificationDelivery?: boolean;
   completionSummary?: CompletionSummaryFact;
@@ -44,6 +54,10 @@ export interface SessionNotificationRequest {
   idempotencyKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
   deferConditionalWakeMs?: number;
+  /** Delay an immediate `wakeMessage` (conditional wakes use `deferConditionalWakeMs`). */
+  deferWakeMs?: number;
+  /** Checked when a wake is about to be sent: a reason skips it (`onWakeSkipped`). */
+  skipDeferredWake?: () => string | undefined;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<NotificationButton>>;
@@ -54,7 +68,11 @@ export interface SessionNotificationRequest {
 
 export interface SessionNotificationHooks {
   onNotifyStarted?: () => void;
+  /** Host durable queue accepted the send intent; its retries now own delivery. */
+  onNotifyAdmitted?: () => void;
   onNotifySucceeded?: () => void;
+  /** The send may still land; do not start a second delivery. */
+  onNotifyAmbiguous?: () => void;
   onNotifyFailed?: () => void;
   onWakeStarted?: () => void;
   onWakeSucceeded?: () => void;
@@ -63,13 +81,19 @@ export interface SessionNotificationHooks {
   onDuplicateSkipped?: (reason: string) => void;
 }
 
-export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
+/**
+ * A completion wake succeeded when `chat.send` answered at all. NO_REPLY is a
+ * valid final answer: the orchestrator sends its summary with the message tool
+ * to the origin route and then answers NO_REPLY (see `ROUTED_REPLY_RULE`).
+ */
+export function validateCompletionFollowupWakeSuccess(stdout: string, routedReply: boolean = true): DispatchSuccessValidationResult {
   const finalText = extractWakeFinalText(stdout).trim();
   if (!finalText) {
     return { outcome: "failure", reason: "completion follow-up wake produced no final response" };
   }
-  if (/^NO_REPLY$/i.test(finalText)) {
-    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" };
+  // Without a routed send the plain reply is the summary, so NO_REPLY means none was produced.
+  if (!routedReply && /^NO_REPLY$/i.test(finalText)) {
+    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" };
   }
   return { outcome: "success" };
 }
@@ -142,6 +166,8 @@ export class WakeDispatcher {
   private readonly beforeInteractiveSend?: () => Promise<void>;
   private readonly bindInteractiveButtons?: (tokenIds: string[], route: NotificationRoute) => void;
   private disposed = false;
+  private stopping = false;
+  private readonly deferredWakes = new Set<{ send: () => void; timer: ReturnType<typeof setTimeout> | undefined }>();
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.beforeInteractiveSend = options.beforeInteractiveSend;
@@ -159,7 +185,30 @@ export class WakeDispatcher {
     this.executor.clearRetryTimersForSession(sessionId);
   }
 
+  /**
+   * Run a held wake after `delayMs`. On dispose (a Gateway stop or plugin
+   * restart) held wakes are sent at once instead of being dropped: the timer
+   * would otherwise lose them, since no pending wake is persisted.
+   */
+  private deferWake(send: () => void, delayMs: number): void {
+    const entry = { send, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+    entry.timer = setTimeout(() => {
+      this.deferredWakes.delete(entry);
+      if (!this.disposed) send();
+    }, delayMs);
+    entry.timer.unref?.();
+    this.deferredWakes.add(entry);
+  }
+
   dispose(): void {
+    // Held wakes go out now, through the in-process system-event queue: a CLI
+    // `chat.send` against a stopping Gateway could fail with no retry left.
+    this.stopping = true;
+    for (const entry of this.deferredWakes) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.send();
+    }
+    this.deferredWakes.clear();
     this.disposed = true;
     this.executor.dispose();
   }
@@ -212,12 +261,13 @@ export class WakeDispatcher {
     const shouldContinue = shouldDispatch;
     if (shouldContinue?.() === false) return;
     const sessionKey = route?.sessionKey?.trim();
-    if (!sessionKey) {
+    if (!sessionKey || this.stopping) {
       this.sendSystemEvent(session, text, {
-        label: `${label}-system`,
+        label: `${label}-${sessionKey ? "on-stop" : "system"}`,
         phase,
         messageKind: "wake",
         wakeNow: true,
+        sessionKey,
         onSuccess,
         onFinalFailure,
         shouldContinue,
@@ -270,6 +320,8 @@ export class WakeDispatcher {
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
     wakeFollows: boolean = false,
+    onAdmitted?: () => void,
+    onAmbiguous?: () => void,
   ): void {
     if (shouldDispatch?.() === false) return;
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
@@ -330,7 +382,12 @@ export class WakeDispatcher {
       return;
     }
 
+    let durableIntentRecorded = false;
     const directFailureHandler = () => {
+      if (durableIntentRecorded) {
+        ambiguousHandler();
+        return;
+      }
       logButtonDiagnostic("wake_notify_direct_failed", {
         sessionId: session.id,
         sessionName: session.name,
@@ -390,9 +447,10 @@ export class WakeDispatcher {
       });
       log.warn(
         `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
-        `timed out with an unknown outcome; reporting delivery failure without a fallback resend.`,
+        `has an unknown delivery outcome; suppressing a fallback resend.`,
       );
-      onAllFailed?.();
+      if (onAmbiguous) onAmbiguous();
+      else onAllFailed?.();
     };
 
     const options = {
@@ -441,7 +499,12 @@ export class WakeDispatcher {
           // the tokens were being persisted: never show buttons that are stale.
           if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
-        await this.directNotifications.send(route, text, buttons);
+        await this.directNotifications.send(route, text, buttons, {
+          onDeliveryIntent: () => {
+            durableIntentRecorded = true;
+            onAdmitted?.();
+          },
+        });
       },
       options,
     );
@@ -521,6 +584,25 @@ export class WakeDispatcher {
     );
   }
 
+  /** Queue orchestrator context for its next turn (a system event without a heartbeat). */
+  private queueForNextTurn(
+    session: Session,
+    text: string,
+    label: string,
+    hooks: SessionNotificationHooks | undefined,
+    shouldContinue?: () => boolean,
+  ): void {
+    this.sendSystemEvent(session, text, {
+      label: `${label}-queued`,
+      phase: "wake",
+      messageKind: "wake",
+      wakeNow: false,
+      onSuccess: hooks?.onWakeSucceeded,
+      onFinalFailure: hooks?.onWakeFailed,
+      shouldContinue,
+    });
+  }
+
   private sendUserNotificationSequence(
     session: Session,
     messages: SessionNotificationMessage[],
@@ -530,6 +612,8 @@ export class WakeDispatcher {
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
     wakeFollows: boolean = false,
+    onAdmitted?: () => void,
+    onAmbiguous?: () => void,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -595,6 +679,8 @@ export class WakeDispatcher {
         requireDirectDelivery,
         shouldDispatch,
         wakeFollows,
+        onAdmitted,
+        onAmbiguous,
       );
     };
 
@@ -618,18 +704,27 @@ export class WakeDispatcher {
     })).filter((message) => message.text.length > 0);
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
-    const wakeSuccessValidator = request.completionWakeSummaryRequired === true
-      ? validateCompletionFollowupWakeSuccess
+    const wakeSuccessValidatorFor = (wakeText: string) => request.completionWakeSummaryRequired === true
+      ? (stdout: string) => validateCompletionFollowupWakeSuccess(stdout, wakeText.includes(ROUTED_REPLY_RULE))
       : undefined;
 
     if (hasConditionalWake) {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
       const wakeOnFailed = request.wakeMessageOnNotifyFailed?.trim();
 
-      const sendDeferredWake = (wakeText: string): void => {
+      const sendDeferredWake = (wakeText: string, queueOnly = false): void => {
         if (!wakeText) return;
         if (shouldDispatch?.() === false) return;
+        const skipReason = request.skipDeferredWake?.();
+        if (skipReason) {
+          hooks?.onWakeSkipped?.(skipReason);
+          return;
+        }
         hooks?.onWakeStarted?.();
+        if (queueOnly) {
+          this.queueForNextTurn(session, wakeText, `${request.label}-wake`, hooks, shouldDispatch);
+          return;
+        }
         this.sendWake(
           session,
           wakeText,
@@ -638,25 +733,25 @@ export class WakeDispatcher {
           hooks?.onWakeFailed,
           hooks?.onWakeSucceeded,
           shouldDispatch,
-          wakeSuccessValidator,
+          wakeSuccessValidatorFor(wakeText),
           hooks?.onWakeSkipped,
           request.idempotencyKey,
         );
       };
-      const dispatchWake = (wakeText: string): void => {
+      const dispatchWake = (wakeText: string, queueOnly = false): void => {
         if (!wakeText) return;
         if (request.deferConditionalWakeUntilNextTick === true || request.deferConditionalWakeMs !== undefined) {
           const delayMs = Math.max(0, Math.floor(request.deferConditionalWakeMs ?? 0));
-          setTimeout(() => sendDeferredWake(wakeText), delayMs).unref?.();
+          this.deferWake(() => sendDeferredWake(wakeText, queueOnly), delayMs);
           return;
         }
-        sendDeferredWake(wakeText);
+        sendDeferredWake(wakeText, queueOnly);
       };
 
       const onSuccess = () => {
         if (shouldDispatch?.() === false) return;
         hooks?.onNotifySucceeded?.();
-        if (wakeOnSuccess) dispatchWake(wakeOnSuccess);
+        if (wakeOnSuccess) dispatchWake(wakeOnSuccess, request.wakeDelivery === "next-turn");
       };
       const onFailed = wakeOnFailed
         ? () => {
@@ -683,7 +778,10 @@ export class WakeDispatcher {
           request.requireDirectUserNotification === true,
           shouldDispatch,
           // A system-event fallback counts as notify success, which dispatches the success wake.
-          Boolean(wakeOnSuccess),
+          // A queued (next-turn) success wake does not run a turn, so the fallback must.
+          Boolean(wakeOnSuccess) && request.wakeDelivery !== "next-turn",
+          hooks?.onNotifyAdmitted,
+          hooks?.onNotifyAmbiguous,
         );
       } else {
         onFailed();
@@ -710,12 +808,19 @@ export class WakeDispatcher {
         request.requireDirectUserNotification === true,
         shouldDispatch,
         Boolean(wakeMessage),
+        hooks?.onNotifyAdmitted,
+        hooks?.onNotifyAmbiguous,
       );
     }
 
     if (!wakeMessage) return;
     if (shouldDispatch?.() === false) return;
     hooks?.onWakeStarted?.();
+
+    if (request.wakeDelivery === "next-turn") {
+      this.queueForNextTurn(session, wakeMessage, `${request.label}-wake`, hooks, shouldDispatch);
+      return;
+    }
 
     if (notifyUser === "on-wake-fallback" && userMessages.length > 0 && !this.routes.resolve(session)?.sessionKey) {
       if (shouldDispatch?.() === false) return;
@@ -736,20 +841,35 @@ export class WakeDispatcher {
         false,
         shouldDispatch,
         true,
+        hooks?.onNotifyAdmitted,
+        hooks?.onNotifyAmbiguous,
       );
     }
 
-    this.sendWake(
-      session,
-      wakeMessage,
-      `${request.label}-wake`,
-      "wake",
-      hooks?.onWakeFailed,
-      hooks?.onWakeSucceeded,
-      shouldDispatch,
-      wakeSuccessValidator,
-      hooks?.onWakeSkipped,
-      request.idempotencyKey,
-    );
+    const sendImmediateWake = (): void => {
+      if (shouldDispatch?.() === false) return;
+      const skipReason = request.skipDeferredWake?.();
+      if (skipReason) {
+        hooks?.onWakeSkipped?.(skipReason);
+        return;
+      }
+      this.sendWake(
+        session,
+        wakeMessage,
+        `${request.label}-wake`,
+        "wake",
+        hooks?.onWakeFailed,
+        hooks?.onWakeSucceeded,
+        shouldDispatch,
+        wakeSuccessValidatorFor(wakeMessage),
+        hooks?.onWakeSkipped,
+        request.idempotencyKey,
+      );
+    };
+    if (request.deferWakeMs !== undefined && request.deferWakeMs > 0) {
+      this.deferWake(sendImmediateWake, request.deferWakeMs);
+      return;
+    }
+    sendImmediateWake();
   }
 }

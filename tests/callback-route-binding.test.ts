@@ -30,9 +30,10 @@ describe("callback route binding (N2)", () => {
     assert.equal(callbackMatchesTokenRoute({ channel: "discord", conversationId: "user:555555555555555555" }, { provider: "discord", target: "user:444444444444444444" }), false);
   });
 
-  it("lets unbound tokens (older builds) and callbacks without conversation details through", () => {
+  it("lets unbound tokens (older builds) through, but refuses a bound token when the callback's chat is unknown", () => {
     assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: OTHER_CHAT }, undefined), true);
-    assert.equal(callbackMatchesTokenRoute({ channel: "discord" }, { provider: "discord", target: "channel:111111111111111111" }), true);
+    assert.equal(callbackMatchesTokenRoute({ channel: "discord" }, { provider: "discord", target: "channel:111111111111111111" }), false);
+    assert.equal(callbackMatchesTokenRoute({ channel: "telegram" }, { provider: "telegram", target: CHAT }), false);
   });
 
   it("the token store binds unbound tokens once and keeps a minted route", () => {

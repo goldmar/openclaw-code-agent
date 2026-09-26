@@ -12,8 +12,7 @@ import { makeAgentKillTool } from "./src/tools/agent-kill";
 import { makeAgentOutputTool } from "./src/tools/agent-output";
 import { makeAgentRespondTool } from "./src/tools/agent-respond";
 import { makeAgentSessionActionTool } from "./src/tools/agent-session-action";
-import { makeAgentRequestPlanApprovalTool } from "./src/tools/agent-request-plan-approval";
-import { makeAgentRequestWorktreeDecisionTool } from "./src/tools/agent-request-worktree-decision";
+import { makeAgentEscalateTool } from "./src/tools/agent-escalate";
 import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
 import { makeAgentStatsTool } from "./src/tools/agent-stats";
 import { makeAgentRepoPolicyTool } from "./src/tools/agent-repo-policy";
@@ -21,10 +20,7 @@ import { makeAgentMergeTool } from "./src/tools/agent-merge";
 import { makeAgentPrTool } from "./src/tools/agent-pr";
 import { makeAgentWorktreeCleanupTool } from "./src/tools/agent-worktree-cleanup";
 import { makeAgentWorktreeStatusTool } from "./src/tools/agent-worktree-status";
-import { makeGoalLaunchTool } from "./src/tools/goal-launch";
-import { makeGoalStatusTool } from "./src/tools/goal-status";
-import { makeGoalStopTool } from "./src/tools/goal-stop";
-import { makeGoalEditTool } from "./src/tools/goal-edit";
+import { makeAgentGoalTool } from "./src/tools/agent-goal";
 import { createCallbackHandler } from "./src/callback-handler";
 import { registerAgentCommand } from "./src/commands/agent";
 import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
@@ -34,9 +30,7 @@ import { registerAgentStatsCommand } from "./src/commands/agent-stats";
 import { registerAgentPolicyCommand } from "./src/commands/agent-policy";
 import { registerAgentOutputCommand } from "./src/commands/agent-output";
 import { registerGoalCommand } from "./src/commands/goal";
-import { registerGoalStatusCommand } from "./src/commands/goal-status";
-import { registerGoalStopCommand } from "./src/commands/goal-stop";
-import { registerGoalEditCommand } from "./src/commands/goal-edit";
+import { registerAgentStatusCommand } from "./src/commands/agent-status";
 import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setAutoUpdateService, setGoalController, setSessionManager } from "./src/singletons";
@@ -389,19 +383,18 @@ export function register(api: OpenClawPluginApi): void {
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSessionActionTool(ctx), { optional: false, name: "agent_session_action" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestWorktreeDecisionTool(ctx), { optional: false, name: "agent_request_worktree_decision" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentEscalateTool(ctx), { optional: false, name: "agent_escalate" });
+  // Opt-in: external workflows that post "Start plan" offers enable it with `planOfferTool: true`.
+  if ((api.pluginConfig as { planOfferTool?: unknown } | undefined)?.planOfferTool === true) {
+    registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
+  }
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRepoPolicyTool(ctx), { optional: false, name: "agent_repo_policy" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false, name: "agent_pr" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false, name: "agent_worktree_cleanup" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false, name: "agent_worktree_status" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false, name: "agent_goal_launch" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false, name: "agent_goal_status" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false, name: "agent_goal_stop" });
-  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalEditTool(ctx), { optional: false, name: "agent_goal_edit" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentGoalTool(ctx), { optional: false, name: "agent_goal" });
 
   // Interactive handlers (shared action-token callbacks across chat transports)
   registerCodeAgentInteractiveHandler("telegram");
@@ -415,10 +408,8 @@ export function register(api: OpenClawPluginApi): void {
   registerAgentStatsCommand(commandApi);
   registerAgentPolicyCommand(commandApi);
   registerAgentOutputCommand(commandApi);
+  registerAgentStatusCommand(commandApi);
   registerGoalCommand(commandApi);
-  registerGoalStatusCommand(commandApi);
-  registerGoalStopCommand(commandApi);
-  registerGoalEditCommand(commandApi);
 
   // Service
   api.registerService({

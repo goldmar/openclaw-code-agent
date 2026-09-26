@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   canonicalizeSessionRoute,
   formatOriginRouteWakeBlock,
+  ROUTED_REPLY_RULE,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
   sessionRouteInternals,
@@ -158,12 +159,12 @@ describe("session-route", () => {
       },
     });
 
-    assert.match(block, /Session origin route \(authoritative for human follow-ups\):/);
+    assert.match(block, /^originRoute: \{/);
     assert.match(block, /"provider":"telegram"/);
     assert.match(block, /"target":"-1001234567890"/);
     assert.match(block, /"threadId":"13832"/);
-    assert.match(block, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
-    assert.match(block, /do not use a plain final assistant reply/i);
+    assert.doesNotMatch(block, /sessionKey/);
+    assert.ok(block.endsWith(ROUTED_REPLY_RULE), block);
   });
 
   it("does not format a wake originRoute block for system routes", () => {
@@ -308,5 +309,21 @@ describe("session-route", () => {
       threadId: "77",
       sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
+  });
+});
+
+describe("wake reply rule", () => {
+  it("tells the orchestrator to reach the user with the message tool, for any route", () => {
+    for (const sessionKey of ["agent:main:direct:5551234", "agent:main:telegram:direct:5551234", "agent:main:main"]) {
+      const block = formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey } });
+      assert.equal(block, `originRoute: {"provider":"telegram","target":"5551234"}\n${ROUTED_REPLY_RULE}`);
+    }
+    assert.match(ROUTED_REPLY_RULE, /message tool to originRoute/);
+    assert.match(ROUTED_REPLY_RULE, /accountId and threadId only when originRoute has them/);
+    const scoped = formatOriginRouteWakeBlock({
+      route: { provider: "telegram", accountId: "second-bot", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" },
+    });
+    assert.match(scoped, /"accountId":"second-bot"/);
+    assert.match(scoped, /accountId and threadId only when originRoute has them/);
   });
 });

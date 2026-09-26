@@ -207,7 +207,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.callbacksAcknowledged, 1);
-    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
   });
 
   it("finishes rejecting a stale callback when its visible response cannot be delivered", async (t) => {
@@ -252,7 +252,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(installs, 0);
-    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
   });
 
   it("runs the plugin update from a Telegram callback payload and emits action diagnostics", async (t) => {
@@ -552,7 +552,8 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.equal(state.buttonsCleared, 1);
+    // A legacy View PR callback is read-only: the other buttons stay (N47).
+    assert.equal(state.buttonsCleared, 0);
     assert.equal(state.replies[0], "PR: https://github.com/example/repo/pull/123");
   });
 
@@ -1197,7 +1198,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(sendCount, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal(state.buttonMarkupEdits, 1);
-    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
   });
 
   it("serializes concurrent plan approval clicks so approval is sent once", async () => {
@@ -1507,7 +1508,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(killCount, 0);
     assert.equal(session.pendingPlanApproval, false);
     assert.equal(session.approvalState, "changes_requested");
-    assert.equal(revise.replies[0], "✏️ Type your revision feedback for [test-session] and I'll forward it to the agent.");
+    assert.equal(revise.replies[0], "✏️ [test-session] Reply with the changes you want; they go to the agent.");
     assert.equal(reject.replies[0], "⚠️ This plan decision is stale because a newer plan review state already exists.");
   });
 
@@ -1680,12 +1681,11 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
-    assert.match(state.replies[0], /Type your revision feedback/);
+    assert.match(state.replies[0], /Reply with the changes you want/);
     assert.deepEqual(patches[0], {
       approvalState: "changes_requested",
       lifecycle: "awaiting_user_input",
       pendingPlanApproval: false,
-      planApprovalContext: undefined,
       planDecisionVersion: 5,
       actionablePlanDecisionVersion: undefined,
       canonicalPlanPromptVersion: undefined,
@@ -1698,6 +1698,49 @@ describe("createCallbackHandler()", () => {
       approvalPromptDeliveredAt: undefined,
       approvalPromptFailedAt: undefined,
     });
+  });
+
+  it("tells the orchestrator, for its next turn, that the user's next message is Revise feedback (N35)", async () => {
+    const queued: Array<{ ref: string; label: string; text: string; key?: string }> = [];
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-request-changes", planDecisionVersion: 4 }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-request-changes", planDecisionVersion: 4 }),
+      resolve: () => createStubSession({ id: "test-id", name: "revise-me", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 }),
+      getPersistedSession: (): undefined => undefined,
+      clearPlanDecisionTokens: () => {},
+      updatePersistedSession: () => true,
+      queueOrchestratorContext: (ref: string, label: string, text: string, key?: string) => {
+        queued.push({ ref, label, text, key });
+        return true;
+      },
+    } as any);
+
+    const state = createCtx("token-revise");
+    await createCallbackHandler().handler(state.ctx as any);
+
+    assert.equal(queued.length, 1, "4.x never told the orchestrator about a Revise press");
+    assert.equal(queued[0]!.ref, "test-id");
+    assert.equal(queued[0]!.label, "plan-revise-requested");
+    assert.match(queued[0]!.text, /^\[revise-me\] The user asked to revise plan v4\./);
+    assert.match(queued[0]!.text, /agent_respond\(session='test-id', message='<their words>', userInitiated=true\)/);
+  });
+
+  it("queues a note that the prompt's earlier next-turn notes no longer apply after a decision button", async () => {
+    const queued: Array<{ label: string; text: string }> = [];
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject", planDecisionVersion: 4 }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject", planDecisionVersion: 4 }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ id: "test-id", name: "ux-plan", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 }),
+      updatePersistedSession: () => true,
+      clearPlanDecisionTokens: () => {},
+      queueOrchestratorContext: (_ref: string, label: string, text: string) => { queued.push({ label, text }); return true; },
+    } as any);
+
+    await createCallbackHandler().handler(createCtx("token-reject").ctx as any);
+
+    assert.deepEqual(queued.map((entry) => entry.label), ["decision-button-pressed"]);
+    assert.equal(queued[0]!.text, "[ux-plan] The user pressed Reject for the plan; earlier notes about that pending decision no longer apply.");
   });
 
   it("rejects timed-out pending plans without leaving them pending in persisted state", async () => {
@@ -1951,8 +1994,30 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal(consumes, 0);
-    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
     assert.deepEqual(state.events, ["acknowledge", "clearButtons", "reply"]);
+  });
+
+  it("View output neither consumes its button nor clears the message's other buttons (N47)", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({ id: "tok-output", sessionId: "sess-view", kind: "view-output" }),
+      consumeActionToken: () => { consumes++; return { sessionId: "sess-view", kind: "view-output" }; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+      isSessionOwnedElsewhere: () => false,
+    } as any);
+
+    const handler = createCallbackHandler();
+    for (let press = 0; press < 2; press++) {
+      const state = createCtx("tok-output");
+      const result = await handler.handler(state.ctx as any);
+      assert.deepEqual(result, { handled: true });
+      assert.equal(state.buttonsCleared, 0, "4.x cleared every other button of the message");
+      assert.equal(state.replies.length, 1);
+      assert.doesNotMatch(state.replies[0]!, /expired|stale/);
+    }
+    assert.equal(consumes, 0, "the button stays usable");
   });
 
   it("does not echo raw malformed Telegram callback text", async () => {
@@ -1982,7 +2047,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(lookups, 0);
     assert.equal(consumes, 0);
-    assert.deepEqual(state.replies, ["⚠️ Unrecognized callback payload."]);
+    assert.deepEqual(state.replies, ["⚠️ This button is not recognized. Use the buttons on the latest message."]);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:/);
   });
 
@@ -2009,7 +2074,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(resolved, [{ sessionId: "sess-42", optionIndex: 1 }]);
     assert.equal(consumed, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ Pending input request submitted.");
+    assert.equal(state.replies[0], "✅ [sess-42] Answer sent.");
   });
 
   it("does not consume or clear active question buttons when answer submission fails", async () => {
@@ -2090,7 +2155,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumedRequestId, "backend-42-request-7");
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ Answer forwarded to the resumed session.");
+    assert.equal(state.replies[0], "✅ [review-morning-audio-brief] Answer sent: OpenAI model (Recommended). The session resumed.");
   });
 
   it("serializes sibling answer buttons for the same persisted question", async () => {
@@ -2199,7 +2264,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitCalls, 1);
     assert.equal(consumeCalls, 1);
     assert.equal(firstState.buttonsCleared, 1);
-    assert.equal(firstState.replies[0], "✅ Pending input request submitted.");
+    assert.equal(firstState.replies[0], "✅ [sess-42] Answer sent.");
   });
 
   it("reports duplicate question-answer callbacks as stale after a successful answer", async () => {
@@ -2232,8 +2297,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(firstResult, { handled: true });
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(submitted, true);
-    assert.equal(firstState.replies[0], "✅ Pending input request submitted.");
-    assert.equal(secondState.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
+    assert.equal(firstState.replies[0], "✅ [sess-42] Answer sent.");
+    assert.equal(secondState.replies[0], "⚠️ This question was already answered or replaced.");
   });
 
   it("reports success when question-answer submission succeeds but token consumption misses", async () => {
@@ -2259,7 +2324,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitted, true);
     assert.equal(consumes, 1);
     assert.equal(state.componentsCleared, 1);
-    assert.equal(state.replies[0], "✅ Pending input request submitted.");
+    assert.equal(state.replies[0], "✅ [sess-42] Answer sent.");
   });
 
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
@@ -2350,11 +2415,13 @@ describe("createCallbackHandler()", () => {
     ];
 
     for (const testCase of cases) {
+      const queued: string[] = [];
       setSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
+        queueOrchestratorContext: (_ref: string, label: string) => { queued.push(label); return true; },
       } as any);
 
       const handler = createCallbackHandler("telegram", testCase.dependencies);
@@ -2367,6 +2434,7 @@ describe("createCallbackHandler()", () => {
       assert.equal(state.buttonsCleared, 0, testCase.kind);
       assert.deepEqual(state.replies, [testCase.text], testCase.kind);
       assert.deepEqual(state.events, ["acknowledge", "reply"], testCase.kind);
+      assert.deepEqual(queued, [], `failed ${testCase.kind} must leave its decision pending`);
     }
   });
 
@@ -2397,12 +2465,14 @@ describe("createCallbackHandler()", () => {
   });
 
   it("keeps Telegram worktree decision buttons when the action fails", async () => {
+    const queued: string[] = [];
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: () => "Error: session no longer has a pending worktree decision.",
+      queueOrchestratorContext: (_ref: string, label: string) => { queued.push(label); return true; },
     } as any);
 
     const handler = createCallbackHandler();
@@ -2414,6 +2484,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonsCleared, 0);
     assert.equal(state.replies[0], "Error: session no longer has a pending worktree decision.");
     assert.deepEqual(state.events, ["acknowledge", "reply"]);
+    assert.deepEqual(queued, []);
   });
 
   it("uses the same text-result predicate for snooze prompt cleanup and replies", async () => {
@@ -2725,7 +2796,7 @@ describe("createCallbackHandler()", () => {
 
     assert.equal(handler.channel, "discord");
     assert.deepEqual(result, { handled: true });
-    assert.equal(state.componentsCleared, 1);
+    assert.equal(state.componentsCleared, 0);
     assert.equal(state.replies[0], "PR: https://github.com/example/repo/pull/999");
   });
 
@@ -3051,7 +3122,7 @@ describe("createCallbackHandler()", () => {
     ]);
     assert.equal(secondState.buttonMarkupEdits, 0);
     assert.equal(secondState.buttonsCleared, 1);
-    assert.equal(secondState.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(secondState.replies[0], "⚠️ This button has expired or was already used.");
   });
 
   it("rejects stale repo policy callback tokens when PR automation is unavailable", async () => {
@@ -3228,10 +3299,12 @@ describe("createCallbackHandler()", () => {
     let buttonsCleared = 0;
     const ctx = {
       channel: "telegram" as const,
+      conversationId: `${TELEGRAM_FORUM_TARGET}:topic:${TELEGRAM_FORUM_THREAD_ID}`,
       auth: { isAuthorizedSender: true },
       callback: {
         data: "code-agent:plan-token",
         payload: "plan-token",
+        chatId: TELEGRAM_FORUM_TARGET,
         messageText: "OpenClaw release monitor: v2026.6.1",
       },
       respond: {
@@ -3386,7 +3459,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumes, 1);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.equal(state.replies[0], "⚠️ This button has expired or was already used.");
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:plan-token/);
   });
 

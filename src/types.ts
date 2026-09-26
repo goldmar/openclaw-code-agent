@@ -487,6 +487,8 @@ export interface PluginConfig {
    * orchestrator with only these commands needs no user confirmation.
    */
   trustedVerifierCommands?: string[];
+  /** Register the opt-in `agent_send_plan_offer` tool (default false). */
+  planOfferTool?: boolean;
 }
 
 export type WorktreeGitHooksMode = "run" | "skip";
@@ -515,6 +517,8 @@ export interface RawPluginConfig {
   worktreeGitHooks?: WorktreeGitHooksMode;
   /** Operator-approved goal verifier commands (exact strings). */
   trustedVerifierCommands?: string[];
+  /** Register the opt-in `agent_send_plan_offer` tool; default false. */
+  planOfferTool?: boolean;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */
@@ -609,6 +613,11 @@ export interface PersistedSessionInfo {
   pendingWorktreeDecisionSince?: string;
   /** ISO timestamp of last stale-branch reminder sent. */
   lastWorktreeReminderAt?: string;
+  /**
+   * Stale-decision reminders sent for the current pending decision. Meaningful
+   * only while `lastWorktreeReminderAt` is set; a row without it has sent none.
+   */
+  worktreeReminderCount?: number;
   /** Base branch used for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
   /** Branch checked out in the parent repository when this worktree was created. */

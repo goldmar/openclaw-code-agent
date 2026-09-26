@@ -256,7 +256,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(skill, /auto-approve/i);
     assert.match(approveSection, /only after it verifies the plan/);
     assert.match(approveSection, /agent_output\(session, full=true\)/);
-    assert.match(approveSection, /agent_request_plan_approval/);
+    assert.match(approveSection, /agent_escalate/);
   });
 
   it("keeps orchestration skill install metadata in plain YAML frontmatter", () => {
@@ -404,10 +404,8 @@ describe("plugin entry source", () => {
         "agent_sessions",
         "agent_stats",
         "agent_policy",
+        "agent_status",
         "agent_goal",
-        "agent_goal_status",
-        "agent_goal_stop",
-        "agent_goal_edit",
       ],
     });
     assert.deepEqual(pluginManifest.setup, {
@@ -465,8 +463,7 @@ describe("plugin entry source", () => {
       "agent_output",
       "agent_respond",
       "agent_session_action",
-      "agent_request_plan_approval",
-      "agent_request_worktree_decision",
+      "agent_escalate",
       "agent_send_plan_offer",
       "agent_stats",
       "agent_repo_policy",
@@ -474,10 +471,7 @@ describe("plugin entry source", () => {
       "agent_pr",
       "agent_worktree_cleanup",
       "agent_worktree_status",
-      "agent_goal_launch",
-      "agent_goal_status",
-      "agent_goal_stop",
-      "agent_goal_edit",
+      "agent_goal",
     ];
     const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
       contracts?: {
@@ -668,22 +662,31 @@ describe("plugin entry source", () => {
     });
   });
 
-  it("registers goal tools, commands, and controller startup", () => {
+  it("registers the goal tool, command, and controller startup", () => {
     const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
 
-    assert.match(indexSource, /makeGoalLaunchTool/);
-    assert.match(indexSource, /makeGoalStatusTool/);
-    assert.match(indexSource, /makeGoalStopTool/);
-    assert.match(indexSource, /makeGoalEditTool/);
+    assert.match(indexSource, /makeAgentGoalTool/);
     assert.match(indexSource, /registerGoalCommand\(commandApi\)/);
-    assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
-    assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
-    assert.match(indexSource, /registerGoalEditCommand\(commandApi\)/);
+    assert.match(indexSource, /registerAgentStatusCommand\(commandApi\)/);
     assert.match(indexSource, /const createdGc = new GoalController\(createdSm\)/);
     assert.match(indexSource, /createdGc\.start\(\)/);
     // Every registration attaches to the one process-wide runtime.
     assert.match(indexSource, /acquireSharedRuntime<CodeAgentServices>\(/);
     assert.match(indexSource, /releaseSharedRuntime\(ownerId\)/);
+  });
+
+  it("registers agent_send_plan_offer only when planOfferTool is enabled", () => {
+    const toolNames = (host: FakeHost): string[] => host.tools.map((entry) => entry.options?.name ?? "");
+    const plain = createPluginHost();
+    register(plain.api);
+    assert.equal(toolNames(plain).includes("agent_send_plan_offer"), false);
+    assert.equal(toolNames(plain).length, 14);
+    resetSharedRuntimeSlotForTests();
+
+    const optedIn = createPluginHost({ planOfferTool: true });
+    register(optedIn.api);
+    assert.equal(toolNames(optedIn).includes("agent_send_plan_offer"), true);
+    assert.equal(toolNames(optedIn).length, 15);
   });
 
   it("keeps tool construction side-effect free and starts before execution", async () => {

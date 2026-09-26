@@ -489,8 +489,7 @@ describe("SessionNotificationService", () => {
       request.userMessage,
       "ℹ️ [pr-updated-clean] PR updated; no local worktree changes remained to merge — worktree cleaned up | 1m1s",
     );
-    assert.match(String(request.wakeMessage), /PR updated; no local worktree changes remained to merge/);
-    assert.match(String(request.wakeMessage), /Coding agent session updated a PR/);
+    assert.match(String(request.wakeMessage), /Updated a PR; no local branch changes remained to merge\./);
     assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
   });
 
@@ -2013,9 +2012,9 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.deferConditionalWakeMs, 2000);
     assert.equal(wakeAttempts, 1);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /plugin's terse status line/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do this even when agent_output already contains a good final summary/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do not include raw PR URLs/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /The user saw: /);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Tell the user in one or two sentences what changed/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /refer to PRs by number, not URL/);
     assert.doesNotMatch(
       requests[0]?.wakeMessageOnNotifySuccess as string,
       /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/174/,
@@ -3140,7 +3139,7 @@ describe("SessionNotificationService", () => {
     assert.equal(capturedRequest.completionWakeSummaryRequired, true);
     assert.equal(capturedRequest.deferConditionalWakeUntilNextTick, true);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(session='session-7', full=true\)/);
-    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947","sessionKey":"agent:x:telegram:channel:-100123:topic:32947"\}/);
+    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /Pushed main\./);
     assert.deepEqual(
       patches.map(({ ref, patch }) => ({

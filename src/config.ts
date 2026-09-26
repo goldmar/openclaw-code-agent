@@ -98,6 +98,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     autoUpdate: config.autoUpdate ?? true,
     worktreeGitHooks: config.worktreeGitHooks === "skip" ? "skip" : "run",
     trustedVerifierCommands: config.trustedVerifierCommands,
+    planOfferTool: config.planOfferTool === true,
   };
 }
 

@@ -25,13 +25,32 @@ describe("agent command", () => {
     setSessionManager(null);
   });
 
-  it("uses the shared launch resolver for routing and policy defaults", async () => {
-    let spawnConfig: Record<string, unknown> | undefined;
+  it("reports a session whose harness failed during startup instead of saying Launched", async () => {
     setSessionManager({
       list: (): never[] => [],
       listPersistedSessions: (): never[] => [],
       launchSession(config: Record<string, unknown>) {
+        return { id: "sess-failed", name: config.name, model: config.model, status: "failed", error: "model_not_found" };
+      },
+    } as any);
+    const result = await captureAgentCommand()({
+      args: "--name broken --model sonnet --harness claude-code Fix it",
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
+      deliveryContext: { channel: "telegram", to: "-1001234567890", accountId: "bot1", threadId: 13832 },
+    });
+    assert.equal(result.text, "❌ [broken] Did not start: model_not_found\nFix the problem and run /agent again.");
+  });
+
+  it("uses the shared launch resolver for routing and policy defaults", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    let launchOptions: { notifyLaunch?: boolean } | undefined;
+    setSessionManager({
+      list: (): never[] => [],
+      listPersistedSessions: (): never[] => [],
+      launchSession(config: Record<string, unknown>, options?: { notifyLaunch?: boolean }) {
         spawnConfig = config;
+        launchOptions = options;
         return {
           id: "sess-agent-command",
           name: config.name,
@@ -40,14 +59,11 @@ describe("agent command", () => {
           worktreeStrategy: "delegate",
         };
       },
-      formatLaunchResult(config: Record<string, unknown>, session: Record<string, unknown>) {
-        return `launched ${session.name} with ${config.permissionMode}/${config.planApproval}`;
-      },
     } as any);
 
     const handler = captureAgentCommand();
     const result = await handler({
-      args: '--name "agent command" Fix the auth bug',
+      args: '--name "agent command" --model sonnet --harness claude-code Fix the auth bug',
       workspaceDir: "/tmp",
       sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       deliveryContext: {
@@ -58,8 +74,13 @@ describe("agent command", () => {
       },
     });
 
-    assert.equal(result.text, "launched agent command with plan/delegate");
+    // One message (N45): the reply is the launch line, with no separate 🚀 notice.
+    assert.equal(result.text, "🚀 [agent command] Launched | /tmp | sonnet\nFollow it with /agent_output agent command or /agent_status.");
     assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.prompt, "Fix the auth bug");
+    assert.equal(spawnConfig?.model, "sonnet");
+    assert.equal(spawnConfig?.harness, "claude-code");
+    assert.equal(launchOptions?.notifyLaunch, false);
     assert.equal(spawnConfig?.permissionMode, "plan");
     assert.equal(spawnConfig?.planApproval, "delegate");
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1001234567890");
