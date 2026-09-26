@@ -20,7 +20,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, withOutcomeSummary } from "./worktree-tool-context";
+import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -357,7 +357,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           } else if (mergeResult.stashed) {
             successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
           }
-          successText = appendMergeWarnings(successText, mergeResult);
+          successText = appendMergeWarnings(successText, mergeResult) + summaryShownNote(params.summary);
           toolResult = { content: [{ type: "text", text: successText }] };
         } else if (mergeResult.rebaseConflict) {
           // Rebase conflicts require manual resolution — surface instructions to the user

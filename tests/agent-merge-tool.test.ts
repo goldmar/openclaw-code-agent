@@ -453,6 +453,7 @@ describe("agent_merge push behavior", () => {
       });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.match((result.content[0] as { text: string }).text, /The user saw this outcome with your summary; do not repeat it\.$/);
       assert.equal(capturedRequests.length, 1);
       const request = capturedRequests[0].request;
       assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+ \| \$0\.00\nAdds the sub\(\) helper with a unit test\.$/);

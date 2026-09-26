@@ -10,7 +10,7 @@ import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefau
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, withOutcomeSummary } from "./worktree-tool-context";
+import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-pr");
@@ -686,6 +686,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                   ``,
                   `📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`,
                   formatMetadataRefreshLine(metadataRefresh),
+                  summaryShownNote(params.summary).trim(),
                 ].filter(Boolean).join("\n"),
               }],
               meta: { success: true, state: "pr_updated" },
@@ -842,9 +843,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           );
 
           // If we had to fall back from draft, append a visible note
-          const finalText = prResult.warnings && prResult.warnings.length > 0
+          const finalText = (prResult.warnings && prResult.warnings.length > 0
             ? `${outcomeLine}\n\n\u26a0\ufe0f  ${prResult.warnings.join("; ")}`
-            : outcomeLine;
+            : outcomeLine) + summaryShownNote(params.summary);
 
           return { content: [{ type: "text", text: finalText }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
         } else {

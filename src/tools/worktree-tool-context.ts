@@ -354,6 +354,11 @@ export function withOutcomeSummary(outcomeLine: string, summary?: string): strin
   return `${outcomeLine}\n${clipped}`;
 }
 
+/** Tool-result note for a caller that passed `summary`, so it does not restate the outcome. */
+export function summaryShownNote(summary?: string): string {
+  return summary?.trim() ? "\nThe user saw this outcome with your summary; do not repeat it." : "";
+}
+
 /**
  * A caller that passed `summary` tells the user what changed in the outcome
  * line itself, so no follow-up summary wake is sent once that line is
