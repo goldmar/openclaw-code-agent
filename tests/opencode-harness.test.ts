@@ -1315,23 +1315,6 @@ setInterval(() => {}, 1000);
     assert.equal(prompts[1]!.body.variant, undefined, "later turns drop the unsupported variant");
   });
 
-  it("stops a subagent whose permission overlay cannot be applied (N24)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    mock.failRoute = (method, path) => (method === "PATCH" && path === "/session/ses_child"
-      ? new Response(JSON.stringify({ error: "nope" }), { status: 500 })
-      : undefined);
-    const { stream, collector } = launch(harnessFor(mock), { permissionMode: "default" });
-    stream.push("delegate");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "session.created", properties: { info: { id: "ses_child", parentID: "ses_1" } } });
-    await waitFor(() => mock.requestsTo("POST", /^\/session\/ses_child\/abort$/).length === 1, "subagent abort");
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
-  });
-
   it("shows one request at a time and queues concurrent ones in order (N20)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;
@@ -1379,15 +1362,13 @@ setInterval(() => {}, 1000);
     await inPlace.collector.done;
   });
 
-  it("surfaces a subagent's permission prompt, applies the overlay to the subagent, and ignores its idle (N24)", async () => {
+  it("surfaces a subagent's permission prompt and ignores its idle (N24)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;
     const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "default" });
     stream.push("delegate");
     await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
     mock.emit({ type: "session.created", properties: { info: { id: "ses_child", parentID: "ses_1" } } });
-    await waitFor(() => mock.requestsTo("PATCH", /^\/session\/ses_child$/).length === 1, "overlay on the subagent");
-    assert.deepEqual(mock.requestsTo("PATCH", /^\/session\/ses_child$/)[0]!.body, { permission: permissionRulesForMode("default") });
     // A grandchild is attributed to the same root session.
     mock.emit({ type: "session.created", properties: { info: { id: "ses_grandchild", parentID: "ses_child" } } });
     mock.emit({ type: "permission.asked", properties: { id: "per_sub", sessionID: "ses_grandchild", permission: "bash", patterns: ["echo hi > sub.txt"] } });

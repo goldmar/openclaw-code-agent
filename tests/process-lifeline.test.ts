@@ -35,7 +35,8 @@ function writeFakeServer(dir: string): string {
   writeFileSync(file, [
     "const { spawn } = require('node:child_process');",
     "const { writeFileSync } = require('node:fs');",
-    "const tool = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    // Like OpenCode's shell tool, the tool leads a process group of its own.
+    "const tool = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });",
     `writeFileSync(${JSON.stringify(join(dir, "pids.json"))}, JSON.stringify({ server: process.pid, tool: tool.pid }));`,
     "console.log('ready');",
     "setInterval(() => {}, 1000);",
@@ -88,7 +89,7 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
     try {
       const server = writeFakeServer(dir);
       const exiting = join(dir, "exiting-server.cjs");
-      writeFileSync(exiting, `require(${JSON.stringify(server)}); setTimeout(() => process.exit(3), 300);`);
+      writeFileSync(exiting, `require(${JSON.stringify(server)}); setTimeout(() => process.exit(3), 2500);`);
       const child = spawnWithLifeline(process.execPath, [exiting], { cwd: dir });
       child.process.stdout.resume();
       const pidsFile = join(dir, "pids.json");

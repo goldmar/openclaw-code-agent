@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rewind_turns` for Claude Code (in place or into a fork, through the SDK's `resumeSessionAt`) and OpenCode (into a fork at the turn's first message).
 - Codex and OpenCode report structured run outcomes and error codes (`codexErrorInfo`; OpenCode `error.name`), per-model token usage and the context window fill, and Codex reports tool calls.
 - OpenCode reports the model, the applied effort (validated against the model's variants from `/config/providers`) and the context window.
-- OpenCode subagent (child session) permission prompts and questions reach the user; subagent sessions get the session's permission overlay.
+- OpenCode subagent (child session) permission prompts and questions reach the user.
 - Warnings for an allowed Codex model missing from `model/list`, and for explicit `harnesses.codex` settings that run Codex under a host `tools.exec.mode` of `deny` / `allowlist`; `openclaw doctor` flags `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` (`dangerousFlags`).
 
 - `autoUpdate` plugin config key (default `true`). When on, the daily update check and its **Update now** / **Restart Gateway** buttons work as before: OCA reinstalls itself only after an explicit **Update now** press and restarts the Gateway only after a separate **Restart Gateway** press. `false` disables update checks, installs, and restarts.
@@ -141,7 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenCode refetched the session's whole message history after every finished step and at every turn boundary (quadratic in long sessions). Turns now read only their own messages (paged), and mid-turn cost reads only the session record.
 - The shared OpenCode server accepted unauthenticated requests from any local process.
 - OpenCode servers, Codex app-server command children, and their tool processes could outlive a killed Gateway. The OpenCode server now runs in its own process group with a parent-death watchdog, and the Codex app server in its own process group.
-- A subagent's permission prompt in an OpenCode session was never shown (events were routed by the parent session id only), and subagents ignored the session's permission overlay.
+- A subagent's permission prompt in an OpenCode session was never shown (events were routed by the parent session id only), so the subagent waited forever. Subagents run with their agent's own permissions; in `default` mode the `task` prompt that starts one is the gate (REFERENCE.md).
 - A second Claude Code `AskUserQuestion` while one was open replaced the first, which was then never answered; it now waits until the first is answered.
 
 - Resuming a finished or suspended session through `agent_respond` (or its Resume button) dropped the launch `system_prompt`. The launch prompt (without the worktree preamble, which is added again) is now stored on the session row and reused on resume and on a fresh relaunch.

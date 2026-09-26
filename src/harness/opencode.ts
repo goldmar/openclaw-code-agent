@@ -697,8 +697,6 @@ function sessionIdFromProperties(properties: Record<string, unknown>): string | 
 
 type SessionEventListener = {
   onEvent(event: NormalizedEvent): void;
-  /** A subagent (child) session of this session was created. */
-  onChildSession?(childSessionId: string): void;
   /** The shared event stream dropped; events may have been missed. */
   onStreamGap(): void;
   /** The shared server process died. */
@@ -886,8 +884,11 @@ class OpenCodeServerManager {
     if (!childId || !parentId || server.childSessions.has(childId)) return;
     const root = server.listeners.has(parentId) ? parentId : server.childSessions.get(parentId);
     if (!root) return;
+    // Tracked for routing only. OpenCode evaluates a subagent's tools with the
+    // permissions it started with: a session overlay PATCHed onto the child
+    // afterwards is stored but not applied (checked on 1.18.32), so the user's
+    // gate for a subagent is the parent's `task` permission prompt.
     server.childSessions.set(childId, root);
-    for (const listener of [...(server.listeners.get(root) ?? [])]) listener.onChildSession?.(childId);
   }
 
   private notifyAll(server: SharedServer, fn: (listener: SessionEventListener) => void): void {
@@ -1232,8 +1233,6 @@ export class OpenCodeHarness implements AgentHarness {
     // N20: one visible request at a time; concurrent ones (for example from
     // parallel subagents) wait here in arrival order.
     const queuedPendingInputs: OpenCodePendingInput[] = [];
-    // N24: subagent sessions started by this session's turns.
-    const childSessionIds = new Set<string>();
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let closed = false;
@@ -1332,32 +1331,6 @@ export class OpenCodeHarness implements AgentHarness {
     const client = (): OpenCodeClient => {
       if (!lease) throw new Error("OpenCode server is not connected.");
       return lease.client;
-    };
-
-    const applyPermissionRules = async (id: string, mode: string): Promise<boolean> => {
-      if (!lease?.alive) return false;
-      try {
-        await client().request("PATCH", `/session/${encodeURIComponent(id)}`, {
-          permission: permissionRulesForMode(mode),
-        });
-        return true;
-      } catch (error) {
-        log.warn(`[OpenCodeHarness] permission overlay for subagent session ${id} failed: ${errorMessage(error)}`);
-        return false;
-      }
-    };
-
-    /**
-     * N24: a subagent session starts with its agent's own rules. It gets this
-     * session's overlay as soon as it is created (before its first model
-     * response in practice); if that fails, the subagent is stopped rather
-     * than left running with rules the session did not grant.
-     */
-    const adoptChildSession = async (childId: string): Promise<void> => {
-      childSessionIds.add(childId);
-      if (await applyPermissionRules(childId, currentPermissionMode)) return;
-      if (!lease?.alive) return;
-      await client().request("POST", `/session/${encodeURIComponent(childId)}/abort`).catch((): undefined => undefined);
     };
 
     const replyPermission = async (requestId: string, response: string, message?: string): Promise<void> => {
@@ -1687,9 +1660,6 @@ export class OpenCodeHarness implements AgentHarness {
 
     const listener: SessionEventListener = {
       onEvent: handleEvent,
-      onChildSession: (childId) => {
-        void adoptChildSession(childId);
-      },
       onStreamGap: () => {
         const turn = activeTurn;
         if (!turn?.waiter || turn.waiter.settled) return;
@@ -2066,7 +2036,6 @@ export class OpenCodeHarness implements AgentHarness {
           await client().request("PATCH", `/session/${encodeURIComponent(sessionId)}`, {
             permission: permissionRulesForMode(mode),
           });
-          for (const childId of childSessionIds) await applyPermissionRules(childId, mode);
         }
         // The next prompt also switches agent (plan → build), which makes
         // OpenCode inject its own build-switch reminder.
