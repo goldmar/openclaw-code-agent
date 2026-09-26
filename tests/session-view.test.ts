@@ -142,7 +142,7 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /old-persisted \[old-persisted\]/);
   });
 
-  it("records that the orchestrator saw a terminal status only for its tools, not user commands", () => {
+  it("records that the orchestrator read a terminal session only for agent_output, not listings or user commands", () => {
     const now = Date.now();
     const seen: string[] = [];
     const failed: any = {
@@ -156,9 +156,8 @@ describe("session-view app layer", () => {
     getSessionOutputText(sm, "ux-fail");
     assert.deepEqual(seen, [], "user commands do not count");
 
-    getSessionsListingText(sm, "all", undefined, { markOutcomesSeen: true });
     getSessionOutputText(sm, "ux-fail", { markOutcomeSeen: true });
-    assert.deepEqual(seen, ["f1", "f1"]);
+    assert.deepEqual(seen, ["f1"]);
   });
 
   it("returns not found when output session reference is unknown", () => {

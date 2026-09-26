@@ -1790,7 +1790,7 @@ describe("WakeDispatcher", () => {
     assert.equal(wakeFailed, 0);
   });
 
-  it("holds a deferred wake and skips it when the orchestrator already saw the outcome", async () => {
+  it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {
     const delays: number[] = [];
     global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
       delays.push(delay ?? 0);

@@ -211,7 +211,7 @@ describe("SessionLifecycleService", () => {
     }
   });
 
-  it("holds a failure wake right after launch and skips it once the orchestrator saw the failure", () => {
+  it("holds outcome wakes right after launch and skips them once the orchestrator read the outcome", () => {
     const requests: Array<Record<string, any>> = [];
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -243,7 +243,16 @@ describe("SessionLifecycleService", () => {
     assert.equal(earlyRequest.deferWakeMs, 15_000);
     assert.equal(earlyRequest.skipDeferredWake(), undefined);
     early.outcomeSeenAt = Date.now();
-    assert.equal(earlyRequest.skipDeferredWake(), "the launching orchestrator turn already saw the failure");
+    assert.equal(earlyRequest.skipDeferredWake(), "the launching orchestrator turn already read the failure");
+
+    const quick = createStubSession({ id: "quick", name: "ux-route", status: "completed", startedAt: Date.now() - 7_000 }) as any;
+    service.emitCompleted(quick);
+    const quickRequest = requests.at(-1)!;
+    assert.equal(quickRequest.label, "completed");
+    assert.equal(quickRequest.deferConditionalWakeMs, 15_000);
+    assert.equal(quickRequest.skipDeferredWake(), undefined);
+    quick.outcomeSeenAt = Date.now();
+    assert.equal(quickRequest.skipDeferredWake(), "the launching orchestrator turn already read the result");
 
     const late = createStubSession({ id: "late", name: "long-run", status: "failed", startedAt: Date.now() - 10 * 60_000 }) as any;
     service.emitFailed(late, "rate limit", false);

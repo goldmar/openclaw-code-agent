@@ -523,7 +523,7 @@ describe("agent_merge push behavior", () => {
       assert.match(capturedRequests[0].request.userMessage, /^✅ \[merge-wake-success\] Merged: /);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1001234567890"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /send it with the message tool to originRoute/);
       assert.equal(persistedSession.worktreeMerged, true);
       assert.equal(persistedSession.worktreeState, "merged");
       assert.equal(persistedSession.pendingWorktreeDecisionSince, undefined);

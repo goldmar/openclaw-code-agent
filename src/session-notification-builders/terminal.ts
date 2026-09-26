@@ -54,8 +54,9 @@ const FINAL_REPLY_RULE = "Your reply is sent to the user; do not answer NO_REPLY
 const ROUTED_REPLY_REMINDER = "Send it with the message tool to originRoute, then answer NO_REPLY.";
 
 /**
- * The closing reply rule: the host delivers the reply itself unless the
- * originRoute block says the reply stays internal (see `hostDeliversWakeReplies`).
+ * The closing reply rule: with an originRoute block the orchestrator sends its
+ * message with the message tool (see `ROUTED_REPLY_RULE`); without one (an
+ * internal chat such as WebChat) its plain reply is the message.
  */
 function finalReplyRule(originThreadLine: string | undefined): string {
   return originThreadLine?.includes(ROUTED_REPLY_RULE) ? ROUTED_REPLY_REMINDER : FINAL_REPLY_RULE;

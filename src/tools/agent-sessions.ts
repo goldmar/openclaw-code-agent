@@ -50,7 +50,7 @@ export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
       const filter = parseStatus(params);
       const originChannel = ctx?.workspaceDir ? resolveAgentChannel(ctx.workspaceDir) : undefined;
       const full = !!(params && typeof params === "object" && (params as Record<string, unknown>).full === true);
-      const text = getSessionsListingText(sessionManager, filter, originChannel, { full, markOutcomesSeen: true });
+      const text = getSessionsListingText(sessionManager, filter, originChannel, { full });
       return { content: [{ type: "text", text }] };
     },
   };

@@ -217,9 +217,9 @@ export class Session extends EventEmitter {
   startedAt: number;
   completedAt?: number;
   /**
-   * When an orchestrator tool (agent_output, agent_sessions) first showed this
-   * session's terminal status. A failure wake deferred just after launch is
-   * skipped when the launching turn already saw the failure.
+   * When the orchestrator first read this session's output (agent_output)
+   * after it ended. An outcome wake deferred just after launch is skipped when
+   * the launching turn already read the outcome.
    */
   outcomeSeenAt?: number;
 
@@ -544,7 +544,7 @@ export class Session extends EventEmitter {
 
   get status(): SessionStatus { return this._status; }
 
-  /** Record that an orchestrator tool showed this session's terminal status. */
+  /** Record that the orchestrator read this session's output after it ended. */
   noteOutcomeSeen(): void {
     if (this.outcomeSeenAt === undefined && (this._status === "completed" || this._status === "failed" || this._status === "killed")) {
       this.outcomeSeenAt = Date.now();

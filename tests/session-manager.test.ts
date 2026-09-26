@@ -438,7 +438,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_/);
-    assert.match(request.wakeMessageOnNotifySuccess, /do not answer NO_REPLY/);
+    assert.match(request.wakeMessageOnNotifySuccess, /then answer NO_REPLY\./);
     assert.match(request.wakeMessageOnNotifySuccess, /The user saw: /);
     assert.match(request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
   });
@@ -3713,12 +3713,12 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /If it is not this chat, send your message there/);
+    assert.match(request.wakeMessageOnNotifySuccess, /send it with the message tool to originRoute/);
     assert.match(request.wakeMessageOnNotifySuccess, /The user saw: ✅ \[normal-session\] Completed/);
     assert.match(request.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
     assert.match(request.wakeMessageOnNotifySuccess, /Do not repeat the status line/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /already summarized by completed session/);
-    assert.equal((request.wakeMessageOnNotifySuccess.match(/originRoute/g) ?? []).length, 1, "the route is stated once (N51)");
+    assert.equal((request.wakeMessageOnNotifySuccess.match(/originRoute: \{/g) ?? []).length, 1, "the route is stated once (N51)");
     assert.match(request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
   });
 

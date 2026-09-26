@@ -573,25 +573,20 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute/);
   });
 
-  it("tells the orchestrator to send its completion summary itself when the host keeps wake replies internal", () => {
+  it("asks for a message-tool send to originRoute, and a plain reply only without a route", () => {
     const session = { id: "session-r", name: "routed", status: "completed", costUsd: 0, duration: 1_000 } as any;
-    // dmScope per-peer key: a chat.send reply in this session never reaches the chat.
+    // A dmScope per-peer key: the host never delivers a plain wake reply here.
     const routed = buildCompletedPayload({
       session,
       originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:direct:5551234" } }),
       preview: "Done",
     }).wakeMessageOnNotifySuccess;
-    assert.match(routed, /Your reply here is NOT shown to the user/);
+    assert.match(routed, /To tell the user anything, send it with the message tool to originRoute/);
     assert.match(routed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
     assert.doesNotMatch(routed, /Your reply is sent to the user/);
 
-    const delivered = buildCompletedPayload({
-      session,
-      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" } }),
-      preview: "Done",
-    }).wakeMessageOnNotifySuccess;
-    assert.match(delivered, /Your reply is sent to the user; do not answer NO_REPLY\.$/);
-    assert.doesNotMatch(delivered, /NOT shown/);
+    const unrouted = buildCompletedPayload({ session, originThreadLine: "", preview: "Done" }).wakeMessageOnNotifySuccess;
+    assert.match(unrouted, /Your reply is sent to the user; do not answer NO_REPLY\.$/);
 
     const failed = buildFailedPayload({
       session: { ...session, status: "failed" },

@@ -38,10 +38,10 @@ type WorktreeStrategyResult = {
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
 const OPTION_DESCRIPTION_MAX_CHARS = 280;
-/** A failure this soon after launch can happen during the launching orchestrator turn. */
-const LAUNCH_FAILURE_WINDOW_MS = 60_000;
-/** How long such a failure wake waits for that turn to read the failure itself. */
-const LAUNCH_FAILURE_WAKE_DELAY_MS = 15_000;
+/** A session that ends this soon after launch can end during the launching orchestrator turn. */
+const LAUNCH_OUTCOME_WINDOW_MS = 60_000;
+/** How long such an outcome wake waits for that turn to read the outcome itself. */
+const LAUNCH_OUTCOME_WAKE_DELAY_MS = 15_000;
 
 export function resolvePlanArtifactForPrompt(
   session: {
@@ -786,6 +786,7 @@ export class SessionLifecycleService {
       requireDirectUserNotification: true,
       wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
       wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,
+      ...(followupSummaryRequired ? this.launchOutcomeWakeDeferral(session, "completed") : {}),
       hooks: {
         onNotifySucceeded: () => {
           canonicalStatusDelivered = true;
@@ -833,28 +834,30 @@ export class SessionLifecycleService {
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
       buttons: payload.buttons,
-      ...this.launchFailureWakeDeferral(session),
+      ...this.launchOutcomeWakeDeferral(session, "failed"),
     });
   }
 
   /**
-   * A session that fails right after launch usually fails while the launching
-   * orchestrator turn is still running, and that turn often reads the failure
-   * itself (agent_output, agent_sessions) and reports it. Hold the failure wake
-   * briefly and skip it when the orchestrator has already seen the failure;
+   * A session that ends right after launch usually ends while the launching
+   * orchestrator turn is still running, and that turn often reads the outcome
+   * itself (agent_output) and reports it. Hold the outcome wake briefly and
+   * skip it when the orchestrator has already read the ended session;
    * otherwise it is sent as usual.
    */
-  private launchFailureWakeDeferral(
+  private launchOutcomeWakeDeferral(
     session: Session,
-  ): Pick<SessionNotificationRequest, "deferWakeMs" | "skipDeferredWake"> {
-    if (Date.now() - session.startedAt > LAUNCH_FAILURE_WINDOW_MS) return {};
-    return {
-      deferWakeMs: LAUNCH_FAILURE_WAKE_DELAY_MS,
-      skipDeferredWake: () => session.outcomeSeenAt !== undefined
-        ? "the launching orchestrator turn already saw the failure"
-        : undefined,
-    };
+    kind: "failed" | "completed",
+  ): Pick<SessionNotificationRequest, "deferWakeMs" | "deferConditionalWakeMs" | "skipDeferredWake"> {
+    if (Date.now() - session.startedAt > LAUNCH_OUTCOME_WINDOW_MS) return {};
+    const skipDeferredWake = () => session.outcomeSeenAt !== undefined
+      ? `the launching orchestrator turn already read the ${kind === "failed" ? "failure" : "result"}`
+      : undefined;
+    return kind === "failed"
+      ? { deferWakeMs: LAUNCH_OUTCOME_WAKE_DELAY_MS, skipDeferredWake }
+      : { deferConditionalWakeMs: LAUNCH_OUTCOME_WAKE_DELAY_MS, skipDeferredWake };
   }
+
 }
 
 /** Next-turn context after a question reached the user. */

@@ -53,11 +53,9 @@ export interface SessionNotificationRequest {
   idempotencyKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
   deferConditionalWakeMs?: number;
-  /**
-   * Delay an immediate `wakeMessage` (not a conditional or next-turn one) and
-   * skip it when `skipDeferredWake` returns a reason at send time.
-   */
+  /** Delay an immediate `wakeMessage` (conditional wakes use `deferConditionalWakeMs`). */
   deferWakeMs?: number;
+  /** Checked when a wake is about to be sent: a reason skips it (`onWakeSkipped`). */
   skipDeferredWake?: () => string | undefined;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
@@ -80,9 +78,8 @@ export interface SessionNotificationHooks {
 
 /**
  * A completion wake succeeded when `chat.send` answered at all. NO_REPLY is a
- * valid final answer: when the host keeps wake replies internal, the
- * orchestrator sends its summary with the message tool and then answers
- * NO_REPLY (see `hostDeliversWakeReplies`).
+ * valid final answer: the orchestrator sends its summary with the message tool
+ * to the origin route and then answers NO_REPLY (see `ROUTED_REPLY_RULE`).
  */
 export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
   const finalText = extractWakeFinalText(stdout).trim();
@@ -666,6 +663,11 @@ export class WakeDispatcher {
       const sendDeferredWake = (wakeText: string, queueOnly = false): void => {
         if (!wakeText) return;
         if (shouldDispatch?.() === false) return;
+        const skipReason = request.skipDeferredWake?.();
+        if (skipReason) {
+          hooks?.onWakeSkipped?.(skipReason);
+          return;
+        }
         hooks?.onWakeStarted?.();
         if (queueOnly) {
           this.queueForNextTurn(session, wakeText, `${request.label}-wake`, hooks, shouldDispatch);
