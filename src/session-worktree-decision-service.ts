@@ -7,7 +7,7 @@ import { deleteBranch, removeWorktree } from "./worktree";
 
 type WorktreeDecisionSession = Pick<
   Session,
-  "id" | "name" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "originalWorkdir"
+  "id" | "name" | "status" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "originalWorkdir"
 >;
 
 export class SessionWorktreeDecisionService {
@@ -36,6 +36,10 @@ export class SessionWorktreeDecisionService {
     const activeSession = this.deps.resolveActiveSession(ref);
     const session = activeSession ?? persistedSession;
     if (!session) return `Error: Session "${ref}" not found.`;
+    // A resumed session (for example after Commit changes) is working in this worktree.
+    if (activeSession && (activeSession.status === "running" || activeSession.status === "starting")) {
+      return `Error: [${activeSession.name}] is running in this worktree. Discard it after the session ends, or stop the session first.`;
+    }
 
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
     const repoDir = await this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);

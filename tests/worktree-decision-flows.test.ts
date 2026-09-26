@@ -106,6 +106,26 @@ for (const name of BACKEND_NAMES) {
       assert.equal(existsSync(join(repo, "feature.txt")), false, "nothing was merged");
     });
 
+    it("does not discard a dirty worktree while Commit changes resumes the session in it", async () => {
+      const repo = createRepo();
+      const created = await startInteractionFixture(name, {
+        config: { workdir: repo, worktreeStrategy: "ask", multiTurn: false },
+        beforeLaunch: async (sm) => { await sm.setRepoPolicy(repo, "never-pr"); },
+      });
+      fixture = created;
+      const worktree = created.session.worktreePath!;
+      writeFileSync(join(worktree, "draft.txt"), "uncommitted\n");
+      await created.backend.endTurn("Wrote draft.txt.");
+      const buttons = await decisionButtons("worktree-dirty-uncommitted");
+      const [commit, discard] = await Promise.all([
+        clickButton(buttonNamed(buttons, "Commit changes")),
+        clickButton(buttonNamed(buttons, "Discard")),
+      ]);
+      assert.doesNotMatch(commit.replies.join("\n"), /still being processed/);
+      assert.match(discard.replies.join("\n"), /still being processed|is running in this worktree/);
+      assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
+    });
+
     it("runs only one of two decisions clicked at the same time", async () => {
       const repo = createRepo();
       const f = await finishSessionWithChange(name, repo, "ask");

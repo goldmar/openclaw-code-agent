@@ -1050,8 +1050,12 @@ export function createCallbackHandler(
       }
 
       // Merge, PR, Later, and Discard on one worktree must not run concurrently:
-      // Discard could delete the branch a Merge is working on.
-      const worktreeLockKey = WORKTREE_DECISION_ACTIONS.has(token.kind) ? sessionId : undefined;
+      // Discard could delete the branch a Merge is working on. A resume of a
+      // session with a worktree (Commit changes) takes the same lock, so Discard
+      // cannot remove the worktree while the resume starts.
+      const resumesWorktree = (token.kind === "session-resume" || token.kind === "session-restart")
+        && Boolean(actionSession?.worktreePath);
+      const worktreeLockKey = WORKTREE_DECISION_ACTIONS.has(token.kind) || resumesWorktree ? sessionId : undefined;
       if (worktreeLockKey && inFlightWorktreeDecisions.has(worktreeLockKey)) {
         await replyText(ctx, `⚠️ Another decision for [${actionSessionName}]'s worktree is still being processed. Try again when it finishes.`);
         return { handled: true };
