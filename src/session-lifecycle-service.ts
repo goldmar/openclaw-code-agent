@@ -38,6 +38,10 @@ type WorktreeStrategyResult = {
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
 const OPTION_DESCRIPTION_MAX_CHARS = 280;
+/** A failure this soon after launch can happen during the launching orchestrator turn. */
+const LAUNCH_FAILURE_WINDOW_MS = 60_000;
+/** How long such a failure wake waits for that turn to read the failure itself. */
+const LAUNCH_FAILURE_WAKE_DELAY_MS = 15_000;
 
 export function resolvePlanArtifactForPrompt(
   session: {
@@ -829,7 +833,27 @@ export class SessionLifecycleService {
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
       buttons: payload.buttons,
+      ...this.launchFailureWakeDeferral(session),
     });
+  }
+
+  /**
+   * A session that fails right after launch usually fails while the launching
+   * orchestrator turn is still running, and that turn often reads the failure
+   * itself (agent_output, agent_sessions) and reports it. Hold the failure wake
+   * briefly and skip it when the orchestrator has already seen the failure;
+   * otherwise it is sent as usual.
+   */
+  private launchFailureWakeDeferral(
+    session: Session,
+  ): Pick<SessionNotificationRequest, "deferWakeMs" | "skipDeferredWake"> {
+    if (Date.now() - session.startedAt > LAUNCH_FAILURE_WINDOW_MS) return {};
+    return {
+      deferWakeMs: LAUNCH_FAILURE_WAKE_DELAY_MS,
+      skipDeferredWake: () => session.outcomeSeenAt !== undefined
+        ? "the launching orchestrator turn already saw the failure"
+        : undefined,
+    };
   }
 }
 

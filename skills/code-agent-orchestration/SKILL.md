@@ -65,7 +65,7 @@ You may approve, but only after it verifies the plan: read it with `agent_output
 - The plugin posts the status line (`✅ [name] Completed`, merge and PR outcomes). A wake then asks you for a short follow-up: tell the user in one or two sentences what was done, from the output. Do not repeat the status line or paste PR URLs.
 - A merge or PR made with `summary` needs no follow-up.
 - A failure: tell the user the cause and your next step (continue with `agent_respond`, or fix the launch).
-- If the wake names an `originRoute` that is not your current chat, send your message there.
+- If the wake names an `originRoute` that is not your current chat, send your message there. If the wake says your reply is not shown, send your message with the message tool to `originRoute`, then answer `NO_REPLY`.
 - If the session finished one phase of a larger job, start the next phase instead.
 
 ## Goal loops

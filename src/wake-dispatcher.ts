@@ -53,6 +53,12 @@ export interface SessionNotificationRequest {
   idempotencyKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
   deferConditionalWakeMs?: number;
+  /**
+   * Delay an immediate `wakeMessage` (not a conditional or next-turn one) and
+   * skip it when `skipDeferredWake` returns a reason at send time.
+   */
+  deferWakeMs?: number;
+  skipDeferredWake?: () => string | undefined;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<NotificationButton>>;
@@ -72,13 +78,16 @@ export interface SessionNotificationHooks {
   onDuplicateSkipped?: (reason: string) => void;
 }
 
+/**
+ * A completion wake succeeded when `chat.send` answered at all. NO_REPLY is a
+ * valid final answer: when the host keeps wake replies internal, the
+ * orchestrator sends its summary with the message tool and then answers
+ * NO_REPLY (see `hostDeliversWakeReplies`).
+ */
 export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
   const finalText = extractWakeFinalText(stdout).trim();
   if (!finalText) {
     return { outcome: "failure", reason: "completion follow-up wake produced no final response" };
-  }
-  if (/^NO_REPLY$/i.test(finalText)) {
-    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" };
   }
   return { outcome: "success" };
 }
@@ -777,17 +786,32 @@ export class WakeDispatcher {
       );
     }
 
-    this.sendWake(
-      session,
-      wakeMessage,
-      `${request.label}-wake`,
-      "wake",
-      hooks?.onWakeFailed,
-      hooks?.onWakeSucceeded,
-      shouldDispatch,
-      wakeSuccessValidator,
-      hooks?.onWakeSkipped,
-      request.idempotencyKey,
-    );
+    const sendImmediateWake = (): void => {
+      if (shouldDispatch?.() === false) return;
+      const skipReason = request.skipDeferredWake?.();
+      if (skipReason) {
+        hooks?.onWakeSkipped?.(skipReason);
+        return;
+      }
+      this.sendWake(
+        session,
+        wakeMessage,
+        `${request.label}-wake`,
+        "wake",
+        hooks?.onWakeFailed,
+        hooks?.onWakeSucceeded,
+        shouldDispatch,
+        wakeSuccessValidator,
+        hooks?.onWakeSkipped,
+        request.idempotencyKey,
+      );
+    };
+    if (request.deferWakeMs !== undefined && request.deferWakeMs > 0) {
+      setTimeout(() => {
+        if (!this.disposed) sendImmediateWake();
+      }, request.deferWakeMs).unref?.();
+      return;
+    }
+    sendImmediateWake();
   }
 }

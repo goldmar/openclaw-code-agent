@@ -91,6 +91,23 @@ function normalizePlanLines(source: string): string[] {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
     const next = lines[index + 1];
+    const fence = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      // A fenced code block is one literal item: its lines are not headings or
+      // fields. It joins the line that introduced it ("…to add:") as inline code.
+      const code: string[] = [];
+      while (index + 1 < lines.length && !lines[index + 1]!.trim().startsWith(fence)) {
+        const codeLine = lines[++index]!.trim();
+        if (codeLine) code.push(codeLine);
+      }
+      index += 1; // the closing fence (or the end of the plan)
+      if (code.length === 0) continue;
+      const inline = formatInlineCode(code);
+      const previous = result.length ? result[result.length - 1]! : "";
+      if (previous.trim() && !isHeading(previous)) result[result.length - 1] = `${previous.trimEnd()} ${inline}`;
+      else result.push(`- ${inline}`);
+      continue;
+    }
     if (line.includes("|") && next && cells(next).every((cell) => /^:?-+:?$/.test(cell))) {
       const headers = cells(line);
       index += 1;
@@ -104,6 +121,18 @@ function normalizePlanLines(source: string): string[] {
     }
   }
   return result;
+}
+
+const PLAN_INLINE_CODE_MAX_CHARS = 160;
+
+/** One code block as one inline code span: `def f(a): return a` or `a; b`. */
+function formatInlineCode(lines: string[]): string {
+  let text = "";
+  for (const line of lines) {
+    text = !text ? line : /[:{(,[]$/.test(text) ? `${text} ${line}` : `${text}; ${line}`;
+  }
+  const clipped = truncateText(text.replace(/`/g, "'"), PLAN_INLINE_CODE_MAX_CHARS);
+  return `\`${clipped}\``;
 }
 
 function pushUnique(target: string[], text: string): void {

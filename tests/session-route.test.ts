@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   canonicalizeSessionRoute,
   formatOriginRouteWakeBlock,
+  hostDeliversWakeReplies,
+  ROUTED_REPLY_RULE,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
   sessionRouteInternals,
@@ -308,5 +310,42 @@ describe("session-route", () => {
       threadId: "77",
       sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
+  });
+});
+
+describe("wake reply delivery (hostDeliversWakeReplies)", () => {
+  it("counts channel-shaped keys and the main session as host-delivered", () => {
+    assert.equal(hostDeliversWakeReplies("agent:main:telegram:group:-1001234567890:topic:77", "telegram"), true);
+    assert.equal(hostDeliversWakeReplies("agent:main:telegram:direct:5551234", "telegram"), true);
+    assert.equal(hostDeliversWakeReplies("agent:main:telegram:bot:direct:5551234", "telegram"), true);
+    assert.equal(hostDeliversWakeReplies("agent:main:discord:channel:1400000000000000001", "discord"), true);
+    assert.equal(hostDeliversWakeReplies("agent:main:main", "telegram"), true);
+  });
+
+  it("counts channel-agnostic, foreign and custom keys as internal", () => {
+    // dmScope per-peer: the host keeps chat.send replies in this session internal.
+    assert.equal(hostDeliversWakeReplies("agent:main:direct:5551234", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:ux-b", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:cron:nightly", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:subagent:abc", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:discord:channel:1", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:telegram", "telegram"), false);
+    assert.equal(hostDeliversWakeReplies(undefined, "telegram"), false);
+    assert.equal(hostDeliversWakeReplies("agent:main:telegram:direct:1", undefined), false);
+  });
+
+  it("tells the orchestrator to send a routed message when the host keeps its reply internal", () => {
+    const block = formatOriginRouteWakeBlock({
+      route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:direct:5551234" },
+    });
+    assert.match(block, /^originRoute: \{/);
+    assert.ok(block.includes(ROUTED_REPLY_RULE), block);
+    assert.doesNotMatch(block, /If it is not this chat/);
+
+    const delivered = formatOriginRouteWakeBlock({
+      route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" },
+    });
+    assert.ok(!delivered.includes(ROUTED_REPLY_RULE), delivered);
+    assert.match(delivered, /If it is not this chat/);
   });
 });

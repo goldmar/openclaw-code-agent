@@ -134,4 +134,32 @@ describe("plan decision brief presentation", () => {
     assertPresentation(fallback.map((m) => m.text));
     assert.equal(fallback.map((m) => m.text).join("\n").split('Reply "approve"').length - 1, 1);
   });
+
+  it("keeps a fenced code block with the step that introduces it instead of splitting it into fields", () => {
+    const plan = [
+      "## Plan", "",
+      "1. Edit `calc.py` to add:",
+      "   ```python",
+      "   def mul(a, b):",
+      '       """Return the product of a and b."""',
+      "       return a * b",
+      "   ```",
+      "   appended after the existing `add` function.",
+      "2. Commit the change with git.", "",
+      "No tests exist in the repo to run; verification is visual (read file back).",
+    ].join("\n");
+    const message = buildPlanApprovalPromptContent({ sessionName: "ux-plan", actionableVersion: 1, preview: plan, hasButtons: true }).userMessages[0]!;
+    assert.match(message, /Edit `calc\.py` to add: `def mul\(a, b\): """Return the product of a and b\."""; return a \* b`/);
+    assert.doesNotMatch(message, /```/);
+    assert.doesNotMatch(message, /: return a \* b$/m);
+    assert.match(message, /Tests \/ verification: No tests exist/);
+  });
+
+  it("shows an unterminated fence as code, and clips long code", () => {
+    const plan = ["1. Update `parser.ts` so it reads:", "```", ...Array.from({ length: 30 }, (_, i) => `line_${i} = ${i}`)].join("\n");
+    const summary = buildPlanReviewSummary({ preview: plan });
+    assert.match(summary, /Update `parser\.ts` so it reads: `line_0 = 0; line_1 = 1;/);
+    assert.match(summary, /\.\.\.`/);
+    assert.doesNotMatch(summary, /```/);
+  });
 });

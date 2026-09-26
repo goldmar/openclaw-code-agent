@@ -1,4 +1,4 @@
-import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import type { SessionRoute } from "./types";
 
 export interface SessionRouteSource {
@@ -334,22 +334,66 @@ function compactRouteObject(route: Record<string, string | undefined>): Record<s
   );
 }
 
+/**
+ * Session-key heads the host treats as channel-agnostic: a `chat.send` turn in
+ * such a session never inherits the session's external chat route.
+ */
+const CHANNEL_AGNOSTIC_SESSION_HEADS = new Set([
+  "main", "direct", "dm", "group", "channel", "cron", "run", "subagent", "acp", "thread", "topic",
+]);
+
+/**
+ * Whether the host delivers the orchestrator's reply to an OCA wake to the
+ * user's chat on its own.
+ *
+ * OCA wakes are `chat.send` turns with `deliver: true` but without an
+ * originating route (that needs the operator.admin scope). The host then
+ * delivers the reply only when the session key names the chat's channel with
+ * a peer shape (`agent:<id>:telegram:group:-100…`, `agent:<id>:slack:direct:…`)
+ * or is the main session (`agent:<id>:main`, inherited by CLI callers). Any
+ * other key (`dmScope: "per-peer"` keys such as `agent:<id>:direct:<peer>`,
+ * cron, sub-agent, ACP or custom keys) keeps the reply internal, so the
+ * orchestrator must send it itself. Mirrors the host's `chat.send` origin
+ * routing (OpenClaw 2026.9.6); anything unrecognized counts as not delivered,
+ * which only costs a routed send, never a lost reply. A custom
+ * `session.mainKey` is not visible to plugins and also counts as not delivered.
+ */
+export function hostDeliversWakeReplies(sessionKey: string | undefined, provider: string | undefined): boolean {
+  const key = sessionKey?.trim().toLowerCase();
+  const channel = provider?.trim().toLowerCase();
+  if (!key || !channel || channel === "system" || channel === "webchat") return false;
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  const parts = rest.split(":").slice(0, 3);
+  const head = parts[0] ?? "";
+  if (head === "main") return true;
+  if (!head || CHANNEL_AGNOSTIC_SESSION_HEADS.has(head) || head !== channel) return false;
+  // A peer kind in the second or third segment (account ids come first), or a legacy `<channel>:<peer>` key.
+  return parts.length > 1;
+}
+
+/** The wake line telling the orchestrator its reply is not shown and how to reach the user instead. */
+export const ROUTED_REPLY_RULE =
+  "Your reply here is NOT shown to the user: to tell them anything, send it with the message tool to originRoute (channel = provider, target, threadId), then answer NO_REPLY.";
+
 export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const route = canonicalizeSessionRoute(source);
   if (!isDirectSessionRoute(route)) return "";
 
+  const sessionKey = route?.sessionKey ?? source.originSessionKey;
   const originRoute = compactRouteObject({
     provider: route?.provider,
     accountId: route?.accountId,
     target: route?.target,
     threadId: route?.threadId ?? (source.originThreadId != null ? String(source.originThreadId) : undefined),
-    sessionKey: route?.sessionKey ?? source.originSessionKey,
+    sessionKey,
   });
 
   if (Object.keys(originRoute).length === 0) return "";
 
   return [
     `originRoute: ${JSON.stringify(originRoute)}`,
-    `(The user's chat for this session. If it is not this chat, send your message there with provider, target and threadId.)`,
+    hostDeliversWakeReplies(sessionKey, route?.provider)
+      ? `(The user's chat for this session. If it is not this chat, send your message there with provider, target and threadId.)`
+      : ROUTED_REPLY_RULE,
   ].join("\n");
 }

@@ -142,6 +142,25 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /old-persisted \[old-persisted\]/);
   });
 
+  it("records that the orchestrator saw a terminal status only for its tools, not user commands", () => {
+    const now = Date.now();
+    const seen: string[] = [];
+    const failed: any = {
+      status: "failed", name: "ux-fail", id: "f1", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp",
+      costUsd: 0, phase: "terminal", startedAt: now - 1000, getOutput: () => ["model_not_found"],
+      noteOutcomeSeen: () => { seen.push("f1"); },
+    };
+    const sm: any = { list: () => [failed], listPersistedSessions: (): never[] => [], resolve: () => failed };
+
+    getSessionsListingText(sm, "all");
+    getSessionOutputText(sm, "ux-fail");
+    assert.deepEqual(seen, [], "user commands do not count");
+
+    getSessionsListingText(sm, "all", undefined, { markOutcomesSeen: true });
+    getSessionOutputText(sm, "ux-fail", { markOutcomeSeen: true });
+    assert.deepEqual(seen, ["f1", "f1"]);
+  });
+
   it("returns not found when output session reference is unknown", () => {
     const sm: any = {
       resolve: (): undefined => undefined,

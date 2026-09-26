@@ -3,6 +3,7 @@ import { fenceAgentOutput } from "../untrusted-output";
 import type { NotificationButton } from "../session-interactions";
 import type { ApprovalExecutionState, KillReason, PermissionMode } from "../types";
 import type { Session } from "../session";
+import { ROUTED_REPLY_RULE } from "../session-route";
 
 type OriginThreadLine = string;
 
@@ -50,6 +51,15 @@ function statusDeliveryLine(statusLine: string, delivered: boolean): string {
 }
 
 const FINAL_REPLY_RULE = "Your reply is sent to the user; do not answer NO_REPLY.";
+const ROUTED_REPLY_REMINDER = "Send it with the message tool to originRoute, then answer NO_REPLY.";
+
+/**
+ * The closing reply rule: the host delivers the reply itself unless the
+ * originRoute block says the reply stays internal (see `hostDeliversWakeReplies`).
+ */
+function finalReplyRule(originThreadLine: string | undefined): string {
+  return originThreadLine?.includes(ROUTED_REPLY_RULE) ? ROUTED_REPLY_REMINDER : FINAL_REPLY_RULE;
+}
 
 export function getStoppedStatusLabel(killReason?: KillReason): string {
   switch (killReason) {
@@ -81,11 +91,12 @@ export function buildCompletionFollowupInstructionLines(args: {
   canonicalStatusDetail?: string;
   canonicalStatusDelivered?: boolean;
   hasOriginRouteBlock?: boolean;
+  originThreadLine?: string;
 }): string[] {
   return [
     `Tell the user in one or two sentences what was done (read agent_output(session='${args.sessionId}', full=true) if the output above is not enough). Do not repeat the status line.`,
     `If this finished one phase of a larger job, start the next phase now instead.`,
-    FINAL_REPLY_RULE,
+    finalReplyRule(args.originThreadLine),
   ];
 }
 
@@ -128,7 +139,7 @@ export function buildCompletedPayload(args: {
     ...formatApprovalExecutionContextLines(session),
     `Output (end):`,
     fenceAgentOutput(preview, "output preview"),
-    ...buildCompletionFollowupInstructionLines({ sessionId: session.id, canonicalStatusDelivered, hasOriginRouteBlock }),
+    ...buildCompletionFollowupInstructionLines({ sessionId: session.id, canonicalStatusDelivered, hasOriginRouteBlock, originThreadLine }),
   ].join("\n");
 
   return {
@@ -159,7 +170,7 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     ...(details.length > 0 ? details.map((line) => `- ${line}`) : []),
     ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
     `Tell the user in one or two sentences what changed (agent_output(session='${args.sessionId}', full=true) if you need the details; if there is no output, state only the facts above). Mention a failed push; refer to PRs by number, not URL. Do not repeat the outcome line.`,
-    FINAL_REPLY_RULE,
+    finalReplyRule(args.originThreadLine),
   ].join("\n");
 }
 
@@ -177,7 +188,7 @@ export function buildGoalTaskSucceededFollowupWake(args: {
     statusDeliveryLine(args.summary, args.canonicalStatusDelivered),
     ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
     `Tell the user in one or two sentences what was achieved (agent_output(session='${args.sessionId}', full=true) if needed; otherwise state only the goal status). Do not repeat the status line.`,
-    FINAL_REPLY_RULE,
+    finalReplyRule(args.originThreadLine),
   ].join("\n");
 }
 
@@ -232,6 +243,7 @@ export function buildFailedPayload(args: {
       ...outputSection,
       ...worktreeCleanupNote,
       `Tell the user the cause in one line and your next step. Continue the same session with agent_respond(session='${session.id}', message='...'), fork it with agent_launch(resume_session_id='${session.id}', fork_session=true, prompt='...'), or fix a launch/config error and relaunch.`,
+      ...(originThreadLine?.includes(ROUTED_REPLY_RULE) ? [ROUTED_REPLY_REMINDER] : []),
     ].join("\n"),
     buttons: failedButtons,
   };

@@ -365,7 +365,18 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.doesNotMatch(ask.userMessage ?? "", /Open PR|Sync PR/u);
       assert.match(ask.userMessage ?? "", /2 commits, 4 files, \+120\/-8/u);
       assert.match(ask.userMessage ?? "", /PR automation unavailable/u);
-      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /Do not merge or open a PR yourself unless they ask/u);
+      // The next-turn note names only the buttons the user got: no Open PR without a PR provider.
+      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /The user has Merge \/ Later \/ Discard buttons for/u);
+      assert.match(ask.wakeMessageOnNotifySuccess ?? "", /Do not merge yourself unless they ask/u);
+      assert.doesNotMatch(ask.wakeMessageOnNotifySuccess ?? "", /Open PR|open a PR/u);
+      assert.doesNotMatch(ask.wakeMessageOnNotifyFailed ?? "", /open a PR|agent_pr/u);
+
+      const prButtons = await (sm as any).getWorktreeDecisionButtons(session.id, { allowDelegate: true }, { merge: true, pr: true });
+      const askWithPr = new SessionWorktreeMessageService().buildAskNotification({
+        session, branchName: "agent/workflow-coverage", baseBranch: "main", diffSummary, buttons: prButtons,
+      });
+      assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /The user has Merge \/ Open PR \/ Later \/ Discard buttons for/u);
+      assert.match(askWithPr.wakeMessageOnNotifySuccess ?? "", /Do not merge or open a PR yourself unless they ask/u);
 
       const delegated = new SessionWorktreeMessageService().buildDelegateNotification({
         session,

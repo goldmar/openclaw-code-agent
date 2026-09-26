@@ -211,6 +211,46 @@ describe("SessionLifecycleService", () => {
     }
   });
 
+  it("holds a failure wake right after launch and skips it once the orchestrator saw the failure", () => {
+    const requests: Array<Record<string, any>> = [];
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => { requests.push(request as any); },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    const early = createStubSession({ id: "early", name: "ux-fail", status: "failed", startedAt: Date.now() - 2_000 }) as any;
+    service.emitFailed(early, "model_not_found", false);
+    const earlyRequest = requests.at(-1)!;
+    assert.equal(earlyRequest.label, "failed");
+    assert.equal(earlyRequest.deferWakeMs, 15_000);
+    assert.equal(earlyRequest.skipDeferredWake(), undefined);
+    early.outcomeSeenAt = Date.now();
+    assert.equal(earlyRequest.skipDeferredWake(), "the launching orchestrator turn already saw the failure");
+
+    const late = createStubSession({ id: "late", name: "long-run", status: "failed", startedAt: Date.now() - 10 * 60_000 }) as any;
+    service.emitFailed(late, "rate limit", false);
+    assert.equal(requests.at(-1)!.deferWakeMs, undefined);
+    assert.equal(requests.at(-1)!.skipDeferredWake, undefined);
+  });
+
   it("emits completion wakes with an explicit follow-up contract and success diagnostics", () => {
     const requests: Array<Record<string, unknown>> = [];
     const infoLogs: string[] = [];

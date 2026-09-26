@@ -35,6 +35,7 @@ export function makeAgentOutputTool(_ctx?: OpenClawPluginToolContext) {
       const text = getSessionOutputText(sessionManager, params.session, {
         full: params.full,
         lines: params.lines,
+        markOutcomeSeen: true,
       });
       return { content: [{ type: "text", text }] };
     },

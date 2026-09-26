@@ -142,6 +142,10 @@ export class SessionWorktreeMessageService {
     const branchLine = session.worktreePrTargetRepo
       ? `\`${branchName}\` → \`${baseBranch}\` (PR target: ${session.worktreePrTargetRepo})`
       : `\`${branchName}\` → \`${baseBranch}\``;
+    // Name only the buttons the user actually got (no Open PR without a PR provider).
+    const buttonLabels = (buttons ?? []).flat().map((button) => button.label.trim()).filter(Boolean);
+    const prOffered = buttons ? buttonLabels.some((label) => /\bPR\b/.test(label)) : true;
+    const choicesLine = buttonLabels.length > 0 ? `${buttonLabels.join(" / ")} buttons` : "the decision buttons";
 
     return {
       label: "worktree-merge-ask",
@@ -166,12 +170,14 @@ export class SessionWorktreeMessageService {
       buttons,
       // Context for the orchestrator's next turn; nothing to do now (N37).
       wakeMessageOnNotifySuccess: [
-        `[${session.name}] The user has Merge / Open PR / Later / Discard buttons for ${branchLine}. Do not merge or open a PR yourself unless they ask. ID: ${session.id}`,
+        `[${session.name}] The user has ${choicesLine} for ${branchLine}. Do not ${prOffered ? "merge or open a PR" : "merge"} yourself unless they ask. ID: ${session.id}`,
       ].join("\n"),
       wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: [
         `[${session.name}] Finished on ${branchLine} (${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
-        `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,
+        prOffered
+          ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`
+          : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,
       ].join("\n"),
     };
   }

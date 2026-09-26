@@ -23,6 +23,8 @@ const VALID_SESSION_STATUSES = new Set<SessionStatus>(["starting", "running", "c
 export interface OutputOptions {
   full?: boolean;
   lines?: number;
+  /** The reader is the orchestrator: record that it saw a terminal status. */
+  markOutcomeSeen?: boolean;
 }
 
 interface SessionResultSummary {
@@ -85,6 +87,8 @@ interface SessionListingItem {
 
 export interface SessionListingOptions {
   full?: boolean;
+  /** The reader is the orchestrator: record that it saw the listed terminal statuses. */
+  markOutcomesSeen?: boolean;
 }
 
 const DEFAULT_SESSION_LIST_LIMIT = 5;
@@ -269,6 +273,7 @@ export function getSessionOutputText(
     return `Error: Session "${ref}" not found.`;
   }
 
+  if (options.markOutcomeSeen) session.noteOutcomeSeen();
   const liveOutputLines = readLiveOutputLines(session, options, linesToShow);
   const outputLines = liveOutputLines && liveOutputLines.length > 0
     ? liveOutputLines
@@ -324,6 +329,7 @@ export function getSessionsListingText(
   }
   if (filter === "waiting") {
     if (sessions.length === 0) return "Nothing is waiting for a decision or an answer.";
+    if (options.markOutcomesSeen) noteOutcomesSeen(sm, sessions);
     return sessions.map((s) => formatSessionListing(s, { nextStep: describeWaiting(s) })).join("\n\n");
   }
   if (options.full) {
@@ -333,7 +339,16 @@ export function getSessionsListingText(
     sessions = sessions.slice(0, DEFAULT_SESSION_LIST_LIMIT);
   }
   if (sessions.length === 0) return "No sessions found.";
+  if (options.markOutcomesSeen) noteOutcomesSeen(sm, sessions);
   return sessions.map((s) => formatSessionListing(s)).join("\n\n");
+}
+
+/** The listed live sessions' terminal statuses are now known to the orchestrator. */
+function noteOutcomesSeen(sm: SessionManager, listed: SessionListingItem[]): void {
+  const ids = new Set(listed.map((item) => item.id));
+  for (const session of sm.list("all")) {
+    if (ids.has(session.id)) session.noteOutcomeSeen();
+  }
 }
 
 const WORKTREE_DECISION_STATES = new Set(["pending_decision"]);

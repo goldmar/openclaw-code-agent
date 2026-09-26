@@ -112,6 +112,6 @@ export function buildNoChangeWakeMessage(args: {
       approvalPromptDeliveredAt,
     }),
     ...previewSection,
-    ...buildCompletionFollowupInstructionLines({ sessionId, hasOriginRouteBlock }),
+    ...buildCompletionFollowupInstructionLines({ sessionId, hasOriginRouteBlock, originThreadLine }),
   ].join("\n");
 }

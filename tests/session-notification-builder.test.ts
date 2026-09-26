@@ -12,6 +12,7 @@ import {
   buildGoalTaskSucceededFollowupWake,
   buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
+import { formatOriginRouteWakeBlock } from "../src/session-route";
 
 describe("session-notification-builder", () => {
   it("builds plugin-owned review summaries for explicit plan approvals", () => {
@@ -570,6 +571,36 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute/);
+  });
+
+  it("tells the orchestrator to send its completion summary itself when the host keeps wake replies internal", () => {
+    const session = { id: "session-r", name: "routed", status: "completed", costUsd: 0, duration: 1_000 } as any;
+    // dmScope per-peer key: a chat.send reply in this session never reaches the chat.
+    const routed = buildCompletedPayload({
+      session,
+      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:direct:5551234" } }),
+      preview: "Done",
+    }).wakeMessageOnNotifySuccess;
+    assert.match(routed, /Your reply here is NOT shown to the user/);
+    assert.match(routed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
+    assert.doesNotMatch(routed, /Your reply is sent to the user/);
+
+    const delivered = buildCompletedPayload({
+      session,
+      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" } }),
+      preview: "Done",
+    }).wakeMessageOnNotifySuccess;
+    assert.match(delivered, /Your reply is sent to the user; do not answer NO_REPLY\.$/);
+    assert.doesNotMatch(delivered, /NOT shown/);
+
+    const failed = buildFailedPayload({
+      session: { ...session, status: "failed" },
+      originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:ux-f" } }),
+      errorSummary: "model_not_found",
+      preview: "",
+      worktreeAutoCleaned: false,
+    }).wakeMessage;
+    assert.match(failed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
   });
 
   it("builds marker-free goal success follow-up wakes", () => {

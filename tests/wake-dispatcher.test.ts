@@ -230,15 +230,13 @@ describe("WakeDispatcher", () => {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
-  it("does not accept NO_REPLY even when a completion marker appears elsewhere in the payload", () => {
-    const failure = validateCompletionFollowupWakeSuccess(JSON.stringify({
-      request: {
-        message: "Prompt mentions COMPLETION_FOLLOWUP_DELIVERED as an instruction.",
-      },
-      finalResponse: "NO_REPLY",
-    }));
-
-    assert.deepEqual(failure, { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" });
+  it("accepts NO_REPLY after a routed send, and fails only an empty answer", () => {
+    // Routed wakes end with NO_REPLY after the message tool delivered the summary.
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" })), { outcome: "success" });
+    assert.deepEqual(
+      validateCompletionFollowupWakeSuccess("  \n"),
+      { outcome: "failure", reason: "completion follow-up wake produced no final response" },
+    );
   });
 
   it("accepts marker-free completion follow-up final text", () => {
@@ -1765,11 +1763,11 @@ describe("WakeDispatcher", () => {
     assert.equal(params.threadId, "13832");
   });
 
-  it("does not accept a NO_REPLY completion follow-up wake and falls back to a session system event", async () => {
+  it("accepts a NO_REPLY completion wake (the summary went out with the message tool) without a fallback", async () => {
     chatSendStdout = "NO_REPLY\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
-      id: "session-no-visible-followup",
+      id: "session-routed-followup",
       route: buildRoute(),
     };
     let wakeSucceeded = 0;
@@ -1786,23 +1784,44 @@ describe("WakeDispatcher", () => {
       },
     });
 
-    const calls = await waitForCalls(2);
-    await waitFor(() => wakeSucceeded === 1, "system event fallback after NO_REPLY");
-
-    assert.equal(calls[0]?.kind, "chat-send");
-    assert.deepEqual(calls[1], systemEvent(
-      "Coding agent session completed. Send the user a short factual completion summary.",
-      "session-no-visible-followup",
-      "agent:main:telegram:group:-1001234567890:topic:11239",
-    ));
-    assert.deepEqual(heartbeats, [{
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:11239",
-    }]);
-    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
+    await waitFor(() => wakeSucceeded === 1, "routed completion wake accepted");
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send"]);
+    assert.deepEqual(heartbeats, []);
     assert.equal(wakeFailed, 0);
+  });
+
+  it("holds a deferred wake and skips it when the orchestrator already saw the outcome", async () => {
+    const delays: number[] = [];
+    global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
+      delays.push(delay ?? 0);
+      if (delay !== 15_000) return originalSetTimeout(fn, delay);
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    const dispatcher = createDispatcher();
+    const skipped: string[] = [];
+    let seen = true;
+    const request = (id: string) => ({
+      label: "failed",
+      userMessage: "❌ [fail] Failed",
+      wakeMessage: `[fail] Failed. ID: ${id}`,
+      notifyUser: "always" as const,
+      deferWakeMs: 15_000,
+      skipDeferredWake: () => seen ? "the launching orchestrator turn already saw the failure" : undefined,
+      hooks: { onWakeSkipped: (reason: string) => { skipped.push(reason); } },
+    });
+
+    dispatcher.dispatchSessionNotification({ id: "seen", route: buildRoute() } as any, request("seen"));
+    await waitFor(() => skipped.length === 1, "deferred wake skipped");
+    assert.equal(delays.includes(15_000), true);
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
+    assert.equal(calls.some((call) => call.kind === "durable-send"), true, "the user still gets the failure notice");
+
+    seen = false;
+    dispatcher.dispatchSessionNotification({ id: "unseen", route: buildRoute() } as any, request("unseen"));
+    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "deferred wake sent");
+    assert.equal(asChatSend(calls.find((call) => call.kind === "chat-send")!).message, "[fail] Failed. ID: unseen");
+    assert.deepEqual(skipped, ["the launching orchestrator turn already saw the failure"]);
   });
 
   it("marks completion follow-up wakes successful after normal marker-free final text", async () => {
