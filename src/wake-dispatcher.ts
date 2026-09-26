@@ -8,7 +8,7 @@ import {
   type DispatchPhase,
   type DispatchSuccessValidationResult,
 } from "./wake-delivery-executor";
-import { WakeRouteResolver } from "./wake-route-resolver";
+import { WakeRouteResolver, type NotificationRoute } from "./wake-route-resolver";
 import {
   RuntimeSystemEventTransport,
   WakeTransport,
@@ -125,6 +125,12 @@ export interface WakeDispatcherOptions {
    * deferred briefly while another writer holds the session-index lock).
    */
   beforeInteractiveSend?: () => Promise<void>;
+  /**
+   * Called with the action-token ids behind a message's buttons and the chat
+   * the message is sent to, before the tokens are persisted, so each token is
+   * bound to that chat (N2: callbacks from any other chat are refused).
+   */
+  bindInteractiveButtons?: (tokenIds: string[], route: NotificationRoute) => void;
 }
 
 export class WakeDispatcher {
@@ -134,10 +140,12 @@ export class WakeDispatcher {
   private readonly systemEvents: SystemEventTransport;
   private readonly executor = new WakeDeliveryExecutor();
   private readonly beforeInteractiveSend?: () => Promise<void>;
+  private readonly bindInteractiveButtons?: (tokenIds: string[], route: NotificationRoute) => void;
   private disposed = false;
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.beforeInteractiveSend = options.beforeInteractiveSend;
+    this.bindInteractiveButtons = options.bindInteractiveButtons;
     this.transport = options.transport ?? new WakeTransport(options.transportOptions);
     this.directNotifications = options.directNotifications ?? new RuntimeDirectNotificationTransport();
     this.systemEvents = options.systemEvents ?? new RuntimeSystemEventTransport();
@@ -421,6 +429,10 @@ export class WakeDispatcher {
       sessionKey: route.sessionKey,
       ...summarizeButtons(buttons),
     });
+    if (hasInteractiveButtons && this.bindInteractiveButtons) {
+      const tokenIds = (buttons ?? []).flat().map((button) => button.callbackData).filter(Boolean);
+      this.bindInteractiveButtons(tokenIds, route);
+    }
     this.executor.executePromise(
       async () => {
         if (hasInteractiveButtons && this.beforeInteractiveSend) {

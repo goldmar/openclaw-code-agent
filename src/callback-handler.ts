@@ -19,6 +19,7 @@ import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } fr
 import { createLogger } from "./logger";
 import { pluginConfig } from "./config";
 import { processShared } from "./process-runtime";
+import { callbackMatchesTokenRoute, type CallbackConversation } from "./callback-route-binding";
 
 const log = createLogger("callback-handler");
 
@@ -300,6 +301,21 @@ function validatePlanDecisionToken(
  * (Telegram `ctx.callback`, Discord `ctx.interaction`). OCA buttons carry
  * `code-agent:<token id>`, so the payload is the action token id.
  */
+function callbackConversation(ctx: InteractiveCallbackContext): CallbackConversation {
+  return ctx.channel === "telegram"
+    ? {
+        channel: "telegram",
+        conversationId: ctx.conversationId,
+        parentConversationId: ctx.parentConversationId,
+        chatId: ctx.callback?.chatId,
+      }
+    : {
+        channel: "discord",
+        conversationId: ctx.conversationId,
+        parentConversationId: ctx.parentConversationId,
+      };
+}
+
 function getPayload(ctx: InteractiveCallbackContext): string {
   const source = ctx.channel === "telegram" ? ctx.callback : ctx.interaction;
   return source?.payload?.trim() ?? "";
@@ -673,6 +689,20 @@ export function createCallbackHandler(
         }));
         await rejectStaleAction(ctx, () =>
           clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged }));
+        return { handled: true };
+      }
+
+      // N2: a button acts only from the chat it was delivered to.
+      if (!callbackMatchesTokenRoute(callbackConversation(ctx), token.route)) {
+        logButtonDiagnostic("callback_route_mismatch", {
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          tokenHash: hashDiagnosticToken(tokenId),
+          actionKind: token.kind,
+          sessionId: token.sessionId,
+        });
+        log.warn(`[callback-handler] Refused a ${token.kind} callback from a chat other than the one its button was sent to.`);
+        await replyText(ctx, "⛔ This button belongs to another chat.");
         return { handled: true };
       }
 

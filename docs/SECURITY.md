@@ -78,6 +78,8 @@ The plugin config key `autoUpdate` (default `true`) controls the self-updater:
 
 Update buttons are single-use action tokens bound to the approved version.
 
+Every OCA button is an opaque, expiring action token. Besides the host's authorized-sender check, a token is bound to the chat its button was delivered to: a callback carrying it from another chat or channel is refused, so a token copied out of one conversation cannot act from another.
+
 ## Worktree Setup Script
 
 OpenClaw core runs `.openclaw/worktree-setup.sh` for its managed worktrees only when the caller has admin scope, because the `worktrees.create` Gateway method can be reached by lower-privileged clients. OCA runs it for its own worktrees. The repository is not necessarily one an operator picked: the launch `workdir` is a tool parameter the orchestrator model fills in from the conversation (or `defaultWorkdir`), so any repository the Gateway user can read can become an OCA workdir. OCA therefore runs only the version of the script committed on the base branch, never an untracked or modified copy in the working tree, with a minimal environment rather than the Gateway's. A merge whose changes touch the setup script asks the user to confirm first. The script still runs unsandboxed with the Gateway user's filesystem privileges, which can be more access than a Codex session has inside a `:workspace` sandbox. Do not point OCA at repositories whose committed setup scripts you do not trust.

@@ -3390,6 +3390,51 @@ describe("createCallbackHandler()", () => {
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:plan-token/);
   });
 
+  it("refuses a Telegram callback from a chat other than the one the token was sent to (N2)", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        id: "t-other-chat",
+        sessionId: "sess-1",
+        kind: "worktree-merge",
+        createdAt: Date.now(),
+        route: { provider: "telegram", target: "-1009876543210" },
+      }),
+      consumeActionToken: (): undefined => { consumes++; return undefined; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+    } as any);
+    const handler = createCallbackHandler();
+    const state = createCtx("t-other-chat");
+    const result = await handler.handler(state.ctx as any);
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 0);
+    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
+  });
+
+  it("refuses a Discord callback from another channel than the token's (N2)", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        id: "t-discord",
+        sessionId: "sess-1",
+        kind: "worktree-merge",
+        createdAt: Date.now(),
+        route: { provider: "discord", target: "channel:111111111111111111" },
+      }),
+      consumeActionToken: (): undefined => { consumes++; return undefined; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
+    } as any);
+    const handler = createCallbackHandler("discord");
+    const state = createCtx("t-discord", "discord");
+    (state.ctx as any).conversationId = "channel:222222222222222222";
+    const result = await handler.handler(state.ctx as any);
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 0);
+    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
+  });
+
   it("blocks unauthorized Telegram topic callbacks before consuming the token", async () => {
     let lookups = 0;
     let consumes = 0;

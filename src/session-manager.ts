@@ -311,7 +311,17 @@ export class SessionManager {
     const sessions = registry.sessions;
     const store = new SessionStore(options.store);
     // Buttons go out only after their action tokens are on disk.
-    const wakeDispatcher = new WakeDispatcher({ beforeInteractiveSend: () => store.whenPersisted() });
+    const wakeDispatcher = new WakeDispatcher({
+      beforeInteractiveSend: () => store.whenPersisted(),
+      // Each button's token acts only from the chat it is sent to (N2).
+      bindInteractiveButtons: (tokenIds, route) => store.actionTokenStore.bindActionTokensToRoute(tokenIds, {
+        provider: route.channel,
+        target: route.target,
+        ...(route.accountId ? { accountId: route.accountId } : {}),
+        ...(route.threadId ? { threadId: route.threadId } : {}),
+        ...(route.sessionKey ? { sessionKey: route.sessionKey } : {}),
+      }),
+    });
     const interactions = new SessionInteractionService(store.actionTokenStore, isGitHubCLIAvailable);
     const references = new SessionReferenceService(sessions, store);
     const stateSync = new SessionStateSyncService({
