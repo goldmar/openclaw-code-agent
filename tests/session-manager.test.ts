@@ -1810,9 +1810,9 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     // Later on the final reminder does not promise a reminder that will never come.
     const decisions = new SessionWorktreeDecisionService({
-      getPersistedSession: () => pending,
-      resolveActiveSession: () => undefined,
-      resolveWorktreeRepoDir: () => undefined,
+      getPersistedSession: (): any => pending,
+      resolveActiveSession: (): undefined => undefined,
+      resolveWorktreeRepoDir: (): undefined => undefined,
       updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => { Object.assign(pending, patch); return true; },
       dispatchNotification: () => {},
       buildRoutingProxy: (value: unknown) => value,
