@@ -89,7 +89,7 @@ describe("process lifeline (N27)", { skip: !lifelineSupported() }, () => {
     try {
       const server = writeFakeServer(dir);
       const exiting = join(dir, "exiting-server.cjs");
-      writeFileSync(exiting, `require(${JSON.stringify(server)}); setTimeout(() => process.exit(3), 2500);`);
+      writeFileSync(exiting, `require(${JSON.stringify(server)}); setTimeout(() => process.exit(3), 300);`);
       const child = spawnWithLifeline(process.execPath, [exiting], { cwd: dir });
       child.process.stdout.resume();
       const pidsFile = join(dir, "pids.json");
