@@ -667,7 +667,8 @@ describe("CodexHarness launch settings", () => {
       model: "gpt-6-astra",
       serviceTier: "priority",
       developerInstructions: "You are working in a git worktree.",
-      permissions: ":danger-full-access",
+      // D5: a thread set up for plan review starts read-only as well.
+      permissions: ":read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
     });
@@ -1448,8 +1449,13 @@ describe("CodexHarness plan review sandbox (D5)", () => {
     const [planTurn, implementTurn] = client.requestsFor("turn/start");
     assert.deepEqual([planTurn.permissions, planTurn.approvalPolicy, planTurn.approvalsReviewer], [":read-only", "never", "user"]);
     assert.deepEqual([implementTurn.permissions, implementTurn.approvalPolicy, implementTurn.approvalsReviewer], [":workspace", "on-request", "auto_review"]);
+    // The thread itself starts read-only (a compact or review takes no overrides).
     const thread = client.requestsFor("thread/start")[0];
-    assert.deepEqual([thread.permissions, thread.approvalPolicy, thread.approvalsReviewer], [":workspace", "on-request", "auto_review"]);
+    assert.deepEqual([thread.permissions, thread.approvalPolicy, thread.approvalsReviewer], [":read-only", "never", "user"]);
+    const implementation = new MockCodexClient();
+    await collectMessages(launch(implementation, { permissionMode: "bypassPermissions" }));
+    const implementationThread = implementation.requestsFor("thread/start")[0];
+    assert.deepEqual([implementationThread.permissions, implementationThread.approvalPolicy], [":workspace", "on-request"]);
   });
 
   it("declines approval requests during a plan turn without surfacing them", async () => {

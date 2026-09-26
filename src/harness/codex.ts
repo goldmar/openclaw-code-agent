@@ -58,6 +58,7 @@ import {
   buildUserInputRequest,
   classifyTurnOutcome,
   CODEX_FAST_SERVICE_TIER,
+  CODEX_PLAN_REVIEW_EXECUTION,
   CODEX_COMMAND_APPROVAL_METHOD,
   CODEX_FILE_CHANGE_APPROVAL_METHOD,
   CODEX_PERMISSIONS_APPROVAL_METHOD,
@@ -830,7 +831,10 @@ export class CodexHarness implements AgentHarness {
       model: runtimeModel,
       fastMode: resolveFastMode(),
       developerInstructions: options.systemPrompt,
-      execution,
+      // D5: a thread set up during plan review starts read-only too, so a
+      // compact or review that runs before the first plan turn (they take no
+      // execution overrides of their own) cannot write either.
+      execution: currentPermissionMode === "plan" ? CODEX_PLAN_REVIEW_EXECUTION : execution,
     });
 
     /**

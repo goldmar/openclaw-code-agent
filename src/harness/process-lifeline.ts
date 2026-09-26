@@ -88,16 +88,13 @@ export function spawnWithLifeline(
   const stopWatchdog = (): void => {
     if (watchdog && watchdog.exitCode === null && watchdog.signalCode === null) watchdog.kill("SIGKILL");
   };
-  child.once("exit", () => {
-    // Tool processes the server left in its group are stopped with it.
-    if (supported) signalGroup(child.pid, "SIGTERM");
-    stopWatchdog();
-  });
+  // Once the server has exited its pid (the group id) may be reused, so the
+  // group is only ever signalled while the server is still running.
+  child.once("exit", stopWatchdog);
   child.once("error", stopWatchdog);
 
   const terminate = async (graceMs = 2_000): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) {
-      if (supported) signalGroup(child.pid, "SIGKILL");
       stopWatchdog();
       return;
     }
@@ -110,7 +107,6 @@ export function spawnWithLifeline(
       child.once("exit", () => {
         clearTimeout(forceTimer);
         if (killTimer) clearTimeout(killTimer);
-        if (supported) signalGroup(child.pid, "SIGKILL");
         resolve();
       });
       if (!(supported && signalGroup(child.pid, "SIGTERM"))) child.kill("SIGTERM");

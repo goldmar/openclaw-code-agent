@@ -1297,6 +1297,41 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("learns a default-model session's model from its first turn and checks it from then on (N19)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.providers = { default: {}, providers: [{ id: "openai", models: { "gpt-5.5": { variants: { low: {} }, limit: { context: 400_000, output: 1 } } } }] };
+    const { stream, collector } = launch(harnessFor(mock), { reasoningEffort: "high" });
+    stream.push("one");
+    await collector.untilCompletions(1);
+    stream.push("two");
+    await collector.untilCompletions(2);
+    stream.end();
+    await collector.done;
+    const info = collector.messages.find((message) => message.type === "backend_info");
+    assert.deepEqual(info?.type === "backend_info" ? info.info : undefined, { model: "openai/gpt-5.5", reasoningEffort: null, reasoningEffortSupported: false });
+    assert.equal(collector.completions()[0]?.data.usage?.contextWindow, 400_000);
+    const prompts = mock.requestsTo("POST", /\/prompt_async$/);
+    assert.equal(prompts[0]!.body.variant, "high", "the first turn runs before the model is known");
+    assert.equal(prompts[1]!.body.variant, undefined, "later turns drop the unsupported variant");
+  });
+
+  it("stops a subagent whose permission overlay cannot be applied (N24)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    mock.failRoute = (method, path) => (method === "PATCH" && path === "/session/ses_child"
+      ? new Response(JSON.stringify({ error: "nope" }), { status: 500 })
+      : undefined);
+    const { stream, collector } = launch(harnessFor(mock), { permissionMode: "default" });
+    stream.push("delegate");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    mock.emit({ type: "session.created", properties: { info: { id: "ses_child", parentID: "ses_1" } } });
+    await waitFor(() => mock.requestsTo("POST", /^\/session\/ses_child\/abort$/).length === 1, "subagent abort");
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    stream.end();
+    await collector.done;
+  });
+
   it("shows one request at a time and queues concurrent ones in order (N20)", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;

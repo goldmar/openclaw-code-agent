@@ -279,10 +279,10 @@ export class StdioJsonRpcClient implements JsonRpcClient {
         }
       }, Math.max(1, this.shutdownGraceMs));
       forceKillTimer.unref?.();
+      // The whole group while the app server still runs (its pid, the group
+      // id, may be reused once it has exited), so its commands stop too.
       signalProcessGroup(child, "SIGTERM");
     });
-    // Commands Codex started may outlive it in the group.
-    signalProcessGroup(child, "SIGKILL");
   }
 
   async notify(method: string, params?: unknown): Promise<void> {

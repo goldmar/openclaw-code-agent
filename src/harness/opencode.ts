@@ -1334,13 +1334,30 @@ export class OpenCodeHarness implements AgentHarness {
       return lease.client;
     };
 
-    const applyPermissionRules = async (id: string, mode: string): Promise<void> => {
+    const applyPermissionRules = async (id: string, mode: string): Promise<boolean> => {
+      if (!lease?.alive) return false;
+      try {
+        await client().request("PATCH", `/session/${encodeURIComponent(id)}`, {
+          permission: permissionRulesForMode(mode),
+        });
+        return true;
+      } catch (error) {
+        log.warn(`[OpenCodeHarness] permission overlay for subagent session ${id} failed: ${errorMessage(error)}`);
+        return false;
+      }
+    };
+
+    /**
+     * N24: a subagent session starts with its agent's own rules. It gets this
+     * session's overlay as soon as it is created (before its first model
+     * response in practice); if that fails, the subagent is stopped rather
+     * than left running with rules the session did not grant.
+     */
+    const adoptChildSession = async (childId: string): Promise<void> => {
+      childSessionIds.add(childId);
+      if (await applyPermissionRules(childId, currentPermissionMode)) return;
       if (!lease?.alive) return;
-      await client().request("PATCH", `/session/${encodeURIComponent(id)}`, {
-        permission: permissionRulesForMode(mode),
-      }).catch((error: unknown) => {
-        log.debug(`[OpenCodeHarness] permission overlay for ${id} failed: ${errorMessage(error)}`);
-      });
+      await client().request("POST", `/session/${encodeURIComponent(childId)}/abort`).catch((): undefined => undefined);
     };
 
     const replyPermission = async (requestId: string, response: string, message?: string): Promise<void> => {
@@ -1614,14 +1631,19 @@ export class OpenCodeHarness implements AgentHarness {
     /** N19: model facts (effort variants, context window) from the server's provider catalog. */
     let reportedModelInfo = false;
     let resolvedVariant: string | undefined = options.reasoningEffort;
-    const resolveModelInfo = async (): Promise<void> => {
-      if (reportedModelInfo || !options.model) return;
+    /**
+     * Without an explicit model, OpenCode runs its configured default; the
+     * model is then known from the first turn's assistant records, and the
+     * catalog check (effort variant, context window) applies from there on.
+     */
+    const resolveModelInfo = async (model: string | undefined = options.model): Promise<void> => {
+      if (reportedModelInfo || !model) return;
       reportedModelInfo = true;
       let info: OpenCodeModelInfo | undefined;
       try {
         info = findOpenCodeModelInfo(await client().request<unknown>("GET", "/config/providers", undefined, {
           timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
-        }), options.model);
+        }), model);
       } catch (error) {
         log.debug(`[OpenCodeHarness] provider catalog unavailable: ${errorMessage(error)}`);
       }
@@ -1629,14 +1651,14 @@ export class OpenCodeHarness implements AgentHarness {
       const supported = effort && info?.variants ? info.variants.includes(effort) : undefined;
       if (supported === false) {
         // OpenCode ignores a variant the model lacks; say so instead of claiming it.
-        log.warn(`[OpenCodeHarness] model ${options.model} has no "${effort}" variant (available: ${info?.variants?.join(", ") || "none"}); running without one.`);
+        log.warn(`[OpenCodeHarness] model ${model} has no "${effort}" variant (available: ${info?.variants?.join(", ") || "none"}); running without one.`);
         resolvedVariant = undefined;
       }
       modelContextWindow = info?.contextWindow;
       queue.enqueue({
         type: "backend_info",
         info: {
-          model: options.model,
+          model,
           ...(effort ? { reasoningEffort: supported === false ? null : effort } : {}),
           ...(supported !== undefined ? { reasoningEffortSupported: supported } : {}),
         },
@@ -1666,11 +1688,7 @@ export class OpenCodeHarness implements AgentHarness {
     const listener: SessionEventListener = {
       onEvent: handleEvent,
       onChildSession: (childId) => {
-        childSessionIds.add(childId);
-        // N24: a subagent session starts with its agent's own rules; give it
-        // this session's permission overlay so "ask" (default) and "deny"
-        // (plan) also hold inside subagents.
-        void applyPermissionRules(childId, currentPermissionMode);
+        void adoptChildSession(childId);
       },
       onStreamGap: () => {
         const turn = activeTurn;
@@ -1836,6 +1854,14 @@ export class OpenCodeHarness implements AgentHarness {
       if (lease?.alive && sessionId) {
         const snapshot = await readTurnUsage(sessionId);
         const turnRecords = snapshot.turnRecords;
+        if (!reportedModelInfo) {
+          // A default-model session: learn the model OpenCode actually used.
+          const used = [...turnRecords].reverse().find((record) => record.providerID && record.modelID);
+          if (used) {
+            await resolveModelInfo(`${used.providerID}/${used.modelID}`);
+            if (modelContextWindow) snapshot.usage.contextWindow = modelContextWindow;
+          }
+        }
         usage = snapshot.usage;
         totalCostUsd = snapshot.costUsd ?? 0;
         durationMs = recordDurationMs(turnRecords);
