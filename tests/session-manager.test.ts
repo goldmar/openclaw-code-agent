@@ -1807,6 +1807,20 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.match(texts[0]!, /^⏰ \[backoff\] Branch `agent\/backoff` still waits for your decision \(3h\)\.$/);
     assert.match(texts[2]!, /Last reminder\.$/);
     assert.doesNotMatch(texts.join("\n"), /agent_merge|agent_pr|agent_worktree_cleanup/, "no tool syntax in user reminders");
+
+    // Later on the final reminder does not promise a reminder that will never come.
+    const decisions = new SessionWorktreeDecisionService({
+      getPersistedSession: () => pending,
+      resolveActiveSession: () => undefined,
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => { Object.assign(pending, patch); return true; },
+      dispatchNotification: () => {},
+      buildRoutingProxy: (value: unknown) => value,
+    } as any);
+    const later = decisions.snoozeWorktreeDecision("backoff", { notifyUser: false });
+    assert.match(later, /^⏭️ Kept for later: `agent\/backoff` \(session: backoff\)\. No more reminders; \/agent_status lists it\.$/);
+    assert.doesNotMatch(later, /24h/);
+    assert.equal(await reminders.getNextReminderAt(pending), undefined);
   });
 
   it("counts a legacy reminder timestamp without a counter as one sent reminder", async () => {

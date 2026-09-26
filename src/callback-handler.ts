@@ -1215,7 +1215,10 @@ export function createCallbackHandler(
             const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
             const succeeded = worktreeActionTextSucceeded(result);
             if (succeeded) {
-              const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
+              // After the final reminder, Later schedules nothing more (see snoozeWorktreeDecision).
+              const confirmation = result.startsWith("⏭️ Kept for later")
+                ? `⏭️ Kept for later [${actionSessionName}]. No more reminders; /agent_status lists it.`
+                : `⏭️ Snoozed 24h for [${actionSessionName}]`;
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               await replyText(ctx, confirmation);
             } else {

@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 
 import type { PersistedSessionInfo } from "./types";
+import { SessionReminderService } from "./session-reminder-service";
 import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { deleteBranch, removeWorktree } from "./worktree";
@@ -113,7 +114,12 @@ export class SessionWorktreeDecisionService {
     }
 
     const branchName = persistedSession.worktreeBranch ?? "unknown";
-    const msg = `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
+    // After the final reminder no further reminder is scheduled: do not promise one.
+    const remindersDone = Boolean(persistedSession.lastWorktreeReminderAt)
+      && (persistedSession.worktreeReminderCount ?? 1) >= SessionReminderService.MAX_REMINDERS;
+    const msg = remindersDone
+      ? `⏭️ Kept for later: \`${branchName}\` (session: ${persistedSession.name}). No more reminders; /agent_status lists it.`
+      : `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
 
     if (options.notifyUser !== false) {
       this.deps.dispatchNotification(
