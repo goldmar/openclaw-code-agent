@@ -45,10 +45,6 @@ export interface LaunchSummarySessionLike {
   resumedFromSessionName?: string;
 }
 
-function summarizePrompt(prompt: string): string {
-  return prompt.length > 80 ? `${prompt.slice(0, 80)}...` : prompt;
-}
-
 function formatResolvedWorkdir(input: LaunchSummaryInput): string {
   if (!input.worktreePath) return input.workdir;
   if (!input.originalWorkdir || input.originalWorkdir === input.worktreePath) {
@@ -58,45 +54,31 @@ function formatResolvedWorkdir(input: LaunchSummaryInput): string {
 }
 
 function formatLaunchSummary(input: LaunchSummaryInput): string {
-  const details = [
-    "Session launched successfully.",
-    `  Name: ${input.sessionName}`,
-    `  ID: ${input.sessionId}`,
-    `  Harness: ${input.harness}`,
-    `  Permission mode: ${input.permissionMode}`,
-    `  Plan approval: ${input.planApproval}`,
-    `  Worktree strategy: ${input.worktreeStrategy ?? "off"}`,
-    ...(input.repoIntegrationPolicy ? [`  Repo policy: ${input.repoIntegrationPolicy}${input.repoProvider ? ` (${input.repoProvider})` : ""}`] : []),
-    `  Resolved workdir: ${formatResolvedWorkdir(input)}`,
-    `  Model: ${input.model ?? "default"}`,
-    `  Prompt: "${summarizePrompt(input.prompt)}"`,
+  const model = [input.harness, input.model ?? "default model", ...(hasDisplayableReasoning(input) ? [`reasoning ${input.reasoningEffort}`] : []), ...(input.fastMode ? ["fast"] : [])].join(" | ");
+  const plan = input.permissionMode === "plan"
+    ? `plan first, approval: ${input.planApproval}`
+    : input.permissionMode === "bypassPermissions" ? "no plan gate, no prompts" : "no plan gate";
+  const worktree = `worktree: ${input.worktreeStrategy ?? "off"}${input.repoIntegrationPolicy ? ` (repo policy ${input.repoIntegrationPolicy})` : ""}`;
+  const lines = [
+    `Launched ${input.sessionName} [${input.sessionId}] · ${model}`,
+    `Dir: ${formatResolvedWorkdir(input)}`,
+    `Mode: ${plan} · ${worktree}`,
   ];
-
-  if (hasDisplayableReasoning(input)) {
-    details.push(`  Reasoning effort: ${input.reasoningEffort}`);
-  }
-  if (input.fastMode) {
-    details.push("  Fast mode: enabled");
-  }
   if (input.resumeSessionId) {
     const resumeLabel = input.resumeSessionName
       ? `${input.resumeSessionName} [${input.resumeSessionId}]`
       : input.resumeSessionId;
-    details.push(`  Resume: ${resumeLabel}${input.forkSession ? " (forked)" : ""}`);
-    if (!input.forkSession && input.resumeSessionName && input.sessionName !== input.resumeSessionName) {
-      details.push(`  Follow-up label: ${input.sessionName}`);
-    }
+    lines.push(`${input.forkSession ? "Forked from" : "Resumed"}: ${resumeLabel}${!input.forkSession && input.resumeSessionName && input.sessionName !== input.resumeSessionName ? ` (now labelled ${input.sessionName})` : ""}`);
   } else if (input.forceNewSession) {
-    details.push("  Force new session: true");
+    lines.push("New session forced (a linked session was not resumed).");
   }
   if (input.rewindTurns) {
-    details.push(input.forkSession
-      ? `  Rewind: forking before the last ${input.rewindTurns} turn(s) (conversation only; files unchanged)`
-      : `  Rewind: reverting the last ${input.rewindTurns} turn(s) of the thread (conversation only; files unchanged)`);
+    lines.push(input.forkSession
+      ? `Rewind: forked before the last ${input.rewindTurns} turn(s) (conversation only; files unchanged)`
+      : `Rewind: reverted the last ${input.rewindTurns} turn(s) of the thread (conversation only; files unchanged)`);
   }
-  details.push("  Mode: multi-turn (use agent_respond to send follow-up messages)");
-  details.push("", "Use agent_sessions to check status, agent_output to see output.");
-  return details.join("\n");
+  lines.push("Send follow-ups with agent_respond. You are notified when it needs you or finishes.");
+  return lines.join("\n");
 }
 
 export function formatLaunchSummaryFromSession(

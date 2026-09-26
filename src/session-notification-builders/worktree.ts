@@ -38,38 +38,19 @@ export function buildDelegateWorktreeWakeMessage(args: {
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
   const mergeAllowed = allowedActions?.merge !== false && !hookWarning;
 
+  const escalateCall = `agent_escalate(session='${sessionName}', kind='worktree', summary='<why>')`;
   return [
-    `[DELEGATED WORKTREE DECISION] Session "${sessionName}" completed with changes.`,
-    ``,
-    `Session ID: ${sessionId}`,
-    `Branch: ${branchName} → ${baseBranch}`,
-    `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+    `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
-    ``,
-    ...(commitLines.length > 0 ? [fenceAgentOutput(commitLines.join("\n"), "commit messages")] : []),
-    ...(moreNote ? [moreNote] : []),
-    ``,
-    `Original task prompt (first 500 chars):`,
-    promptSnippet,
-    ``,
-    ...(policyReason ? [`Policy constraint: ${policyReason}`, ``] : []),
-    ...(hookWarning
-      ? [`Hook changes: ${hookWarning.replace(/^⚠️\s*/u, "")} agent_merge and agent_pr are refused for this branch; call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user decides.`, ``]
-      : []),
-    `You own the next step for this worktree.`,
-    `- First call agent_output(session='${sessionId}', full=true) to inspect the full session output and use it as source material for your decision.`,
-    ...(!mergeAllowed
-      ? [`- Do not call agent_merge(); ${hookWarning ? "the branch changes hook files, so only the user can merge it" : "repo policy does not allow direct merge for this session"}.`]
-      : [`- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`]),
-    ...(allowedActions?.pr === false
-      ? [`- Do not call agent_pr(); PR creation is unavailable or forbidden by repo policy.`]
-      : [`- If a PR is safer or human choice is needed, call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user gets the canonical Merge/Open PR/Later/Discard buttons.`]),
-    `- If scope or risk is unclear, call agent_request_worktree_decision(session="${sessionName}", summary="...") with a concise risk summary instead of sending a plain-text-only question.`,
-    `- Never call agent_pr() autonomously in delegate mode.`,
-    `- After deciding, notify the user briefly with what you did and why.`,
-    ...(hasOriginRouteBlock
-      ? [`- Send any human follow-up to the Session origin route above; if it differs from the current chat, do not use a plain final assistant reply.`]
-      : []),
+    `Task (start): ${promptSnippet}`,
+    ...(commitLines.length > 0 ? [fenceAgentOutput([...commitLines, ...(moreNote ? [moreNote] : [])].join("\n"), "commit messages")] : []),
+    ...(policyReason ? [`Policy: ${policyReason}`] : []),
+    ...(hookWarning ? [`Hook changes: ${hookWarning.replace(/^⚠️\s*/u, "")} Only the user can merge or open a PR for this branch.`] : []),
+    `Check the result (agent_output(session='${sessionId}', full=true)), then:`,
+    ...(mergeAllowed
+      ? [`- In scope and low risk: agent_merge(session='${sessionName}', summary='<one or two lines for the user on what changed>'). The summary is shown with the merge notice; send no other message.`]
+      : [`- Do not merge: ${hookWarning ? "the branch changes hook files" : "repo policy does not allow a direct merge"}.`]),
+    `- A PR${allowedActions?.pr === false ? " (not available here)" : ""}, a risky change, or unclear scope: ${escalateCall}, then wait for the user. Do not call agent_pr yourself.`,
   ].join("\n");
 }
 
@@ -77,19 +58,7 @@ export function buildDelegateReminderWakeMessage(
   session: Pick<PersistedSessionInfo, "name" | "sessionId" | "harnessSessionId" | "worktreeBranch">,
   pendingHours: number,
 ): string {
-  return [
-    `[DELEGATED WORKTREE DECISION REMINDER] Session "${session.name}" still has an unresolved worktree decision.`,
-    ``,
-    `Session ID: ${session.sessionId ?? session.harnessSessionId}`,
-    `Branch: ${session.worktreeBranch ?? "unknown"}`,
-    `Pending: ${pendingHours}h`,
-    ``,
-    `Resolve it now:`,
-    `- agent_merge(session="${session.name}") if the diff is clearly safe and in scope`,
-    `- If a PR is safer, ask the user before agent_pr()`,
-    `- If scope or risk is unclear, ask the user for guidance`,
-    `- Never call agent_pr() autonomously in delegate mode`,
-  ].join("\n");
+  return `[${session.name}] Reminder: branch ${session.worktreeBranch ?? "unknown"} has waited ${pendingHours}h for your decision. agent_merge(session='${session.name}', summary='...') if it is safe, otherwise agent_escalate(session='${session.name}', kind='worktree', summary='...').`;
 }
 
 export function buildNoChangeWakeMessage(args: {
@@ -125,15 +94,13 @@ export function buildNoChangeWakeMessage(args: {
     approvalPromptDeliveredAt,
   } = args;
   const previewSection = preview.trim()
-    ? ["", "Output preview:", fenceAgentOutput(preview, "output preview")]
+    ? ["Output (end):", fenceAgentOutput(preview, "output preview")]
     : [];
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
   return [
-    headline ?? `Coding agent session completed with no worktree changes to merge.`,
-    `Name: ${sessionName} | ID: ${sessionId}`,
-    `Worktree outcome: ${cleanupSummary}`,
-    ...(hasOriginRouteBlock ? [originThreadLine] : []),
+    `[${sessionName}] ${headline ?? "Completed with no branch changes to merge."} ${cleanupSummary.charAt(0).toUpperCase()}${cleanupSummary.slice(1)}. ID: ${sessionId}`,
+    ...(hasOriginRouteBlock ? [originThreadLine!] : []),
     ...formatApprovalExecutionContextLines({
       requestedPermissionMode,
       currentPermissionMode,
@@ -145,11 +112,6 @@ export function buildNoChangeWakeMessage(args: {
       approvalPromptDeliveredAt,
     }),
     ...previewSection,
-    ``,
-    ...buildCompletionFollowupInstructionLines({
-      sessionId,
-      canonicalStatusDetail: "The plugin already sent the canonical completion status to the user, including the no-worktree-changes outcome.",
-      hasOriginRouteBlock,
-    }),
+    ...buildCompletionFollowupInstructionLines({ sessionId, hasOriginRouteBlock }),
   ].join("\n");
 }

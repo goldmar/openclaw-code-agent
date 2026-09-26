@@ -27,11 +27,13 @@ describe("agent command", () => {
 
   it("uses the shared launch resolver for routing and policy defaults", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
+    let launchOptions: { notifyLaunch?: boolean } | undefined;
     setSessionManager({
       list: (): never[] => [],
       listPersistedSessions: (): never[] => [],
-      launchSession(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>, options?: { notifyLaunch?: boolean }) {
         spawnConfig = config;
+        launchOptions = options;
         return {
           id: "sess-agent-command",
           name: config.name,
@@ -40,14 +42,11 @@ describe("agent command", () => {
           worktreeStrategy: "delegate",
         };
       },
-      formatLaunchResult(config: Record<string, unknown>, session: Record<string, unknown>) {
-        return `launched ${session.name} with ${config.permissionMode}/${config.planApproval}`;
-      },
     } as any);
 
     const handler = captureAgentCommand();
     const result = await handler({
-      args: '--name "agent command" Fix the auth bug',
+      args: '--name "agent command" --model sonnet --harness claude-code Fix the auth bug',
       workspaceDir: "/tmp",
       sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
       deliveryContext: {
@@ -58,8 +57,13 @@ describe("agent command", () => {
       },
     });
 
-    assert.equal(result.text, "launched agent command with plan/delegate");
+    // One message (N45): the reply is the launch line, with no separate 🚀 notice.
+    assert.equal(result.text, "🚀 [agent command] Launched | /tmp | sonnet\nFollow it with /agent_output agent command or /agent_status.");
     assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.prompt, "Fix the auth bug");
+    assert.equal(spawnConfig?.model, "sonnet");
+    assert.equal(spawnConfig?.harness, "claude-code");
+    assert.equal(launchOptions?.notifyLaunch, false);
     assert.equal(spawnConfig?.permissionMode, "plan");
     assert.equal(spawnConfig?.planApproval, "delegate");
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1001234567890");

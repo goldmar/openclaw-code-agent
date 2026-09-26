@@ -172,13 +172,13 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
   };
 
   const detailNotes: string[] = [];
-  if (approachOmitted > 0) detailNotes.push(`${approachOmitted} additional routine implementation step(s)`);
-  if (!args.artifact) detailNotes.push("a version-matched structured plan artifact was unavailable; this brief uses the available plan preview");
-  if (unclassifiedCount > PLAN_APPROVAL_APPROACH_MAX_ITEMS) detailNotes.push("unclassified plan detail was compacted into the implementation section");
+  // N42: only say what was left out; whether a structured plan artifact existed is not the user's concern.
+  if (approachOmitted > 0) detailNotes.push(`${approachOmitted} more routine step${approachOmitted === 1 ? "" : "s"} not shown`);
+  if (unclassifiedCount > PLAN_APPROVAL_APPROACH_MAX_ITEMS) detailNotes.push("some detail was condensed");
 
   const detailAction = args.detailRef && /^[a-zA-Z0-9_-]+$/.test(args.detailRef)
-    ? `Inspect available full output before deciding: /agent_output ${args.detailRef} --full. Request the complete plan if it is unavailable there.`
-    : "To inspect these details before deciding, reply asking for the complete plan for this version.";
+    ? `Full plan: /agent_output ${args.detailRef} --full`
+    : "Reply asking for the full plan to see everything.";
 
   return [
     ...renderSection("objective"),
@@ -200,8 +200,7 @@ function buildDecisionGradePlanSummary(args: { preview: string; artifact?: PlanA
     ...renderSection("rollback"),
     ...(detailNotes.length > 0 ? [
       "",
-      "Full-plan detail:",
-      `- ${detailNotes.join("; ")}. ${detailAction}`,
+      `(${detailNotes.join("; ")}. ${detailAction})`,
     ] : []),
   ].join("\n").replace(/\n{3,}/g, "\n\n").trim() || "Plan context: No concrete plan content was available. Request the complete plan before deciding.";
 }

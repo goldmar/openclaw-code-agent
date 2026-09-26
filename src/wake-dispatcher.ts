@@ -35,6 +35,15 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  /**
+   * How `wakeMessage` and `wakeMessageOnNotifySuccess` reach the orchestrator.
+   * "now" (default) runs an orchestrator turn (`chat.send`). "next-turn" only
+   * queues the text as a system event on the origin session, without a
+   * heartbeat: the host prepends it to that session's next turn (for example
+   * the user's reply). Use it for context the orchestrator needs later but
+   * must not act on now. A wake for a failed user notification always runs now.
+   */
+  wakeDelivery?: "now" | "next-turn";
   /** Whether a failure-report wake proves the preceding user notification was delivered. */
   failureWakeConfirmsNotificationDelivery?: boolean;
   completionSummary?: CompletionSummaryFact;
@@ -509,6 +518,25 @@ export class WakeDispatcher {
     );
   }
 
+  /** Queue orchestrator context for its next turn (a system event without a heartbeat). */
+  private queueForNextTurn(
+    session: Session,
+    text: string,
+    label: string,
+    hooks: SessionNotificationHooks | undefined,
+    shouldContinue?: () => boolean,
+  ): void {
+    this.sendSystemEvent(session, text, {
+      label: `${label}-queued`,
+      phase: "wake",
+      messageKind: "wake",
+      wakeNow: false,
+      onSuccess: hooks?.onWakeSucceeded,
+      onFinalFailure: hooks?.onWakeFailed,
+      shouldContinue,
+    });
+  }
+
   private sendUserNotificationSequence(
     session: Session,
     messages: SessionNotificationMessage[],
@@ -614,10 +642,14 @@ export class WakeDispatcher {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
       const wakeOnFailed = request.wakeMessageOnNotifyFailed?.trim();
 
-      const sendDeferredWake = (wakeText: string): void => {
+      const sendDeferredWake = (wakeText: string, queueOnly = false): void => {
         if (!wakeText) return;
         if (shouldDispatch?.() === false) return;
         hooks?.onWakeStarted?.();
+        if (queueOnly) {
+          this.queueForNextTurn(session, wakeText, `${request.label}-wake`, hooks, shouldDispatch);
+          return;
+        }
         this.sendWake(
           session,
           wakeText,
@@ -631,20 +663,20 @@ export class WakeDispatcher {
           request.idempotencyKey,
         );
       };
-      const dispatchWake = (wakeText: string): void => {
+      const dispatchWake = (wakeText: string, queueOnly = false): void => {
         if (!wakeText) return;
         if (request.deferConditionalWakeUntilNextTick === true || request.deferConditionalWakeMs !== undefined) {
           const delayMs = Math.max(0, Math.floor(request.deferConditionalWakeMs ?? 0));
-          setTimeout(() => sendDeferredWake(wakeText), delayMs).unref?.();
+          setTimeout(() => sendDeferredWake(wakeText, queueOnly), delayMs).unref?.();
           return;
         }
-        sendDeferredWake(wakeText);
+        sendDeferredWake(wakeText, queueOnly);
       };
 
       const onSuccess = () => {
         if (shouldDispatch?.() === false) return;
         hooks?.onNotifySucceeded?.();
-        if (wakeOnSuccess) dispatchWake(wakeOnSuccess);
+        if (wakeOnSuccess) dispatchWake(wakeOnSuccess, request.wakeDelivery === "next-turn");
       };
       const onFailed = wakeOnFailed
         ? () => {
@@ -671,7 +703,8 @@ export class WakeDispatcher {
           request.requireDirectUserNotification === true,
           shouldDispatch,
           // A system-event fallback counts as notify success, which dispatches the success wake.
-          Boolean(wakeOnSuccess),
+          // A queued (next-turn) success wake does not run a turn, so the fallback must.
+          Boolean(wakeOnSuccess) && request.wakeDelivery !== "next-turn",
         );
       } else {
         onFailed();
@@ -704,6 +737,11 @@ export class WakeDispatcher {
     if (!wakeMessage) return;
     if (shouldDispatch?.() === false) return;
     hooks?.onWakeStarted?.();
+
+    if (request.wakeDelivery === "next-turn") {
+      this.queueForNextTurn(session, wakeMessage, `${request.label}-wake`, hooks, shouldDispatch);
+      return;
+    }
 
     if (notifyUser === "on-wake-fallback" && userMessages.length > 0 && !this.routes.resolve(session)?.sessionKey) {
       if (shouldDispatch?.() === false) return;

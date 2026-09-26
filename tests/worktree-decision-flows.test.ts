@@ -127,7 +127,7 @@ for (const name of BACKEND_NAMES) {
       const repo = createRepo();
       const f = await finishSessionWithChange(name, repo, "delegate");
       const wake = await f.waitForNotification("worktree-delegate");
-      assert.match(wake.request.wakeMessage ?? wake.request.wakeMessageOnNotifySuccess ?? "", /\[DELEGATED WORKTREE DECISION\]/);
+      assert.match(wake.request.wakeMessage ?? wake.request.wakeMessageOnNotifySuccess ?? "", /You decide what happens to the branch \(worktree: delegate\)/);
       assert.equal(f.buttons("worktree-delegate").length, 0, "the user gets no buttons until the orchestrator asks");
 
       const before = f.notifications.length;
@@ -162,7 +162,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(f.backend.turns.at(-1)?.text.includes("Make one small change"), true);
 
       const stale = await clickButton(buttonNamed(buttons, "No PR"));
-      assert.match(stale.replies.join("\n"), /stale or has already been used/);
+      assert.match(stale.replies.join("\n"), /expired or was already used/);
       assert.equal((await f.sm.resolveRepoPolicy(repo)).policy, "manual", "the stale click changes nothing");
     });
   });

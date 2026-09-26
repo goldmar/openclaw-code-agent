@@ -203,7 +203,7 @@ describe("agent_pr execute(): new PRs", () => {
     const result = await f.run();
 
     assert.deepEqual(result.meta, { success: true, state: "created" });
-    assert.equal(textOf(result), "✅ PR opened: https://github.com/acme/widget/pull/101");
+    assert.equal(textOf(result), "✅ [pr-flow] PR opened: https://github.com/acme/widget/pull/101");
     assert.equal(f.gh.remoteHead(f.branch), head, "the branch was pushed before the PR was opened");
     const [create] = f.gh.ghCalls("create");
     assert.ok(create);
@@ -229,7 +229,7 @@ describe("agent_pr execute(): new PRs", () => {
     assert.equal(persisted?.worktreeLifecycle?.state, "pr_open");
 
     assert.equal(f.outcomes.length, 1);
-    assert.equal(f.outcomes[0]?.line, "✅ PR opened: https://github.com/acme/widget/pull/101");
+    assert.equal(f.outcomes[0]?.line, "✅ [pr-flow] PR opened: https://github.com/acme/widget/pull/101");
     assert.deepEqual(f.outcomes[0]?.detailLines, [
       `Opened PR for branch ${f.branch} into main.`,
       "PR URL: https://github.com/acme/widget/pull/101.",
@@ -341,7 +341,7 @@ describe("agent_pr execute(): existing open PRs", () => {
 
     assert.deepEqual(result.meta, { success: true, state: "pr_updated" });
     const text = textOf(result);
-    assert.match(text, new RegExp(`^✅ PR updated: ${seeded.url} \\(1 files, \\+1/-0\\)`));
+    assert.match(text, new RegExp(`^✅ \\[pr-flow\\] PR updated: ${seeded.url} \\(1 files, \\+1/-0\\)`));
     assert.match(text, /📝 Added comment detailing 1 new commits \(\+1 \/ -0\)/);
     assert.match(text, /📝 Refreshed PR title\/body from current OpenClaw metadata\./);
 
@@ -354,7 +354,7 @@ describe("agent_pr execute(): existing open PRs", () => {
     assert.equal(f.gh.ghCalls("create").length, 0);
     assert.equal(f.persisted()?.worktreePrUrl, seeded.url);
     assert.equal(f.persisted()?.worktreePrNumber, seeded.number);
-    assert.equal(f.outcomes[0]?.line, `✅ PR updated: ${seeded.url} (1 files, +1/-0)`);
+    assert.equal(f.outcomes[0]?.line, `✅ [pr-flow] PR updated: ${seeded.url} (1 files, +1/-0)`);
   });
 
   it("refreshes an OCA fallback body from the session report when runtime.llm fails", async () => {
@@ -571,7 +571,7 @@ describe("auto-pr worktree strategy", () => {
     const branch = argAfter(create.args, "--head");
     assert.ok(branch);
     assert.equal(gh.remoteHead(branch), git(gh.repoDir, "rev-parse", branch));
-    assert.equal(outcomes[0]?.line, "✅ PR opened: https://github.com/acme/widget/pull/101");
+    assert.equal(outcomes[0]?.line, "✅ [auto-pr-flow] PR opened: https://github.com/acme/widget/pull/101");
     const persisted = sm.getPersistedSession(session.id);
     assert.equal(persisted?.worktreePrUrl, "https://github.com/acme/widget/pull/101");
     assert.equal(persisted?.worktreeStrategy, "auto-pr");

@@ -203,11 +203,11 @@ describe("callback payload handling (properties)", () => {
             assert.deepEqual(replies, ["⛔ Unauthorized."]);
             assert.deepEqual(lookups, []);
           } else if (!trimmed) {
-            assert.deepEqual(replies, ["⚠️ Unrecognized callback payload."]);
+            assert.deepEqual(replies, ["⚠️ This button is not recognized. Use the buttons on the latest message."]);
             assert.deepEqual(lookups, []);
           } else {
             assert.deepEqual(lookups, [trimmed]);
-            assert.deepEqual(replies, ["⚠️ This action is stale or has already been used."]);
+            assert.deepEqual(replies, ["⚠️ This button has expired or was already used."]);
           }
         },
       ),
@@ -221,7 +221,7 @@ describe("callback payload handling (properties)", () => {
         setSessionManager(null);
         const replies: string[] = [];
         await createCallbackHandler(channel).handler(payloadCtx(channel, payload, true, replies));
-        assert.deepEqual(replies, ["⚠️ Code agent service not running."]);
+        assert.deepEqual(replies, ["⚠️ The code agent is not running right now. Try again in a moment."]);
       }),
       propertyParams(20),
     );

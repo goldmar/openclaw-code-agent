@@ -158,12 +158,12 @@ describe("session-route", () => {
       },
     });
 
-    assert.match(block, /Session origin route \(authoritative for human follow-ups\):/);
+    assert.match(block, /^originRoute: \{/);
     assert.match(block, /"provider":"telegram"/);
     assert.match(block, /"target":"-1001234567890"/);
     assert.match(block, /"threadId":"13832"/);
     assert.match(block, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);
-    assert.match(block, /do not use a plain final assistant reply/i);
+    assert.match(block, /If it is not this chat, send your message there with provider, target and threadId/);
   });
 
   it("does not format a wake originRoute block for system routes", () => {

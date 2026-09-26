@@ -159,8 +159,8 @@ describe("AutoUpdateService", () => {
     await harness.service.waitForIdle();
 
     assert.equal(harness.sends.length, 1);
-    assert.match(harness.sends[0]?.text ?? "", /4\.6\.0 -> 4\.6\.1/);
-    assert.deepEqual(harness.sends[0]?.labels, ["Update now", "Remind later", "Dismiss"]);
+    assert.match(harness.sends[0]?.text ?? "", /4\.6\.1 is available \(you have 4\.6\.0\)/);
+    assert.deepEqual(harness.sends[0]?.labels, ["Update now", "Remind later", "Skip this version"]);
     assert.equal(readState(stateDir).promptedVersion, "4.6.1");
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
     assert.deepEqual(harness.commands, []);
@@ -271,7 +271,7 @@ describe("AutoUpdateService", () => {
         ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
         ["openclaw", "plugins", "search", "goldmar/openclaw-code-agent", "--limit", "100", "--json"],
       ]);
-      assert.match(sends[0]?.text ?? "", /4\.6\.0 -> 4\.6\.1/);
+      assert.match(sends[0]?.text ?? "", /4\.6\.1 is available \(you have 4\.6\.0\)/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -311,9 +311,9 @@ describe("AutoUpdateService", () => {
 
     assert.equal(harness.fetchCount, 1);
     assert.equal(harness.sends.length, 1);
-    assert.match(harness.sends[0]?.text ?? "", /^OpenClaw Code Agent update available:/);
-    assert.match(harness.sends[0]?.text ?? "", /OpenClaw Code Agent's recorded npm or ClawHub source/);
-    assert.match(harness.sends[0]?.text ?? "", /OpenClaw Code Agent will ask separately/);
+    assert.match(harness.sends[0]?.text ?? "", /^⬆️ Code Agent 4\.6\.1 is available/);
+    assert.match(harness.sends[0]?.text ?? "", /from the same source \(npm or ClawHub\)/);
+    assert.match(harness.sends[0]?.text ?? "", /restarting the Gateway is a separate step/);
     assert.doesNotMatch(harness.sends[0]?.text ?? "", /\bOCA\b/);
     assert.equal(readState(stateDir).promptedVersion, "4.6.1");
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
@@ -344,7 +344,8 @@ describe("AutoUpdateService", () => {
     // The legacy dismissal is honored (no prompt, no re-fetch within a day).
     assert.equal(harness.sends.length, 0);
     assert.equal(harness.fetchCount, 0);
-    assert.equal(harness.service.dismiss("4.6.1"), "Dismissed OpenClaw Code Agent 4.6.1 update reminder.");
+    assert.equal(harness.service.dismiss("4.6.1"), "Skipped Code Agent 4.6.1. You will hear about newer versions.");
+    assert.equal(readState(stateDir).skippedVersion, "4.6.1");
     assert.equal(readState(stateDir).dismissedVersion, "4.6.1");
     assert.equal(readState(stateDir).latestVersion, "4.6.1");
     assert.equal(statSync(join(stateDir, autoUpdateInternals.UPDATE_STATE_FILE)).mode & 0o777, 0o600);
@@ -383,6 +384,35 @@ describe("AutoUpdateService", () => {
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
   });
 
+  it("Remind later asks again after a day; Skip this version never asks for that version again (N43)", async () => {
+    setPluginConfig({});
+    let now = Date.parse("2026-07-15T12:00:00.000Z");
+    const stateDir = tempStateDir();
+    const harness = createService({ stateDir, latestVersion: "4.6.1", now: () => now });
+    const check = async (): Promise<void> => {
+      // Keep the daily registry check fresh so only the prompt rules decide.
+      writeState(stateDir, { ...readState(stateDir), lastCheckedAt: new Date(now - 1000).toISOString() });
+      harness.service.maybeCheckForUpdate({ route: ROUTE });
+      await harness.service.waitForIdle();
+    };
+
+    harness.service.maybeCheckForUpdate({ route: ROUTE });
+    await harness.service.waitForIdle();
+    assert.equal(harness.sends.length, 1);
+    assert.match(harness.service.remindLater("4.6.1"), /again tomorrow/);
+    now += 23 * 60 * 60 * 1000;
+    await check();
+    assert.equal(harness.sends.length, 1, "not before a day has passed");
+    now += 2 * 60 * 60 * 1000;
+    await check();
+    assert.equal(harness.sends.length, 2, "4.x waited a week for Remind later, the same as Dismiss");
+
+    harness.service.dismiss("4.6.1");
+    now += 30 * 24 * 60 * 60 * 1000;
+    await check();
+    assert.equal(harness.sends.length, 2, "a skipped version is never offered again (4.x re-offered it weekly)");
+  });
+
   it("runs update and restart only from explicit confirmation methods", async () => {
     setPluginConfig({});
     const stateDir = tempStateDir();
@@ -402,7 +432,8 @@ describe("AutoUpdateService", () => {
       ["openclaw", "plugins", "install", "openclaw-code-agent@4.6.1", "--force"],
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
-    assert.deepEqual(harness.sends.at(-1)?.labels, ["Restart Gateway", "Remind later", "Dismiss"]);
+    assert.deepEqual(harness.sends.at(-1)?.labels, ["Restart Gateway", "Not now"]);
+    assert.equal(harness.service.dismiss("4.6.1"), "OK. Code Agent 4.6.1 loads at the next Gateway restart.");
 
     const restartText = await harness.service.restartConfirmed("4.6.1");
     assert.match(restartText, /Gateway restart requested/);
@@ -420,7 +451,7 @@ describe("AutoUpdateService", () => {
 
     harness.service.maybeCheckForUpdate({ route: ROUTE });
     await harness.service.waitForIdle();
-    assert.match(harness.sends[0]?.text ?? "", /exact approved version/);
+    assert.match(harness.sends[0]?.text ?? "", /exactly this version/);
 
     // The registry may move after the signed callback token was created. The
     // confirmation must still install the version that the user saw.
@@ -433,7 +464,7 @@ describe("AutoUpdateService", () => {
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
     assert.equal(readState(stateDir).updateInstalledVersion, "4.6.1");
-    assert.match(harness.sends.at(-1)?.text ?? "", /OpenClaw Code Agent 4\.6\.1 installation was verified/);
+    assert.match(harness.sends.at(-1)?.text ?? "", /Code Agent 4\.6\.1 is installed\. Restart the Gateway to load it/);
   });
 
   it("reinstalls an exact approved ClawHub release from the recorded source", async () => {

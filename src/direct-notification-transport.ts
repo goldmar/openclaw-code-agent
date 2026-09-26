@@ -147,11 +147,13 @@ export function buildPresentation(
     .filter((row) => Array.isArray(row) && row.length > 0)
     .map((row) => ({
       type: "buttons" as const,
-      buttons: row.map((button) => ({
-        label: button.label,
-        value: prefixCallbackData(button.callbackData),
-        ...(button.style ? { style: button.style } : {}),
-      })),
+      buttons: row.map((button) => button.url
+        ? { label: button.label, action: { type: "url" as const, url: button.url } }
+        : {
+            label: button.label,
+            value: prefixCallbackData(button.callbackData),
+            ...(button.style ? { style: button.style } : {}),
+          }),
     }));
   return blocks.length > 0 ? { blocks } : undefined;
 }

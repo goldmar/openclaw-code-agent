@@ -66,8 +66,8 @@ describe("repo policy resolution", () => {
       const result = await sm.checkRepoPolicyForLaunch(repoDir, "delegate");
       assert.equal(result.ok, false);
       if (!result.ok) {
-        assert.match(result.text, /Repo integration policy is not set/);
-        assert.match(result.text, /OpenClaw Code Agent will create isolated worktrees/);
+        assert.match(result.text, /Repo policy is not set for /);
+        assert.match(result.text, /Ask the user how branches should land/);
         assert.doesNotMatch(result.text, /\bOCA\b/);
         assert.match(result.text, /agent_repo_policy/);
       }
@@ -148,7 +148,9 @@ describe("repo policy resolution", () => {
       assert.match(result, /No PR or Manual response/);
       assert.equal(dispatchCalls.length, 1);
       const [, request] = dispatchCalls[0];
-      assert.match(request.userMessage, /Provider: unsupported \(PR automation unavailable\)/);
+      assert.match(request.userMessage, /No GitHub remote, so pull requests are not available/);
+      assert.doesNotMatch(request.userMessage, /agent_repo_policy/, "tool syntax belongs only in the orchestrator text (N39)");
+      assert.equal(request.wakeMessageOnNotifySuccess, undefined, "no do-nothing wake (N37)");
       assert.doesNotMatch(request.userMessage, /Require PR/);
       assert.doesNotMatch(request.userMessage, /Merge or PR/);
       assert.doesNotMatch(request.userMessage, /policy="pr-required"/);
@@ -205,7 +207,8 @@ describe("repo policy resolution", () => {
       assert.match(result, /Repo policy choice prompt sent/);
       assert.equal(dispatchCalls.length, 1);
       const [, request] = dispatchCalls[0];
-      assert.match(request.userMessage, /continue this launch automatically/);
+      assert.match(request.userMessage, /The launch continues after you choose/);
+      assert.ok(request.userMessage.split("\n").length <= 7, `short prompt (N39): ${request.userMessage}`);
       assert.deepEqual(
         request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
         [["No PR", "Manual"]],
@@ -336,8 +339,8 @@ describe("repo policy resolution", () => {
       assert.equal(spawnConfig?.rewindTurns, 2);
       assert.equal(spawnConfig?.resumeSessionId, "backend-session-1");
       assert.equal(spawnConfig?.resumeWorktreeFrom, "stable-session-1");
-      assert.match(result.text, /ID: stable-session-1/);
-      assert.match(result.text, /Rewind: forking before the last 2 turn/);
+      assert.match(result.text, /\[stable-session-1\]/);
+      assert.match(result.text, /Rewind: forked before the last 2 turn/);
       sm.dispose();
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
@@ -384,7 +387,7 @@ describe("repo policy resolution", () => {
 
       assert.equal(continuation.kind, "launched");
       if (continuation.kind === "launched") {
-        assert.match(continuation.text, /Session launched successfully/);
+        assert.match(continuation.text, /^Launched manual-policy-session \[/);
       }
       assert.equal(spawnConfig?.prompt, "Continue after manual policy");
       assert.equal(spawnConfig?.workdir, repoDir);

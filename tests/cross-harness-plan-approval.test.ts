@@ -138,7 +138,7 @@ for (const name of BACKEND_NAMES) {
       const v1 = await proposePlan();
       const v1Buttons = await planButtons();
       const revise = await clickButton(buttonNamed(v1Buttons, "Revise"));
-      assert.match(revise.replies.join("\n"), /Type your revision feedback/);
+      assert.match(revise.replies.join("\n"), /Reply with the changes you want/);
       assert.equal(fixture.session.approvalState, "changes_requested");
 
       const feedback = "Put the migration behind a feature flag";
@@ -147,7 +147,7 @@ for (const name of BACKEND_NAMES) {
       await expectRevisionRequested(v1, feedback);
 
       const staleBeforeV2 = await clickButton(buttonNamed(v1Buttons, "Approve"));
-      assert.match(staleBeforeV2.replies.join("\n"), /stale|no longer/);
+      assert.match(staleBeforeV2.replies.join("\n"), /stale|no longer|expired/);
 
       const before = fixture.notifications.length;
       const v2 = await nextPlanRound(PLAN_V2);
@@ -156,7 +156,7 @@ for (const name of BACKEND_NAMES) {
       assert.notDeepEqual(v2Buttons.map((button) => button.callbackData), v1Buttons.map((button) => button.callbackData));
 
       const staleV1 = await clickButton(buttonNamed(v1Buttons, "Approve"));
-      assert.match(staleV1.replies.join("\n"), /stale|no longer/, "approving v1 after v2 exists fails as stale");
+      assert.match(staleV1.replies.join("\n"), /stale|no longer|expired/, "approving v1 after v2 exists fails as stale");
       assert.equal(fixture.session.pendingPlanApproval, true, "the stale click leaves v2 pending");
 
       await clickButton(buttonNamed(v2Buttons, "Approve"));
@@ -200,7 +200,7 @@ for (const name of BACKEND_NAMES) {
       fixture = await start(name, { planPromptDelivery: "failed" });
       const round = await proposePlan();
       const revise = await executeRespond(fixture.sm, { session: fixture.session.id, message: "Revise", userInitiated: true });
-      assert.match(revise.text, /Type your revision feedback/);
+      assert.match(revise.text, /Reply with the changes you want/);
       assert.equal(fixture.session.approvalState, "changes_requested");
       await executeRespond(fixture.sm, { session: fixture.session.id, message: "Drop step 3", userInitiated: true });
       await expectRevisionRequested(round, "Drop step 3");
@@ -211,7 +211,7 @@ for (const name of BACKEND_NAMES) {
       const round = await proposePlan();
       const wake = fixture.lastNotification("plan-approval")!;
       assert.equal(wake.request.notifyUser, "never");
-      assert.match(wake.request.wakeMessage ?? "", /\[DELEGATED PLAN APPROVAL\]/);
+      assert.match(wake.request.wakeMessage ?? "", /Plan v1 ready\. ID: .+ You review it \(planApproval: delegate\)/);
       assert.equal(fixture.buttons("plan-approval").length, 0, "the user gets no buttons yet");
 
       const result = await executeRespond(fixture.sm, {
@@ -222,7 +222,7 @@ for (const name of BACKEND_NAMES) {
       });
       assert.match(result.text, /Plan approved/);
       await expectImplementationStarted(round);
-      assert.match(fixture.lastNotification("plan-approved")?.request.userMessage ?? "", /Plan approved/);
+      assert.match(fixture.lastNotification("plan-approved")?.request.userMessage ?? "", /Plan approved: Scope matches the task and the change is low risk\./);
     });
 
     for (const mode of ["delegate", "approve"] as const) {
@@ -247,9 +247,9 @@ for (const name of BACKEND_NAMES) {
       assert.equal(wake.request.notifyUser, "never");
       assert.equal(fixture.buttons("plan-approval").length, 0);
       const text = wake.request.wakeMessage ?? "";
-      assert.match(text, /\[PLAN READY\].*only after verifying the plan/);
+      assert.match(text, /Plan v1 ready\..*only after verifying the plan/);
       assert.match(text, /agent_output\(session='.+', full=true\)/);
-      assert.match(text, /agent_request_plan_approval/);
+      assert.match(text, /agent_escalate\(session='.+', kind='plan'/);
       assert.match(text, /approval_rationale/);
 
       await executeRespond(fixture.sm, {

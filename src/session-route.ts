@@ -349,8 +349,7 @@ export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   if (Object.keys(originRoute).length === 0) return "";
 
   return [
-    `Session origin route (authoritative for human follow-ups):`,
     `originRoute: ${JSON.stringify(originRoute)}`,
-    `Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`,
+    `(The user's chat for this session. If it is not this chat, send your message there with provider, target and threadId.)`,
   ].join("\n");
 }

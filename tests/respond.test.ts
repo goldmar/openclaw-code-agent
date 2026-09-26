@@ -361,6 +361,26 @@ describe("executeRespond", () => {
     assert.match(result.text, /Pending input request submitted/);
   });
 
+  it("does not echo the user's own words back to the chat (N46)", async () => {
+    const notifications: string[] = [];
+    const running = createStubSession({ status: "running", sendMessage: async () => {} });
+    const answering = createStubSession({
+      pendingInputState: {
+        requestId: "req-echo", kind: "question", promptText: "Which?", options: [],
+        allowsFreeText: true, activeQuestionIndex: 0,
+        questions: [{ id: "q", question: "Which?", options: [] }],
+      },
+      submitPendingInputText: async () => true,
+    });
+    const sm = createStubSessionManager({ "follow-up": running, "answer": answering });
+    (sm as any).notifySession = (_session: unknown, text: string) => { notifications.push(text); };
+
+    await executeRespond(sm, { session: "follow-up", message: "Also add tests.", userInitiated: true });
+    await executeRespond(sm, { session: "answer", message: "the second one", userInitiated: true });
+
+    assert.deepEqual(notifications, [], "4.x posted ↪️ [name] \"<the user's words>\" for each");
+  });
+
   it("truthfully reports an answered wizard step while another question remains", async () => {
     const session = createStubSession({
       pendingInputState: {
@@ -428,7 +448,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
+    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (session resumed): The plan stays in bounds and only touches low-risk files.");
     assert.equal(
       notifications[0].idempotencyKey,
       "agent-respond-plan-approved-resumed:dead-plan-shutdown:1780000003000:harness-plan-shutdown:vunknown",
@@ -609,7 +629,7 @@ describe("executeRespond", () => {
     });
 
     assert.equal(result.isError, undefined);
-    assert.match(result.text, /Type your revision feedback/);
+    assert.match(result.text, /Reply with the changes you want/);
     assert.equal(sentMessage, undefined);
     assert.equal(session.approvalState, "changes_requested");
     assert.equal(session.pendingPlanApproval, false);
@@ -706,7 +726,8 @@ describe("executeRespond", () => {
     assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
+    // N36: the user sees why the orchestrator approved, without a separate message.
+    assert.equal(notifications[0].text, "👍 [test-session] Plan approved: The scope matches the request and the change is low risk.");
   });
 
   it("persists active plan approval state before notifying", async () => {

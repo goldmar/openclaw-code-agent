@@ -87,7 +87,7 @@ describe("plan decision brief presentation", () => {
         "## Scope", "- Include all 12 readers.", "## Tests", ...Array.from({ length: 12 }, (_, i) => `- Verify fixture ${i}.`),
         "## Rollback", "- Restore the backup."].join("\n") } });
     assert.doesNotMatch(summary, /routine helper 90/);
-    for (const text of ["additional routine implementation step", "delete the legacy bucket permanently", tail, "Include all 12 readers", "Option A or Option B", "Expand scope to cover audio", "Verify fixture 11", "Restore the backup"])
+    for (const text of ["more routine step", "delete the legacy bucket permanently", tail, "Include all 12 readers", "Option A or Option B", "Expand scope to cover audio", "Verify fixture 11", "Restore the backup"])
       assert.ok(summary.includes(text), text.slice(0, 60));
     assert.match(summary, /reply asking for the complete plan for this version/);
   });
@@ -106,7 +106,7 @@ describe("plan decision brief presentation", () => {
       assert.match(summary, /Tests \/ verification: Step 9: Run integration tests/);
       assert.match(summary, /Files \/ systems affected: Step 10: change `src\/video-reader.ts` and `src\/audio-reader.ts`/);
       assert.doesNotMatch(summary, /ordinary helper behavior 8/);
-      assert.match(summary, /2 additional routine implementation step/);
+      assert.match(summary, /2 more routine steps not shown/);
     }
   });
 

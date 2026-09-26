@@ -13,7 +13,8 @@ describe("agent_goal tool", () => {
     const tool = makeAgentGoalTool({} as any);
     assert.equal(tool.name, "agent_goal");
     const action = (tool.parameters as any).properties.action;
-    assert.deepEqual(action.anyOf.map((entry: { const: string }) => entry.const), ["launch", "status", "edit", "stop"]);
+    assert.deepEqual(action.enum, ["launch", "status", "edit", "stop"]);
+    assert.equal(action.type, "string");
     // The removed status aliases are gone.
     assert.equal((tool.parameters as any).properties.id, undefined);
   });

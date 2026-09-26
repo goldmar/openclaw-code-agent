@@ -84,11 +84,10 @@ export class SessionQuestionService {
       ...(options.length > 0 ? [`Options:`, ...options.map((o, i) => `  ${i + 1}. ${o.label}`)] : []),
     ].join("\n"), "question");
     const fallbackWakeText = [
-      `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
-      ``,
+      `[${session.name}] The agent asks the user a question that could not be shown to them. ID: ${session.id}`,
+      `Show it to the user exactly, without answering it:`,
       questionBlock,
-      ``,
-      `Send the question to the user and call agent_respond(session="${session.id}", message="<answer>", userInitiated=true) with their answer. Do not answer it yourself.`,
+      `Forward their answer: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
     ].join("\n");
 
     return new Promise((resolve, reject) => {
@@ -119,12 +118,12 @@ export class SessionQuestionService {
         // A question answered (or superseded) before its buttons went out, for
         // example while their tokens waited to be persisted, is never shown.
         shouldDispatch: () => this.pendingQuestions.get(session.id)?.requestId === requestId,
+        // Context for when the user answers in chat; nothing to do now (N37).
         wakeMessageOnNotifySuccess: [
-          `AskUserQuestion delivered to the user.`,
-          `Session: ${session.name} | ID: ${session.id}`,
+          `[${session.name}] The user was asked this question with buttons; do not answer it yourself. If they answer in chat, forward it: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
           questionBlock,
-          `Await their selection — do NOT answer this question yourself.`,
         ].join("\n"),
+        wakeDelivery: "next-turn",
         wakeMessageOnNotifyFailed: fallbackWakeText,
       });
     });

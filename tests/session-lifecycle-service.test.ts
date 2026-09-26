@@ -268,11 +268,10 @@ describe("SessionLifecycleService", () => {
     };
     assert.equal(request.wakeMessage, undefined);
     assert.equal(request.requireDirectUserNotification, true);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Plugin requested short factual follow-up summary: yes/);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences what was done/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /The user saw: ✅ \[complete-session\] Completed/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
-    assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/);
+    assert.match(request.wakeMessageOnNotifyFailed ?? "", /did NOT reach the user/);
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_notify_succeeded\"") && line.includes("\"requestedShortFactualSummary\":true")));
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_wake_succeeded\"") && line.includes("\"canonicalStatusDelivered\":true")));
   });
@@ -388,10 +387,9 @@ describe("SessionLifecycleService", () => {
       wakeMessageOnNotifyFailed?: string;
     };
     assert.equal(request.completionWakeSummaryRequired, true);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences what was done/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
-    assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/i);
+    assert.match(request.wakeMessageOnNotifyFailed ?? "", /did NOT reach the user/);
   });
 
   it("does not re-enter ask-mode prompt delivery once the current plan prompt is already proven", () => {
@@ -455,7 +453,9 @@ describe("SessionLifecycleService", () => {
       userMessages?: unknown[];
     };
     assert.equal(request.notifyUser, "never");
-    assert.match(request.wakeMessage ?? "", /USER APPROVAL REQUESTED/);
+    assert.match(request.wakeMessage ?? "", /It is with the user \(planApproval: ask\)/);
+    // The user already has the prompt: only next-turn context for the orchestrator (N37).
+    assert.equal((request as { wakeDelivery?: string }).wakeDelivery, "next-turn");
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.onUserNotifyFailed, undefined);
     assert.equal(request.userMessage, undefined);

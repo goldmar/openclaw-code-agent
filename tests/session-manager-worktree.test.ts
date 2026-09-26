@@ -197,7 +197,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.userMessage, /worktree cleaned up/);
       assert.doesNotMatch(request.userMessage, /PR updated; no local worktree changes remained to merge/);
       assert.equal(request.notifyUser, "always");
-      assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
+      assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
       const persisted = (sm as any).store.persisted.get("h-no-change");
       assert.equal(persisted.worktreePath, undefined);
@@ -303,7 +303,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.userMessage, /PR updated; no local worktree changes remained to merge/);
       assert.match(request.userMessage, /worktree cleaned up/);
       assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
-      assert.match(request.wakeMessage, /PR updated; no local worktree changes remained to merge/);
+      assert.match(request.wakeMessage, /Updated a PR; no local branch changes remained to merge/);
       const persisted = (sm as any).store.persisted.get("h-pr-updated-clean");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
@@ -400,7 +400,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.label, "worktree-no-changes");
       assert.match(request.userMessage, /no worktree changes to merge/);
       assert.match(request.userMessage, /worktree cleaned up/);
-      assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
+      assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.doesNotMatch(request.wakeMessage, /completed with no repository changes/);
       const persisted = (sm as any).store.persisted.get("h-pr-open-no-change");
       assert.equal(persisted.worktreePath, undefined);
@@ -579,12 +579,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
       assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no worktree changes to merge — worktree cleaned up");
-      assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-      assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
-      assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);
+      assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
-      assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
-      assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
+      assert.match(request.wakeMessage, /Do not repeat the status line/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -641,12 +638,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
       assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no worktree changes to merge — worktree cleaned up");
-      assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-      assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
-      assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);
+      assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
-      assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
-      assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
+      assert.match(request.wakeMessage, /Do not repeat the status line/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -715,7 +709,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-dirty-uncommitted");
-      assert.match(request.userMessage, /uncommitted worktree changes/i);
+      assert.match(request.userMessage, /Finished with uncommitted changes and no commits/);
+      // N44: the guidance comes with buttons to act on it.
+      assert.deepEqual(request.buttons?.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Commit changes", "View output", "Discard"]]);
       assert.match(request.userMessage, /new-file\.txt/);
       const persisted = (sm as any).store.persisted.get("h-dirty-completion");
       assert.equal(persisted.lifecycle, "awaiting_worktree_decision");
@@ -807,14 +803,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.notifyUser, "never");
       assert.equal(request.userMessage, undefined);
       assert.equal(request.buttons, undefined);
-      assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION/);
-      assert.match(request.wakeMessage, /Session origin route \(authoritative for human follow-ups\):/);
+      assert.match(request.wakeMessage, /You decide what happens to the branch \(worktree: delegate\)/);
+      assert.match(request.wakeMessage, /originRoute: \{/);
       assert.match(request.wakeMessage, /"target":"-1001234567890"/);
       assert.match(request.wakeMessage, /"threadId":"13832"/);
-      assert.match(request.wakeMessage, /do not use a plain final assistant reply/i);
-      assert.match(request.wakeMessage, /agent_merge\(session="delegate-session"/);
-      assert.match(request.wakeMessage, /agent_request_worktree_decision\(session="delegate-session"/);
-      assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
+      assert.match(request.wakeMessage, /agent_merge\(session='delegate-session', summary=/);
+      assert.match(request.wakeMessage, /agent_escalate\(session='delegate-session', kind='worktree'/);
+      assert.match(request.wakeMessage, /Do not call agent_pr yourself/);
       const persisted = (sm as any).store.persisted.get("h-delegate");
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);
 
@@ -978,7 +973,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-merge-ask");
-      assert.match(request.userMessage, /Summary:/);
+      assert.match(request.userMessage, /^🔀 \[ask-summary\] Finished on `agent\/ask-summary` → `main`/);
       assert.match(request.userMessage, /Fixed the worktree decision notification so it explains the completed UX changes/);
       assert.match(request.userMessage, /Updated callback cleanup so successful decisions resolve the original Telegram buttons/);
       assert.match(request.userMessage, /Covered the summary and callback behavior with focused regression tests/);
@@ -988,8 +983,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(capturedEvidence?.objective ?? "", /fix the worktree decision prompt/);
       assert.ok(capturedEvidence?.changedFiles.includes("README.md"));
       assert.match(capturedEvidence?.outputPreview ?? "", /Implemented a richer worktree decision prompt/);
-      assert.match(request.wakeMessageOnNotifySuccess, /Session: ask-summary \| ID: s-ask-summary/);
-      assert.match(request.wakeMessageOnNotifySuccess, /Branch: `agent\/ask-summary` → `main`/);
+      assert.match(request.wakeMessageOnNotifySuccess, /^\[ask-summary\] The user has Merge \/ Open PR \/ Later \/ Discard buttons for `agent\/ask-summary` → `main`/);
+      assert.equal(request.wakeDelivery, "next-turn", "the orchestrator has nothing to do until the user answers (N37)");
       assert.deepEqual(
         request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
         [

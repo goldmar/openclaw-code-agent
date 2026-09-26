@@ -324,6 +324,28 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 // uniqueName
 // =========================================================================
 
+describe("SessionManager.queueOrchestratorContext (N35)", () => {
+  it("queues a next-turn note on the session's route without notifying the user", () => {
+    const sm = new SessionManager(5);
+    stubDispatch(sm);
+    const s = fakeSession({ id: "s-revise", name: "revise-me" });
+    (sm as any).sessions.set(s.id, s);
+
+    assert.equal(sm.queueOrchestratorContext("s-revise", "plan-revise-requested", "[revise-me] The user pressed Revise.", "key-1"), true);
+    const [[target, request]] = (sm as any).__dispatchCalls;
+    assert.equal(target.id, "s-revise");
+    assert.deepEqual(request, {
+      label: "plan-revise-requested",
+      idempotencyKey: "key-1",
+      wakeMessage: "[revise-me] The user pressed Revise.",
+      wakeDelivery: "next-turn",
+      notifyUser: "never",
+    });
+    assert.equal(sm.queueOrchestratorContext("missing", "x", "y"), false);
+    sm.dispose();
+  });
+});
+
 describe("SessionManager.uniqueName", () => {
   let sm: SessionManager;
 
@@ -410,15 +432,15 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.completionWakeSummaryRequired, true);
     assert.equal(request.requireDirectUserNotification, undefined);
     assert.equal(request.wakeMessage, undefined);
-    assert.match(request.wakeMessageOnNotifySuccess, /Goal task succeeded\./);
+    assert.match(request.wakeMessageOnNotifySuccess, /Goal task paper-harness-preopen-hardening succeeded\./);
     assert.match(request.wakeMessageOnNotifySuccess, /agent_output\(session='bdTo6WBy', full=true\)/);
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_/);
-    assert.match(request.wakeMessageOnNotifySuccess, /Send a normal concise final response/);
-    assert.match(request.wakeMessageOnNotifySuccess, /Canonical goal success status delivered to user: yes/);
-    assert.match(request.wakeMessageOnNotifyFailed, /Canonical goal success status delivered to user: no/);
+    assert.match(request.wakeMessageOnNotifySuccess, /do not answer NO_REPLY/);
+    assert.match(request.wakeMessageOnNotifySuccess, /The user saw: /);
+    assert.match(request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
   });
 
   it("does not request completion follow-up wakes for non-success goal updates", () => {
@@ -1737,6 +1759,75 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     });
   }
 
+  it("backs reminders off from 3h to 24h to a week and stops after three (N38)", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "backoff",
+      harnessSessionId: "backoff-thread",
+      backendRef: { kind: "claude-code", conversationId: "backoff-thread" },
+      name: "backoff",
+      prompt: "test",
+      workdir: undefined,
+      worktreePath: undefined,
+      worktreeBranch: "agent/backoff",
+      worktreeStrategy: "ask",
+      createdAt: start,
+      completedAt: start,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(start).toISOString(),
+    };
+    const texts: string[] = [];
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { texts.push(request.userMessage ?? ""); },
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+
+    // 4.x reminded every 3h forever; now: +3h, then +24h, then +7d, then never.
+    assert.equal(await reminders.getNextReminderAt(pending), start + 3 * hour);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), true);
+    assert.equal(pending.worktreeReminderCount, 1);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 6 * hour), false, "no second reminder after only 3 more hours");
+    assert.equal(await reminders.getNextReminderAt(pending), start + 27 * hour);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 27 * hour), true);
+    assert.equal(await reminders.getNextReminderAt(pending), start + 27 * hour + 7 * 24 * hour);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 27 * hour + 7 * 24 * hour), true);
+    assert.equal(pending.worktreeReminderCount, 3);
+    assert.equal(await reminders.getNextReminderAt(pending), undefined, "no reminder after the third");
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 400 * 24 * hour), false);
+    assert.equal(texts.length, 3);
+    assert.match(texts[0]!, /^⏰ \[backoff\] Branch `agent\/backoff` still waits for your decision \(3h\)\.$/);
+    assert.match(texts[2]!, /Last reminder\.$/);
+    assert.doesNotMatch(texts.join("\n"), /agent_merge|agent_pr|agent_worktree_cleanup/, "no tool syntax in user reminders");
+  });
+
+  it("counts a legacy reminder timestamp without a counter as one sent reminder", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id }) as any,
+      () => {},
+      () => true,
+      async () => undefined,
+    );
+    const legacy: any = {
+      sessionId: "legacy", harnessSessionId: "legacy-thread", backendRef: { kind: "claude-code", conversationId: "legacy-thread" },
+      name: "legacy", status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
+      worktreeStrategy: "ask", worktreeBranch: "agent/legacy",
+      pendingWorktreeDecisionSince: new Date(start).toISOString(),
+      lastWorktreeReminderAt: new Date(start + 3 * hour).toISOString(),
+    };
+    assert.equal(await reminders.getNextReminderAt(legacy), start + 27 * hour);
+  });
+
   it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-unresolved-store-"));
     const sm = new SessionManager(5, 5, {
@@ -2687,7 +2778,9 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.notifyUser, "always");
     assert.match(request.userMessage, /❓ \[waiter\] Question waiting for reply/);
     assert.equal(request.wakeMessage, undefined);
-    assert.match(request.wakeMessageOnNotifyFailed, /genuine user reply/i);
+    assert.match(request.wakeMessageOnNotifyFailed, /waiting for the user's answer/i);
+    // The prompt reached the user: the orchestrator only gets next-turn context (N37).
+    assert.equal(request.wakeDelivery, "next-turn");
   });
 
   it("uses session planApproval override for plan approval buttons", async () => {
@@ -2715,7 +2808,9 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
-    assert.match(request.wakeMessageOnNotifySuccess, /Session: planner \| ID: s-plan-ask/);
+    assert.match(request.wakeMessageOnNotifySuccess, /\[planner\] Plan v7 is with the user/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-plan-ask'/);
+    assert.equal(request.wakeDelivery, "next-turn");
 
     const approveTokenId = request.buttons[0][0].callbackData;
     const approveToken = (sm as any).interactions.consumeActionToken(approveTokenId);
@@ -2765,8 +2860,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.notifyUser, "never");
     assert.equal(request.userMessage, undefined);
     assert.equal(request.buttons, undefined);
-    assert.match(request.wakeMessage, /DELEGATED PLAN APPROVAL/);
-    assert.match(request.wakeMessage, /Review privately/);
+    assert.match(request.wakeMessage, /\[planner-delegate\] Plan v\d+ ready\. ID: s-plan-delegate You review it \(planApproval: delegate\)/);
+    assert.match(request.wakeMessage, /agent_escalate\(session='s-plan-delegate', kind='plan'/);
   });
 
   it("does not show approval buttons for Codex plan sessions when planApproval=delegate", async () => {
@@ -2945,8 +3040,8 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Decision brief/);
-    assert.match(request.userMessage, /Full-plan detail:/);
-    assert.match(request.userMessage, /additional/);
+    assert.match(request.userMessage, /more routine steps? not shown/);
+    assert.doesNotMatch(request.userMessage, /structured plan artifact/);
     assert.equal(request.userMessages, undefined);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
@@ -3028,7 +3123,7 @@ describe("SessionManager turn-end wake", () => {
       assert.equal(request.label, "plan-approval");
       assert.match(request.userMessage, /Decision brief/);
       assert.match(request.userMessage, /Step 1:/);
-      assert.match(request.userMessage, /additional routine implementation step/);
+      assert.match(request.userMessage, /more routine steps? not shown/);
       assert.doesNotMatch(request.userMessage, /grounding in the current workspace state/);
       assert.deepEqual(request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Approve", "Revise", "Reject"]]);
     } finally {
@@ -3325,7 +3420,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "waiting");
     assert.equal(request.buttons, undefined);
     assert.equal(request.wakeMessage, undefined);
-    assert.match(request.wakeMessageOnNotifyFailed, /Do NOT answer it yourself/);
+    assert.match(request.wakeMessageOnNotifyFailed, /without answering or commenting on it/);
     assert.doesNotMatch(request.wakeMessageOnNotifyFailed, /auto-respond/);
     assert.doesNotMatch(request.userMessage, /Plan ready for approval/);
   });
@@ -3589,7 +3684,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [review-session] Completed | $0.00 | 12s");
-    assert.match(request.wakeMessageOnNotifySuccess, /Output preview:/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Output \(end\):/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
@@ -3614,18 +3709,17 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
-    assert.match(request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
+    assert.match(request.wakeMessageOnNotifySuccess, /originRoute: \{/);
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /do NOT use a plain final assistant reply/i);
-    assert.match(request.wakeMessageOnNotifySuccess, /plugin already sent the canonical completion status/i);
-    assert.match(request.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess, /Do this even when agent_output already contains a good final summary/);
+    assert.match(request.wakeMessageOnNotifySuccess, /If it is not this chat, send your message there/);
+    assert.match(request.wakeMessageOnNotifySuccess, /The user saw: ✅ \[normal-session\] Completed/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Do not repeat the status line/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /already summarized by completed session/);
-    assert.match(request.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
-    assert.match(request.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
-    assert.match(request.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
+    assert.equal((request.wakeMessageOnNotifySuccess.match(/originRoute/g) ?? []).length, 1, "the route is stated once (N51)");
+    assert.match(request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
   });
 
   it("suppresses completion follow-up summaries for silent cron/system completions", async () => {
@@ -3929,8 +4023,8 @@ describe("SessionManager terminal wakes", () => {
     assert.match(request.completionWakeOutcomeKey, /^terminal:s-complete:completed:/);
     assert.equal(request.notifyUser, "always");
     assert.match(request.userMessage, /✅ \[done\] Completed/);
-    assert.match(request.wakeMessageOnNotifySuccess, /Coding agent session completed/);
-    assert.match(request.wakeMessageOnNotifyFailed, /Coding agent session completed/);
+    assert.match(request.wakeMessageOnNotifySuccess, /^\[done\] Completed\. ID: s-complete/);
+    assert.match(request.wakeMessageOnNotifyFailed, /^\[done\] Completed\. ID: s-complete/);
   });
 
   it("de-dupes duplicate terminal handling when completedAt is populated after the first pass", async () => {
@@ -4195,10 +4289,10 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(sessionArg.id, "s-failed");
     assert.equal(request.label, "failed");
     assert.equal(request.notifyUser, "always");
-    assert.match(request.wakeMessage, /Coding agent session failed/);
-    assert.match(request.wakeMessage, /Failure summary:/);
+    assert.match(request.wakeMessage, /^\[broken-launch\] Failed\. ID: s-failed/);
+    assert.match(request.wakeMessage, /Error:/);
     assert.match(request.wakeMessage, /not supported when using Codex with a ChatGPT account/);
-    assert.match(request.wakeMessage, /relaunch fresh with agent_launch/);
+    assert.match(request.wakeMessage, /fix a launch\/config error and relaunch/);
     assert.match(request.userMessage, /❌ \[broken-launch\] Failed/);
   });
 
@@ -4233,7 +4327,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.match(request.userMessage, /Failed to authenticate\. API Error: 401 Invalid bearer token/);
     assert.doesNotMatch(request.userMessage, /✅/);
     assert.doesNotMatch(request.userMessage, /Completed/);
-    assert.match(request.wakeMessage, /Coding agent session failed/);
+    assert.match(request.wakeMessage, /\] Failed\. ID: s-auth-failed/);
   });
 
   it("uses the final substantive block for terminal completion wake previews", async () => {
@@ -4305,9 +4399,8 @@ describe("SessionManager terminal wake behavior", () => {
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.match(request.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
-    assert.match(request.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
-    assert.match(request.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
+    // A normal approved run adds no approval lines (N51); only an anomaly is reported.
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Requested permission mode|approved_then_implemented/);
   });
 
   it("de-dupes duplicate failed wake for the same terminal marker", async () => {
@@ -4383,10 +4476,10 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval-timeout");
-    assert.match(request.userMessage, /Plan v7 still awaiting approval after idle timeout/);
-    assert.match(request.userMessage, /Approve resumes the session and starts implementation/);
-    assert.match(request.userMessage, /Revise resumes it in plan mode/);
-    assert.match(request.userMessage, /Reject keeps the session stopped/);
+    assert.match(request.userMessage, /Plan v7 still waiting for approval; the session is paused/);
+    assert.match(request.userMessage, /Approve resumes it and starts the work/);
+    assert.match(request.userMessage, /Revise resumes it to update the plan/);
+    assert.match(request.userMessage, /Reject keeps it stopped/);
     assert.deepEqual(
       (request.buttons ?? []).map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
@@ -4438,12 +4531,10 @@ describe("SessionManager terminal wake behavior", () => {
 
     await (sm as any).onSessionTerminal(s);
 
+    // The user already has an actionable prompt and the orchestrator has nothing to do:
+    // 4.x still woke the orchestrator here (N37).
     const calls = (sm as any).__dispatchCalls;
-    assert.equal(calls.length, 1);
-    const [_sessionArg, request] = calls[0];
-    assert.equal(request.notifyUser, "never");
-    assert.equal(request.userMessage, undefined);
-    assert.match(request.wakeMessage, /already has an actionable plan review prompt/i);
+    assert.equal(calls.length, 0);
   });
 
   it("keeps delegated timed-out pending plans wake-only", async () => {
@@ -4469,8 +4560,8 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(request.notifyUser, "never");
     assert.equal(request.userMessage, undefined);
     assert.equal(request.buttons, undefined);
-    assert.match(request.wakeMessage, /DELEGATED PLAN APPROVAL REMINDER/);
-    assert.match(request.wakeMessage, /agent_request_plan_approval/);
+    assert.match(request.wakeMessage, /Reminder: plan v\d+ still waits for your review/);
+    assert.match(request.wakeMessage, /agent_escalate\(session='s-plan-timeout-delegate', kind='plan'/);
   });
 
   it("uses explicit stopped wording for user-terminated sessions", async () => {
@@ -4622,7 +4713,8 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       "Open PR",
       "Decide later",
     ]);
-    assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-worktree \| ID: s-cc-worktree/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-cc-worktree'/);
+    assert.equal(request.wakeDelivery, "next-turn");
     assert.match(request.wakeMessageOnNotifySuccess, /Should I merge this branch or open a PR\?/);
 
     const pendingQuestion = (sm as any).pendingAskUserQuestions.get(session.id);
@@ -4666,7 +4758,8 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     const token = (sm as any).interactions.getActionToken(request.buttons[0][0].callbackData);
     assert.equal(token.pendingInputRequestId, "native-question-1");
     assert.equal(token.pendingInputQuestionId, undefined);
-    assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-question \| ID: s-cc-question/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-cc-question'/);
+    assert.equal(request.wakeDelivery, "next-turn");
     assert.match(request.wakeMessageOnNotifySuccess, /Which environment should I target\?/);
 
     sm.resolveAskUserQuestion(session.id, 0);

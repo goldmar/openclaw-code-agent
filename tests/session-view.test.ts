@@ -28,6 +28,43 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /🟢 s6 \[6\]/);
   });
 
+  it("status=waiting lists only sessions that need a decision or answer, each with its next step (N52)", () => {
+    const now = Date.now();
+    const base = { multiTurn: true, workdir: "/tmp", costUsd: 0, duration: 1000, prompt: "x" };
+    const sm: any = {
+      list: () => [
+        { ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now - 1000 },
+        { ...base, status: "running", name: "plan-ask", id: "2", phase: "awaiting_plan_decision", planApproval: "ask", startedAt: now - 2000 },
+        { ...base, status: "running", name: "plan-delegate", id: "3", phase: "awaiting_plan_decision", planApproval: "delegate", startedAt: now - 3000 },
+        { ...base, status: "running", name: "question", id: "4", phase: "awaiting_user_input", startedAt: now - 4000 },
+      ],
+      listPersistedSessions: () => [
+        {
+          sessionId: "5", harnessSessionId: "h5", name: "branch", prompt: "x", workdir: "/tmp", status: "completed",
+          lifecycle: "awaiting_worktree_decision", worktreeStrategy: "ask", worktreeState: "pending_decision",
+          worktreePath: "/tmp/.worktrees/b", worktreeBranch: "agent/b", createdAt: now - 5000, completedAt: now - 4500,
+          pendingWorktreeDecisionSince: new Date(now - 4000).toISOString(),
+        },
+        {
+          sessionId: "6", harnessSessionId: "h6", name: "merged", prompt: "x", workdir: "/tmp", status: "completed",
+          lifecycle: "terminal", worktreeStrategy: "ask", worktreeState: "merged", worktreeMerged: true,
+          createdAt: now - 6000, completedAt: now - 5500,
+        },
+      ],
+    };
+
+    const text = getSessionsListingText(sm, "waiting");
+    assert.doesNotMatch(text, /busy|merged \[6\]/);
+    assert.match(text, /plan-ask \[2\][^\n]*\n(?:.*\n)*?   👉 Plan waiting for the user: Approve \/ Revise \/ Reject/);
+    assert.match(text, /👉 Plan waiting for the orchestrator's review/);
+    assert.match(text, /question \[4\] — waiting for an answer/);
+    assert.match(text, /👉 Question waiting for an answer/);
+    assert.match(text, /branch \[5\][\s\S]*👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
+
+    const idle: any = { list: () => [{ ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now }], listPersistedSessions: (): never[] => [] };
+    assert.equal(getSessionsListingText(idle, "waiting"), "Nothing is waiting for a decision or an answer.");
+  });
+
   it("includes harness and model metadata for active sessions in the listing text", () => {
     const now = Date.now();
     const sm: any = {
@@ -51,7 +88,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
-    assert.match(text, /🧰 Harness \| model: codex \| gpt-5\.5/);
+    assert.match(text, /📁 \/tmp · codex \| gpt-5\.5/);
   });
 
   it("shows all sessions from the last 24h when full is enabled", () => {
@@ -174,7 +211,7 @@ describe("session-view app layer", () => {
     };
     const text = getSessionsListingText(sm, "completed");
     assert.match(text, /✅ done-job \[s-persisted\]/);
-    assert.match(text, /Persisted: no live runtime process in this Gateway/);
+    assert.doesNotMatch(text, /Persisted: no live runtime process/);
   });
 
   it("shows runtime recovery diagnostics for persisted rows recovered from running state", () => {
@@ -209,8 +246,9 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "killed");
-    assert.match(text, /Recovered: persisted metadata only; no live process to kill \(persisted-running-without-runtime\)/);
-    assert.match(text, /Recovery: raw=running\/active\/live → normalized=killed\/suspended\/stopped/);
+    assert.match(text, /♻️ Recovered after a Gateway restart; no live process \(persisted-running-without-runtime\)/);
+    // The raw → normalized state dump was internal diagnostics (N53).
+    assert.doesNotMatch(text, /raw=running/);
   });
 
   it("does not crash when persisted rows are missing prompt/workdir fields", () => {
@@ -378,7 +416,7 @@ describe("session-view app layer", () => {
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
     assert.match(text, /fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/);
-    assert.match(text, /Worktree: agent\/fix-fresh-broker-proof-observation-scope \[merged ✓\]/);
+    assert.match(text, /🌿 agent\/fix-fresh-broker-proof-observation-scope \[merged ✓\]/);
     assert.doesNotMatch(text, /\[not merged\]/);
     assert.equal((text.match(/fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/g) ?? []).length, 1);
   });

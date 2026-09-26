@@ -28,8 +28,14 @@ type AutoUpdateState = {
   latestVersion?: string;
   promptedVersion?: string;
   lastPromptedAt?: string;
+  /** Legacy (4.x): Dismiss and Remind later both postponed prompts for this version by a week. */
   dismissedVersion?: string;
   lastDismissedAt?: string;
+  /** "Skip this version": never prompt for this version again (N43). */
+  skippedVersion?: string;
+  /** "Remind later": prompt for `remindVersion` again after `remindAt` (N43). */
+  remindVersion?: string;
+  remindAt?: string;
   updateInstalledVersion?: string;
   restartPromptedVersion?: string;
   lastError?: string;
@@ -224,6 +230,9 @@ function normalizeState(raw: unknown): AutoUpdateState {
     "lastPromptedAt",
     "dismissedVersion",
     "lastDismissedAt",
+    "skippedVersion",
+    "remindVersion",
+    "remindAt",
     "updateInstalledVersion",
     "restartPromptedVersion",
     "lastError",
@@ -379,29 +388,34 @@ export class AutoUpdateService {
       : "Gateway restart requested.";
   }
 
+  /**
+   * "Skip this version" on the update prompt: no more prompts for it (newer
+   * versions are still offered). On the restart prompt ("Not now") the version
+   * is already installed; it loads at the next Gateway restart.
+   */
   dismiss(version: string | undefined): string {
-    return this.postpone(version, "Dismissed");
-  }
-
-  remindLater(version: string | undefined): string {
-    return this.postpone(version, "Will remind later about");
-  }
-
-  private postpone(version: string | undefined, label: string): string {
     const normalizedVersion = normalizeVersion(version);
     const state = this.readState();
-    this.writeState({
-      ...state,
-      ...(normalizedVersion
-        ? {
-            dismissedVersion: normalizedVersion,
-            lastDismissedAt: new Date(this.now()).toISOString(),
-          }
-        : {}),
-    });
+    if (normalizedVersion) this.writeState({ ...state, skippedVersion: normalizedVersion });
+    if (normalizedVersion && state.updateInstalledVersion === normalizedVersion) {
+      return `OK. Code Agent ${normalizedVersion} loads at the next Gateway restart.`;
+    }
     return normalizedVersion
-      ? `${label} OpenClaw Code Agent ${normalizedVersion} update reminder.`
-      : `${label} OpenClaw Code Agent update reminder.`;
+      ? `Skipped Code Agent ${normalizedVersion}. You will hear about newer versions.`
+      : "Skipped this update.";
+  }
+
+  /** "Remind later": ask about this version again in a day. */
+  remindLater(version: string | undefined): string {
+    const normalizedVersion = normalizeVersion(version);
+    if (normalizedVersion) {
+      this.writeState({
+        ...this.readState(),
+        remindVersion: normalizedVersion,
+        remindAt: new Date(this.now() + DAY_MS).toISOString(),
+      });
+    }
+    return normalizedVersion ? `OK. Code Agent ${normalizedVersion} will be offered again tomorrow.` : "OK. The update will be offered again tomorrow.";
   }
 
   private async checkForUpdate(context: AutoUpdateCheckContext): Promise<void> {
@@ -456,10 +470,8 @@ export class AutoUpdateService {
 
   private async sendUpdatePrompt(route: NotificationRoute, latestVersion: string): Promise<void> {
     await this.notifier.send(route, [
-      `OpenClaw Code Agent update available: ${this.options.currentVersion} -> ${latestVersion}.`,
-      ``,
-      `Update now will reinstall the exact approved version from OpenClaw Code Agent's recorded npm or ClawHub source, then verify it.`,
-      `If the update succeeds, OpenClaw Code Agent will ask separately before restarting the Gateway.`,
+      `⬆️ Code Agent ${latestVersion} is available (you have ${this.options.currentVersion}).`,
+      `Update now installs exactly this version from the same source (npm or ClawHub); restarting the Gateway is a separate step.`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-install", "Update now", {
         pluginUpdateVersion: latestVersion,
@@ -474,13 +486,18 @@ export class AutoUpdateService {
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-remind-later", "Remind later", {
         pluginUpdateVersion: latestVersion,
       }),
-      this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Dismiss", {
+      this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Skip this version", {
         pluginUpdateVersion: latestVersion,
       }),
     ]]);
   }
 
   private shouldPromptForVersion(state: AutoUpdateState, latestVersion: string): boolean {
+    if (state.skippedVersion === latestVersion) return false;
+    if (state.remindVersion === latestVersion && state.remindAt) {
+      const remindAt = Date.parse(state.remindAt);
+      if (Number.isFinite(remindAt)) return this.now() >= remindAt;
+    }
     const lastRelevantPromptAt = state.promptedVersion === latestVersion
       ? state.lastPromptedAt
       : undefined;
@@ -496,18 +513,12 @@ export class AutoUpdateService {
 
   private async sendRestartPrompt(route: NotificationRoute, version: string): Promise<void> {
     await this.notifier.send(route, [
-      `OpenClaw Code Agent ${version} installation was verified.`,
-      ``,
-      `Restart the Gateway now to load the updated plugin?`,
-      `This will run: openclaw gateway restart`,
+      `✅ Code Agent ${version} is installed. Restart the Gateway to load it (runs openclaw gateway restart)?`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-restart", "Restart Gateway", {
         pluginUpdateVersion: version,
       }),
-      this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-remind-later", "Remind later", {
-        pluginUpdateVersion: version,
-      }),
-      this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Dismiss", {
+      this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-dismiss", "Not now", {
         pluginUpdateVersion: version,
       }),
     ]]);

@@ -146,7 +146,7 @@ export function describeSessionPhase(session: Pick<SessionListRenderable, "phase
 
 /** Render a human-readable session row for `agent_sessions`. */
 export function formatSessionListing(session: SessionListRenderable, options: { nextStep?: string } = {}): string {
-  const icon = STATUS_ICONS[session.phase] ?? STATUS_ICONS[session.status] ?? "❓";
+  const icon = (session.phase === "terminal" ? undefined : STATUS_ICONS[session.phase]) ?? STATUS_ICONS[session.status] ?? "❓";
   const duration = formatDuration(session.duration);
   const promptSummary =
     session.prompt.length > 80 ? session.prompt.slice(0, 80) + "..." : session.prompt;

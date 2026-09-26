@@ -101,12 +101,12 @@ for (const name of BACKEND_NAMES) {
       assert.equal(s.messages().filter((message) => /Which color\?/.test(message.text)).length, 1);
 
       const click = await s.click(green);
-      assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+      assert.deepEqual(click.replies, [`✅ [${session.name}] Answer sent: Green.`]);
       assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Green"] } });
       await waitUntil(() => !session.pendingInputState, "question cleared");
 
       const late = await s.click(prompt.buttons.find((button) => button.label === "Red")!);
-      assert.match(late.replies.join("\n"), /no longer active|stale/);
+      assert.match(late.replies.join("\n"), /already answered or replaced|expired/);
     });
 
     it("asks for plan approval in a Discord thread and implements after the Approve button", async () => {
@@ -148,7 +148,10 @@ for (const name of BACKEND_NAMES) {
       // The host has no model (every runtime.llm call fails): the prompt carries
       // the deterministic summary (from the session output or its commits).
       assert.ok(s.host.llmCalls.some((call) => call.purpose === "openclaw-code-agent.worktree-decision-summary"));
-      assert.match(prompt.text, /Summary:\n- (?:Added|Adds) feature/);
+      // N40: the prompt names the session; the summary lines follow the headline.
+      assert.match(prompt.text, /^🔀 \[[\w-]+\] Finished on `agent\/[\w-]+` → `main`: 1 commit, 1 file, \+1\/-0/);
+      assert.match(prompt.text, /\n- (?:Added|Adds) feature/);
+      assert.match(prompt.text, /Discard deletes the branch and its changes for good\.$/);
       await s.click(merge);
       await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
       assert.ok(existsSync(join(repo, "feature.txt")), "branch merged into main");
@@ -160,11 +163,11 @@ for (const name of BACKEND_NAMES) {
       const session = await s.launch({ permissionMode: "plan", planApproval: "delegate" });
       const decision = s.backend.proposePlan(PLAN);
       await waitUntil(() => session.pendingPlanApproval === true, "pending plan approval");
-      await waitUntil(() => s.wakes.some((wake) => /\[DELEGATED PLAN APPROVAL\]/.test(wake.message)), "delegated review wake");
+      await waitUntil(() => s.wakes.some((wake) => /You review it \(planApproval: delegate\)/.test(wake.message)), "delegated review wake");
       const turnsBefore = s.backend.turns.length;
 
       // The orchestrator hands the review to the user; the host refuses the buttons.
-      const handedOver = await s.runTool("agent_request_plan_approval", { session: session.id, summary: "Touches the schema; please confirm." });
+      const handedOver = await s.runTool("agent_escalate", { session: session.id, kind: "plan", summary: "Touches the schema; please confirm." });
       assert.match(handedOver, /Canonical plan approval prompt queued/);
       const fallback = await s.waitForMessage(/buttons could not be delivered/);
       assert.equal(fallback.buttons.length, 0);

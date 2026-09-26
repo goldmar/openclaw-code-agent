@@ -103,6 +103,8 @@ export class SessionWorktreeDecisionService {
       this.deps.updatePersistedSession(mutationRef, {
         worktreeDecisionSnoozedUntil: snoozedUntil,
         lastWorktreeReminderAt: new Date(now).toISOString(),
+        // A snooze is not a reminder: keep the count so the backoff continues.
+        worktreeReminderCount: persistedSession.lastWorktreeReminderAt ? persistedSession.worktreeReminderCount ?? 1 : 0,
       } as Partial<PersistedSessionInfo>);
     }
 

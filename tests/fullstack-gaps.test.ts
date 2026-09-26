@@ -93,7 +93,7 @@ describe("failed worktree actions", () => {
 
       // The spent prompt's siblings were replaced too: only the new controls act.
       const oldLater = await s.click(buttonIn(prompt, "Later"));
-      assert.match(oldLater.replies.join("\n"), /stale or has already been used/);
+      assert.match(oldLater.replies.join("\n"), /expired or was already used/);
       assert.equal(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil, undefined);
 
       // The user resolves the conflict (here: drops the conflicting main commit) and retries.
@@ -240,7 +240,7 @@ describe("snooze and reminders", () => {
       lastWorktreeReminderAt: new Date(Date.now() - 25 * hour).toISOString(),
       worktreeDecisionSnoozedUntil: new Date(Date.now() - 60_000).toISOString(),
     });
-    const reminder = await s.waitForMessage(/Reminder: branch .* is still waiting for a merge decision/, sendsBefore);
+    const reminder = await s.waitForMessage(/^⏰ \[[\w-]+\] Branch `.*` still waits for your decision/, sendsBefore);
     await s.click(buttonIn(reminder, "Merge"));
     await waitUntil(() => existsSync(join(repo, "feature.txt")), "merged from the reminder");
   });
@@ -257,13 +257,16 @@ describe("session buttons", () => {
 
     const output = await s.click(buttonIn(suspended, "View output"));
     assert.match(output.replies.join("\n"), /codex-fullstack|Working|output/i);
+    // N47: View output can be pressed again and leaves Resume usable.
+    const outputAgain = await s.click(buttonIn(suspended, "View output"));
+    assert.doesNotMatch(outputAgain.replies.join("\n"), /expired/);
 
     const resume = await s.click(buttonIn(suspended, "Resume"));
     assert.match(resume.replies.join("\n"), /^▶️/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /Continue where you left off/);
     const again = await s.click(buttonIn(suspended, "Resume"));
-    assert.match(again.replies.join("\n"), /stale or has already been used/);
+    assert.match(again.replies.join("\n"), /expired or was already used/);
   });
 
   it("resumes from a Restart button a 4.x store left behind", async () => {
@@ -295,18 +298,18 @@ describe("session buttons", () => {
     const session = await s.launch();
     assert.ok(s.sm.kill(session.id, "idle-timeout"));
     const suspended = await s.waitForMessage(/Suspended after idle timeout/);
-    const button = buttonIn(suspended, "View output");
+    const button = buttonIn(suspended, "Resume");
     // A token minted by a newer build, whose action kind this build lacks.
     const token = s.sm.getActionToken(button.payload) as { kind: string } | undefined;
     assert.ok(token);
     token.kind = "future-action";
     const click = await s.click(button);
-    assert.deepEqual(click.replies, ["⚠️ Unknown callback action."]);
+    assert.deepEqual(click.replies, ["⚠️ This button is not supported by the running version of the code agent."]);
   });
 
   it("keeps plugin-update buttons across a Gateway restart", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
-    const dismiss = s.sm.makePluginActionButton("plugin-update", "plugin-update-dismiss", "Dismiss", {
+    const dismiss = s.sm.makePluginActionButton("plugin-update", "plugin-update-dismiss", "Skip this version", {
       pluginUpdateVersion: "9.9.9",
       route: { provider: "telegram", target: TELEGRAM_TOPIC.to, threadId: "42" },
     });
@@ -314,7 +317,7 @@ describe("session buttons", () => {
     await s.restartGateway();
     const click = await s.click(dismiss.callbackData);
     assert.doesNotMatch(click.replies.join("\n"), /stale/);
-    assert.match(click.replies.join("\n"), /Dismissed/);
+    assert.match(click.replies.join("\n"), /Skipped/);
   });
 });
 
@@ -325,7 +328,7 @@ describe("goal loop", () => {
 
   async function launchGoal(s: FullStack, workdir: string, extra: Record<string, unknown> = {}) {
     const turnsBefore = s.backend.turns.length;
-    const text = await s.runTool("agent_goal_launch", {
+    const text = await s.runTool("agent_goal", { action: "launch",
       goal: "Create done.txt",
       verifier_commands: ["test -f done.txt"],
       workdir,
@@ -382,7 +385,7 @@ describe("goal loop", () => {
   it("cancels the goal when the user declines the verifier commands (D3)", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const turnsBefore = s.backend.turns.length;
-    await s.runTool("agent_goal_launch", { goal: "Create done.txt", verifier_commands: ["rm -rf /tmp/x"], workdir: goalWorkdir(), harness: "codex" });
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", verifier_commands: ["rm -rf /tmp/x"], workdir: goalWorkdir(), harness: "codex" });
     const prompt = await s.waitForMessage(/\$ rm -rf \/tmp\/x/);
     const cancel = prompt.buttons.find((button) => button.label === "Cancel");
     assert.ok(cancel);
@@ -396,7 +399,7 @@ describe("goal loop", () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const workdir = goalWorkdir();
     const turnsBefore = s.backend.turns.length;
-    await s.runTool("agent_goal_launch", { goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
     await s.backend.waitForTurns(turnsBefore + 1);
     const task = s.gc.listTasks()[0]!;
     assert.equal(task.permissionMode, "plan");

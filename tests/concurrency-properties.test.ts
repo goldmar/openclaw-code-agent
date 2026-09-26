@@ -294,7 +294,7 @@ describe("concurrent callbacks through the plugin entry", () => {
     const green = await s.waitForButton("Green");
     const [first, second] = await Promise.all([s.click(green), s.click(green)]);
     const replies = [...first.replies, ...second.replies];
-    assert.equal(replies.filter((text) => /Pending input request submitted/.test(text)).length, 1, replies.join(" | "));
+    assert.equal(replies.filter((text) => /Answer sent/.test(text)).length, 1, replies.join(" | "));
     assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Green"] } });
     await waitUntil(() => !session.pendingInputState, "question cleared");
   });
@@ -321,10 +321,10 @@ describe("concurrent callbacks through the plugin entry", () => {
     // Either the click won the race and answered, or the runtime stopped first
     // and the click (which restarts the service lazily) reports it cannot act.
     const text = click.replies.join("\n");
-    if (/Pending input request submitted/.test(text)) {
+    if (/Answer sent/.test(text)) {
       assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Green"] } });
     } else {
-      assert.match(text, /stale|no longer active|not running|could not/i);
+      assert.match(text, /stale|expired|no longer active|already answered|not running|could not/i);
     }
     void session;
     // A second click after the stop never acts again.

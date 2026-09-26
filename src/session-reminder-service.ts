@@ -54,11 +54,26 @@ export class SessionReminderService {
   ) {}
 
   static readonly REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
-  static readonly REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
+  /**
+   * Wait after the Nth reminder before the next one (N38): 3h, 24h, then a
+   * week; after `MAX_REMINDERS` no more reminders are sent. Index 0 applies
+   * when the only "reminder" was a snooze.
+   */
+  static readonly REMINDER_BACKOFF_MS = [3 * 60 * 60 * 1000, 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000] as const;
+  static readonly MAX_REMINDERS = 3;
+
+  /** Reminders already sent for the current pending decision. */
+  static remindersSent(session: Pick<PersistedSessionInfo, "lastWorktreeReminderAt" | "worktreeReminderCount">): number {
+    if (!session.lastWorktreeReminderAt) return 0;
+    // Rows from builds without the counter sent at least one reminder.
+    return session.worktreeReminderCount ?? 1;
+  }
 
   async getNextReminderAt(session: PersistedSessionInfo): Promise<number | undefined> {
     const pendingSince = new Date(session.pendingWorktreeDecisionSince).getTime();
     if ((await this.getWorktreeDecisionReminderStatus(session, pendingSince)) !== "pending") return undefined;
+    const sent = SessionReminderService.remindersSent(session);
+    if (sent >= SessionReminderService.MAX_REMINDERS) return undefined;
 
     const candidates = [pendingSince + SessionReminderService.REMINDER_THRESHOLD_MS];
     if (session.worktreeDecisionSnoozedUntil) {
@@ -68,7 +83,8 @@ export class SessionReminderService {
     if (session.lastWorktreeReminderAt) {
       const lastReminderAt = new Date(session.lastWorktreeReminderAt).getTime();
       if (Number.isFinite(lastReminderAt)) {
-        candidates.push(lastReminderAt + SessionReminderService.REMINDER_INTERVAL_MS);
+        const backoff = SessionReminderService.REMINDER_BACKOFF_MS;
+        candidates.push(lastReminderAt + backoff[Math.min(sent, backoff.length - 1)]);
       }
     }
     return Math.max(...candidates);
@@ -87,8 +103,10 @@ export class SessionReminderService {
 
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
+    const sent = SessionReminderService.remindersSent(session);
+    const isLast = sent + 1 >= SessionReminderService.MAX_REMINDERS;
     try {
-      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent))) return false;
+      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent, isLast))) return false;
     } catch (err) {
       log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -99,6 +117,7 @@ export class SessionReminderService {
     for (const mutationRef of getPersistedMutationRefs(session)) {
       this.updatePersistedSession(mutationRef, {
         lastWorktreeReminderAt: new Date(now).toISOString(),
+        worktreeReminderCount: sent + 1,
       });
     }
     return true;
@@ -109,6 +128,7 @@ export class SessionReminderService {
     session: PersistedSessionInfo,
     pendingHours: number,
     stillCurrent: () => boolean,
+    isLast: boolean,
   ): Promise<boolean> {
     const routingProxy = this.buildRoutingProxy({
       id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
@@ -123,16 +143,12 @@ export class SessionReminderService {
         label: `worktree-stale-reminder-${session.name}`,
         wakeMessage: buildDelegateReminderWakeMessage(session, pendingHours),
         notifyUser: "never",
+        idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${pendingHours}`,
       });
       return true;
     }
 
-    const text = [
-      `⏰ Reminder: branch \`${session.worktreeBranch ?? "unknown"}\` is still waiting for a merge decision.`,
-      `Session: ${session.name} | Pending: ${pendingHours}h`,
-      ``,
-      `agent_merge(session="${session.name}") or agent_pr(session="${session.name}") or agent_worktree_cleanup() to resolve.`,
-    ].join("\n");
+    const text = `⏰ [${session.name}] Branch \`${session.worktreeBranch ?? "unknown"}\` still waits for your decision (${formatPendingAge(pendingHours)})${isLast ? ". Last reminder." : "."}`;
 
     const buttons = await this.getWorktreeDecisionButtons(
       getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
@@ -215,4 +231,8 @@ export class SessionReminderService {
   private isResolvedDerivedWorktreeState(state: ManagedWorktreeLifecycleState): boolean {
     return state === "merged" || state === "released" || state === "no_change" || state === "cleanup_failed";
   }
+}
+
+function formatPendingAge(hours: number): string {
+  return hours >= 48 ? `${Math.floor(hours / 24)} days` : `${hours}h`;
 }

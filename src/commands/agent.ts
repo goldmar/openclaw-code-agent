@@ -1,7 +1,5 @@
 import { sessionManager } from "../singletons";
-import {
-  pluginConfig,
-} from "../config";
+import { formatHarnessModelLabel } from "../session-display";
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
@@ -43,17 +41,26 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function parseAgentCommandArgs(raw: string): { name?: string; prompt: string } {
+const AGENT_USAGE = "Usage: /agent [--name <name>] [--workdir <dir>] [--harness <claude-code|codex|opencode>] [--model <model>] <prompt>";
+
+/** `--name`, `--workdir`, `--harness` and `--model` before the prompt (N45). */
+export function parseAgentCommandArgs(raw: string): { name?: string; workdir?: string; harness?: string; model?: string; prompt: string } {
   const tokens = tokenizeCommandArgs(raw);
-  let name: string | undefined;
-  let promptTokens = tokens;
-  if (tokens[0] === "--name" && tokens[1]) {
-    name = tokens[1];
-    promptTokens = tokens.slice(2);
+  const flags: Record<string, string | undefined> = {};
+  let index = 0;
+  while (index < tokens.length) {
+    const flag = tokens[index];
+    const key = flag === "--name" ? "name" : flag === "--workdir" ? "workdir" : flag === "--harness" ? "harness" : flag === "--model" ? "model" : undefined;
+    if (!key || tokens[index + 1] === undefined) break;
+    flags[key] = tokens[index + 1];
+    index += 2;
   }
   return {
-    name,
-    prompt: promptTokens.join(" ").trim(),
+    name: flags.name,
+    workdir: flags.workdir,
+    harness: flags.harness,
+    model: flags.model,
+    prompt: tokens.slice(index).join(" ").trim(),
   };
 }
 
@@ -61,7 +68,7 @@ function parseAgentCommandArgs(raw: string): { name?: string; prompt: string } {
 export function registerAgentCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent",
-    description: "Launch a coding agent session. Usage: /agent [--name <name>] <prompt>",
+    description: "Launch a coding agent session. Usage: /agent [--name <name>] [--workdir <dir>] [--harness <name>] [--model <model>] <prompt>",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx: AgentCommandContext) => {
@@ -70,14 +77,14 @@ export function registerAgentCommand(api: CommandApi): void {
       }
 
       const raw = (ctx.args ?? "").trim();
-      if (!raw) return { text: "Usage: /agent [--name <name>] <prompt>" };
+      if (!raw) return { text: AGENT_USAGE };
 
-      const { name, prompt } = parseAgentCommandArgs(raw);
-      if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
+      const { name, workdir, harness, model, prompt } = parseAgentCommandArgs(raw);
+      if (!prompt) return { text: AGENT_USAGE };
 
       try {
         const resolution = resolveAgentLaunchRequest(
-          { prompt, name },
+          { prompt, name, workdir, harness, model },
           ctx as OpenClawPluginToolContext,
           sessionManager,
         );
@@ -101,15 +108,15 @@ export function registerAgentCommand(api: CommandApi): void {
           permissionMode: resolution.permissionMode,
           planApproval: resolution.planApproval,
           taskLifecycle: resolveSessionTaskLifecycle(ctx as OpenClawPluginToolContext),
-        });
+        }, { notifyLaunch: false });
 
-        return { text: sessionManager.formatLaunchResult({
-          prompt,
-          workdir: resolution.workdir,
-          harness: resolution.harness,
-          permissionMode: resolution.permissionMode ?? pluginConfig.permissionMode,
-          planApproval: resolution.planApproval,
-        }, session) };
+        // One message: this reply replaces the separate 🚀 launch notice (N45).
+        const harnessLabel = formatHarnessModelLabel({
+          harness: session.harnessName,
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+        }) ?? resolution.harness;
+        return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_status.` };
       } catch (err: unknown) {
         const message = errorMessage(err);
         const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";

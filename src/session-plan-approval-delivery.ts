@@ -44,11 +44,8 @@ export function buildPlanApprovalWakeText(
 ): string {
   const sessionId = "id" in session ? session.id : session.sessionId ?? "unknown-session";
   return [
-    explicitFallback
-      ? `Plan review fallback text delivered to the user because interactive buttons could not be delivered.`
-      : `Plan approval buttons delivered to the user.`,
-    `Session: ${session.name ?? "unknown"} | ID: ${sessionId} | Plan v${planDecisionVersion ?? "?"}`,
-    `Wait for their ${explicitFallback ? "explicit reply" : "button callback"} — do NOT approve or reject this plan yourself.`,
+    `[${session.name ?? sessionId}] Plan v${planDecisionVersion ?? "?"} is with the user (${explicitFallback ? "text prompt: approve / reject / changes" : "Approve / Revise / Reject buttons"}). Do not approve or reject it yourself.`,
+    `If the user answers in chat, forward their words: agent_respond(session='${sessionId}', message='<their words>', userInitiated=true).`,
   ].join("\n");
 }
 

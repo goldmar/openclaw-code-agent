@@ -474,7 +474,19 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
   await ctx.respond.reply({ text, ephemeral: true });
 }
 
-const staleActionMessage = "⚠️ This action is stale or has already been used.";
+/** Confirmation after a question-answer button (N41): names the session and the chosen option. */
+function formatAnswerConfirmation(
+  sessionName: string,
+  token: Pick<SessionActionToken, "label">,
+  state: { forwardedToResumedSession: boolean; moreInputRequired: boolean },
+): string {
+  const choice = typeof token.label === "string" && token.label.trim() ? `: ${token.label.trim()}` : "";
+  if (state.forwardedToResumedSession) return `✅ [${sessionName}] Answer sent${choice}. The session resumed.`;
+  if (state.moreInputRequired) return `✅ [${sessionName}] Answer sent${choice}. Next question below.`;
+  return `✅ [${sessionName}] Answer sent${choice}.`;
+}
+
+const staleActionMessage = "⚠️ This button has expired or was already used.";
 
 async function rejectStaleAction(
   ctx: InteractiveCallbackContext,
@@ -642,13 +654,13 @@ export function createCallbackHandler(
         isAuthorizedSender: ctx.auth.isAuthorizedSender,
       });
       if (!tokenId) {
-        await replyText(ctx, "⚠️ Unrecognized callback payload.");
+        await replyText(ctx, "⚠️ This button is not recognized. Use the buttons on the latest message.");
         return { handled: true };
       }
 
       // Guard service initialization
       if (!sessionManager) {
-        await replyText(ctx, "⚠️ Code agent service not running.");
+        await replyText(ctx, "⚠️ The code agent is not running right now. Try again in a moment.");
         return { handled: true };
       }
 
@@ -702,7 +714,7 @@ export function createCallbackHandler(
 
       if (token.kind === "question-answer" && token.consumedAt != null) {
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-        await replyText(ctx, "⚠️ That question button is no longer active. Use the latest question prompt.");
+        await replyText(ctx, "⚠️ This question was already answered or replaced.");
         return { handled: true };
       }
 
@@ -756,7 +768,7 @@ export function createCallbackHandler(
           }
           sessionManager.consumeActionToken(tokenId);
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          await replyText(ctx, "⚠️ That question is no longer waiting for an answer.");
+          await replyText(ctx, "⚠️ This question was already answered or replaced.");
           return { handled: true };
         }
 
@@ -823,22 +835,14 @@ export function createCallbackHandler(
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
           const moreInputRequired = !forwardedToResumedSession
             && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
-          await replyText(ctx, forwardedToResumedSession
-            ? `✅ Answer forwarded to the resumed session.`
-            : moreInputRequired
-              ? `✅ Question step answered; more input is required.`
-              : `✅ Pending input request submitted.`);
+          await replyText(ctx, formatAnswerConfirmation(actionSessionName, token, { forwardedToResumedSession, moreInputRequired }));
           return { handled: true };
         }
 
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         const moreInputRequired = !forwardedToResumedSession
           && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
-        await replyText(ctx, forwardedToResumedSession
-          ? `✅ Answer forwarded to the resumed session.`
-          : moreInputRequired
-            ? `✅ Question step answered; more input is required.`
-            : `✅ Pending input request submitted.`);
+        await replyText(ctx, formatAnswerConfirmation(actionSessionName, token, { forwardedToResumedSession, moreInputRequired }));
         return { handled: true };
       }
 
@@ -1009,6 +1013,13 @@ export function createCallbackHandler(
           } else {
             const result = requestPlanDecisionChanges(sessionManager, sessionId);
             await replyText(ctx, `✏️ ${result.text}`);
+            // The user's next chat message is plan feedback; tell the orchestrator (N35).
+            sessionManager.queueOrchestratorContext?.(
+              sessionId,
+              "plan-revise-requested",
+              `[${actionSessionName}] The user pressed Revise on plan v${consumedToken.planDecisionVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(session='${sessionId}', message='<their words>', userInitiated=true). ID: ${sessionId}`,
+              `plan-revise-requested:${sessionId}:v${consumedToken.planDecisionVersion ?? "?"}`,
+            );
           }
           return { handled: true };
         });
@@ -1032,6 +1043,20 @@ export function createCallbackHandler(
           sessionManager.consumeActionToken(tokenId);
           await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
           await replyText(ctx, `⚠️ This worktree decision was already resolved (${settledWorktree}) for [${actionSessionName}]. No action taken.`);
+          return { handled: true };
+        }
+
+        // Read-only buttons (N47): they keep the message's other buttons and stay
+        // usable, so they are neither consumed nor cleared.
+        if (token.kind === "view-output") {
+          const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
+          await replyText(ctx, toolResultText(result));
+          return { handled: true };
+        }
+        if (token.kind === "worktree-view-pr") {
+          // Older builds sent View PR as a callback; current prompts use a link button.
+          const url = token.targetUrl ?? sessionManager.getPersistedSession?.(sessionId)?.worktreePrUrl;
+          await replyText(ctx, url ? `PR: ${url}` : "⚠️ The PR link is no longer available.");
           return { handled: true };
         }
 
@@ -1132,7 +1157,7 @@ export function createCallbackHandler(
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
             const text = autoUpdateService
               ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
-              : "Dismissed OpenClaw Code Agent update reminder.";
+              : "Skipped this update.";
             await replyText(ctx, `✅ ${text}`);
             break;
           }
@@ -1141,7 +1166,7 @@ export function createCallbackHandler(
             await clearUpdateActionButtons(ctx, callbackAcknowledged);
             const text = autoUpdateService
               ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
-              : "Will remind later about OpenClaw Code Agent update reminder.";
+              : "OK. The update will be offered again tomorrow.";
             await replyText(ctx, `✅ ${text}`);
             break;
           }
@@ -1199,14 +1224,6 @@ export function createCallbackHandler(
             }
             await replyText(ctx, text);
             await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
-            break;
-          }
-
-          case "worktree-view-pr": {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            const persisted = sessionManager.getPersistedSession?.(sessionId);
-            const url = token.targetUrl ?? persisted?.worktreePrUrl;
-            await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
             break;
           }
 
@@ -1383,23 +1400,17 @@ export function createCallbackHandler(
             await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
             const result = await executeRespond(sessionManager, {
               session: sessionId,
-              message: "Continue where you left off.",
+              // A resume button may carry its own instruction (for example "commit your changes").
+              message: consumedToken.launchPrompt ?? "Continue where you left off.",
               userInitiated: true,
             });
-            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ ${result.text}`);
-            break;
-          }
-
-          case "view-output": {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
-            await replyText(ctx, toolResultText(result));
+            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ [${actionSessionName}] Resumed.`);
             break;
           }
 
           default: {
             await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            await replyText(ctx, `⚠️ Unknown callback action.`);
+            await replyText(ctx, `⚠️ This button is not supported by the running version of the code agent.`);
             break;
           }
         }

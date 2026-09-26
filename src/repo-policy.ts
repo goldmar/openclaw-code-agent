@@ -40,25 +40,25 @@ const REPO_POLICY_OPTIONS: readonly RepoPolicyOption[] = [
     policy: "pr-required",
     label: "Require PR",
     title: "Require PR",
-    description: "Direct merge is disabled; follow-through must use a pull request.",
+    description: "pull requests only.",
   },
   {
     policy: "pr-allowed",
     label: "Merge or PR",
     title: "Merge or PR",
-    description: "Use the requested strategy; direct merge and pull requests are both allowed.",
+    description: "merge or pull request.",
   },
   {
     policy: "never-pr",
     label: "No PR",
     title: "No PR",
-    description: "Do not create pull requests; keep follow-through local/direct.",
+    description: "local merge only, no pull requests.",
   },
   {
     policy: "manual",
     label: "Manual",
     title: "Manual",
-    description: "Create isolated worktrees, but require an explicit human follow-up decision every time.",
+    description: "no automatic merge or PR; you decide each time.",
   },
 ];
 
@@ -285,19 +285,26 @@ export function resolveWorktreePolicyDecision(args: {
   return { strategy: requested, allowedActions };
 }
 
+/**
+ * Orchestrator-facing text when a repository has no policy yet: tool results
+ * and the wake sent when the user's choice buttons could not be delivered.
+ */
 export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requestedStrategy: WorktreeStrategy, prAvailable: boolean = identity.provider === "github"): string {
   const options = getRepoPolicyOptionsForPrAvailability(prAvailable);
   return [
-    `Repo integration policy is not set for ${identity.repoRoot}.`,
-    ``,
-    `OpenClaw Code Agent will create isolated worktrees, but it needs one repo policy before worktree follow-through can run.`,
-    `Requested worktree strategy: ${requestedStrategy}`,
-    `Provider: ${identity.provider}${prAvailable ? "" : " (PR automation unavailable)"}`,
-    ``,
-    `Choose one available policy:`,
-    ...options.map((option) => `- ${option.title}: ${option.description}`),
-    ``,
-    `If buttons are unavailable, set it manually. OpenClaw Code Agent will continue the pending launch automatically when exactly one matching launch is waiting; otherwise run the intended launch again:`,
-    ...options.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
+    `Repo policy is not set for ${identity.repoRoot} (requested worktree strategy: ${requestedStrategy}${prAvailable ? "" : "; PRs unavailable"}).`,
+    `Ask the user how branches should land: ${options.map((option) => `${option.title} (${option.policy}): ${option.description}`).join(" ")}`,
+    `Then set it: agent_repo_policy(workdir='${identity.repoRoot}', policy='${options.map((option) => option.policy).join("|")}'). A single pending launch continues automatically; otherwise launch again.`,
+  ].join("\n");
+}
+
+/** The user's policy question, sent with one button per policy (N39). */
+export function formatRepoPolicyChoicePrompt(identity: RepoIdentity, prAvailable: boolean = identity.provider === "github"): string {
+  const options = getRepoPolicyOptionsForPrAvailability(prAvailable);
+  return [
+    `🧭 How should finished branches land in ${identity.repoRoot}? (asked once per repository)`,
+    options.map((option) => `${option.label}: ${option.description}`).join("\n"),
+    ...(prAvailable ? [] : [`(No GitHub remote, so pull requests are not available.)`]),
+    `The launch continues after you choose.`,
   ].join("\n");
 }

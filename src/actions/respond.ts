@@ -145,6 +145,12 @@ async function spawnFreshRelaunch(
 const RESUMED_PLAN_APPROVAL_PREFIX =
   "The user approved your plan while this session was suspended. Implement the approved plan now; do not ask for further confirmation.\n\n";
 
+/** "👍 [name] Plan approved — <rationale>" (N36): the user sees why without a separate message. */
+export function formatPlanApprovedLine(sessionName: string, rationale?: string, resumed = false): string {
+  const base = `👍 [${sessionName}] Plan approved${resumed ? " (session resumed)" : ""}`;
+  return rationale ? `${base}: ${rationale}` : base;
+}
+
 function normalizeApprovalRationale(rationale?: string): string | undefined {
   const normalized = rationale?.replace(/\s+/g, " ").trim();
   if (!normalized) return undefined;
@@ -298,7 +304,7 @@ export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string
     sm.updatePersistedSession?.(sessionId, patch);
   }
 
-  return { text: `Type your revision feedback for [${name}] and I'll forward it to the agent.` };
+  return { text: `[${name}] Reply with the changes you want; they go to the agent.` };
 }
 
 async function tryAutoResume(
@@ -387,7 +393,7 @@ async function tryAutoResume(
     if (isPlanApproval) {
       sm.notifySession(
         resumed,
-        `👍 [${resumed.name}] Plan approved (resumed)`,
+        formatPlanApprovedLine(resumed.name, approvalRationale, true),
         "plan-approved",
         `agent-respond-plan-approved-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}:v${session.planDecisionVersion ?? "unknown"}`,
       );
@@ -547,10 +553,7 @@ export async function executeRespond(
       && (await session.submitPendingInputText?.(params.message)) === true;
 
     if (submittedPendingText) {
-      if (params.userInitiated) {
-        const notifyPreview = truncateText(params.message, 100);
-        sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
-      }
+      // No "↪️" echo of the user's own words (N46).
       if (!params.userInitiated) {
         session.incrementAutoRespond();
       }
@@ -600,15 +603,11 @@ export async function executeRespond(
       persistPlanApprovalState(sm, session);
     }
 
-    // Single notification: plan approval gets a dedicated icon; everything else
-    // (including interrupt/redirect) collapses into one ↪️ message with preview.
+    // Plan approval is announced with the orchestrator's rationale (N36). Other
+    // messages are not echoed back to the user, who wrote them (N46).
     if (isPlanApproval) {
-      sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
-    } else if (params.userInitiated) {
-      const notifyPreview = truncateText(params.message, 100);
-      sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
+      sm.notifySession(session, formatPlanApprovedLine(session.name, approvalRationale), "plan-approved");
     }
-    // else: silent auto-respond — no notification
 
     if (!params.userInitiated) {
       session.incrementAutoRespond();

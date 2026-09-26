@@ -201,7 +201,8 @@ for (const name of BACKEND_NAMES) {
         assert.deepEqual(buttons.map((button) => button.label), ["Red", "Green", "Blue"]);
 
         const click = await clickButton(buttonNamed(buttons, "Blue"), channel);
-        assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+        // N41: the confirmation names the session and the chosen option.
+        assert.deepEqual(click.replies, [`✅ [${fixture!.session.name}] Answer sent: Blue.`]);
         assert.ok(click.cleared > 0, "the answered buttons are cleared");
         assert.deepEqual(await outcome, { kind: "answered", answers: { "Which color?": ["Blue"] } });
       });
@@ -217,7 +218,7 @@ for (const name of BACKEND_NAMES) {
         const prompts = fixture.notifications.slice(before).filter((entry) => QUESTION_LABELS.test(entry.request.label));
         assert.deepEqual(prompts.map((entry) => entry.request.label), ["waiting"], "no separate AskUserQuestion prompt");
         const click = await clickButton(buttonNamed(buttons, "Red"));
-        assert.deepEqual(click.replies, ["✅ Pending input request submitted."]);
+        assert.deepEqual(click.replies, [`✅ [${fixture!.session.name}] Answer sent: Red.`]);
         assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Red"] } });
       });
     }
@@ -231,7 +232,7 @@ for (const name of BACKEND_NAMES) {
 
       for (const label of ["Green", "Red"]) {
         const again = await clickButton(buttonNamed(buttons, label));
-        assert.match(again.replies.join("\n"), /no longer active/);
+        assert.match(again.replies.join("\n"), /already answered or replaced/);
       }
     });
 
@@ -252,7 +253,7 @@ for (const name of BACKEND_NAMES) {
       assert.ok(stepOnePrompts.length > 0);
       for (const prompt of stepOnePrompts) {
         const stale = await clickButton(buttonNamed(prompt.request.buttons!.flat(), "Blue"));
-        assert.match(stale.replies.join("\n"), /no longer (?:active|waiting)/, prompt.request.label);
+        assert.match(stale.replies.join("\n"), /already answered or replaced/, prompt.request.label);
       }
       assert.equal(fixture.session.pendingInputState?.activeQuestionIndex, 1, "the stale click does not answer step 2");
 
@@ -293,7 +294,7 @@ for (const name of BACKEND_NAMES) {
         await waitUntil(() => !fixture!.session.pendingInputState, "question cleared");
 
         const late = await clickButton(buttonNamed(buttons, "Red"));
-        assert.match(late.replies.join("\n"), /no longer waiting for an answer/);
+        assert.match(late.replies.join("\n"), /already answered or replaced/);
         const text = await respond("Red");
         assert.equal(text.isError, undefined, text.text);
         assert.doesNotMatch(text.text, /Pending input request submitted/, "a late reply is a normal message, not an answer");
@@ -310,14 +311,14 @@ for (const name of BACKEND_NAMES) {
       await waitUntil(() => fixture!.sm.getPersistedSession(fixture!.session.id)?.status === "killed", "session suspended");
 
       const click = await clickButton(buttonNamed(buttons, "Blue"));
-      assert.deepEqual(click.replies, ["✅ Answer forwarded to the resumed session."]);
+      assert.deepEqual(click.replies, [`✅ [${fixture!.session.name}] Answer sent: Blue. The session resumed.`]);
       await waitUntil(() => fixture!.backend.turns.length > turnsBefore, "resumed turn");
       const resumedTurn = fixture.backend.turns.at(-1)!;
       assert.match(resumedTurn.text, /interrupted by an OpenClaw Gateway restart/);
       assert.match(resumedTurn.text, /Selected answer: Blue/);
 
       const again = await clickButton(buttonNamed(buttons, "Red"));
-      assert.match(again.replies.join("\n"), /no longer active/);
+      assert.match(again.replies.join("\n"), /already answered or replaced/);
     });
 
     it("resumes the session with the answer when a question button is clicked after a Gateway restart", async () => {
@@ -329,7 +330,7 @@ for (const name of BACKEND_NAMES) {
       await fixture.restartGateway();
 
       const click = await clickButton(buttonNamed(buttons, "Green"));
-      assert.deepEqual(click.replies, ["✅ Answer forwarded to the resumed session."]);
+      assert.deepEqual(click.replies, [`✅ [${fixture!.session.name}] Answer sent: Green. The session resumed.`]);
       await waitUntil(() => fixture!.backend.turns.length > turnsBefore, "resumed turn");
       assert.match(fixture.backend.turns.at(-1)!.text, /Selected answer: Green/);
       assert.equal(fixture.sm.resolve(fixture.session.id)?.status, "running");

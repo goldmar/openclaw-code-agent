@@ -33,7 +33,7 @@ They share substrates (Codex App Server, Claude Code, git worktrees) but solve d
 | Cost | None reported (native-agent path records tokens with cost `0`) | Core provider accounting | Core provider accounting | Per-session USD in completion notices and `agent_stats` |
 | Background completion to chat | Task with `done_only` notify | Core chat runtime | Turn-scoped only | Plugin wake pipeline back to the origin thread, including Telegram topics |
 | Resume after restart | Persistent sessions and `resumeSessionId` | Codex thread resume | `--session-id` resume | Persisted session catalog; `agent_respond` resumes Claude Code, Codex, and OpenCode sessions |
-| Goal loops | No | `/codex goal` inspects Codex goals; auto-continuation disabled | Core `/goal` needs the built-in runtime | `agent_goal_*` verifier or completion-promise loops across harnesses |
+| Goal loops | No | `/codex goal` inspects Codex goals; auto-continuation disabled | Core `/goal` needs the built-in runtime | `agent_goal` verifier or completion-promise loops across harnesses |
 
 ## Managed Worktrees and OCA Worktrees
 

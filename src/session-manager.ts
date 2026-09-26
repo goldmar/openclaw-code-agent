@@ -85,6 +85,7 @@ import { buildPendingDecisionPatch } from "./worktree-session-patches";
 import {
   createRepoPolicyRecord,
   formatUnknownRepoPolicyMessage,
+  formatRepoPolicyChoicePrompt,
   isPrAvailableForResolution,
   resolveAllowedWorktreeActions,
   resolveRepoIdentity,
@@ -346,6 +347,13 @@ export class SessionManager {
         manager.getWorktreeDecisionButtons(sessionId, options, allowedActions)
       ),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      makeDirtyWorktreeButtons: (sessionId) => [[
+        manager.makeActionButton(sessionId, "session-resume", "Commit changes", {
+          launchPrompt: "Your worktree has uncommitted changes and no commits. Commit the task's real changes with a clear message, and remove temporary files you created.",
+        }),
+        manager.makeActionButton(sessionId, "view-output", "View output"),
+        manager.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
+      ]],
       isPrAvailable: async (repoDir) => (await manager.resolveRepoPolicy(repoDir)).prAvailable,
       hasOpenPrForBranch: async (repoDir, branchName, targetRepo) => {
         const status = await syncWorktreePR(repoDir, branchName, targetRepo);
@@ -966,19 +974,11 @@ export class SessionManager {
       {
         label: "repo-policy-choice",
         idempotencyKey: `repo-policy-choice:${resolution.identity.key}:${strategy}:${launchContextDigest}`,
-        userMessage: [
-          message,
-          ``,
-          `After you choose a policy, OpenClaw Code Agent will continue this launch automatically.`,
-        ].join("\n"),
+        userMessage: formatRepoPolicyChoicePrompt(resolution.identity, resolution.prAvailable),
         notifyUser: "always",
         requireDirectUserNotification: true,
         buttons,
-        wakeMessageOnNotifySuccess: [
-          `Repo policy choice buttons delivered to the user.`,
-          `Repo: ${resolution.identity.repoRoot}`,
-          `Wait for their policy choice; do not set the policy or relaunch separately.`,
-        ].join("\n"),
+        // No success wake: the agent_launch result already tells the orchestrator to wait (N37).
         wakeMessageOnNotifyFailed: message,
       },
     );
@@ -1247,6 +1247,7 @@ export class SessionManager {
         },
       },
       wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({ session, planDecisionVersion }),
       failureWakeConfirmsNotificationDelivery: false,
     });
@@ -1438,6 +1439,7 @@ export class SessionManager {
           planPrompt.reviewSummary,
         ),
         wakeMessageOnNotifySuccess: buildPlanApprovalWakeText({ id: sessionId, name: session.name }, actionableVersion),
+        wakeDelivery: "next-turn",
       },
     );
 
@@ -1652,7 +1654,7 @@ export class SessionManager {
     const active = this.resolve(ref);
     const persisted = this.getPersistedSession(ref);
     const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
-    const fresh = new Set((buttons ?? []).flat().map((button) => button.callbackData));
+    const fresh = new Set((buttons ?? []).flat().filter((button) => !button.url).map((button) => button.callbackData));
     if (fresh.size === 0) return false;
     // Several re-offers of one decision can overlap (a second failed action
     // while the first retry prompt is still being delivered). A delivered retry
@@ -1851,6 +1853,34 @@ export class SessionManager {
       userMessage: text,
       notifyUser: "always",
     });
+  }
+
+  /**
+   * Queue context for the orchestrator's next turn in the session's origin chat
+   * (a system event without a heartbeat; nothing runs now). For example after
+   * the user pressed Revise, so their next chat message is forwarded as plan
+   * feedback (N35).
+   */
+  queueOrchestratorContext(ref: string, label: string, text: string, idempotencyKey?: string): boolean {
+    const active = this.resolve(ref);
+    const persisted = active ? undefined : this.getPersistedSession(ref);
+    if (!active && !persisted) return false;
+    const target = active ?? this.buildRoutingProxy({
+      id: persisted!.sessionId,
+      name: persisted!.name,
+      sessionId: persisted!.sessionId,
+      harnessSessionId: persisted!.harnessSessionId,
+      backendRef: persisted!.backendRef,
+      route: persisted!.route,
+    });
+    this.dispatchSessionNotification(target, {
+      label,
+      idempotencyKey,
+      wakeMessage: text,
+      wakeDelivery: "next-turn",
+      notifyUser: "never",
+    });
+    return true;
   }
 
   async notifyResumedLaunch(session: Session): Promise<void> {

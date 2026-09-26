@@ -560,6 +560,65 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
   });
 
+  it("queues a next-turn success wake as a system event without chat.send or a heartbeat (N37)", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-next-turn", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "ask-user-question",
+      userMessage: "❓ [s] Which greeting?",
+      notifyUser: "always",
+      wakeMessageOnNotifySuccess: "[s] The user was asked this question.",
+      wakeDelivery: "next-turn",
+      wakeMessageOnNotifyFailed: "[s] Show the user this question.",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "queued context");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(asDurableSend(calls[0]).text, "❓ [s] Which greeting?");
+    assert.deepEqual(findCall("system-event"), systemEvent("[s] The user was asked this question.", "session-next-turn"));
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false, "a next-turn wake must not start an orchestrator turn");
+    assert.deepEqual(heartbeats, []);
+  });
+
+  it("still wakes now when the user notification of a next-turn request fails", async () => {
+    chatSendStdout = "Relayed.\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-next-turn-failed", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "chat not found" });
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-merge-ask",
+      userMessage: "🔀 [s] Finished on branch",
+      notifyUser: "always",
+      buttons: [[{ label: "Merge", callbackData: "tok" }]],
+      wakeMessageOnNotifySuccess: "[s] The user has buttons.",
+      wakeDelivery: "next-turn",
+      wakeMessageOnNotifyFailed: "[s] Ask the user what to do with the branch.",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "chat-send"), "failure wake");
+    assert.equal(asChatSend(findCall("chat-send")).message, "[s] Ask the user what to do with the branch.");
+    assert.equal(calls.some((call) => call.kind === "system-event" && call.text.includes("has buttons")), false);
+  });
+
+  it("queues a plain next-turn wake message without a user notification", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-revise", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-revise-requested",
+      wakeMessage: "[s] The user pressed Revise.",
+      wakeDelivery: "next-turn",
+      notifyUser: "never",
+    });
+
+    await waitFor(() => calls.length > 0, "queued note");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(calls, [systemEvent("[s] The user pressed Revise.", "session-revise")]);
+    assert.deepEqual(heartbeats, []);
+  });
+
   it("hands Telegram topic direct notifications to the host durable outbound queue", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

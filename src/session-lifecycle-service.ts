@@ -1,3 +1,4 @@
+import { fenceAgentOutput } from "./untrusted-output";
 import { removeWorktree, deleteBranch, getCommitsAheadCount } from "./worktree";
 import { formatDuration, truncateText } from "./format";
 import { getPersistedMutationRefs } from "./session-backend-ref";
@@ -239,6 +240,7 @@ export class SessionLifecycleService {
         },
       },
       wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({
         session,
         planDecisionVersion,
@@ -472,43 +474,25 @@ export class SessionLifecycleService {
         label: "plan-approval-timeout",
         idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:delegate`,
         wakeMessage: [
-          `[DELEGATED PLAN APPROVAL REMINDER] Plan review is still pending after the session hit idle timeout.`,
-          `Name: ${session.name} | ID: ${session.id}`,
-          this.deps.originThreadLine(session),
-          `The agent already produced a plan and is waiting for a delegated decision.`,
-          `Review privately first. Approve directly with agent_respond(..., approve=true, approval_rationale='...') if the plan is clearly within scope and low risk.`,
-          `Escalate only if needed via agent_request_plan_approval(summary='...').`,
-          `If you approve directly, follow up with a short user-facing explanation; the plugin's thumbs-up line is only the minimal approval acknowledgment.`,
-          `If a canonical approval prompt was already posted for this plan version, do not restate it in plain text.`,
+          `[${session.name}] Reminder: plan v${actionableVersion ?? "?"} still waits for your review (the session was suspended while idle; approving resumes it). ID: ${session.id}`,
+          ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
+          `Approve with agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line>') when it is in scope and low risk; otherwise agent_escalate(session='${session.id}', kind='plan', summary='<why>').`,
         ].join("\n"),
         notifyUser: "never",
       });
       return;
     }
     if (planApprovalMode === "ask" && promptAlreadyProven) {
-      this.deps.dispatchSessionNotification(session, {
-        label: "plan-approval-timeout",
-        idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:already-delivered`,
-        notifyUser: "never",
-        wakeMessage: [
-          `[PLAN APPROVAL REMINDER] The user already has an actionable plan review prompt for this plan version.`,
-          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
-          this.deps.originThreadLine(session),
-          `Do NOT post another approval summary unless canonical delivery is known to be missing.`,
-        ].join("\n"),
-      });
+      // The user already has an actionable prompt for this version and the
+      // orchestrator has nothing to do: no wake (N37).
       return;
     }
     this.deps.dispatchSessionNotification(session, {
       label: "plan-approval-timeout",
       idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
       userMessage: [
-        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still awaiting approval after idle timeout | $${(session.costUsd ?? 0).toFixed(2)} | ${formatDuration(session.duration)}`,
-        ``,
-        `The agent already produced a plan and is waiting for your decision.`,
-        `Approve resumes the session and starts implementation.`,
-        `Revise resumes it in plan mode so it can update the plan first.`,
-        `Reject keeps the session stopped.`,
+        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still waiting for approval; the session is paused | $${(session.costUsd ?? 0).toFixed(2)} | ${formatDuration(session.duration)}`,
+        `Approve resumes it and starts the work. Revise resumes it to update the plan. Reject keeps it stopped.`,
       ].join("\n"),
       notifyUser: "always",
       buttons: planApprovalMode === "ask" && !promptAlreadyProven
@@ -655,6 +639,8 @@ export class SessionLifecycleService {
         notifyUser: "never",
         buttons: payload.buttons,
         wakeMessage: payload.wakeMessage,
+        // The user already has the prompt; the orchestrator needs this only when they answer.
+        wakeDelivery: "next-turn",
       });
       return;
     }
@@ -704,6 +690,7 @@ export class SessionLifecycleService {
         shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
         onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, planReviewSummary),
         wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion),
+        wakeDelivery: "next-turn",
       });
       return;
     }
@@ -729,6 +716,9 @@ export class SessionLifecycleService {
       shouldDispatch: pendingInputRequestId
         ? () => isCurrentPendingInputQuestion(session, pendingInputRequestId, pendingInputQuestionIdentity)
         : undefined,
+      // Context for the orchestrator's next turn, in case the user answers in chat (N37).
+      wakeMessageOnNotifySuccess: buildQuestionShownWakeText(session, payload.userMessage),
+      wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: payload.wakeMessage,
     });
   }
@@ -835,4 +825,12 @@ export class SessionLifecycleService {
       buttons: payload.buttons,
     });
   }
+}
+
+/** Next-turn context after a question reached the user. */
+function buildQuestionShownWakeText(session: Pick<Session, "id" | "name">, question: string | undefined): string {
+  return [
+    `[${session.name}] The user was shown the agent's question below; do not answer it yourself. If they answer in chat, forward it: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
+    fenceAgentOutput(question ?? "", "question"),
+  ].join("\n");
 }

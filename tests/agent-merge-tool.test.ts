@@ -429,6 +429,42 @@ describe("agent_merge push behavior", () => {
     }
   });
 
+  it("shows the orchestrator's summary under the outcome and sends no follow-up wake (N36)", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-summary");
+    try {
+      const sessionName = "merge-summary";
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
+      const capturedRequests: any[] = [];
+      const persistedSession = installPersistedSessionWithNotificationService({
+        sessionName,
+        repoDir,
+        worktreePath,
+        branchName,
+        wakeOutcome: "success",
+        capturedRequests,
+      });
+
+      const result = await makeAgentMergeTool().execute("tool-id", {
+        session: sessionName,
+        summary: "Adds the sub() helper with a unit test.",
+      });
+
+      assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.equal(capturedRequests.length, 1);
+      const request = capturedRequests[0].request;
+      assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+\nAdds the sub\(\) helper with a unit test\./);
+      // 4.x had no summary parameter and always woke the orchestrator for a follow-up.
+      assert.equal(request.wakeMessageOnNotifySuccess, undefined);
+      assert.equal(request.wakeMessageOnNotifyFailed, undefined);
+      assert.equal(request.completionWakeSummaryRequired, false);
+      assert.equal(persistedSession.completionWakeSummaryRequired, undefined, "no pending-summary repair flag is stored");
+      assert.equal(persistedSession.worktreeMerged, true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("records immediate merge outcome wake success against the persisted origin route", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-success");
     try {
@@ -451,7 +487,8 @@ describe("agent_merge push behavior", () => {
       assert.equal(capturedRequests.length, 1);
       assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
       assert.equal(capturedRequests[0].request.completionWakeSummaryRequired, true);
-      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /originRoute: \{/);
+      assert.match(capturedRequests[0].request.userMessage, /^✅ \[merge-wake-success\] Merged: /);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1001234567890"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1001234567890:topic:13832"/);

@@ -119,7 +119,7 @@ describe("fenced agent output in wakes (B8)", () => {
     });
     assert.match(payload.wakeMessage, /<<<AGENT_OUTPUT_[0-9a-f]{12} last output: untrusted data/);
     assert.doesNotMatch(payload.wakeMessage, /auto-respond/);
-    assert.match(payload.wakeMessage, /Do NOT answer it yourself/);
+    assert.match(payload.wakeMessage, /without answering or commenting on it/);
   });
 
   it("ask-mode plan wakes no longer tell the orchestrator to approve with approve=true", () => {
@@ -131,7 +131,8 @@ describe("fenced agent output in wakes (B8)", () => {
     });
     assert.doesNotMatch(payload.wakeMessage, /approve=true\)/);
     assert.match(payload.wakeMessage, /userInitiated=true/);
-    assert.match(payload.wakeMessage, /AGENT_OUTPUT_[0-9a-f]{12} plan preview/);
+    // The user already has the plan; the wake carries no agent output at all.
+    assert.doesNotMatch(payload.wakeMessage, /Plan: do things/);
   });
 });
 
