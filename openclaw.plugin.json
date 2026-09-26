@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
-  "version": "4.7.20",
+  "version": "5.0.0",
   "contracts": {
     "tools": [
       "agent_launch",
@@ -251,7 +251,7 @@
       "autoUpdate": {
         "type": "boolean",
         "default": true,
-        "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Dismiss buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
+        "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Skip this version buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
       }
     }
   },

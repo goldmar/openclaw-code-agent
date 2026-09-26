@@ -75,7 +75,7 @@ The environment variables OCA reads are local configuration: harness command ove
 
 The plugin config key `autoUpdate` (default `true`) controls the self-updater:
 
-- **On:** about once a day OCA checks for a newer stable release from the plugin's recorded install source and, if one exists, sends **Update now** / **Remind later** / **Dismiss** buttons. Nothing is installed until a user presses **Update now**. OCA then reinstalls exactly the approved version from the recorded npm or ClawHub source (`openclaw plugins install <package>@<version> --force`, or `clawhub:<package>@<version>` for ClawHub installs) and verifies the installed version and install record with `openclaw plugins inspect`. The Gateway is restarted only after a separate **Restart Gateway** press (`openclaw gateway restart`).
+- **On:** about once a day OCA checks for a newer stable release from the plugin's recorded install source and, if one exists, sends **Update now** / **Remind later** / **Skip this version** buttons. Nothing is installed until a user presses **Update now**. OCA then reinstalls exactly the approved version from the recorded npm or ClawHub source (`openclaw plugins install <package>@<version> --force`, or `clawhub:<package>@<version>` for ClawHub installs) and verifies the installed version and install record with `openclaw plugins inspect`. The Gateway is restarted only after a separate **Restart Gateway** press (`openclaw gateway restart`).
 - **Off (`autoUpdate: false`):** no update checks, installs, or restarts. Update buttons sent before the change reply that self-update is disabled.
 
 Update buttons are single-use action tokens bound to the approved version.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-09-26
+
 5.0.0 makes OCA thinner on top of OpenClaw 2026.9.6: it adopts the public plugin-SDK surfaces for delivery, logging, state, and system events; moves the Claude Code, OpenCode, and Codex harnesses onto their native protocols; and removes 4.x compatibility layers. Read **Breaking changes** before upgrading; [REFERENCE.md](docs/REFERENCE.md#upgrading-from-4x) has the migration steps. OpenClaw `2026.9.6` is both the installation target and the minimum supported host.
 
 ### Breaking changes
@@ -1035,7 +1037,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.20...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.20...v5.0.0
 [4.7.20]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.19...v4.7.20
 [4.7.19]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.18...v4.7.19
 [4.7.18]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.17...v4.7.18
