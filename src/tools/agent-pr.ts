@@ -1,4 +1,4 @@
-import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
+import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, localBranchRef, targetRepoValidationError } from "../worktree-ref-validation";
 import { repoHookGitArgs } from "../git-hooks";
 import { Type } from "../tool-parameter-schema";
 import { runGit, withRepoLock } from "../git-exec";
@@ -435,6 +435,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       if (params.base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
+      if (params.target_repo !== undefined) {
+        const repoError = targetRepoValidationError(params.target_repo);
+        if (repoError) return { content: [{ type: "text", text: `Error: target_repo: ${repoError}` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Check if gh CLI is available

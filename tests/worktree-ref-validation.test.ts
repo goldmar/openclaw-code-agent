@@ -5,7 +5,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError } from "../src/worktree-ref-validation";
+import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, targetRepoValidationError } from "../src/worktree-ref-validation";
+import { resolveTargetRepo } from "../src/worktree-repo";
 import { branchExists, deleteBranch, fetchRemoteBranchRef, getAheadBehindCounts, getDiffSummary, getCommitsAheadCount, isBranchAncestorOfBase, wouldMergeBeNoop, mergeBranch, pushBranch } from "../src/worktree";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
@@ -24,6 +25,22 @@ describe("literal worktree ref boundary", () => {
     for (const value of ["main", "feature/security-fix", "release/2026.9", "refs/feature", "refs/feature/topic", "refs/heads-up"]) {
       assert.equal(await branchNameValidationError(value), undefined);
     }
+  });
+
+  it("accepts only OWNER/REPO or HOST/OWNER/REPO PR target repositories (N5)", async () => {
+    for (const value of ["octo-org/octo-repo", "a/b", "octo/repo.name_1", "github.example.com/octo/repo"]) {
+      assert.equal(targetRepoValidationError(value), undefined, value);
+    }
+    const badRepos: unknown[] = [undefined, 3, "", "repo", "-R/x", "--repo=evil/x", "octo/-x", "octo/..", "octo/.", "-octo/repo", "octo-/repo",
+      "octo/repo/extra/more", "https://github.com/octo/repo", "octo/repo.git", "octo /repo", "octo/re po", "octo/repo\n", "octo--org/repo"];
+    for (const value of badRepos) assert.match(targetRepoValidationError(value) ?? "", /OWNER\/REPO/, String(value));
+    await assert.rejects(async () => await resolveTargetRepo("/nonexistent", "--repo=evil/x"), /Invalid PR target repository/);
+
+    setSessionManager(new Proxy({}, { get() { throw new Error("session manager must not be reached"); } }) as any);
+    const pr = await makeAgentPrTool().execute("test", { session: "test", target_repo: "--web" });
+    assert.match(pr.content[0].text, /Error: target_repo: Expected a GitHub repository/);
+    const launch = await makeAgentLaunchTool({} as any).execute("test", { prompt: "test", worktree_pr_target_repo: "octo/repo --web" });
+    assert.match(launch.content[0].text, /Error: worktree_pr_target_repo: Expected a GitHub repository/);
   });
 
   it("permits computed remote-tracking refs only at read-only comparison boundaries", async () => {

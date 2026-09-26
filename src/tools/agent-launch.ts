@@ -1,4 +1,4 @@
-import { branchNameValidationError } from "../worktree-ref-validation";
+import { branchNameValidationError, targetRepoValidationError } from "../worktree-ref-validation";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
@@ -164,6 +164,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       if (params.worktree_base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.worktree_base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
+      }
+      if (params.worktree_pr_target_repo !== undefined) {
+        const repoError = targetRepoValidationError(params.worktree_pr_target_repo);
+        if (repoError) return { content: [{ type: "text", text: `Error: worktree_pr_target_repo: ${repoError}` }] };
       }
 
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).

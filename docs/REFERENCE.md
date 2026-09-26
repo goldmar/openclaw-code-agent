@@ -491,7 +491,7 @@ Launch a background coding session.
 | `harness` | `string` | No | Defaults to `defaultHarness` |
 | `worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Explicit per-launch value wins over plugin default; `auto-pr` attempts PR creation/update automatically |
 | `worktree_base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
-| `worktree_pr_target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from `upstream` remote if unset |
+| `worktree_pr_target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from `upstream` remote if unset. Must be `OWNER/REPO` or `HOST/OWNER/REPO`; anything else is rejected |
 
 Example:
 
@@ -664,7 +664,7 @@ Create or update a GitHub PR for a worktree branch.
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 | `update_metadata` | `boolean` | No | For an open PR, refresh the title and body. By default only OpenClaw-generated bodies and fallback titles are refreshed |
 | `update_body` | `boolean` | No | Alias for `update_metadata` |
-| `target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from the `upstream` remote |
+| `target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from the `upstream` remote. Must be `OWNER/REPO` or `HOST/OWNER/REPO`; anything else is rejected |
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. When session metadata already points at an open PR, `agent_pr` treats that PR's head branch as authoritative; a follow-up/helper worktree branch is fast-forwarded into the original PR branch when safe, and divergent branches are rejected instead of creating a sibling PR. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
 
