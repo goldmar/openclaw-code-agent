@@ -371,7 +371,8 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.doesNotMatch(ask.wakeMessageOnNotifySuccess ?? "", /Open PR|open a PR/u);
       assert.doesNotMatch(ask.wakeMessageOnNotifyFailed ?? "", /open a PR|agent_pr/u);
 
-      const prButtons = await (sm as any).getWorktreeDecisionButtons(session.id, { allowDelegate: true }, { merge: true, pr: true });
+      // Fixed labels: whether the real builder offers Open PR depends on the host's gh state.
+      const prButtons = [[{ label: "Merge", callbackData: "m" }, { label: "Open PR", callbackData: "p" }], [{ label: "Later", callbackData: "l" }, { label: "Discard", callbackData: "d" }]];
       const askWithPr = new SessionWorktreeMessageService().buildAskNotification({
         session, branchName: "agent/workflow-coverage", baseBranch: "main", diffSummary, buttons: prButtons,
       });
