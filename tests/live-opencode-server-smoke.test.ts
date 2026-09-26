@@ -173,7 +173,18 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
   it("runs a trivial prompt through opencode serve", { skip: !RUN_COMPLETION }, async () => {
     assertOpenCodeVersion();
 
-    const harness = new OpenCodeHarness({ requestTimeoutMs: 45_000, serverIdleShutdownMs: 0 });
+    const transportFailures: string[] = [];
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      try {
+        return await fetch(input, init);
+      } catch (error) {
+        const url = input instanceof Request ? input.url : String(input);
+        const cause = error instanceof Error ? (error as Error & { cause?: { code?: unknown } }).cause : undefined;
+        transportFailures.push(`${init?.method ?? "GET"} ${new URL(url).pathname}: ${error instanceof Error ? error.name : "unknown"} (${typeof cause?.code === "string" ? cause.code : "no code"})`);
+        throw error;
+      }
+    };
+    const harness = new OpenCodeHarness({ fetch: diagnosticFetch, requestTimeoutMs: 45_000, serverIdleShutdownMs: 0 });
     const messages = await collectUntilCompleted(harness.launch({
       prompt: "Reply with exactly: OPENCLAW_OPENCODE_SMOKE",
       cwd: process.cwd(),
@@ -187,6 +198,7 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
       errorCode: result?.data.errorCode,
       result: result?.data.result?.slice(0, 300),
       messageTypes: messages.map((message) => message.type),
+      transportFailures,
     }));
     assert.match(result?.data.result ?? messages.map((message) => message.type === "text_delta" ? message.text : "").join(""), /OPENCLAW_OPENCODE_SMOKE/);
   });
