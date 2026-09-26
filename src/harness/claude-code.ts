@@ -511,44 +511,27 @@ export class ClaudeCodeHarness implements AgentHarness {
     };
 
     const askUserQuestion = options.canUseTool;
+    // N20 (one policy for every harness): one question is shown at a time; a
+    // concurrent AskUserQuestion waits until the visible one is answered.
+    let questionInFlight: Promise<void> | undefined;
     const canUseTool: CanUseTool = async (toolName, input, toolOptions) => {
       if (toolName === "AskUserQuestion") {
         if (!askUserQuestion) {
           return { behavior: "deny", message: "No interactive user is attached to this session; proceed with your best judgment." };
         }
-        const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
-        // Answers arrive either through the session's question service (button
-        // callbacks) or directly through submitPendingInputText/Option.
-        const direct = new Promise<PermissionResult>((resolve) => {
-          pendingQuestion = { state, input, answers: {}, resolve };
-        });
-        queue.enqueue(createPendingInputEvent(state));
-        // The session may not have applied the pending-input event yet, so name
-        // the request explicitly: the prompt's buttons must target it.
-        const viaService = askUserQuestion(toolName, input, {
-          requestId: state.requestId,
-          questionId: state.questions?.[state.activeQuestionIndex ?? 0]?.id,
-        });
-        const onAbort = (): void => {
-          if (pendingQuestion?.state.requestId !== state.requestId) return;
-          const pending = pendingQuestion;
-          pendingQuestion = undefined;
-          pending.resolve({ behavior: "deny", message: "The question was cancelled.", interrupt: true });
-        };
-        toolOptions.signal.addEventListener("abort", onAbort, { once: true });
+        // Waiters wake in arrival order; the first re-arms the gate before the
+        // others check it again.
+        while (questionInFlight) await questionInFlight;
+        if (closed || toolOptions.signal.aborted) {
+          return { behavior: "deny", message: "The question was cancelled.", interrupt: true };
+        }
+        let release!: () => void;
+        questionInFlight = new Promise<void>((resolve) => { release = resolve; });
         try {
-          // Promise.race observes both: a later rejection of the losing side
-          // (for example the service timeout) is never unhandled.
-          return await Promise.race([viaService, direct]);
-        } catch (error) {
-          // The question service gave up (timeout, superseded, shutdown): tell
-          // the agent plainly instead of failing the permission request.
-          const reason = error instanceof Error ? error.message : String(error);
-          return { behavior: "deny", message: `The user did not answer the question (${reason}). Continue with your best judgment, or ask again if the answer is essential.` };
+          return await askQuestion(input, toolOptions);
         } finally {
-          toolOptions.signal.removeEventListener("abort", onAbort);
-          if (pendingQuestion?.state.requestId === state.requestId) pendingQuestion = undefined;
-          queue.enqueue(createPendingInputResolvedEvent(state.requestId));
+          questionInFlight = undefined;
+          release();
         }
       }
       if (toolName === "ExitPlanMode") {
@@ -568,6 +551,46 @@ export class ClaudeCodeHarness implements AgentHarness {
         return { behavior: "deny", message: PLAN_MODE_TOOL_DENIED_MESSAGE };
       }
       return { behavior: "allow", updatedInput: input };
+    };
+
+    const askQuestion = async (
+      input: Record<string, unknown>,
+      toolOptions: Parameters<CanUseTool>[2],
+    ): Promise<PermissionResult> => {
+      const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
+      // Answers arrive either through the session's question service (button
+      // callbacks) or directly through submitPendingInputText/Option.
+      const direct = new Promise<PermissionResult>((resolve) => {
+        pendingQuestion = { state, input, answers: {}, resolve };
+      });
+      queue.enqueue(createPendingInputEvent(state));
+      // The session may not have applied the pending-input event yet, so name
+      // the request explicitly: the prompt's buttons must target it.
+      const viaService = askUserQuestion!("AskUserQuestion", input, {
+        requestId: state.requestId,
+        questionId: state.questions?.[state.activeQuestionIndex ?? 0]?.id,
+      });
+      const onAbort = (): void => {
+        if (pendingQuestion?.state.requestId !== state.requestId) return;
+        const pending = pendingQuestion;
+        pendingQuestion = undefined;
+        pending.resolve({ behavior: "deny", message: "The question was cancelled.", interrupt: true });
+      };
+      toolOptions.signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        // Promise.race observes both: a later rejection of the losing side
+        // (for example the service timeout) is never unhandled.
+        return await Promise.race([viaService, direct]);
+      } catch (error) {
+        // The question service gave up (timeout, superseded, shutdown): tell
+        // the agent plainly instead of failing the permission request.
+        const reason = error instanceof Error ? error.message : String(error);
+        return { behavior: "deny", message: `The user did not answer the question (${reason}). Continue with your best judgment, or ask again if the answer is essential.` };
+      } finally {
+        toolOptions.signal.removeEventListener("abort", onAbort);
+        if (pendingQuestion?.state.requestId === state.requestId) pendingQuestion = undefined;
+        queue.enqueue(createPendingInputResolvedEvent(state.requestId));
+      }
     };
 
     const worktreeConfigRoot = options.originalWorkdir
