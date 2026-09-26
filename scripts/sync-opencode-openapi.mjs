@@ -31,6 +31,7 @@ const OPERATIONS = [
   ["/session/{sessionID}/fork", "post"],
   ["/permission/{requestID}/reply", "post"],
   ["/question/{requestID}/reply", "post"],
+  ["/config/providers", "get"],
 ];
 
 const LISTENING_LINE = /opencode server listening on (https?:\/\/\S+)/;
