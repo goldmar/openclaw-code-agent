@@ -29,10 +29,10 @@ function buildQuestionUserMessage(args: {
   const questionText = normalizeQuestionText(args.questionText) ?? "The session is waiting for your reply.";
   const contextSummary = normalizeQuestionText(args.contextSummary);
   if (!contextSummary) {
-    return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
+    return `❓ [${args.sessionName}] The agent asks\n\n${questionText}`;
   }
   return [
-    `❓ [${args.sessionName}] Question waiting for reply:`,
+    `❓ [${args.sessionName}] The agent asks`,
     ``,
     questionText,
     ``,

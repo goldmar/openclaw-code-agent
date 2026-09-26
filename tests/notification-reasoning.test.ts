@@ -169,7 +169,7 @@ describe("notification reasoning visibility", () => {
     }
     const payload = buildWaitingForInputPayload({ session, preview: "Question?", originThreadLine: "" });
     service.dispatch(session, payload);
-    assert.match(requests.at(-1)!.userMessage!, /Question waiting for reply: \| codex \| gpt-6-sol \| reasoning: high\n/);
+    assert.match(requests.at(-1)!.userMessage!, /The agent asks \| codex \| gpt-6-sol \| reasoning: high\n/);
     service.dispatch(session, {
       label: "plan-approval", userMessages: [
         { text: "📋 [reasoning-test] Plan (1/2):\nBody one", requiredForSequenceSuccess: true },

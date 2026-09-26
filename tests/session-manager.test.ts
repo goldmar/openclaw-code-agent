@@ -2776,7 +2776,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "waiting");
     assert.equal(request.buttons, undefined);
     assert.equal(request.notifyUser, "always");
-    assert.match(request.userMessage, /❓ \[waiter\] Question waiting for reply/);
+    assert.match(request.userMessage, /❓ \[waiter\] The agent asks/);
     assert.equal(request.wakeMessage, undefined);
     assert.match(request.wakeMessageOnNotifyFailed, /waiting for the user's answer/i);
     // The prompt reached the user: the orchestrator only gets next-turn context (N37).

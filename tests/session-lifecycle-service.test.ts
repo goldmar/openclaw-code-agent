@@ -1207,3 +1207,31 @@ describe("SessionLifecycleService", () => {
     );
   });
 });
+
+describe("question prompt text", () => {
+  it("numbers every option and explains multi-select, which has no buttons", async () => {
+    const { buildActiveQuestionPrompt } = await import("../src/session-lifecycle-service");
+    const text = buildActiveQuestionPrompt({
+      question: {
+        id: "fruits",
+        header: "Fruits",
+        question: "Which fruits do you like?",
+        multiSelect: true,
+        options: [{ label: "apple" }, { label: "banana", description: "Yellow" }, { label: "cherry" }],
+      } as any,
+      index: 1,
+      total: 2,
+      optionDescriptions: [{ label: "banana", description: "Yellow" }],
+    });
+    assert.equal(text, [
+      "Question 2 - Fruits",
+      "Which fruits do you like?",
+      "",
+      "1. apple",
+      "2. banana - Yellow",
+      "3. cherry",
+      "",
+      "Several answers allowed: reply with them, for example 1,3.",
+    ].join("\n"));
+  });
+});

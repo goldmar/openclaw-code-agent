@@ -63,7 +63,7 @@ export function resolvePlanArtifactForPrompt(
   }
 }
 
-function buildActiveQuestionPrompt(args: {
+export function buildActiveQuestionPrompt(args: {
   question: PendingInputQuestion;
   index: number;
   total: number;
@@ -77,12 +77,18 @@ function buildActiveQuestionPrompt(args: {
     ...(title ? [title] : []),
     args.question.question,
   ];
-  if (args.optionDescriptions.length > 0) {
+  // Every option is numbered, so it can be answered by number, including a
+  // multi-select question, which has no buttons.
+  const descriptions = new Map(args.optionDescriptions.map((option) => [option.label, option.description]));
+  if (args.question.options.length > 0) {
     lines.push(
       "",
-      "Options:",
-      ...args.optionDescriptions.map((option) => `${option.label} - ${option.description}`),
+      ...args.question.options.map((option, index) => {
+        const description = descriptions.get(option.label);
+        return `${index + 1}. ${option.label}${description ? ` - ${description}` : ""}`;
+      }),
     );
+    if (args.question.multiSelect) lines.push("", "Several answers allowed: reply with them, for example 1,3.");
   }
   return lines.join("\n");
 }
