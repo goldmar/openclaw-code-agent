@@ -1,8 +1,8 @@
 import { assertBranchName, localBranchRef } from "./worktree-ref-validation";
 import { runGit, withRepoLock } from "./git-exec";
-import { existsSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { dirname, join } from "path";
+import { dirname, isAbsolute, join } from "path";
 import { repoHookGitArgs } from "./git-hooks";
 import { getBranchName, getCheckoutPathForBranch, isBranchPublished } from "./worktree-repo";
 import { pluginConfig } from "./config";
@@ -170,6 +170,20 @@ async function isAncestor(repoDir: string, ancestor: string, descendant: string)
   }
 }
 
+/** Unstaged changes in `checkout` (made by a failing commit hook) saved as a patch in the git dir; its path, if any. */
+async function saveHookChanges(repoDir: string, checkout: string, branch: string): Promise<string | undefined> {
+  try {
+    const patch = await runGit(["-C", checkout, "diff", "--binary"], { timeout: 15_000 });
+    if (!patch.trim()) return undefined;
+    const commonDir = (await runGit(["-C", repoDir, "rev-parse", "--git-common-dir"], { timeout: 5_000 })).trim();
+    const path = join(isAbsolute(commonDir) ? commonDir : join(repoDir, commonDir), `oca-hook-changes-${branch.replace(/[^A-Za-z0-9._-]+/g, "-")}-${Date.now()}.patch`);
+    writeFileSync(path, patch, { mode: 0o600 });
+    return path;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Check `branch` out in a private temporary worktree; the directory is removed again if that fails. */
 async function addTemporaryWorktree(repoDir: string, branch: string, hooks: string[]): Promise<string> {
   const parent = mkdtempSync(join(tmpdir(), "oca-merge-"));
@@ -332,7 +346,13 @@ async function mergeBranchLocked(
         await runGit([...hooks, "-C", baseCheckout, "merge", "--ff-only", branchRef], { timeout: 30_000 });
       }
     } catch (err) {
+      let hookNote = "";
       if (strategy === "squash") {
+        // A commit hook may have changed files before rejecting the commit
+        // (for example a formatter). Keep those changes as a patch instead of
+        // discarding them with the reset (the temporary checkout is removed).
+        const saved = await saveHookChanges(repoDir, baseCheckout, branch);
+        if (saved) hookNote = `\nThe commit hook changed files before failing; its changes were saved to ${saved}. Apply them on ${branch} (git apply), commit, and merge again.`;
         try {
           await runGit(["-C", baseCheckout, "reset", "--merge"], { timeout: 15_000 });
         } catch (resetErr) {
@@ -346,7 +366,7 @@ async function mergeBranchLocked(
           warnRecovery("Failed to pop auto-stash during recovery", popErr);
         }
       }
-      return withWarnings({ success: false, error: errorMessage(err), stashed: stashed || undefined, stashRef });
+      return withWarnings({ success: false, error: `${errorMessage(err)}${hookNote}`, stashed: stashed || undefined, stashRef });
     }
 
     let stashPopConflict = false;

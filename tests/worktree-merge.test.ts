@@ -247,6 +247,25 @@ describe("mergeBranch keeps the user's checkout (B4)", () => {
     }
   });
 
+  it("keeps the changes a rejecting commit hook made as a patch instead of discarding them", async () => {
+    const { repoDir, worktreePath } = setup();
+    try {
+      mkdirSync(join(repoDir, ".git", "hooks"), { recursive: true });
+      writeFileSync(join(repoDir, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho formatted > task.txt\nexit 1\n", { mode: 0o755 });
+
+      const result = await mergeBranch(repoDir, "agent/task", "main", "squash", worktreePath);
+
+      assert.equal(result.success, false);
+      const saved = /saved to (\S+\.patch)/.exec(result.error ?? "")?.[1];
+      assert.ok(saved, result.error);
+      assert.match(readFileSync(saved!, "utf-8"), /\+formatted/);
+      assert.equal(git(repoDir, "log", "--format=%s", "-1", "main"), "initial", "nothing was merged");
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("warns before rebasing a branch that was already pushed", async () => {
     const { repoDir, worktreePath } = setup();
     const remote = mkdtempSync(join(tmpdir(), "openclaw-merge-remote-"));
