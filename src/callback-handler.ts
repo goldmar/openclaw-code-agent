@@ -227,6 +227,40 @@ function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
 
+/** Decision buttons whose press makes the prompt's queued next-turn note stale. */
+const DECISION_NOTE_LABELS: Partial<Record<SessionActionKind, { button: string; subject: string }>> = {
+  "plan-approve": { button: "Approve", subject: "plan" },
+  "plan-reject": { button: "Reject", subject: "plan" },
+  "worktree-merge": { button: "Merge", subject: "branch" },
+  "worktree-create-pr": { button: "Open PR", subject: "branch" },
+  "worktree-update-pr": { button: "Sync PR", subject: "branch" },
+  "worktree-decide-later": { button: "Later", subject: "branch" },
+  "worktree-dismiss": { button: "Discard", subject: "branch" },
+};
+
+/**
+ * Next-turn notes queued with a decision prompt ("Plan v2 is with the user",
+ * "the user has Merge / Later / Discard buttons") cannot be withdrawn from the
+ * host queue: after a decision button, queue a note that they no longer apply.
+ * Revise queues its own note (the next message is the change).
+ */
+function queueDecisionPressedNote(
+  sm: { queueOrchestratorContext?: (ref: string, label: string, text: string, idempotencyKey?: string) => boolean },
+  kind: SessionActionKind,
+  sessionId: string,
+  sessionName: string,
+  tokenId: string,
+): void {
+  const decided = DECISION_NOTE_LABELS[kind];
+  if (!decided) return;
+  sm.queueOrchestratorContext?.(
+    sessionId,
+    "decision-button-pressed",
+    `[${sessionName}] The user pressed ${decided.button} for the ${decided.subject}; earlier notes about that pending decision no longer apply.`,
+    `decision-button-pressed:${sessionId}:${tokenId}`,
+  );
+}
+
 const WORKTREE_DECISION_ACTIONS: ReadonlySet<SessionActionKind> = new Set([
   "worktree-merge",
   "worktree-create-pr",
@@ -988,6 +1022,7 @@ export function createCallbackHandler(
         }
 
         await clearApprovalPrompt(true);
+        queueDecisionPressedNote(sessionManager, "plan-approve", sessionId, actionSessionName, tokenId);
         return { handled: true };
       }
 
@@ -1040,6 +1075,7 @@ export function createCallbackHandler(
           if (consumedToken.kind === "plan-reject") {
             const result = rejectPlanDecision(sessionManager, sessionId);
             await replyText(ctx, `❌ ${result.text}`);
+            queueDecisionPressedNote(sessionManager, "plan-reject", sessionId, actionSessionName, tokenId);
           } else {
             // Also queues the orchestrator note that the next message is the change (N35).
             const result = requestPlanDecisionChanges(sessionManager, sessionId);
@@ -1445,6 +1481,8 @@ export function createCallbackHandler(
             break;
           }
         }
+
+        queueDecisionPressedNote(sessionManager, token.kind, sessionId, actionSessionName, tokenId);
 
         return { handled: true };
       } finally {

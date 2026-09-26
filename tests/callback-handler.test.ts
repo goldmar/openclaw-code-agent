@@ -1725,6 +1725,24 @@ describe("createCallbackHandler()", () => {
     assert.match(queued[0]!.text, /agent_respond\(session='test-id', message='<their words>', userInitiated=true\)/);
   });
 
+  it("queues a note that the prompt's earlier next-turn notes no longer apply after a decision button", async () => {
+    const queued: Array<{ label: string; text: string }> = [];
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject", planDecisionVersion: 4 }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject", planDecisionVersion: 4 }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ id: "test-id", name: "ux-plan", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 }),
+      updatePersistedSession: () => true,
+      clearPlanDecisionTokens: () => {},
+      queueOrchestratorContext: (_ref: string, label: string, text: string) => { queued.push({ label, text }); return true; },
+    } as any);
+
+    await createCallbackHandler().handler(createCtx("token-reject").ctx as any);
+
+    assert.deepEqual(queued.map((entry) => entry.label), ["decision-button-pressed"]);
+    assert.equal(queued[0]!.text, "[ux-plan] The user pressed Reject for the plan; earlier notes about that pending decision no longer apply.");
+  });
+
   it("rejects timed-out pending plans without leaving them pending in persisted state", async () => {
     const patches: Array<Record<string, unknown>> = [];
     setSessionManager({
