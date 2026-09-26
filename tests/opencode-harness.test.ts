@@ -1,10 +1,12 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  candidateSearchPaths,
+  findOpenCodeModelInfo,
   OpenCodeHarness,
   openCodeAgentForMode,
   permissionRulesForMode,
@@ -20,6 +22,8 @@ type RequestRecord = {
   path: string;
   directory?: string;
   body?: any;
+  query?: URLSearchParams;
+  authorization?: string;
 };
 
 type MockSession = {
@@ -46,6 +50,7 @@ class MockOpenCodeServer {
   failSessionPatch = false;
   failRoute?: (method: string, path: string) => Response | Promise<Response> | undefined;
   readonly sessions = new Map<string, MockSession>();
+  providers: unknown = { providers: [], default: {} };
   private nextSession = 0;
   private streams: ReadableStreamDefaultController<Uint8Array>[] = [];
   private readonly encoder = new TextEncoder();
@@ -57,7 +62,8 @@ class MockOpenCodeServer {
     const path = url.pathname;
     const directory = url.searchParams.get("directory") ?? undefined;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    this.requests.push({ method, path, directory, body });
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    this.requests.push({ method, path, directory, body, query: url.searchParams, authorization: headers.Authorization });
 
     const override = await this.failRoute?.(method, path);
     if (override) return override;
@@ -78,12 +84,27 @@ class MockOpenCodeServer {
     const forkMatch = /^\/session\/([^/]+)\/fork$/.exec(path);
     if (method === "POST" && forkMatch) {
       const id = `ses_fork_${++this.nextSession}`;
-      this.sessions.set(id, { id, directory, messages: [...(this.session(forkMatch[1]).messages)] });
+      // Like OpenCode: the fork copies the messages before `messageID`.
+      const source = this.session(forkMatch[1]).messages;
+      const cut = body?.messageID ? source.findIndex((entry) => (entry as { info: { id: string } }).info.id === body.messageID) : -1;
+      this.sessions.set(id, { id, directory, messages: cut >= 0 ? source.slice(0, cut) : [...source] });
       return json({ id });
     }
     if (method === "GET" && path === "/session/status") return json(this.statuses);
     const messageMatch = /^\/session\/([^/]+)\/message$/.exec(path);
-    if (method === "GET" && messageMatch) return json(this.session(messageMatch[1]).messages);
+    if (method === "GET" && messageMatch) {
+      // Like OpenCode: `limit` returns the newest N messages (oldest first);
+      // `x-next-cursor` pages to older ones via `before`.
+      const all = this.session(messageMatch[1]).messages;
+      const limit = url.searchParams.get("limit");
+      if (limit === null) return json(all);
+      const end = url.searchParams.get("before") ? Number(url.searchParams.get("before")) : all.length;
+      const start = Math.max(0, end - Number(limit));
+      const response = json(all.slice(start, end));
+      if (start > 0) response.headers.set("x-next-cursor", String(start));
+      return response;
+    }
+    if (method === "GET" && path === "/config/providers") return json(this.providers);
     const promptMatch = /^\/session\/([^/]+)\/prompt_async$/.exec(path);
     if (method === "POST" && promptMatch) {
       const id = promptMatch[1];
@@ -1002,8 +1023,9 @@ describe("OpenCodeHarness pending input", () => {
     mock.emit({ type: "message.part.updated", properties: { sessionID: "ses_1", part: { type: "step-finish", cost: 0.02 } } });
     await collector.until(() => runningCosts().length === 1, "running cost after step");
     assert.equal(runningCosts()[0], 0.02);
-    const update = collector.messages.find((message) => message.type === "usage_updated");
-    assert.equal(update?.type === "usage_updated" ? update.usage.models?.[0]?.costUsd : undefined, 0.02);
+    // N25: mid-turn updates read only the session's cost (no history fetch);
+    // the per-model breakdown arrives with the turn result.
+    assert.equal(mock.requestsTo("GET", /\/message$/).filter((request) => request.query?.get("limit") === null).length, 0);
 
     // The next step asks a question; the cost so far is refreshed for the waiting view.
     mock.sessionCost = 0.03;
@@ -1172,5 +1194,205 @@ setTimeout(() => process.exit(9), 50);
       await collector.done;
     });
     rmSync(dirname(command), { recursive: true, force: true });
+  });
+});
+
+describe("OpenCodeHarness harness consistency (N1, N6, N16–N25)", () => {
+  it("gives every server spawn its own password and sends it with each request (N1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-opencode-auth-"));
+    const command = installFakeOpenCodeServer(`
+const { appendFileSync } = require("node:fs");
+appendFileSync(${JSON.stringify(join(dir, "passwords.txt"))}, (process.env.OPENCODE_SERVER_USERNAME || "") + ":" + (process.env.OPENCODE_SERVER_PASSWORD || "") + "\\n");
+console.log("opencode server listening on http://127.0.0.1:43125");
+setInterval(() => {}, 1000);
+`, join(dir, "bin"));
+    try {
+      await withOpenCodeCommand(command, async () => {
+        const first = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
+        const second = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
+        await first.close();
+        await second.close();
+        const seen = readFileSync(join(dir, "passwords.txt"), "utf8").trim().split("\n");
+        assert.equal(seen.length, 2);
+        assert.ok(seen.every((entry) => /^opencode:[A-Za-z0-9_-]{32}$/.test(entry)), seen.join(" | "));
+        assert.notEqual(seen[0], seen[1], "each spawn has its own password");
+        assert.equal(first.authorization, `Basic ${Buffer.from(seen[0]!).toString("base64")}`);
+      });
+      const mock = new MockOpenCodeServer();
+      const handle = mock.handle();
+      const harness = new OpenCodeHarness({
+        createServer: async () => ({ ...handle, authorization: "Basic dGVzdDpzZWNyZXQ=" }),
+        fetch: mock.fetch,
+        serverIdleShutdownMs: 0,
+      });
+      const { stream, collector } = launch(harness);
+      stream.push("hi");
+      await collector.untilCompletions(1);
+      stream.end();
+      await collector.done;
+      assert.ok(mock.requests.length > 2);
+      assert.ok(mock.requests.every((request) => request.authorization === "Basic dGVzdDpzZWNyZXQ="));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not search hard-coded Homebrew or Linuxbrew prefixes for the OpenCode command (N6)", () => {
+    const paths = candidateSearchPaths("/custom/bin");
+    assert.deepEqual(paths, ["/custom/bin", "/usr/local/bin", "/usr/bin", "/bin"]);
+    assert.equal(paths.some((path) => path.includes("linuxbrew") || path.includes("homebrew")), false);
+  });
+
+  it("reports OpenCode error classes as error codes with an authoritative outcome (N16)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.replyError = { name: "ProviderAuthError", data: { message: "Invalid API key" } };
+    const { stream, collector } = launch(harnessFor(mock));
+    stream.push("hi");
+    await collector.untilCompletions(1);
+    const failed = collector.completions()[0]!.data;
+    assert.equal(failed.success, false);
+    assert.equal(failed.outcomeAuthoritative, true);
+    assert.equal(failed.errorCode, "ProviderAuthError");
+    assert.equal(failed.result, "Invalid API key");
+    stream.end();
+    await collector.done;
+
+    const event = new MockOpenCodeServer();
+    event.autoComplete = false;
+    const second = launch(harnessFor(event));
+    second.stream.push("hi");
+    await waitFor(() => event.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    event.emit({ type: "session.error", properties: { sessionID: "ses_1", error: { name: "APIError", data: { message: "overloaded" } } } });
+    await second.collector.untilCompletions(1);
+    assert.equal(second.collector.completions()[0]!.data.errorCode, "APIError");
+    assert.equal(second.collector.completions()[0]!.data.outcomeAuthoritative, true);
+    second.stream.end();
+    await second.collector.done;
+  });
+
+  it("validates the effort against the model's variants and reports backend info and the context window (N19)", async () => {
+    const providers = {
+      default: {},
+      providers: [{ id: "deepseek", models: { "deepseek-flash": { variants: { low: {}, high: {}, max: {} }, limit: { context: 1_000_000, output: 393_216 } } } }],
+    };
+    assert.deepEqual(findOpenCodeModelInfo(providers, "deepseek/deepseek-flash"), { variants: ["low", "high", "max"], contextWindow: 1_000_000 });
+    for (const [effort, sent, supported] of [["high", "high", true], ["medium", undefined, false]] as const) {
+      const mock = new MockOpenCodeServer();
+      mock.providers = providers;
+      const { stream, collector } = launch(harnessFor(mock), { model: "deepseek/deepseek-flash", reasoningEffort: effort });
+      stream.push("hi");
+      await collector.untilCompletions(1);
+      stream.end();
+      await collector.done;
+      const prompt = mock.requestsTo("POST", /\/prompt_async$/)[0]!;
+      assert.equal(prompt.body.variant, sent, effort);
+      const info = collector.messages.find((message) => message.type === "backend_info");
+      assert.deepEqual(info?.type === "backend_info" ? info.info : undefined, {
+        model: "deepseek/deepseek-flash",
+        reasoningEffort: supported ? effort : null,
+        reasoningEffortSupported: supported,
+      });
+      assert.equal(collector.completions()[0]?.data.usage?.contextWindow, 1_000_000);
+      assert.equal(mock.requestsTo("GET", /^\/config\/providers$/).length, 1);
+    }
+  });
+
+  it("shows one request at a time and queues concurrent ones in order (N20)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    const { stream, session, collector } = launch(harnessFor(mock));
+    stream.push("go");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    mock.emit({ type: "permission.asked", properties: { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["npm test"] } });
+    mock.emit({ type: "question.asked", properties: { id: "que_2", sessionID: "ses_1", questions: [{ question: "Which branch?", options: [{ label: "main" }] }] } });
+    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "first request");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(collector.pending().map((message) => message.state.requestId), ["per_1"], "the second request waits");
+    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "que_2" }), false);
+    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "per_1" }), true);
+    await collector.until((messages) => messages.filter((message) => message.type === "pending_input").length === 2, "second request");
+    assert.equal(collector.pending()[1]?.state.requestId, "que_2");
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    stream.end();
+    await collector.done;
+  });
+
+  it("rewinds by forking before the user message of the N-th last turn (N23)", async () => {
+    const mock = new MockOpenCodeServer();
+    const source = mock.session("ses_src");
+    for (const turn of [1, 2, 3]) {
+      source.messages.push({ info: { role: "user", id: `msg_u${turn}` }, parts: [] });
+      source.messages.push({ info: { role: "assistant", id: `msg_a${turn}` }, parts: [{ type: "text", text: `answer ${turn}` }] });
+    }
+    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_src", forkSession: true, rewindTurns: 2 });
+    stream.push("continue");
+    await collector.untilCompletions(1);
+    stream.end();
+    await collector.done;
+    const fork = mock.requestsTo("POST", /\/fork$/)[0]!;
+    assert.deepEqual(fork.body, { messageID: "msg_u2" });
+    const forkedId = [...mock.sessions.keys()].find((id) => id.startsWith("ses_fork_"))!;
+    const kept = mock.session(forkedId).messages.map((entry) => (entry as { info: { id: string } }).info.id);
+    assert.deepEqual(kept.slice(0, 2), ["msg_u1", "msg_a1"]);
+
+    const inPlace = launch(harnessFor(new MockOpenCodeServer()), { resumeSessionId: "ses_src", rewindTurns: 1 });
+    inPlace.stream.push("continue");
+    await inPlace.collector.untilCompletions(1);
+    assert.match(inPlace.collector.completions()[0]?.data.result ?? "", /only rewind into a fork/);
+    inPlace.stream.end();
+    await inPlace.collector.done;
+  });
+
+  it("surfaces a subagent's permission prompt, applies the overlay to the subagent, and ignores its idle (N24)", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "default" });
+    stream.push("delegate");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    mock.emit({ type: "session.created", properties: { info: { id: "ses_child", parentID: "ses_1" } } });
+    await waitFor(() => mock.requestsTo("PATCH", /^\/session\/ses_child$/).length === 1, "overlay on the subagent");
+    assert.deepEqual(mock.requestsTo("PATCH", /^\/session\/ses_child$/)[0]!.body, { permission: permissionRulesForMode("default") });
+    // A grandchild is attributed to the same root session.
+    mock.emit({ type: "session.created", properties: { info: { id: "ses_grandchild", parentID: "ses_child" } } });
+    mock.emit({ type: "permission.asked", properties: { id: "per_sub", sessionID: "ses_grandchild", permission: "bash", patterns: ["echo hi > sub.txt"] } });
+    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "subagent prompt");
+    assert.match(collector.pending()[0]!.state.promptText, /An OpenCode subagent requests bash permission/);
+    // The subagent finishing does not end the parent's turn.
+    mock.emit({ type: "session.idle", properties: { sessionID: "ses_child" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(collector.completions().length, 0);
+    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "per_sub" }), true);
+    assert.equal(mock.requestsTo("POST", /^\/permission\/per_sub\/reply$/)[0]?.body.reply, "once");
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    stream.end();
+    await collector.done;
+  });
+
+  it("reads only each turn's own messages instead of the whole history (N25)", async () => {
+    const mock = new MockOpenCodeServer();
+    const history = mock.session("ses_long");
+    for (let turn = 0; turn < 120; turn += 1) {
+      history.messages.push({ info: { role: "user", id: `msg_old_u${turn}` }, parts: [] });
+      history.messages.push({
+        info: { role: "assistant", id: `msg_old_a${turn}`, providerID: "openai", modelID: "gpt-5.5", cost: 0.01, tokens: { input: 10, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } },
+        parts: [],
+      });
+    }
+    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_long" });
+    for (const [index, prompt] of ["one", "two", "three"].entries()) {
+      stream.push(prompt);
+      await collector.untilCompletions(index + 1);
+    }
+    stream.end();
+    await collector.done;
+    const reads = mock.requestsTo("GET", /\/message$/);
+    assert.equal(reads.filter((request) => request.query?.get("limit") === null).length, 0, "never an unbounded read");
+    // The earlier history is read once (5 pages of 50), then each turn reads one page.
+    const pages = reads.filter((request) => request.query?.get("limit") === "50").length;
+    assert.ok(pages <= 5 + 3, `pages read: ${pages}`);
+    const models = collector.completions().at(-1)?.data.usage?.models;
+    assert.equal(models?.[0]?.inputTokens, 120 * 10 + 3 * 1_000, "cumulative usage still covers the whole session");
   });
 });
