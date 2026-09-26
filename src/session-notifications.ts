@@ -230,6 +230,20 @@ export class SessionNotificationService {
         this.applyDeliveryState(deliveryRef, "notifying");
         dispatchRequest.hooks?.onNotifyStarted?.();
       },
+      ...(dispatchRequest.hooks?.onNotifyAdmitted ? { onNotifyAdmitted: () => {
+        // The host durable queue owns this intent. Do not reclaim the dedupe
+        // key and send a second copy if the final platform outcome is unknown.
+        notificationDedupeResolved = true;
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        dispatchRequest.hooks?.onNotifyAdmitted?.();
+      } } : {}),
+      ...(dispatchRequest.hooks?.onNotifyAmbiguous ? { onNotifyAmbiguous: () => {
+        notificationDedupeResolved = true;
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        this.applyNotifyDeliveryState(deliveryRef, "failed", undefined);
+        this.completionSummaries.finish(completionSummaryDecision.key, false);
+        dispatchRequest.hooks?.onNotifyAmbiguous?.();
+      } } : {}),
       onNotifySucceeded: () => {
         notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);

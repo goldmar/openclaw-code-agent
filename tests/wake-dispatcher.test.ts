@@ -71,6 +71,7 @@ type DeliveryRule = {
   outcome: "ok" | "failed" | "throw" | "hang";
   error?: string;
   delayMs?: number;
+  admit?: boolean;
   once?: boolean;
 };
 
@@ -107,6 +108,7 @@ async function fakeSendDurableMessageBatch(params: Record<string, any>): Promise
   calls.push(call);
   const rule = takeRule(call);
   await delay(rule?.delayMs);
+  if (rule?.admit) params.onDeliveryIntent?.({ id: "test-durable-intent" });
   if (rule?.outcome === "hang") await new Promise<void>(() => {});
   if (rule?.outcome === "throw") throw new Error(rule.error ?? "durable send threw");
   if (rule?.outcome === "failed") {
@@ -749,6 +751,39 @@ describe("WakeDispatcher", () => {
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.deepEqual(heartbeats, []);
     assert.equal(notifyFailed, 1);
+    dispatcher.dispose();
+  });
+
+  it("reports durable admission separately from a later unknown delivery outcome", async () => {
+    rules.push({
+      match: (call) => call.kind === "durable-send",
+      outcome: "failed",
+      admit: true,
+      error: "platform delivery failed after durable admission",
+    });
+    const dispatcher = createDispatcher();
+    const session: FakeSession = { id: "session-admitted-send", route: buildRoute() };
+    let admitted = 0;
+    let ambiguous = 0;
+    let failed = 0;
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "stale-reminder",
+      userMessage: "⏰ decision pending",
+      notifyUser: "always",
+      requireDirectUserNotification: true,
+      hooks: {
+        onNotifyAdmitted: () => { admitted += 1; },
+        onNotifyAmbiguous: () => { ambiguous += 1; },
+        onNotifyFailed: () => { failed += 1; },
+      },
+    });
+
+    await waitFor(() => ambiguous === 1, "admitted send outcome");
+    assert.equal(admitted, 1);
+    assert.equal(failed, 0);
+    assert.equal(calls.filter((call) => call.kind === "durable-send").length, 1);
+    assert.equal(calls.some((call) => call.kind === "system-event"), false);
     dispatcher.dispose();
   });
 

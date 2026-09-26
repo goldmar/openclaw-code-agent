@@ -16,6 +16,7 @@ export interface DirectNotificationTransport {
     route: NotificationRoute,
     text: string,
     buttons?: Array<Array<NotificationButton>>,
+    options?: { onDeliveryIntent?: () => void },
   ): Promise<void>;
 }
 
@@ -59,6 +60,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     route: NotificationRoute,
     text: string,
     buttons?: Array<Array<NotificationButton>>,
+    options?: { onDeliveryIntent?: () => void },
   ): Promise<void> {
     const presentation = buildPresentation(buttons);
     logButtonDiagnostic("direct_send_started", {
@@ -85,6 +87,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
         ...(route.threadId ? { threadId: route.threadId } : {}),
         payloads: [presentation ? { text, presentation } : { text }],
         durability: "required",
+        onDeliveryIntent: () => options?.onDeliveryIntent?.(),
       });
     } catch (err) {
       logButtonDiagnostic("direct_send_failed", {

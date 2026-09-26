@@ -8,7 +8,9 @@ import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { createLogger } from "./logger";
 
 const log = createLogger("session-reminder-service");
-const REMINDER_DELIVERY_RESULT_WAIT_MS = 10_000;
+// The dispatcher classifies a hung direct send after 30s. Wait past that
+// classification so maintenance does not schedule a retry first.
+const REMINDER_DELIVERY_RESULT_WAIT_MS = 35_000;
 
 type RoutingProxyBuilder = (session: {
   id?: string;
@@ -63,7 +65,7 @@ export class SessionReminderService {
   static readonly REMINDER_BACKOFF_MS = [3 * 60 * 60 * 1000, 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000] as const;
   static readonly MAX_REMINDERS = 3;
 
-  /** Reminders already sent for the current pending decision. */
+  /** Reminder attempts accepted by a durable sender or confirmed delivered. */
   static remindersSent(session: Pick<PersistedSessionInfo, "lastWorktreeReminderAt" | "worktreeReminderCount">): number {
     if (!session.lastWorktreeReminderAt) return 0;
     // Rows from builds without the counter sent at least one reminder.
@@ -115,7 +117,7 @@ export class SessionReminderService {
     const sent = SessionReminderService.remindersSent(session);
     const isLast = sent + 1 >= SessionReminderService.MAX_REMINDERS;
     let recorded = false;
-    const recordDelivered = (): void => {
+    const recordAttempt = (): void => {
       if (recorded || !stillCurrent()) return;
       recorded = true;
       for (const mutationRef of getPersistedMutationRefs(session)) {
@@ -127,7 +129,7 @@ export class SessionReminderService {
       }
     };
     try {
-      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent, isLast, recordDelivered))) return false;
+      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent, isLast, sent, nextReminderAt, recordAttempt))) return false;
     } catch (err) {
       log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -144,7 +146,9 @@ export class SessionReminderService {
     pendingHours: number,
     stillCurrent: () => boolean,
     isLast: boolean,
-    onDelivered: () => void,
+    sent: number,
+    deadline: number,
+    onAttempt: () => void,
   ): Promise<boolean> {
     const routingProxy = this.buildRoutingProxy({
       id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
@@ -160,9 +164,9 @@ export class SessionReminderService {
         wakeMessage: buildDelegateReminderWakeMessage(session, pendingHours),
         notifyUser: "never",
         shouldDispatch: stillCurrent,
-        idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${pendingHours}`,
+        idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${session.pendingWorktreeDecisionSince}:${sent + 1}:${deadline}`,
         hooks: {
-          onWakeSucceeded: () => { onDelivered(); settle(true); },
+          onWakeSucceeded: () => { onAttempt(); settle(true); },
           onWakeFailed: () => settle(false),
           onWakeSkipped: () => settle(false),
           onDuplicateSkipped: () => settle(false),
@@ -184,9 +188,14 @@ export class SessionReminderService {
       notifyUser: "always",
       requireDirectUserNotification: true,
       shouldDispatch: stillCurrent,
+      // A Later press can move the deadline while the previous send is in flight.
+      // The next scheduled reminder must not reuse that old send's dedupe key.
+      idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${session.pendingWorktreeDecisionSince}:${sent + 1}:${deadline}`,
       buttons,
       hooks: {
-        onNotifySucceeded: () => { onDelivered(); settle(true); },
+        onNotifyAdmitted: () => { onAttempt(); settle(true); },
+        onNotifySucceeded: () => { onAttempt(); settle(true); },
+        onNotifyAmbiguous: () => { onAttempt(); settle(true); },
         onNotifyFailed: () => settle(false),
         onDuplicateSkipped: () => settle(false),
       },
@@ -202,8 +211,7 @@ export class SessionReminderService {
         clearTimeout(timer);
         resolve(delivered);
       };
-      // A host send can remain pending. Maintenance retries after its own backoff;
-      // a late success still records delivery through the hook above.
+      // A late accepted intent still records its attempt through the hook.
       const timer = setTimeout(() => settle(false), REMINDER_DELIVERY_RESULT_WAIT_MS);
       timer.unref?.();
       try {

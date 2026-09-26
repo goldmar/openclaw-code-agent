@@ -68,7 +68,11 @@ export interface SessionNotificationRequest {
 
 export interface SessionNotificationHooks {
   onNotifyStarted?: () => void;
+  /** Host durable queue accepted the send intent; its retries now own delivery. */
+  onNotifyAdmitted?: () => void;
   onNotifySucceeded?: () => void;
+  /** The send may still land; do not start a second delivery. */
+  onNotifyAmbiguous?: () => void;
   onNotifyFailed?: () => void;
   onWakeStarted?: () => void;
   onWakeSucceeded?: () => void;
@@ -316,6 +320,8 @@ export class WakeDispatcher {
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
     wakeFollows: boolean = false,
+    onAdmitted?: () => void,
+    onAmbiguous?: () => void,
   ): void {
     if (shouldDispatch?.() === false) return;
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
@@ -376,7 +382,12 @@ export class WakeDispatcher {
       return;
     }
 
+    let durableIntentRecorded = false;
     const directFailureHandler = () => {
+      if (durableIntentRecorded) {
+        ambiguousHandler();
+        return;
+      }
       logButtonDiagnostic("wake_notify_direct_failed", {
         sessionId: session.id,
         sessionName: session.name,
@@ -436,9 +447,10 @@ export class WakeDispatcher {
       });
       log.warn(
         `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
-        `timed out with an unknown outcome; reporting delivery failure without a fallback resend.`,
+        `has an unknown delivery outcome; suppressing a fallback resend.`,
       );
-      onAllFailed?.();
+      if (onAmbiguous) onAmbiguous();
+      else onAllFailed?.();
     };
 
     const options = {
@@ -487,7 +499,12 @@ export class WakeDispatcher {
           // the tokens were being persisted: never show buttons that are stale.
           if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
-        await this.directNotifications.send(route, text, buttons);
+        await this.directNotifications.send(route, text, buttons, {
+          onDeliveryIntent: () => {
+            durableIntentRecorded = true;
+            onAdmitted?.();
+          },
+        });
       },
       options,
     );
@@ -595,6 +612,8 @@ export class WakeDispatcher {
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
     wakeFollows: boolean = false,
+    onAdmitted?: () => void,
+    onAmbiguous?: () => void,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -660,6 +679,8 @@ export class WakeDispatcher {
         requireDirectDelivery,
         shouldDispatch,
         wakeFollows,
+        onAdmitted,
+        onAmbiguous,
       );
     };
 
@@ -759,6 +780,8 @@ export class WakeDispatcher {
           // A system-event fallback counts as notify success, which dispatches the success wake.
           // A queued (next-turn) success wake does not run a turn, so the fallback must.
           Boolean(wakeOnSuccess) && request.wakeDelivery !== "next-turn",
+          hooks?.onNotifyAdmitted,
+          hooks?.onNotifyAmbiguous,
         );
       } else {
         onFailed();
@@ -785,6 +808,8 @@ export class WakeDispatcher {
         request.requireDirectUserNotification === true,
         shouldDispatch,
         Boolean(wakeMessage),
+        hooks?.onNotifyAdmitted,
+        hooks?.onNotifyAmbiguous,
       );
     }
 
@@ -816,6 +841,8 @@ export class WakeDispatcher {
         false,
         shouldDispatch,
         true,
+        hooks?.onNotifyAdmitted,
+        hooks?.onNotifyAmbiguous,
       );
     }
 

@@ -1867,6 +1867,70 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
+  it("reserves a reminder attempt once the durable queue accepts it, even if delivery becomes ambiguous", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "admitted-reminder", harnessSessionId: "admitted-reminder-thread", name: "admitted-reminder",
+      status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
+      worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
+    };
+    let dispatches = 0;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => {
+        dispatches += 1;
+        request.hooks?.onNotifyAdmitted?.();
+        request.hooks?.onNotifyAmbiguous?.();
+      },
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), true);
+    assert.equal(pending.worktreeReminderCount, 1);
+    assert.equal(await reminders.sendReminderIfDue(pending, start + 3 * hour), false);
+    assert.equal(dispatches, 1);
+    assert.equal(await reminders.getNextReminderAt(pending), start + 27 * hour);
+  });
+
+  it("uses a new reminder dedupe key when Later wins a race with durable admission", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "snoozed-admission", harnessSessionId: "snoozed-admission-thread", name: "snoozed-admission",
+      status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
+      worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
+    };
+    const firstDue = start + 3 * hour;
+    const snoozedDue = firstDue + 24 * hour;
+    const keys: string[] = [];
+    let current = true;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => {
+        keys.push(request.idempotencyKey ?? "");
+        if (keys.length === 1) {
+          current = false;
+          pending.worktreeDecisionSnoozedUntil = new Date(snoozedDue).toISOString();
+          request.hooks?.onNotifyAdmitted?.();
+        } else {
+          request.hooks?.onNotifySucceeded?.();
+        }
+      },
+      (_ref, patch) => { Object.assign(pending, patch); return true; },
+      async () => undefined,
+    );
+
+    assert.equal(await reminders.sendReminderIfDue(pending, firstDue, () => current), true);
+    assert.equal(pending.worktreeReminderCount, undefined, "the late admission must preserve the newer snooze");
+    current = true;
+    assert.equal(await reminders.sendReminderIfDue(pending, snoozedDue, () => current), true);
+    assert.equal(pending.worktreeReminderCount, 1);
+    assert.equal(keys.length, 2);
+    assert.notEqual(keys[0], keys[1]);
+  });
+
   it("cancels a queued reminder after a snooze changes the decision generation", async () => {
     const start = 1_700_000_000_000;
     const pending: any = {

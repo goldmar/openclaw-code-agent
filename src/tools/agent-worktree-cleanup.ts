@@ -44,6 +44,11 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       if (!isAgentWorktreeCleanupParams(params)) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, session?, dismiss_session? }." }] };
       }
+      // A 4.x dry_run=true call must never silently become a 5.0 clean_safe
+      // deletion when a host forwards extra properties to execute().
+      if ("dry_run" in params) {
+        return { content: [{ type: "text", text: "Error: dry_run was removed. Use mode=preview_safe to inspect worktrees before cleanup." }] };
+      }
 
       if (params.base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.base_branch);
