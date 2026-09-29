@@ -9,6 +9,30 @@ import {
 } from "../src/harness/codex-cost";
 
 describe("Codex API cost accounting", () => {
+  it("prices GPT-6.1 Sol cache reads at 5% and applies the effective service tier", () => {
+    const usage = {
+      inputTokens: 100_000, cachedInputTokens: 20_000, cacheWriteInputTokens: 0,
+      outputTokens: 10_000, reasoningOutputTokens: 5_000,
+    };
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", usage }), 0.262);
+    assert.equal(estimateCodexApiCostUsd({ model: "GPT-6.1-SOL", serviceTier: "default", usage }), 0.262);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", serviceTier: "priority", usage }), 0.524);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", serviceTier: "fast", usage }), 0.524);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", serviceTier: "flex", usage }), 0.131);
+  });
+
+  it("switches GPT-6.1 Sol input, cache-write, and output rates above 272K input tokens", () => {
+    const usage = {
+      inputTokens: 272_000, cachedInputTokens: 100_000, cacheWriteInputTokens: 50_000,
+      outputTokens: 1_000, reasoningOutputTokens: 500,
+    };
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", usage }), 0.389);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", usage: { ...usage, inputTokens: 272_001 } }), 0.773004);
+    assert.equal(estimateCodexApiCostUsd({
+      model: "gpt-6.1-sol", serviceTier: "priority", usage: { ...usage, inputTokens: 300_000 },
+    // 150K uncached * $8 + 100K cached * $0.40 + 50K writes * $10 + 1K output * $30.
+    }), 1.77);
+  });
   it("prices GPT-6 Astra input, cached input, and output tokens", () => {
     const cost = estimateCodexApiCostUsd({
       model: "gpt-6-astra",
@@ -116,7 +140,7 @@ describe("Codex API cost accounting", () => {
         reasoningOutputTokens: 0,
       },
     }), undefined);
-    for (const model of ["gpt-6-sol-unlisted-snapshot", "gpt-6-luna-unlisted-snapshot", "gpt-6-terra"]) {
+    for (const model of ["gpt-6.1-sol-unlisted-snapshot", "gpt-6.1-sol-2026-09-29", "gpt-6-sol-unlisted-snapshot", "gpt-6-luna-unlisted-snapshot", "gpt-6-terra"]) {
       assert.equal(estimateCodexApiCostUsd({
         model,
         usage: {

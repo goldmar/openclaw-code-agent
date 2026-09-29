@@ -10,7 +10,7 @@ import { JsonRpcRemoteError, JsonRpcResponseError, StdioJsonRpcClient, dispatchJ
 import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { MIN_CODEX_CLI_VERSION, codexVersionError, codexVersionFromUserAgent } from "../src/harness/codex-protocol";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
-import { setPluginConfig } from "../src/config";
+import { resolveDefaultModelForHarness, resolveReasoningEffortForHarness, setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
 import type { TokenUsageBreakdown } from "../src/harness/codex-app-server-protocol/v2/TokenUsageBreakdown";
@@ -697,6 +697,22 @@ describe("CodexHarness launch settings", () => {
     assert.equal("model" in client.requestsFor("thread/start")[0], false);
   });
 
+  it("keeps the shipped GPT-6.1 Sol effort at medium when the live catalog defaults to low", async () => {
+    setPluginConfig({});
+    const client = new MockCodexClient({
+      models: [codexCatalogModel("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
+    });
+    const messages = await collectMessages(launch(client, {
+      model: resolveDefaultModelForHarness("codex"),
+      reasoningEffort: resolveReasoningEffortForHarness("codex"),
+    }));
+    assert.equal(client.requestsFor("thread/start")[0].model, "gpt-6.1-sol");
+    const turn = client.requestsFor("turn/start")[0] as { effort: string; collaborationMode: { settings: { reasoning_effort: string } } };
+    assert.equal(turn.effort, "medium");
+    assert.equal(turn.collaborationMode.settings.reasoning_effort, "medium");
+    assert.ok(messages.some((message) => message.type === "backend_info" && message.info.reasoningEffort === "medium"));
+  });
+
   it("applies configured Codex permission profile, approval policy, and reviewer (B5)", async () => {
     setPluginConfig({ harnesses: { codex: { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } } });
     const client = new MockCodexClient();
@@ -1079,6 +1095,22 @@ describe("CodexHarness minimum Codex CLI version (B23)", () => {
 });
 
 describe("CodexHarness cost accounting (B8)", () => {
+  it("prices GPT-6.1 Sol responses once and carries estimates separately for subscription goals", async () => {
+    for (const accountType of ["apiKey", "chatgpt"] as const) {
+      const client = new MockCodexClient({
+        accountType,
+        models: [codexCatalogModel("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
+        tokenUsage: [breakdown(1_000, 400, 200, 100, 90), breakdown(500, 0, 0, 50, 40)],
+      });
+      const messages = await collectMessages(launch(client, { model: "gpt-6.1-sol" }));
+      const result = runCompleted(messages);
+      assert.equal(result?.data.total_cost_usd, accountType === "apiKey" ? 0.00384 : 0);
+      const estimates = messages.flatMap((message) => message.type === "usage_updated" && message.usage.estimatedCostUsd !== undefined
+        ? [message.usage.estimatedCostUsd] : []);
+      if (accountType === "chatgpt") assert.equal(estimates.at(-1), 0.00384);
+      else assert.deepEqual(estimates, []);
+    }
+  });
   it("prices each thread/tokenUsage/updated response for API-key accounts", async () => {
     const client = new MockCodexClient({
       accountType: "apiKey",

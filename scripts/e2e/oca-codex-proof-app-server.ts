@@ -254,7 +254,7 @@ class ProofServer {
     const cwd = typeof record.cwd === "string" ? record.cwd : "/tmp";
     return {
       thread: { id: typeof record.threadId === "string" ? record.threadId : THREAD_ID, turns: [] },
-      model: typeof record.model === "string" ? record.model : "gpt-6-sol",
+      model: typeof record.model === "string" ? record.model : "gpt-6.1-sol",
       modelProvider: "openai",
       serviceTier: null,
       cwd,

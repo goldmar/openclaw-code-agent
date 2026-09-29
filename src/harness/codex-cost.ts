@@ -21,7 +21,10 @@ type TokenRates = {
 // GPT-6 Sol and Luna: https://developers.openai.com/api/docs/pricing (Standard,
 // short context, as of 2026-09-23; also announced in
 // https://developers.openai.com/api/docs/changelog).
+// GPT-6.1 Sol: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+// (2026-09-29); cached input is 5% of the uncached input rate.
 const STANDARD_RATES: Record<string, TokenRates> = {
+  "gpt-6.1-sol": { input: 2, cachedInput: 0.1, output: 10 },
   "gpt-6-astra": { input: 10, cachedInput: 1, output: 50 },
   "gpt-6-sol": { input: 2, cachedInput: 0.2, output: 10 },
   "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
@@ -49,8 +52,8 @@ function canonicalPricingModel(model: string | undefined): string | undefined {
   const normalized = model?.trim().toLowerCase();
   if (!normalized) return undefined;
   if (normalized === "gpt-5.6") return "gpt-5.6-sol";
-  // GPT-6 models are priced by exact id only; unlisted snapshots stay unpriced.
-  if (normalized.startsWith("gpt-6-")) {
+  // GPT-6 and 6.x models are priced by exact id only; unlisted snapshots stay unpriced.
+  if (/^gpt-6(?:[.-])/.test(normalized)) {
     return Object.hasOwn(STANDARD_RATES, normalized) ? normalized : undefined;
   }
   for (const pricedModel of Object.keys(STANDARD_RATES)) {
@@ -129,7 +132,9 @@ export function estimateCodexApiCostUsd(params: {
   } = params.usage;
 
   const isLongContext = inputTokens > LONG_CONTEXT_INPUT_THRESHOLD;
-  const serviceMultiplier = isFastServiceTier(params.serviceTier) ? FAST_MODE_MULTIPLIER : 1;
+  const serviceMultiplier = isFastServiceTier(params.serviceTier)
+    ? FAST_MODE_MULTIPLIER
+    : pricingModel === "gpt-6.1-sol" && params.serviceTier?.trim().toLowerCase() === "flex" ? 0.5 : 1;
   const inputMultiplier = serviceMultiplier * (isLongContext ? LONG_CONTEXT_INPUT_MULTIPLIER : 1);
   const outputMultiplier = serviceMultiplier * (isLongContext ? LONG_CONTEXT_OUTPUT_MULTIPLIER : 1);
   const uncachedInputTokens = inputTokens - cachedInputTokens - cacheWriteInputTokens;

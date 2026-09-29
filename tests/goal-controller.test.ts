@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 
 import { GoalController, goalRunCostUsd, normalizeVerifierCommands } from "../src/goal-controller";
 import { GoalTaskStore } from "../src/goal-store";
+import { estimateCodexApiCostUsd } from "../src/harness/codex-cost";
 import type { GoalTaskState } from "../src/types";
 import { createStubSession, tick } from "./helpers";
 
@@ -898,6 +899,28 @@ describe("GoalController", () => {
     assert.match(chatgpt.failureReason ?? "", /cost limit/);
     assert.equal(goalRunCostUsd({ costUsd: 0.2, usage: { estimatedCostUsd: 5 } }), 0.2, "billed cost wins when there is one");
     assert.equal(goalRunCostUsd({ costUsd: 0 }), 0);
+  });
+
+  it("uses GPT-6.1 Sol API estimates to stop subscription goals at the cost limit once per run", () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    (controller as any).store = createStore();
+    const task = buildTask({ id: "g-sol61", model: "gpt-6.1-sol", maxCostUsd: 0.5, totalCostUsd: 0 });
+    const estimate = estimateCodexApiCostUsd({
+      model: task.model,
+      usage: {
+        inputTokens: 100_000, cachedInputTokens: 20_000, cacheWriteInputTokens: 0,
+        outputTokens: 10_000, reasoningOutputTokens: 5_000,
+      },
+    });
+    assert.equal(estimate, 0.262);
+    const run = { id: "cx-sol61", startedAt: 1, costUsd: 0, usage: { estimatedCostUsd: estimate } };
+    assert.equal((controller as any).recordRunCost(task, run), true);
+    assert.equal((controller as any).recordRunCost(task, run), true);
+    assert.equal(task.totalCostUsd, 0.262, "duplicate run receipts do not consume budget twice");
+    assert.equal((controller as any).recordRunCost(task, { ...run, startedAt: 2 }), false);
+    assert.equal(task.totalCostUsd, 0.524);
+    assert.equal(task.status, "failed");
+    assert.match(task.failureReason ?? "", /cost limit/);
   });
 
   it("fails waiting_for_user tasks during restore", async () => {

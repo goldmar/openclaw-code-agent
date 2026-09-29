@@ -18,7 +18,7 @@ describe("agent_launch tool defaults", () => {
     setSessionManager(null);
   });
 
-  it("uses the built-in Codex model and leaves reasoning effort to Codex when no model is provided", async () => {
+  it("uses the built-in Codex model and preserves medium reasoning when no model is provided", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ defaultHarness: "codex" });
 
@@ -39,12 +39,12 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.harness, "codex");
-    assert.equal(spawnConfig?.model, "gpt-6-sol");
-    assert.equal(spawnConfig?.reasoningEffort, undefined);
+    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
+    assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.fastMode, undefined);
     assert.equal("codexApprovalPolicy" in (spawnConfig ?? {}), false);
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, / · codex \| gpt-6-sol/);
+    assert.match(text, / · codex \| gpt-6.1-sol/);
     assert.match(text, /Mode: plan first, approval: delegate · worktree: delegate/);
     const [summary, note] = text.split("\n\n");
     assert.ok(summary!.split("\n").length <= 5, `compact launch summary: ${text}`);
@@ -486,7 +486,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6-sol");
+    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
     assert.equal(spawnConfig?.forkSession, true);
     assert.equal(spawnConfig?.rewindTurns, 1);
@@ -535,7 +535,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6-sol");
+    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
 

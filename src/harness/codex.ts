@@ -364,7 +364,7 @@ export class CodexHarness implements AgentHarness {
     let currentPermissionMode = options.permissionMode ?? "default";
     const runtimeModel = canonicalizeModelForHarness(this.name, options.model);
     if (!isModelFormatSupportedForHarness(this.name, runtimeModel)) {
-      throw new Error(`Codex model "${options.model}" is not supported. Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`);
+      throw new Error(`Codex model "${options.model}" is not supported. Use a bare Codex model id such as "gpt-6.1-sol" or "gpt-6-astra".`);
     }
     let threadModel: string | undefined;
     let effectiveModel = runtimeModel;

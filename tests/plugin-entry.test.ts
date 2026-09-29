@@ -428,11 +428,11 @@ describe("plugin entry source", () => {
       "max",
     ]);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
-    assert.equal(harnessDefaults?.codex?.defaultModel, "gpt-6-sol");
+    assert.equal(harnessDefaults?.codex?.defaultModel, "gpt-6.1-sol");
     assert.equal(harnessDefaults?.["claude-code"]?.defaultModel, "opus");
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
     assert.equal(harnessDefaults?.codex?.fastMode, false);
-    assert.equal(harnessDefaults?.codex?.reasoningEffort, undefined);
+    assert.equal(harnessDefaults?.codex?.reasoningEffort, "medium");
     assert.equal(harnessDefaults?.codex?.permissionProfile, undefined, "unset so it follows tools.exec.mode");
     assert.equal(harnessDefaults?.codex?.approvalPolicy, undefined);
     assert.equal(harnessDefaults?.codex?.approvalsReviewer, undefined);

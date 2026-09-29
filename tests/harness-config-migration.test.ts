@@ -42,7 +42,7 @@ describe("harness model configuration", () => {
 
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.1-sol");
     assert.equal("allowedModels" in pluginConfig, false);
     assert.equal(resolve("claude-code", "haiku").kind, "error");
   });

@@ -81,8 +81,9 @@
         "description": "Per-harness launch defaults and model restrictions.",
         "default": {
           "codex": {
-            "defaultModel": "gpt-6-sol",
+            "defaultModel": "gpt-6.1-sol",
             "allowedModels": [
+              "gpt-6.1-sol",
               "gpt-6-sol",
               "gpt-6-astra",
               "gpt-6-luna",
@@ -90,6 +91,7 @@
               "gpt-5.6-terra",
               "gpt-5.6-luna"
             ],
+            "reasoningEffort": "medium",
             "fastMode": false
           },
           "claude-code": {
@@ -125,7 +127,7 @@
                 "xhigh",
                 "max"
               ],
-              "description": "Harness-specific reasoning effort. Passed to Codex (as the turn effort, skipped when Codex's model/list says the model does not support it), to Claude Code as its effort, and to OpenCode as the prompt variant. Unset for Codex means Codex's own configured/model default."
+              "description": "Harness-specific reasoning effort. Passed to Codex (as the turn effort, skipped when Codex's model/list says the model does not support it), to Claude Code as its effort, and to OpenCode as the prompt variant. Codex defaults to medium; explicit values override it."
             },
             "fastMode": {
               "type": "boolean",
@@ -274,7 +276,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts; when unset they follow the host tools.exec.mode like OpenClaw's bundled Codex plugin ('full' or unset: full access, no prompts; 'auto': ':workspace' + 'on-request' + 'auto_review'; 'ask': the same with approvals in chat), and explicit values always win. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts; when unset they follow the host tools.exec.mode like OpenClaw's bundled Codex plugin ('full' or unset: full access, no prompts; 'auto': ':workspace' + 'on-request' + 'auto_review'; 'ask': the same with approvals in chat), and explicit values always win. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6.1-sol\",\"allowedModels\":[\"gpt-6.1-sol\",\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {

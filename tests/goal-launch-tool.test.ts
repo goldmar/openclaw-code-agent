@@ -63,8 +63,8 @@ describe("agent_goal action=launch", () => {
 
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.harness, "codex");
-    assert.equal(launchConfig?.model, "gpt-6-sol");
-    assert.equal(launchConfig?.reasoningEffort, undefined);
+    assert.equal(launchConfig?.model, "gpt-6.1-sol");
+    assert.equal(launchConfig?.reasoningEffort, "medium");
     // D3: the first iteration uses the configured permission mode (default plan).
     assert.equal(launchConfig?.permissionMode, "plan");
     assert.equal(launchConfig?.requireVerifierConfirmation, true, "orchestrator-supplied verifiers need the user's confirmation");

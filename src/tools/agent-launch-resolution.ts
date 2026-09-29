@@ -67,13 +67,14 @@ type SessionManagerLike = {
   listPersistedSessions?: () => PersistedSessionInfo[];
   resolve?: (ref: string) => {
     harnessName?: string;
+    model?: string;
     reasoningEffort?: PersistedSessionInfo["reasoningEffort"];
     backendConversationId?: string;
     harnessSessionId?: string;
   } | undefined;
   getPersistedSession?: (ref: string) => Pick<
     PersistedSessionInfo,
-    "harness" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+    "harness" | "model" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
   > | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
 };
@@ -249,8 +250,17 @@ export function resolveAgentLaunchRequest(
       return { kind: "error", text: "Error: rewind_turns with the OpenCode harness requires fork_session=true (an in-place OpenCode revert would also undo file changes)." };
     }
   }
+  const activeResumeSession = params.resume_session_id
+    ? sessionManager.resolve?.(params.resume_session_id)
+    : undefined;
+  const persistedResumeSession = params.resume_session_id
+    ? sessionManager.getPersistedSession?.(params.resume_session_id)
+    : undefined;
   const defaultModel = resolveDefaultModelForHarness(harness);
-  const rawResolvedModel = params.model ?? defaultModel;
+  const rawResolvedModel = params.model
+    ?? (activeResumeSession?.harnessName === harness ? activeResumeSession.model : undefined)
+    ?? (persistedResumeSession?.harness === harness ? persistedResumeSession.model : undefined)
+    ?? defaultModel;
   const canonicalResolvedModel = canonicalizeModelForHarness(harness, rawResolvedModel);
   const wasExplicitModel = params.model !== undefined;
   const allowedModels = resolveAllowedModelsForHarness(harness);
@@ -264,7 +274,7 @@ export function resolveAgentLaunchRequest(
   if (canonicalResolvedModel && !isModelFormatSupportedForHarness(harness, canonicalResolvedModel)) {
     return {
       kind: "error",
-      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
+      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6.1-sol" or "gpt-6-astra".`,
     };
   }
 
@@ -333,12 +343,6 @@ export function resolveAgentLaunchRequest(
   }
 
   let resolvedResumeId = params.resume_session_id;
-  const activeResumeSession = resolvedResumeId
-    ? sessionManager.resolve?.(resolvedResumeId)
-    : undefined;
-  const persistedResumeSession = resolvedResumeId
-    ? sessionManager.getPersistedSession?.(resolvedResumeId)
-    : undefined;
   if (resolvedResumeId) {
     const resolved = sessionManager.resolveBackendConversationId?.(resolvedResumeId);
     if (!resolved) {

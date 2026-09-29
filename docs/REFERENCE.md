@@ -8,9 +8,9 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | --- | --- |
 | `defaultHarness` | `claude-code` |
 | `harnesses.claude-code.defaultModel` | `opus` |
-| `harnesses.codex.defaultModel` | `gpt-6-sol` |
-| `harnesses.codex.allowedModels` | `["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
-| `harnesses.codex.reasoningEffort` | unset; Codex applies its configured/model default |
+| `harnesses.codex.defaultModel` | `gpt-6.1-sol` |
+| `harnesses.codex.allowedModels` | `["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
+| `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
 | `harnesses.codex.permissionProfile` | unset; follows `tools.exec.mode` (`:danger-full-access` when that is unset) |
 | `harnesses.codex.approvalPolicy` | unset; follows `tools.exec.mode` (`never` when that is unset) |
@@ -44,8 +44,9 @@ The current `openclaw-code-agent` package requires, is built against, and is val
   {
     "harnesses": {
       "codex": {
-        "defaultModel": "gpt-6-sol",
-        "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        "defaultModel": "gpt-6.1-sol",
+        "reasoningEffort": "medium",
+        "allowedModels": ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
       },
       "claude-code": {
         "defaultModel": "opus",
@@ -56,7 +57,7 @@ The current `openclaw-code-agent` package requires, is built against, and is val
   ```
 
   Place these fields under `plugins.entries.openclaw-code-agent.config`. An empty `allowedModels: []` removes that harness restriction; omission keeps the built-in list, but setting a custom `defaultModel` without an explicit list drops the built-in restriction.
-- **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)). OCA's `permissionMode` no longer affects Codex execution: in 4.x `bypassPermissions` always meant `danger-full-access` with no approvals, while in 5.0 a host with `tools.exec.mode` `auto` or `ask` runs Codex in the `:workspace` sandbox even for `bypassPermissions` sessions, and `deny` / `allowlist` refuse Codex launches. Set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` to keep the 4.x behavior on such hosts. Codex CLI `0.156.1` or newer is required: older App Servers (or ones whose version cannot be read) fail the launch with an error naming both versions.
+- **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` defaults to `medium` to preserve the effective GPT-6 Sol level when switching to GPT-6.1 Sol, and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)). OCA's `permissionMode` no longer affects Codex execution: in 4.x `bypassPermissions` always meant `danger-full-access` with no approvals, while in 5.0 a host with `tools.exec.mode` `auto` or `ask` runs Codex in the `:workspace` sandbox even for `bypassPermissions` sessions, and `deny` / `allowlist` refuse Codex launches. Set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` to keep the 4.x behavior on such hosts. Codex CLI `0.156.1` or newer is required: older App Servers (or ones whose version cannot be read) fail the launch with an error naming both versions.
 - **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override, so state lives in `$OPENCLAW_HOME/.openclaw`). If you set `OPENCLAW_HOME` to point OCA at a state directory, set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead. Output transcripts moved from `/tmp/openclaw-agent-<id>.txt`, and auto-update state from `<stateDir>/openclaw-code-agent-auto-update.json`, to `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
 - **Minimum host.** OpenClaw `2026.9.6` is required for installation, the plugin API, the Gateway, and the peer dependency; upgrade the host first.
 - **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review) and merges tools: the four `agent_goal_*` tools are now `agent_goal`, and `agent_request_plan_approval` / `agent_request_worktree_decision` are now `agent_escalate`. `agent_send_plan_offer` is registered only with `planOfferTool: true`. If an agent's tool allowlist names OCA tools individually, update it; the [CHANGELOG](../CHANGELOG.md) has the full migration table.
@@ -163,8 +164,9 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-6-sol",
-        "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        "defaultModel": "gpt-6.1-sol",
+        "reasoningEffort": "medium",
+        "allowedModels": ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
         "fastMode": false
       },
       "opencode": {}
@@ -218,7 +220,7 @@ Claude Code decisions for 5.0:
 - **Only `default`, `plan` and `bypassPermissions` are exposed.** The SDK's `acceptEdits`, `dontAsk` and `auto` modes are Claude-specific (`auto` also needs a model with `supportsAutoMode`), have no Codex or OpenCode counterpart, and would make `permission_mode` mean different things per harness.
 - **No per-turn Codex tier.** Codex can override the tier for one turn (`serviceTierForTurn`), but OCA's `fast_mode` is a session setting, so the thread tier is used.
 
-The built-in Codex default (`gpt-6-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
+The built-in Codex default (`gpt-6.1-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
 Codex harness details:
 
@@ -227,9 +229,10 @@ Codex harness details:
 - Startup failures say what failed: a missing `codex` command names the command and `OPENCLAW_CODEX_APP_SERVER_COMMAND`; an app server that exits reports its exit code or signal and its last stderr lines (credentials and home paths redacted); a JSON-RPC error keeps its `code` and `data`.
 - Minimum Codex CLI: `0.156.1` (`MIN_CODEX_CLI_VERSION` in `src/harness/codex-protocol.ts`). After `initialize`, the harness reads the version from the App Server's `userAgent` (`<originator>/<version> (...)`) and fails the launch, before any thread is started, when the version is older or cannot be read. The error names the reported and the required version.
 - The session system prompt, including the worktree preamble, is sent as thread-level `developerInstructions` on `thread/start`, `thread/resume`, and `thread/fork`. Every `turn/start` carries the model, the top-level `effort`, and a `collaborationMode` (`plan` for OCA plan mode, otherwise `default`) whose snake_case settings repeat the model and `reasoning_effort` and leave `developer_instructions: null` so Codex's built-in mode instructions stay active.
-- Reasoning effort: `harnesses.codex.reasoningEffort` (or the launch `reasoning_effort`) is sent when set. There is no built-in default; unset means Codex's own configured/model default. When the session's own Codex connection (`model/list`) says a model does not support the requested effort, the harness omits it rather than failing the turn and reports that to the session, so status lines only show efforts that are actually applied (before the first Codex session loads the catalog, only `low`/`medium`/`high` are shown).
+- Reasoning effort: `harnesses.codex.reasoningEffort` (or the launch `reasoning_effort`) is sent when set. The built-in default is `medium`; explicit launch or configuration values override it. When the session's own Codex connection (`model/list`) says a model does not support the requested effort, the harness omits it rather than failing the turn and reports that to the session, so status lines only show efforts that are actually applied (before the first Codex session loads the catalog, only `low`/`medium`/`high` are shown).
 - `harnesses.codex.fastMode: true` requests `serviceTier: "priority"` (Codex's fast tier) when the session's own `model/list` lists that tier for the model; otherwise the session runs at standard speed and reports fast mode as unsupported (Codex accepts an unknown tier without an error). A resumed or forked thread keeps the tier it last ran with, so continuing without fast mode sends `serviceTier: "default"`. API-key cost estimates apply the fast multiplier only when Codex reports `priority` as the thread's effective tier.
 - Resume sends `excludeTurns: true`; OCA never hydrates full thread history.
+- Resuming with no model or effort override keeps the active or persisted session's model and reasoning pins. Only new sessions use the current defaults; a saved model must still pass the configured allowlist.
 - Cost: for API-key accounts the harness prices each `thread/tokenUsage/updated` response (`last` breakdown) against the built-in price table and reports the running total as each response is priced, so the session cost is current mid-turn (for example while an approval is pending). ChatGPT-login sessions stay unpriced (`$0`, per-model cost basis `managed`); their tokens are still reported, and an API-price estimate of them is kept apart from the cost and used only by goal `max_cost_usd` limits.
 - Usage: `agent_output` shows this connection's per-model tokens and the context fill (the latest response's total against `modelContextWindow`).
 - Permissions and approvals are configured per operator, identically for every OCA permission mode (OCA permission modes only select Codex's `plan` vs `default` collaboration mode):

@@ -563,9 +563,9 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.1-sol");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });
@@ -602,8 +602,8 @@ describe("setPluginConfig", () => {
     setPluginConfig({});
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.1-sol");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
@@ -666,9 +666,9 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.defaultWorktreeStrategy, "delegate");
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.1-sol");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });

@@ -18,11 +18,11 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["sonnet", "opus"],
   },
   codex: {
-    defaultModel: "gpt-6-sol",
-    allowedModels: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    // No builtin reasoningEffort: Codex applies its own configured/model
-    // default (see model/list `defaultReasoningEffort`) unless one is set.
-    // No builtin permissionProfile / approvalPolicy / approvalsReviewer either:
+    defaultModel: "gpt-6.1-sol",
+    allowedModels: ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    // Preserve medium reasoning when Codex changes its model/catalog default.
+    reasoningEffort: "medium",
+    // No builtin permissionProfile / approvalPolicy / approvalsReviewer:
     // unset values follow the host tools.exec.mode (see resolveCodexExecutionSettings).
   },
   opencode: {},
@@ -349,4 +349,3 @@ export function resolveAgentChannel(workdir: string): string | undefined {
   }
   return undefined;
 }
-
