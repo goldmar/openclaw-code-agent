@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -71,7 +72,7 @@ class AcceptanceRun {
     this.directory = mkdtempSync(join(options.artifacts, "oca501-host-"));
     this.children = new Set(); this.servers = new Set(); this.results = []; this.commandCounter = 0;
     this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = [];
-    this.nativeExecutions = [];
+    this.nativeExecutions = []; this.ownedProcesses = new Map();
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only"];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     for (const [key, folder] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "xdg-config", XDG_STATE_HOME: "xdg-state", XDG_DATA_HOME: "xdg-data", XDG_CACHE_HOME: "xdg-cache", CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", OPENCLAW_STATE_DIR: "state" })) {
@@ -122,8 +123,9 @@ class AcceptanceRun {
     for (const pid of descendants) {
       try {
         const executable = realpathSync(`/proc/${pid}/exe`);
-        if (executable !== this.nativeExecutable) continue;
         const stat = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1).split(" ");
+        this.ownedProcesses.set(pid, { pid, parentPid, executable, startTicks: stat[19] });
+        if (executable !== this.nativeExecutable) continue;
         if (!this.nativeExecutions.some((entry) => entry.pid === pid)) this.nativeExecutions.push({ pid, parentPid, executable, sha256: fileHash(executable), startTicks: stat[19] });
       } catch { /* Processes may exit between the observation and proc read. */ }
     }
@@ -215,7 +217,8 @@ class AcceptanceRun {
     this.children.delete(child);
   }
   async rpc(method, params = {}) {
-    const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json", "--url", this.gatewayUrl.replace("http:", "ws:")]);
+    // Use only the isolated config target/auth; URL overrides require explicit auth.
+    const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
     return JSON.parse(output.slice(output.indexOf("{")));
   }
   async invoke(name, args, { channel = "webchat", target = "agent:main:main" } = {}) {
@@ -248,7 +251,7 @@ class AcceptanceRun {
     await this.fixtures();
     const nativeConfig = `model = "${MODEL}"\nmodel_provider = "oca501"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n[model_providers.oca501]\nname = "OCA501 loopback fixture"\nbase_url = "${this.providerUrl}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`;
     writeFileSync(join(this.env.CODEX_HOME, "config.toml"), nativeConfig, { mode: 0o600 });
-    // OCA intentionally filters CODEX_HOME from native children. HOME is retained.
+    // Both supported native config homes remain confined to this disposable run.
     mkdirSync(join(this.env.HOME, ".codex"), { mode: 0o700 });
     writeFileSync(join(this.env.HOME, ".codex/config.toml"), nativeConfig, { mode: 0o600 });
     await this.nativePreflight();
@@ -268,6 +271,7 @@ class AcceptanceRun {
     const pluginToolNames = json(join(ROOT, "openclaw.plugin.json")).contracts.tools.filter((name) => name !== "agent_send_plan_offer");
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
+      logging: { file: join(this.directory, "openclaw-runtime.log") },
       agents: { defaults: { workspace: this.workspace, heartbeat: { every: "0m" }, memorySearch: { enabled: false } } },
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
       tools: { profile: "full", allow: pluginToolNames },
@@ -313,10 +317,16 @@ class AcceptanceRun {
     for (let id = 2; id <= 12; id++) this.results.push({ scenario: `H${String(id).padStart(2, "0")}`, classification: "UNPROVEN", unprovenReason: "Scenario implementation belongs to the next independently reviewed milestone", ...this.provenance });
   }
   async cleanup() {
-    for (const child of [...this.children]) await this.stop(child);
+    const failures = [];
+    const attempt = async (operation) => { try { await operation(); } catch (error) { failures.push(this.redact(error.stack ?? error)); } };
+    // Discover children even when native initialization fails before any HTTP
+    // provider request, before parent exit can reparent them away from the tree.
+    for (const child of this.children) if (child.pid) await attempt(() => this.observeNativeProcesses(child.pid));
+    for (const child of [...this.children]) await attempt(() => this.stop(child));
     // OCA launches native app servers in separate process groups. Only stop
     // recorded owned identities, with proc start time protecting against PID reuse.
     for (const entry of this.nativeExecutions) {
+      await attempt(async () => {
       const ownsLiveProcess = () => {
         try { return realpathSync(`/proc/${entry.pid}/exe`) === entry.executable
           && readFileSync(`/proc/${entry.pid}/stat`, "utf8").split(") ").at(-1).split(" ")[19] === entry.startTicks; } catch { return false; }
@@ -327,8 +337,52 @@ class AcceptanceRun {
         if (ownsLiveProcess()) { try { process.kill(-entry.pid, "SIGKILL"); } catch {} }
         await waitFor("owned native process cleanup", () => !ownsLiveProcess(), 5000);
       }
+      });
     }
-    for (const server of this.servers) { server.closeAllConnections(); await new Promise((done) => server.close(done)); assert.equal(server.listening, false); }
+    // The native transport owns another process group; verify every captured
+    // descendant, not just the successfully initialized native binary.
+    for (const entry of this.ownedProcesses.values()) {
+      await attempt(async () => {
+      const ownsLiveProcess = () => {
+        try { return realpathSync(`/proc/${entry.pid}/exe`) === entry.executable
+          && readFileSync(`/proc/${entry.pid}/stat`, "utf8").split(") ").at(-1).split(" ")[19] === entry.startTicks; } catch { return false; }
+      };
+      if (ownsLiveProcess()) {
+        try { process.kill(entry.pid, "SIGCONT"); process.kill(entry.pid, "SIGTERM"); } catch {}
+        await delay(500);
+        if (ownsLiveProcess()) { try { process.kill(entry.pid, "SIGKILL"); } catch {} }
+        await waitFor("owned descendant cleanup", () => !ownsLiveProcess(), 5000);
+      }
+      assert.equal(ownsLiveProcess(), false, `Owned process survived cleanup: ${entry.pid}`);
+      });
+    }
+    const ports = [];
+    if (this.gatewayUrl) ports.push(Number(new URL(this.gatewayUrl).port));
+    for (const server of this.servers) {
+      await attempt(async () => {
+      ports.push(server.address().port);
+      server.closeAllConnections(); await new Promise((done) => server.close(done)); assert.equal(server.listening, false);
+      });
+    }
+    for (const port of ports) {
+      await attempt(async () => {
+      const listening = await new Promise((done) => {
+        const socket = createConnection({ host: "127.0.0.1", port });
+        socket.once("connect", () => { socket.destroy(); done(true); });
+        socket.once("error", () => { socket.destroy(); done(false); });
+        socket.setTimeout(1000, () => { socket.destroy(); done(false); });
+      });
+      assert.equal(listening, false, `Owned listener survived cleanup: ${port}`);
+      });
+    }
+    if (failures.length) {
+      for (const result of this.results) if (result.classification === "PASS") {
+        result.classification = "BLOCKED"; result.unprovenReason = "Behavior assertions passed, but owned-resource cleanup failed";
+      }
+      this.results.push({ ...this.provenance, scenario: "cleanup", classification: "BLOCKED", exitCode: 1, unprovenReason: failures.join("\n"), logPath: this.directory });
+      process.exitCode = 1;
+    }
+    this.artifact("cleanup.json", { ownedProcesses: [...this.ownedProcesses.values()], checkedPorts: ports, classification: failures.length ? "BLOCKED" : "PASS", failures });
     this.artifact("gateway.log", this.gatewayLog ?? "Gateway not started");
     this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
     this.artifact("provenance.json", this.provenance);
@@ -340,9 +394,16 @@ let run;
 try {
   run = new AcceptanceRun(parseOptions(process.argv.slice(2)));
   await run.setup();
-  console.log(`${LABEL}: prerequisite PASS; evidence ${run.directory}`);
 } catch (error) {
   if (run) run.results.push({ ...run.provenance, scenario: "H01-prerequisite", classification: "BLOCKED", exitCode: 1, unprovenReason: run.redact(error.stack ?? error), logPath: run.directory });
   console.error(run ? run.redact(error.stack ?? error) : String(error));
   process.exitCode = 1;
-} finally { if (run) await run.cleanup(); }
+} finally {
+  if (run) {
+    try { await run.cleanup(); } catch (error) {
+      process.exitCode = 1;
+      console.error(`Cleanup/evidence failure: ${run.redact(error.stack ?? error)}`);
+    }
+  }
+}
+if (run) console.log(`${LABEL}: prerequisite ${process.exitCode ? "BLOCKED" : "PASS"}; evidence ${run.directory}`);
