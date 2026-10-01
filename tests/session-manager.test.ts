@@ -2329,7 +2329,8 @@ describe("SessionManager resumed launch routing", () => {
           }
           return originalCheck(...args);
         });
-        const launch = t.mock.method(harness, "launch", harness.launch.bind(harness));
+        const originalHarnessLaunch: typeof harness.launch = harness.launch.bind(harness);
+        const launch = t.mock.method(harness, "launch", originalHarnessLaunch);
         let blocker: Promise<Session> | undefined;
         if (boundary === "queue") {
           blocker = sm.launchSession({
@@ -2340,7 +2341,7 @@ describe("SessionManager resumed launch routing", () => {
         }
         let queuedResolve!: () => void;
         const queued = new Promise<void>((resolve) => { queuedResolve = resolve; });
-        const originalLaunch = sm.launchSession.bind(sm);
+        const originalLaunch: SessionManager["launchSession"] = sm.launchSession.bind(sm);
         t.mock.method(sm, "launchSession", (...args: Parameters<typeof originalLaunch>) => {
           const result = originalLaunch(...args);
           if (args[0].sessionIdOverride === row.sessionId) queuedResolve();
