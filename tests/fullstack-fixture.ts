@@ -204,6 +204,7 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
 
   const originalLoadSender = directNotificationTransportInternals.loadSendDurableMessageBatch;
   const originalExecFile = wakeDeliveryExecutorInternals.execFile;
+  const originalGatewayCall = wakeDeliveryExecutorInternals.callGatewayFromCli;
   const originalTimeouts = { ...runtimeLlmTimeoutsMs };
   const originalLaunchWaitMs = launchEarlyOutcomeInternals.waitMs;
   // Fake backends rarely call a tool at once; do not hold every agent_launch for the early-outcome wait.
@@ -227,12 +228,20 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
     queueMicrotask(() => callback(reply.error ?? null, reply.stdout ?? "", ""));
   };
   wakeDeliveryExecutorInternals.execFile = fakeExecFile as unknown as typeof wakeDeliveryExecutorInternals.execFile;
+  wakeDeliveryExecutorInternals.callGatewayFromCli = async (method, _opts, params) => await new Promise<Record<string, unknown>>((resolve, reject) => {
+    fakeExecFile("openclaw", ["gateway", "call", method, "--params", JSON.stringify(params)], {},
+      (error, stdout) => {
+        if (error) { reject(error); return; }
+        try { resolve(JSON.parse(stdout)); } catch (parseError) { reject(parseError); }
+      });
+  });
 
   const restoreBoundaries = (): void => {
     resetSharedRuntimeSlotForTests();
     setPluginConfig({});
     directNotificationTransportInternals.loadSendDurableMessageBatch = originalLoadSender;
     wakeDeliveryExecutorInternals.execFile = originalExecFile;
+    wakeDeliveryExecutorInternals.callGatewayFromCli = originalGatewayCall;
     launchEarlyOutcomeInternals.waitMs = originalLaunchWaitMs;
     Object.assign(runtimeLlmTimeoutsMs, originalTimeouts);
     stores.restore();

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
+- Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.
+- Confirm completion follow-ups through the exact Gateway run's terminal delivery receipt rather than its admission acknowledgment. Persist the run and delivery contract before submission, preserve pending summaries on uncertain outcomes, and observe uncertain saved runs after restart without repeating the notification or turn. Retry only wakes proven not to have been submitted, using their saved message and identity.
+
 ## [5.0.1] - 2026-09-30
 
 ### Changed

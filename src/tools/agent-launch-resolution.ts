@@ -374,12 +374,12 @@ export function resolveAgentLaunchRequest(
     resolvedModel,
     permissionMode,
     planApproval,
-    originChannel: routeResolution.recovered
+    originChannel: routeResolution.recovered || route.provider === "webchat"
       ? (route.accountId
         ? `${route.provider}|${route.accountId}|${route.target}`
         : `${route.provider}|${route.target}`)
       : originChannel,
-    originThreadId: routeResolution.recovered ? route.threadId : originThreadId,
+    originThreadId: routeResolution.recovered || route.provider === "webchat" ? route.threadId : originThreadId,
     originSessionKey: routeResolution.recovered ? route.sessionKey : originSessionKey,
     route,
     resumeSessionId,

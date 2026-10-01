@@ -10,6 +10,13 @@ import { setPluginRuntime } from "../src/runtime-store";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { ROUTED_REPLY_RULE } from "../src/session-route";
+import { SessionNotificationService } from "../src/session-notifications";
+import type { PersistedSessionInfo } from "../src/types";
+import { SessionStore } from "../src/session-store";
+import { sessionStoreStorageInternals } from "../src/session-store-storage";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 type FakeSession = {
   id: string;
@@ -43,8 +50,8 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
  * `sendDurableMessageBatch` params (direct notifications, through the real
  * `RuntimeDirectNotificationTransport`), `runtime.system.enqueueSystemEvent`
  * calls (through the real `RuntimeSystemEventTransport`), and the
- * `openclaw gateway call chat.send` argv (the only delivery that still runs the
- * CLI, through the executor's `execFile` hook).
+ * chat.send params and agent.wait argv. The authenticated SDK and CLI are
+ * separately stubbed at the executor boundary.
  */
 type DurableSendCall = {
   kind: "durable-send";
@@ -58,7 +65,8 @@ type DurableSendCall = {
 };
 type SystemEventCall = { kind: "system-event"; text: string; sessionKey: string; contextKey?: string };
 type ChatSendCall = { kind: "chat-send"; argv: string[]; params: Record<string, unknown> };
-type DeliveryCall = DurableSendCall | SystemEventCall | ChatSendCall;
+type AgentWaitCall = { kind: "agent-wait"; argv: string[]; params: Record<string, unknown> };
+type DeliveryCall = DurableSendCall | SystemEventCall | ChatSendCall | AgentWaitCall;
 type HeartbeatCall = Record<string, unknown>;
 
 /**
@@ -78,7 +86,8 @@ type DeliveryRule = {
 let calls: DeliveryCall[] = [];
 let heartbeats: HeartbeatCall[] = [];
 let rules: DeliveryRule[] = [];
-let chatSendStdout = "";
+let chatSendStdout: string | undefined;
+let agentWaitReply: ((runId: string) => string) | undefined;
 
 function takeRule(call: DeliveryCall): DeliveryRule | undefined {
   const index = rules.findIndex((rule) => rule.match(call));
@@ -137,8 +146,12 @@ const fakeSystemRuntime = {
 
 const fakeChatSendExecFile = ((file: string, args: string[], _options: unknown, callback?: (err: Error | null, stdout: string, stderr: string) => void) => {
   assert.equal(file, "openclaw");
-  assert.deepEqual(args.slice(0, 7), ["gateway", "call", "chat.send", "--expect-final", "--timeout", "30000", "--params"]);
-  const call: ChatSendCall = { kind: "chat-send", argv: [...args], params: JSON.parse(args[7] ?? "{}") };
+  assert.deepEqual(args.slice(0, 2), ["gateway", "call"]);
+  assert.ok(args.includes("--json"));
+  const params = JSON.parse(args[args.indexOf("--params") + 1] ?? "{}");
+  const method = args[2];
+  assert.ok(method === "chat.send" || method === "agent.wait");
+  const call: ChatSendCall | AgentWaitCall = { kind: method === "chat.send" ? "chat-send" : "agent-wait", argv: [...args], params };
   calls.push(call);
   const rule = takeRule(call);
   if (rule?.outcome !== "hang") {
@@ -148,13 +161,35 @@ const fakeChatSendExecFile = ((file: string, args: string[], _options: unknown, 
         callback?.(new Error(`Command failed: openclaw gateway call chat.send\n${message}`), "", message);
         return;
       }
-      callback?.(null, chatSendStdout, "");
+      const runId = String(params.runId ?? params.idempotencyKey);
+      callback?.(null, method === "chat.send"
+        ? chatSendStdout ?? JSON.stringify({ runId, status: "started" })
+        : agentWaitReply?.(runId) ?? JSON.stringify({ runId, status: "ok", terminalReceipt: { runId, sourceReplyDelivered: true }, terminalReply: { disposition: "silent" } }), "");
     });
   }
   return {} as any;
 }) as unknown as typeof wakeDeliveryExecutorInternals.execFile;
 
 const originalExecFile = wakeDeliveryExecutorInternals.execFile;
+const originalGatewayCall = wakeDeliveryExecutorInternals.callGatewayFromCli;
+const fakeGatewayCall: typeof originalGatewayCall = async (method, opts, params, extra) => {
+  assert.equal(method, "chat.send");
+  assert.equal(opts.json, true);
+  assert.equal(opts.timeout, "30000");
+  assert.deepEqual(extra?.scopes, ["operator.admin"]);
+  assert.equal(extra?.sharedStateMode, "read-only");
+  assert.equal(extra?.progress, false);
+  assert.ok(extra?.signal);
+  return await new Promise<Record<string, unknown>>((resolve, reject) => {
+    // Both test seams share the scripted host responses; this never invokes
+    // the real SDK helper or a subprocess.
+    wakeDeliveryExecutorInternals.execFile("openclaw", ["gateway", "call", method, "--json", "--timeout", "30000", "--params", JSON.stringify(params)], {},
+      (err, stdout) => {
+        if (err) { reject(err); return; }
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+  });
+};
 
 function createDispatcher(options: WakeDispatcherOptions = {}) {
   return new WakeDispatcher({
@@ -217,9 +252,11 @@ describe("WakeDispatcher", () => {
     calls = [];
     heartbeats = [];
     rules = [];
-    chatSendStdout = "";
+    chatSendStdout = undefined;
+    agentWaitReply = undefined;
     setPluginRuntime({ system: fakeSystemRuntime }, { channels: {} });
     wakeDeliveryExecutorInternals.execFile = fakeChatSendExecFile;
+    wakeDeliveryExecutorInternals.callGatewayFromCli = fakeGatewayCall;
   });
 
   afterEach(() => {
@@ -229,38 +266,23 @@ describe("WakeDispatcher", () => {
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
     wakeDeliveryExecutorInternals.execFile = originalExecFile;
+    wakeDeliveryExecutorInternals.callGatewayFromCli = originalGatewayCall;
     setPluginRuntime(undefined);
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
-  it("accepts NO_REPLY after a routed send, rejects it for a plain-reply wake, and fails an empty answer", () => {
-    // Routed wakes end with NO_REPLY after the message tool delivered the summary.
-    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), true), { outcome: "success" });
-    // Without a route the plain reply is the summary: NO_REPLY means none was produced.
-    assert.deepEqual(
-      validateCompletionFollowupWakeSuccess(JSON.stringify({ finalResponse: "NO_REPLY" }), false),
-      { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" },
-    );
-    assert.deepEqual(
-      validateCompletionFollowupWakeSuccess("  \n"),
-      { outcome: "failure", reason: "completion follow-up wake produced no final response" },
-    );
-  });
-
-  it("accepts marker-free completion follow-up final text", () => {
-    const success = validateCompletionFollowupWakeSuccess(
-      "Sent a concise routed summary for PR #185 without repeating the link.\n",
-    );
-
-    assert.deepEqual(success, { outcome: "success" });
-  });
-
-  it("treats legacy marker text as ordinary non-empty final text", () => {
-    const success = validateCompletionFollowupWakeSuccess(
-      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered\n",
-    );
-
-    assert.deepEqual(success, { outcome: "success" });
+  it("requires matching host receipts rather than acknowledgements or model text", () => {
+    const delivered = JSON.stringify({ runId: "r1", status: "ok", terminalReceipt: { runId: "r1", sourceReplyDelivered: true }, terminalReply: { disposition: "silent" } });
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(delivered, true, "r1"), { outcome: "success" });
+    for (const stdout of ["NO_REPLY", "Sent the summary", "COMPLETION_FOLLOWUP_SKIPPED: already delivered", "Gateway call: chat.send\n{}", JSON.stringify({ runId: "r1", status: "started" }), delivered]) {
+      assert.equal(validateCompletionFollowupWakeSuccess(stdout, true, "other-run").outcome, "ambiguous");
+    }
+    for (const sourceReplyDelivered of [false, "true", undefined]) {
+      assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ runId: "r1", status: "ok", terminalReceipt: { runId: "r1", sourceReplyDelivered }, terminalReply: { disposition: "visible", text: "Private final" } }), true, "r1").outcome, "ambiguous");
+    }
+    assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ runId: "r1", status: "ok", terminalReceipt: { runId: "different", sourceReplyDelivered: true } }), true, "r1").outcome, "ambiguous");
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify({ runId: "r1", status: "ok", terminalReply: { disposition: "visible", text: "Visible UI summary" } }), false, "r1"), { outcome: "success" });
+    assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ runId: "r1", status: "ok", terminalReply: { disposition: "silent" } }), false, "r1").outcome, "ambiguous");
   });
 
   it("uses message.send for direct user notifications and logs completion", async () => {
@@ -457,7 +479,6 @@ describe("WakeDispatcher", () => {
       queueMicrotask(() => fn());
       return { fake: true, unref() { return this; } } as any;
     }) as typeof setTimeout);
-    chatSendStdout = "Sent the routed PR update summary.";
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "worktree-outcome",
@@ -554,7 +575,6 @@ describe("WakeDispatcher", () => {
   });
 
   it("enqueues a failed notice without a heartbeat when a wake for the same dispatch follows", async () => {
-    chatSendStdout = "Relayed.\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-notice-with-wake",
@@ -619,7 +639,6 @@ describe("WakeDispatcher", () => {
   });
 
   it("still wakes now when the user notification of a next-turn request fails", async () => {
-    chatSendStdout = "Relayed.\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = { id: "session-next-turn-failed", route: buildRoute(), originSessionKey: ORIGIN_SESSION_KEY };
     rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "chat not found" });
@@ -1805,7 +1824,6 @@ describe("WakeDispatcher", () => {
   });
 
   it("accepts a NO_REPLY completion wake (the summary went out with the message tool) without a fallback", async () => {
-    chatSendStdout = "NO_REPLY\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-routed-followup",
@@ -1826,9 +1844,340 @@ describe("WakeDispatcher", () => {
     });
 
     await waitFor(() => wakeSucceeded === 1, "routed completion wake accepted");
-    assert.deepEqual(calls.map((call) => call.kind), ["chat-send"]);
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send", "agent-wait"]);
+    assert.equal(asChatSend(calls[0]).deliver, false);
     assert.deepEqual(heartbeats, []);
     assert.equal(wakeFailed, 0);
+  });
+
+  it("keeps admission separate from completion while the host run is still pending", async () => {
+    rules = [{ match: (call) => call.kind === "agent-wait", outcome: "hang" }];
+    const dispatcher = createDispatcher();
+    const admitted: string[] = [];
+    let succeeded = 0;
+    dispatcher.dispatchSessionNotification({ id: "admitted", route: buildRoute() } as any, {
+      label: "completed", wakeMessage: ROUTED_REPLY_RULE, notifyUser: "never", completionWakeSummaryRequired: true,
+      idempotencyKey: "stable-completion",
+      hooks: { onWakeAdmitted: (runId) => { admitted.push(runId); }, onWakeSucceeded: () => { succeeded += 1; } },
+    });
+    await waitFor(() => admitted.length === 1 && calls.some((call) => call.kind === "agent-wait"), "admission observed");
+    assert.deepEqual(admitted, ["stable-completion"]);
+    assert.equal(succeeded, 0);
+    assert.deepEqual(heartbeats, []);
+    dispatcher.dispose();
+  });
+
+  it("does not resend a completion when terminal delivery or acknowledgement is unproven", async () => {
+    for (const response of ["private", "wrong-run", "malformed-ack"]) {
+      calls = [];
+      chatSendStdout = response === "malformed-ack" ? "Gateway call: chat.send\n{}" : undefined;
+      agentWaitReply = (runId) => JSON.stringify({ runId, status: "ok", terminalReply: { disposition: "visible", text: "Private final" }, ...(response === "wrong-run" ? { terminalReceipt: { runId: "other", sourceReplyDelivered: true } } : {}) });
+      const dispatcher = createDispatcher();
+      let ambiguous = 0;
+      let succeeded = 0;
+      dispatcher.dispatchSessionNotification({ id: response, route: buildRoute() } as any, {
+        label: "completed", wakeMessage: ROUTED_REPLY_RULE, notifyUser: "never", completionWakeSummaryRequired: true,
+        hooks: { onWakeAmbiguous: () => { ambiguous += 1; }, onWakeSucceeded: () => { succeeded += 1; } },
+      });
+      await waitFor(() => ambiguous === 1, response);
+      assert.equal(succeeded, 0);
+      assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
+      assert.equal(calls.some((call) => call.kind === "system-event"), false);
+      dispatcher.dispose();
+    }
+  });
+
+  it("reobserves pending host results without submitting a fresh completion turn", async () => {
+    global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
+      if (delay !== 2000) return originalSetTimeout(fn, delay);
+      queueMicrotask(() => fn());
+      return { unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    let observations = 0;
+    agentWaitReply = (runId) => JSON.stringify(++observations < 3
+      ? { runId, status: observations === 1 ? "pending" : "timeout" }
+      : { runId, status: "ok", terminalReceipt: { runId, sourceReplyDelivered: true }, terminalReply: { disposition: "silent" } });
+    const dispatcher = createDispatcher();
+    let succeeded = 0;
+    dispatcher.dispatchSessionNotification({ id: "reobserve", route: buildRoute() } as any, {
+      label: "completed", wakeMessage: ROUTED_REPLY_RULE, notifyUser: "never", completionWakeSummaryRequired: true,
+      admittedWakeRunId: "persisted-run",
+      hooks: { onWakeSucceeded: () => { succeeded += 1; } },
+    });
+    await waitFor(() => succeeded === 1, "terminal receipt observed");
+    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 0);
+    assert.equal(observations, 3);
+    assert.ok(calls.every((call) => call.kind === "agent-wait" && call.params.runId === "persisted-run"));
+    assert.deepEqual(heartbeats, []);
+  });
+
+  it("recovers admitted wakes with their persisted delivery proof contract through the real dispatcher", async () => {
+    for (const outcome of ["routed-delivered", "routed-private", "plain-visible"] as const) {
+      calls = [];
+      const routedReply = outcome !== "plain-visible";
+      // Historical WebChat wakes used explicit routed sends. Recovery must
+      // retain that run's contract even when today's WebChat route is plain.
+      const persisted: PersistedSessionInfo = {
+        sessionId: `recovered-${outcome}`,
+        harnessSessionId: `backend-${outcome}`,
+        name: outcome,
+        prompt: "Task",
+        workdir: "/tmp",
+        status: "completed",
+        costUsd: 0,
+        route: { provider: "webchat", target: "browser", sessionKey: "agent:main:main" },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: `terminal:${outcome}`,
+        completionWakeRunId: `accepted-${outcome}`,
+        completionWakeRoutedReply: routedReply,
+      };
+      agentWaitReply = (runId) => JSON.stringify(outcome === "routed-delivered"
+        ? { runId, status: "ok", terminalReceipt: { runId, sourceReplyDelivered: true }, terminalReply: { disposition: "silent" } }
+        : { runId, status: "ok", terminalReply: { disposition: "visible", text: "Final response" } });
+      const dispatcher = createDispatcher();
+      const patches: Array<Partial<PersistedSessionInfo>> = [];
+      const service = new SessionNotificationService(
+        dispatcher,
+        (_ref, patch) => { patches.push(patch); Object.assign(persisted, patch); },
+        { getPersistedSession: () => persisted },
+      );
+      service.recoverAdmittedCompletionWakes([persisted]);
+      await waitFor(() => outcome === "routed-private"
+        ? patches.filter((patch) => patch.deliveryState === "wake_pending").length >= 2
+        : Boolean(persisted.completionWakeSucceededAt), `recovery ${outcome}`);
+      assert.deepEqual(calls.map((call) => call.kind), ["agent-wait"]);
+      assert.equal((calls[0] as AgentWaitCall).params.runId, `accepted-${outcome}`);
+      assert.equal(persisted.completionWakeSummaryRequired, outcome === "routed-private" ? true : undefined);
+      assert.equal(Boolean(persisted.completionWakeSucceededAt), outcome !== "routed-private");
+      assert.deepEqual(heartbeats, []);
+      service.dispose();
+    }
+  });
+
+  it("requires the admission journal on disk before the real dispatcher submits a completion wake", async (t) => {
+    for (const scenario of ["durable", "failed-initial", "failed-retry"] as const) {
+      const failedWrite = scenario !== "durable";
+      const retry = scenario === "failed-retry";
+      calls = [];
+      const directory = mkdtempSync(join(tmpdir(), "wake-admission-journal-"));
+      const store = new SessionStore({ indexPath: join(directory, "sessions.json") });
+      const row: PersistedSessionInfo = {
+        sessionId: `durable-${scenario}`,
+        harnessSessionId: `backend-durable-${scenario}`,
+        name: "Durable completion",
+        prompt: "Task",
+        workdir: "/tmp",
+        status: "completed",
+        costUsd: 0,
+        route: { provider: "telegram", target: "chat", sessionKey: "agent:main:telegram:group:chat" },
+        ...(retry ? {
+          completionWakeSummaryRequired: true,
+          completionWakeRunId: "previously-unsubmitted-run",
+          completionWakeOutcomeKey: `terminal:durable-${scenario}`,
+          completionWakeSubmissionState: "not_submitted" as const,
+          completionWakeMessage: ROUTED_REPLY_RULE,
+          completionWakeRoutedReply: true,
+          completionWakeSummaryFact: { required: true, producer: "terminal" as const, outcomeKey: `terminal:durable-${scenario}` },
+        } : {}),
+      };
+      store.replacePersistedSession(row);
+      const dispatcher = createDispatcher();
+      const patches: Array<Partial<PersistedSessionInfo>> = [];
+      const confirmations: boolean[] = [];
+      const service = new SessionNotificationService(dispatcher, (ref, patch) => {
+        patches.push(patch);
+        Object.assign(store.getPersistedSession(ref)!, patch);
+        store.saveIndex();
+      }, {
+        getPersistedSession: (ref) => store.getPersistedSession(ref),
+        confirmCompletionWakeAdmission: async (ref, runId, outcome) => {
+          const confirmed = await store.confirmCompletionWakeAdmission(ref, runId, outcome);
+          confirmations.push(confirmed);
+          return confirmed;
+        },
+      });
+      const failingSave = failedWrite
+        ? t.mock.method(sessionStoreStorageInternals, "saveJsonFile", () => { throw new Error("simulated disk write failure"); })
+        : undefined;
+      try {
+        if (retry) service.recoverAdmittedCompletionWakes(store.listPersistedSessions());
+        else service.dispatch(row, {
+          label: "completed",
+          notifyUser: "never",
+          wakeMessage: ROUTED_REPLY_RULE,
+          completionWakeSummaryRequired: true,
+          completionWakeOutcomeKey: `terminal:durable-${scenario}`,
+        });
+        if (failedWrite) {
+          await waitFor(() => patches.some((patch) => patch.completionWakeSubmissionState === "unknown"), "in-memory candidate retained");
+          // Reproduce the store releasing its persistence waiters while the
+          // failed write leaves the previous generation on disk.
+          store.flushPendingSave();
+          await waitFor(() => patches.filter((patch) => patch.deliveryState === "wake_pending").length >= 2, "journal failure preserved");
+          assert.equal(calls.length, 0, "failed persistence must prevent CLI submission");
+          assert.deepEqual(confirmations, [false]);
+          assert.equal(store.getPersistedSession(row.sessionId!)?.completionWakeSummaryRequired, true);
+          assert.equal(store.getPersistedSession(row.sessionId!)?.completionWakeSubmissionState, "not_submitted");
+        } else {
+          await waitFor(() => Boolean(store.getPersistedSession(row.sessionId!)?.completionWakeSucceededAt), "durable run completed");
+          const submitted = findCall("chat-send");
+          assert.ok(submitted);
+          assert.deepEqual(confirmations, [true]);
+          assert.equal(await store.confirmCompletionWakeAdmission(row.sessionId!, String(submitted.params.idempotencyKey), `terminal:durable-${scenario}`), false,
+            "delivered completion is no longer a pending admission");
+          assert.deepEqual(calls.map((call) => call.kind), ["chat-send", "agent-wait"]);
+        }
+      } finally {
+        service.dispose();
+        store.flushPendingSave();
+        failingSave?.mock.restore();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("reports a retained wake as unsubmitted when its journal rejects or its guard changes before CLI", async () => {
+    for (const journalRejects of [false, true]) {
+      calls = [];
+      const dispatcher = createDispatcher();
+      let allowed = true;
+      let settleJournal!: () => void;
+      const rejected: string[] = [];
+      const ambiguous: string[] = [];
+      const admission = new Promise<void>((resolve, reject) => {
+        settleJournal = () => journalRejects ? reject(new Error("journal is unwritable")) : resolve();
+      });
+      const session = { id: "unsubmitted", route: buildRoute() } as any;
+      dispatcher.dispatchSessionNotification(session, {
+        label: "unsubmitted",
+        notifyUser: "never",
+        completionWakeSummaryRequired: true,
+        wakeMessage: ROUTED_REPLY_RULE,
+        shouldDispatch: () => allowed,
+        idempotencyKey: "unsubmitted-run",
+        hooks: {
+          onWakeAdmitted: (_runId, routedReply, wakeMessage) => {
+            assert.equal(routedReply, true);
+            assert.equal(wakeMessage, ROUTED_REPLY_RULE);
+            return admission;
+          },
+          onWakeAdmissionRejected: (runId) => rejected.push(runId),
+          onWakeAmbiguous: (reason) => ambiguous.push(reason),
+        },
+      });
+      allowed = journalRejects;
+      settleJournal();
+      await waitFor(() => rejected.length === 1 && ambiguous.length === 1, "known unsubmitted wake recorded");
+      assert.deepEqual(rejected, ["unsubmitted-run"]);
+      assert.equal(calls.length, 0);
+      assert.deepEqual(heartbeats, []);
+      dispatcher.dispose();
+    }
+  });
+
+  it("keeps submission unknown when the executor throws after entering its CLI boundary", async () => {
+    let enteredCli = false;
+    wakeDeliveryExecutorInternals.execFile = (() => {
+      enteredCli = true;
+      throw new Error("executor failed after entering submission");
+    }) as unknown as typeof wakeDeliveryExecutorInternals.execFile;
+    const dispatcher = createDispatcher();
+    let rejected = false;
+    let ambiguous = false;
+    dispatcher.dispatchSessionNotification({ id: "executor-exception", route: buildRoute() } as any, {
+      label: "executor-exception",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      wakeMessage: ROUTED_REPLY_RULE,
+      hooks: {
+        onWakeAdmissionRejected: () => { rejected = true; },
+        onWakeAmbiguous: () => { ambiguous = true; },
+      },
+    });
+    await waitFor(() => ambiguous, "submission remains unknown");
+    assert.equal(enteredCli, true);
+    assert.equal(rejected, false);
+    assert.deepEqual(heartbeats, []);
+    dispatcher.dispose();
+  });
+
+  it("retries a proven unsubmitted wake with the saved identity and original routed message", async () => {
+    const dispatcher = createDispatcher();
+    let completed = false;
+    const retained: string[] = [];
+    dispatcher.dispatchSessionNotification({ id: "unsubmitted-retry", route: buildRoute() } as any, {
+      label: "unsubmitted-retry",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      wakeMessage: ROUTED_REPLY_RULE,
+      admittedWakeRunId: "saved-unsubmitted-run",
+      admittedWakeRoutedReply: true,
+      retryUnsubmittedWake: true,
+      hooks: {
+        onWakeAdmitted: (runId) => { retained.push(runId); },
+        onWakeSucceeded: () => { completed = true; },
+      },
+    });
+    await waitFor(() => completed, "saved identity submitted and delivered");
+    assert.deepEqual(retained, ["saved-unsubmitted-run"]);
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send", "agent-wait"]);
+    const submitted = findCall("chat-send")!;
+    assert.equal(submitted.params.idempotencyKey, "saved-unsubmitted-run");
+    assert.equal(submitted.params.message, ROUTED_REPLY_RULE);
+    assert.equal(submitted.params.deliver, false);
+    assert.deepEqual(heartbeats, []);
+    dispatcher.dispose();
+  });
+
+  it("pins WebChat completion wakes to an explicit internal origin even on an external-shaped session key", async () => {
+    let sdkCalls = 0;
+    wakeDeliveryExecutorInternals.callGatewayFromCli = async (...args) => {
+      sdkCalls += 1;
+      return await fakeGatewayCall(...args);
+    };
+    agentWaitReply = (runId) => JSON.stringify({ runId, status: "ok", terminalReply: { disposition: "visible", text: "Visible WebChat summary" } });
+    const dispatcher = createDispatcher();
+    let started = false;
+    let routedReply: boolean | undefined;
+    const key = "agent:main:telegram:group:chat:topic:22";
+    dispatcher.dispatchSessionNotification({
+      id: "ordinary-webchat", route: { provider: "webchat", target: key, sessionKey: key, accountId: "legacy-bot", threadId: "22" },
+      originThreadId: 22,
+    } as any, {
+      label: "ordinary-webchat",
+      wakeMessage: "Reply with an ordinary visible final answer in this WebChat session.",
+      completionWakeSummaryRequired: true,
+      notifyUser: "never",
+      hooks: {
+        onWakeAdmitted: (_runId, contract) => { routedReply = contract; },
+        onWakeSucceeded: () => { started = true; },
+      },
+    });
+    await waitFor(() => started, "visible WebChat final received");
+    assert.equal(sdkCalls, 1);
+    assert.equal(routedReply, false);
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send", "agent-wait"]);
+    const submitted = findCall("chat-send")!;
+    assert.equal(submitted.params.deliver, false);
+    assert.equal(submitted.params.originatingChannel, "webchat");
+    assert.equal(submitted.params.originatingTo, key);
+    assert.equal(submitted.params.originatingAccountId, undefined);
+    assert.equal(submitted.params.originatingThreadId, undefined);
+    assert.deepEqual(heartbeats, []);
+    dispatcher.dispose();
+  });
+
+  it("preserves pending delivery after a noncompletion CLI connection failure", async () => {
+    rules = [{ match: (call) => call.kind === "chat-send", outcome: "failed", error: "connection closed after admission" }];
+    const dispatcher = createDispatcher();
+    let ambiguous = 0;
+    dispatcher.dispatchSessionNotification({ id: "connection-loss", route: buildRoute() } as any, {
+      label: "waiting", wakeMessage: "Waiting for your input", notifyUser: "never",
+      hooks: { onWakeAmbiguous: () => { ambiguous += 1; } },
+    });
+    await waitFor(() => ambiguous === 1, "connection ambiguity retained");
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send"]);
+    assert.deepEqual(heartbeats, []);
   });
 
   it("hands a held wake to the system-event queue when the dispatcher stops, instead of dropping it", async () => {
@@ -1851,20 +2200,22 @@ describe("WakeDispatcher", () => {
     assert.equal(event.sessionKey, buildRoute().sessionKey);
   });
 
-  it("falls back to a system-event wake when a plain-reply completion wake ends with NO_REPLY", async () => {
-    chatSendStdout = "NO_REPLY\n";
+  it("preserves an admitted plain-reply obligation without a fallback after silent completion", async () => {
+    agentWaitReply = (runId) => JSON.stringify({ runId, status: "ok", terminalReply: { disposition: "silent" } });
     const dispatcher = createDispatcher();
     let wakeSucceeded = 0;
-    dispatcher.dispatchSessionNotification({ id: "plain-followup", route: buildRoute() } as any, {
+    let ambiguous = 0;
+    dispatcher.dispatchSessionNotification({ id: "plain-followup", route: buildRoute({ provider: "webchat", target: "agent:main:main", sessionKey: "agent:main:main" }) } as any, {
       label: "completed",
       wakeMessage: "Coding agent session completed. Your reply is sent to the user; do not answer NO_REPLY.",
       notifyUser: "never",
       completionWakeSummaryRequired: true,
-      hooks: { onWakeSucceeded: () => { wakeSucceeded += 1; } },
+      hooks: { onWakeSucceeded: () => { wakeSucceeded += 1; }, onWakeAmbiguous: () => { ambiguous += 1; } },
     });
-    await waitFor(() => calls.some((call) => call.kind === "system-event"), "system-event fallback after NO_REPLY");
-    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
-    await waitFor(() => wakeSucceeded === 1, "fallback wake counted");
+    await waitFor(() => ambiguous === 1, "silent completion remains unconfirmed");
+    assert.deepEqual(calls.map((call) => call.kind), ["chat-send", "agent-wait"]);
+    assert.equal(wakeSucceeded, 0);
+    assert.deepEqual(heartbeats, []);
   });
 
   it("holds a deferred wake and skips it when the orchestrator already read the outcome", async () => {
@@ -1902,7 +2253,6 @@ describe("WakeDispatcher", () => {
   });
 
   it("marks completion follow-up wakes successful after normal marker-free final text", async () => {
-    chatSendStdout = "Sent the routed summary for PR #185 without repeating the link.\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-visible-followup",
@@ -1930,7 +2280,6 @@ describe("WakeDispatcher", () => {
   });
 
   it("does not treat legacy completion skip marker text as a transport skip", async () => {
-    chatSendStdout = "COMPLETION_FOLLOWUP_SKIPPED: internal pipeline continuing\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-skipped-followup",

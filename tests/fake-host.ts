@@ -33,6 +33,8 @@ import { RuntimeDirectNotificationTransport } from "../src/direct-notification-t
 import type { PluginRuntime } from "../src/runtime-store";
 
 type Api = OpenClawPluginApi;
+declare const hookRegistrar: Api["on"];
+type GatewayStartHandler = Parameters<typeof hookRegistrar<"gateway_start">>[1];
 export type ToolRegistration = { tool: Parameters<Api["registerTool"]>[0]; options?: Parameters<Api["registerTool"]>[1] };
 export type CommandDefinition = Parameters<Api["registerCommand"]>[0];
 export type CommandContext = Parameters<CommandDefinition["handler"]>[0];
@@ -98,6 +100,7 @@ export type FakeHost = {
   tools: ToolRegistration[];
   commands: CommandDefinition[];
   services: ServiceDefinition[];
+  gatewayStartHooks: GatewayStartHandler[];
   interactiveHandlers: InteractiveRegistration[];
   disposers: Array<() => void | Promise<void>>;
   /** Replace the scripted `runtime.llm.complete` replies. */
@@ -121,6 +124,8 @@ export type FakeHost = {
   runInteractive(channel: "telegram" | "discord", ctx: PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext | Record<string, unknown>): Promise<unknown>;
   /** Start every registered service, as Gateway startup does (optionally with a different `config`). */
   startServices(config?: OpenClawPluginServiceContext["config"]): Promise<void>;
+  /** Emit the host-ready lifecycle separately from pre-ready service startup. */
+  emitGatewayStart(context?: Partial<Parameters<GatewayStartHandler>[1]>): Promise<void>;
   /** Stop every registered service (started explicitly or lazily by a tool call). */
   stopServices(): Promise<void>;
   /** Stop services, run lifecycle disposers, and remove the state dir. */
@@ -152,6 +157,7 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
   const tools: ToolRegistration[] = [];
   const commands: CommandDefinition[] = [];
   const services: ServiceDefinition[] = [];
+  const gatewayStartHooks: GatewayStartHandler[] = [];
   const interactiveHandlers: InteractiveRegistration[] = [];
   const disposers: Array<() => void | Promise<void>> = [];
 
@@ -248,8 +254,12 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
     registerTool: (tool, toolOptions) => { tools.push({ tool, options: toolOptions }); },
     registerCommand: (command) => { commands.push(command); },
     registerService: (service) => { services.push(service); },
+    on: (hookName, handler) => {
+      if (hookName !== "gateway_start") throw new Error(`fake host: unsupported hook ${hookName}`);
+      gatewayStartHooks.push(handler as GatewayStartHandler);
+    },
     registerInteractiveHandler: (registration) => { interactiveHandlers.push(registration); },
-  } satisfies Partial<Record<keyof Api, unknown>> & Pick<Api, "registerTool" | "registerCommand" | "registerService" | "registerInteractiveHandler" | "runtime" | "logger">;
+  } satisfies Partial<Record<keyof Api, unknown>> & Pick<Api, "on" | "registerTool" | "registerCommand" | "registerService" | "registerInteractiveHandler" | "runtime" | "logger">;
   const api = apiMembers as unknown as OpenClawPluginApi;
 
   const resolveTool = (name: string, ctx: Partial<OpenClawPluginToolContext>): AgentToolLike => {
@@ -280,6 +290,7 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
     tools,
     commands,
     services,
+    gatewayStartHooks,
     interactiveHandlers,
     disposers,
     setLlmReplies(replies) {
@@ -308,6 +319,11 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
     },
     async startServices(config) {
       for (const service of services) await service.start(config === undefined ? serviceContext : { ...serviceContext, config });
+    },
+    async emitGatewayStart(context = {}) {
+      for (const hook of gatewayStartHooks) {
+        await hook({ port: 12345 }, { port: 12345, config: serviceContext.config, workspaceDir: stateDir, ...context });
+      }
     },
     async stopServices() {
       for (const service of [...services].reverse()) await service.stop?.(serviceContext);

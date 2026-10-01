@@ -51,7 +51,7 @@ function statusDeliveryLine(statusLine: string, delivered: boolean): string {
 }
 
 const FINAL_REPLY_RULE = "Your reply is sent to the user; do not answer NO_REPLY.";
-const ROUTED_REPLY_REMINDER = "Send it with the message tool to originRoute, then answer NO_REPLY.";
+const ROUTED_REPLY_REMINDER = "Send it with message(action='send', final=true) to originRoute, then answer NO_REPLY.";
 
 /**
  * The closing reply rule: with an originRoute block the orchestrator sends its

@@ -1,4 +1,5 @@
 import { canonicalizeSessionRoute } from "./session-route";
+import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 import { REASONING_EFFORT_SET, REPO_INTEGRATION_POLICY_SET, WORKTREE_STRATEGY_SET } from "./types";
 import type {
   ManagedWorktreeLifecycleState,
@@ -71,6 +72,19 @@ function toNonEmptyString(value: unknown, fallback = ""): string {
 
 function toOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function normalizeCompletionWakeSummaryFact(raw: unknown): CompletionSummaryFact | undefined {
+  if (!isRecord(raw) || raw.required !== true) return undefined;
+  const producer = raw.producer;
+  if (producer !== "terminal" && producer !== "goal" && producer !== "worktree"
+    && producer !== "worktree-pr" && producer !== "legacy") return undefined;
+  return {
+    required: true,
+    producer,
+    outcomeKey: toOptionalString(raw.outcomeKey),
+    fallbackFingerprint: toOptionalString(raw.fallbackFingerprint),
+  };
 }
 
 function toOptionalNumber(value: unknown): number | undefined {
@@ -607,6 +621,13 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     notificationDedupe: normalizeNotificationDedupeRecords(raw.notificationDedupe),
     completionSummaryDedupe: normalizeCompletionSummaryRecords(raw.completionSummaryDedupe),
     completionWakeIssuedAt: toOptionalString(raw.completionWakeIssuedAt),
+    completionWakeRunId: toOptionalString(raw.completionWakeRunId),
+    completionWakeOutcomeKey: toOptionalString(raw.completionWakeOutcomeKey),
+    completionWakeRoutedReply: typeof raw.completionWakeRoutedReply === "boolean" ? raw.completionWakeRoutedReply : undefined,
+    completionWakeMessage: toOptionalString(raw.completionWakeMessage),
+    completionWakeSubmissionState: raw.completionWakeSubmissionState === "not_submitted" || raw.completionWakeSubmissionState === "unknown"
+      ? raw.completionWakeSubmissionState : undefined,
+    completionWakeSummaryFact: normalizeCompletionWakeSummaryFact(raw.completionWakeSummaryFact),
     completionWakeSucceededAt,
     completionWakeFailedAt: toOptionalString(raw.completionWakeFailedAt),
     completionWakeSkippedAt,

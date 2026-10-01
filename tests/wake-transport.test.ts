@@ -23,7 +23,7 @@ describe("WakeTransport", () => {
       "gateway",
       "call",
       "chat.send",
-      "--expect-final",
+      "--json",
       "--timeout",
       "30000",
     ]);
@@ -37,6 +37,23 @@ describe("WakeTransport", () => {
     assert.equal(payload.threadId, undefined);
   });
 
+  it("observes exactly the admitted run through the pinned agent.wait shape", () => {
+    const args = new WakeTransport().buildAgentWaitArgs("run-1");
+    assert.deepEqual(args.slice(0, 3), ["gateway", "call", "agent.wait"]);
+    assert.ok(args.includes("--json"));
+    assert.deepEqual(JSON.parse(args[args.indexOf("--params") + 1]!), { runId: "run-1", timeoutMs: 25000 });
+  });
+
+  it("binds routed custom-key wakes to the canonical account and topic without automatic delivery", () => {
+    const args = new WakeTransport().buildChatSendArgs("agent:main:direct:123", "wake", false, "wake-1", {
+      channel: "telegram", target: "-100123", accountId: "second-bot", threadId: "77",
+    });
+    assert.deepEqual(JSON.parse(args[args.indexOf("--params") + 1]!), {
+      sessionKey: "agent:main:direct:123", message: "wake", deliver: false, idempotencyKey: "wake-1",
+      originatingChannel: "telegram", originatingTo: "-100123",
+      originatingAccountId: "second-bot", originatingThreadId: "77",
+    });
+  });
 });
 
 describe("buildPresentation", () => {

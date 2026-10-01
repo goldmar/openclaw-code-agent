@@ -266,6 +266,7 @@ export class SessionManager {
   private readonly maintenance: SessionMaintenanceService;
   readonly ready: Promise<void>;
   private shuttingDown = false;
+  private completionWakeRecoveryStarted = false;
   private readonly pendingPlanResumeClaims = new Map<string, PersistedSessionInfo>();
 
   constructor(
@@ -298,6 +299,13 @@ export class SessionManager {
     this.worktreeMessages = services.worktreeMessages;
     this.maintenance = services.maintenance;
     this.ready = Promise.resolve();
+  }
+
+  /** Called only after the host opens Gateway RPC admission. */
+  recoverCompletionWakes(): void {
+    if (this.shuttingDown || this.completionWakeRecoveryStarted) return;
+    this.completionWakeRecoveryStarted = true;
+    this.notifications.recoverAdmittedCompletionWakes(this.store.listPersistedSessions());
   }
 
   private static createServiceBundle(
@@ -335,6 +343,7 @@ export class SessionManager {
       (ref, patch) => stateSync.applySessionPatch(ref, patch),
       {
         getPersistedSession: (ref) => store.getPersistedSession(ref),
+        confirmCompletionWakeAdmission: (ref, runId, outcomeKey) => store.confirmCompletionWakeAdmission(ref, runId, outcomeKey),
       },
     );
     const worktrees = new SessionWorktreeController();

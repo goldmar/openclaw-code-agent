@@ -408,6 +408,12 @@ describe("SessionStore persisted compatibility", () => {
       completionWakeIssuedAt: "2026-06-01T23:26:03.000Z",
       completionWakeSucceededAt: "2026-06-01T23:26:04.000Z",
       completionWakeSummaryRequired: true,
+      completionWakeRunId: "accepted-summary-run",
+      completionWakeOutcomeKey: "terminal:merged-followup:completed:v1",
+      completionWakeRoutedReply: false,
+      completionWakeMessage: "Summarize the finished task.",
+      completionWakeSubmissionState: "not_submitted",
+      completionWakeSummaryFact: { required: true, producer: "legacy", fallbackFingerprint: "the original completion fingerprint" },
       costUsd: 0,
     }]);
 
@@ -418,6 +424,13 @@ describe("SessionStore persisted compatibility", () => {
     });
 
     assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSummaryRequired, true);
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeRunId, "accepted-summary-run");
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeOutcomeKey, "terminal:merged-followup:completed:v1");
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeRoutedReply, false);
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeMessage, "Summarize the finished task.");
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSubmissionState, "not_submitted");
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSummaryFact?.producer, "legacy");
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSummaryFact?.fallbackFingerprint, "the original completion fingerprint");
     assert.equal(
       store.getPersistedSession("merged-followup")?.completionWakeSucceededAt,
       "2026-06-01T23:26:04.000Z",

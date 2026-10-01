@@ -1,5 +1,6 @@
 export type { OpenClawPluginToolContext } from "../api";
 import type { HarnessLaunchOptions } from "./harness/types";
+import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 
 // Plugin types
 
@@ -550,6 +551,17 @@ export interface PersistedSessionInfo {
   notificationDedupe?: SessionNotificationDedupeRecord[];
   completionSummaryDedupe?: SessionCompletionSummaryRecord[];
   completionWakeIssuedAt?: string;
+  /** Submitted orchestrator run to observe; never replace it while admission or delivery is unknown. */
+  completionWakeRunId?: string;
+  /** Semantic completion outcome belonging to completionWakeRunId. */
+  completionWakeOutcomeKey?: string;
+  /** Delivery proof required by the submitted run, preserved across route-policy changes. */
+  completionWakeRoutedReply?: boolean;
+  /** Exact chosen wake body required to retry a proven non-submission. */
+  completionWakeMessage?: string;
+  completionWakeSubmissionState?: "not_submitted" | "unknown";
+  /** Original dedupe fact; recovery must retain legacy fingerprint semantics. */
+  completionWakeSummaryFact?: CompletionSummaryFact;
   /** The required human-visible completion follow-up was confirmed delivered. */
   completionWakeSucceededAt?: string;
   completionWakeFailedAt?: string;

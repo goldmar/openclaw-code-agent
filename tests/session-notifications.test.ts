@@ -3,6 +3,177 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
+import type { PersistedSessionInfo } from "../src/types";
+import type { SessionNotificationRequest, WakeDispatcher } from "../src/wake-dispatcher";
+
+describe("admitted completion wake recovery", () => {
+  function setup() {
+    const persisted: PersistedSessionInfo = {
+      sessionId: "accepted-completion",
+      harnessSessionId: "accepted-backend",
+      name: "accepted-completion",
+      prompt: "Finish the task",
+      workdir: "/tmp",
+      status: "completed",
+      createdAt: 1000,
+      costUsd: 0,
+      route: { provider: "telegram", target: "chat", sessionKey: "agent:main:telegram:group:chat" },
+    };
+    const requests: SessionNotificationRequest[] = [];
+    const dispatcher: Pick<WakeDispatcher, "dispatchSessionNotification" | "dispose"> = {
+      dispatchSessionNotification: (_session, request) => { requests.push(request); },
+      dispose: () => {},
+    };
+    const createService = () => new SessionNotificationService(
+      // Only these dispatcher methods are used by the notification service.
+      dispatcher as WakeDispatcher,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const request: SessionNotificationRequest = {
+      label: "completed",
+      idempotencyKey: "completed:first-outcome",
+      completionWakeOutcomeKey: "terminal:first-outcome",
+      completionWakeSummaryRequired: true,
+      userMessage: "Task finished",
+      wakeMessageOnNotifySuccess: "Summarize the completed task",
+      wakeMessageOnNotifyFailed: "Summarize the task and failed status notification",
+      notifyUser: "always",
+    };
+    return { persisted, requests, createService, request };
+  }
+
+  it("persists admission and reobserves it after timeout without repeating the status notification", () => {
+    const { persisted, requests, createService, request } = setup();
+    const service = createService();
+    service.dispatch(persisted, request);
+    requests[0]!.hooks!.onNotifySucceeded!();
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("accepted-run");
+    requests[0]!.hooks!.onWakeAmbiguous!("wait timed out");
+    assert.equal(persisted.completionWakeRunId, "accepted-run");
+    assert.equal(persisted.completionWakeOutcomeKey, "terminal:first-outcome");
+    assert.equal(persisted.completionWakeRoutedReply, true);
+    assert.equal(persisted.completionWakeSummaryRequired, true);
+    assert.equal(persisted.completionWakeSucceededAt, undefined);
+
+    service.dispatch(persisted, request);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]!.admittedWakeRunId, "accepted-run");
+    assert.equal(requests[1]!.admittedWakeRoutedReply, true);
+    assert.equal(requests[1]!.notifyUser, "never");
+    assert.equal(requests[1]!.userMessage, undefined);
+    assert.equal(requests[1]!.userMessages, undefined);
+    assert.equal(requests[1]!.wakeMessageOnNotifySuccess, undefined);
+    service.dispatch(persisted, request);
+    assert.equal(requests.length, 2, "one observation at a time");
+    requests[1]!.hooks!.onWakeSucceeded!();
+    assert.equal(persisted.completionWakeSummaryRequired, undefined);
+    assert.ok(persisted.completionWakeSucceededAt);
+  });
+
+  it("recovers only unresolved accepted runs after a service restart", () => {
+    const { persisted, requests, createService, request } = setup();
+    createService().dispatch(persisted, request);
+    requests[0]!.hooks!.onNotifySucceeded!();
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("restart-run");
+    const restarted = createService();
+    restarted.recoverAdmittedCompletionWakes([persisted]);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]!.admittedWakeRunId, "restart-run");
+    assert.equal(requests[1]!.notifyUser, "never");
+    assert.equal(requests[1]!.userMessage, undefined);
+    requests[1]!.hooks!.onWakeSucceeded!();
+    restarted.recoverAdmittedCompletionWakes([persisted]);
+    assert.equal(requests.length, 2);
+  });
+
+  it("keeps a newer semantic outcome separate from an older accepted run and receipt", () => {
+    const { persisted, requests, createService, request } = setup();
+    const service = createService();
+    service.dispatch(persisted, request);
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("older-run");
+    persisted.createdAt = 2000; // A new lifecycle can produce a new completion.
+    service.dispatch(persisted, {
+      ...request,
+      completionWakeOutcomeKey: "terminal:second-outcome",
+      idempotencyKey: "completed:second-outcome",
+    });
+    assert.equal(requests[1]!.admittedWakeRunId, undefined);
+    requests[1]!.hooks!.onWakeStarted!();
+    assert.equal(persisted.completionWakeRunId, undefined);
+    requests[1]!.hooks!.onWakeAdmitted!("newer-run");
+    requests[0]!.hooks!.onWakeAdmissionRejected!("older-run");
+    requests[0]!.hooks!.onWakeSucceeded!();
+    assert.equal(persisted.completionWakeRunId, "newer-run");
+    assert.equal(persisted.completionWakeOutcomeKey, "terminal:second-outcome");
+    assert.equal(persisted.completionWakeSummaryRequired, true);
+    assert.equal(persisted.completionWakeSucceededAt, undefined);
+  });
+
+  it("reconciles the saved run after a crash between summary dedupe and clearing its pending obligation", () => {
+    const { persisted, requests, createService, request } = setup();
+    createService().dispatch(persisted, request);
+    requests[0]!.hooks!.onNotifySucceeded!();
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("crash-window-run", true);
+    requests[0]!.hooks!.onWakeSucceeded!();
+    assert.ok(persisted.completionSummaryDedupe?.length);
+    // The summary dedupe generation reached disk, but the next patch did not.
+    persisted.completionWakeSummaryRequired = true;
+    persisted.completionWakeSucceededAt = undefined;
+    persisted.deliveryState = "wake_pending";
+    const restarted = createService();
+    restarted.recoverAdmittedCompletionWakes([persisted]);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]!.admittedWakeRunId, "crash-window-run");
+    assert.equal(requests[1]!.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]!.notifyUser, "never");
+    assert.equal(requests[1]!.userMessage, undefined);
+    requests[1]!.hooks!.onWakeSucceeded!();
+    assert.equal(persisted.completionWakeSummaryRequired, undefined);
+    assert.ok(persisted.completionWakeSucceededAt);
+  });
+
+  it("retries only a definitely unsubmitted wake with its exact saved message and run identity", () => {
+    const { persisted, requests, createService, request } = setup();
+    createService().dispatch(persisted, request);
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("rejected-run", true, "The exact selected wake message");
+    requests[0]!.hooks!.onWakeAdmissionRejected!("rejected-run");
+    assert.equal(persisted.completionWakeRunId, "rejected-run");
+    assert.equal(persisted.completionWakeSubmissionState, "not_submitted");
+    assert.equal(persisted.completionWakeSummaryRequired, true);
+    createService().recoverAdmittedCompletionWakes([persisted]);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]!.retryUnsubmittedWake, true);
+    assert.equal(requests[1]!.admittedWakeRunId, "rejected-run");
+    assert.equal(requests[1]!.admittedWakeRoutedReply, true);
+    assert.equal(requests[1]!.wakeMessage, "The exact selected wake message");
+    assert.equal(requests[1]!.notifyUser, "never");
+    assert.equal(requests[1]!.userMessage, undefined);
+  });
+
+  it("preserves legacy completion dedupe after recovering a saved run", () => {
+    const { persisted, requests, createService, request } = setup();
+    const legacyRequest: SessionNotificationRequest = { ...request, idempotencyKey: undefined, completionWakeOutcomeKey: undefined };
+    createService().dispatch(persisted, legacyRequest);
+    requests[0]!.hooks!.onNotifySucceeded!();
+    requests[0]!.hooks!.onWakeStarted!();
+    requests[0]!.hooks!.onWakeAdmitted!("legacy-run", true);
+    requests[0]!.hooks!.onWakeAmbiguous!("wait timed out");
+    assert.equal(persisted.completionWakeSummaryFact?.producer, "legacy");
+    assert.ok(persisted.completionWakeSummaryFact?.fallbackFingerprint);
+    const restarted = createService();
+    restarted.recoverAdmittedCompletionWakes([persisted]);
+    assert.equal(requests.length, 2);
+    requests[1]!.hooks!.onWakeSucceeded!();
+    restarted.dispatch(persisted, legacyRequest);
+    assert.equal(requests.length, 2, "the original legacy replay must remain deduplicated");
+  });
+});
 
 describe("SessionNotificationService", () => {
   it("appends session stats to PR opened and updated worktree notifications while preserving raw URLs", () => {
