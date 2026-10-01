@@ -1,12 +1,15 @@
 import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pluginConfig, setPluginConfig } from "../src/config";
 import { Session } from "../src/session";
+import { SessionManager } from "../src/session-manager";
 import { registerHarness, getHarness } from "../src/harness";
-import { createFakeHarness } from "./helpers";
+import { createFakeHarness, tick } from "./helpers";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 
 const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "..", "openclaw.plugin.json"), "utf8")) as {
@@ -87,7 +90,74 @@ describe("harness model configuration", () => {
 describe("session model policy on native execution", () => {
   afterEach(() => setPluginConfig({}));
 
+  it("blocks Claude question answers before the native pending-input event is applied", async () => {
+    const original = getHarness("claude-code");
+    const backend = createFakeHarness("claude-code");
+    registerHarness(backend);
+    const manager = new SessionManager(5);
+    let settled = false;
+    try {
+      setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
+      const session = await manager.launchSession({ prompt: "ask", workdir: tmpdir(), harness: "claude-code",
+        model: "sonnet", permissionMode: "plan", worktreeStrategy: "off",
+        route: { provider: "telegram", target: "12345" } }, { notifyLaunch: false });
+      backend.pushMessage({ type: "init", session_id: "question-thread" });
+      await tick(50);
+      assert.equal(session.status, "running");
+      assert.equal(session.pendingInputState, undefined);
+      const pending = manager.handleAskUserQuestion(session.id, {
+        questions: [{ question: "Which target?", options: [{ label: "Staging" }] }],
+      }, { requestId: "early-question" });
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["opus"] } } });
+      await assert.rejects(manager.resolvePendingInputOption(session.id, 0, { requestId: "early-question" }), /not allowed/);
+      assert.throws(() => manager.resolveAskUserQuestion(session.id, 0), /not allowed/);
+      await tick(5);
+      assert.equal(settled, false, "denied answers must leave the question pending");
+      setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
+      assert.equal(await manager.resolvePendingInputOption(session.id, 0, { requestId: "early-question" }), true);
+      assert.deepEqual((await pending).updatedInput.answers, { "Which target?": "Staging" });
+    } finally {
+      await manager.shutdown();
+      registerHarness(original);
+    }
+  });
+
   for (const harness of ["codex", "claude-code"]) {
+    it(`${harness} blocks automatic worktree finalization after its model is revoked`, async () => {
+      const original = getHarness(harness);
+      const backend = createFakeHarness(harness);
+      registerHarness(backend);
+      const model = harness === "codex" ? "gpt-6-sol" : "sonnet";
+      const workdir = mkdtempSync(join(tmpdir(), "oca-revoked-finalization-"));
+      const session = new Session({ prompt: "implement", workdir, harness, model,
+        multiTurn: true, permissionMode: "bypassPermissions", worktreeStrategy: "delegate" }, "revoked-finalization");
+      try {
+        execFileSync("git", ["init", "-b", "main", workdir], { stdio: "ignore" });
+        writeFileSync(join(workdir, "change.txt"), "preserve uncommitted work\n");
+        session.worktreePath = workdir;
+        setPluginConfig({ harnesses: { [harness]: { allowedModels: [model] } } });
+        await session.start();
+        backend.pushMessage({ type: "init", session_id: "revoked-thread" });
+        await tick(50);
+        assert.equal(session.status, "running");
+        assert.equal(backend.consumedPrompts.length, 1);
+        setPluginConfig({ harnesses: { [harness]: { allowedModels: [harness === "codex" ? "gpt-6-astra" : "opus"] } } });
+        backend.pushMessage({ type: "result", data: { success: true, duration_ms: 100,
+          total_cost_usd: 0.01, num_turns: 1, session_id: "revoked-thread" } });
+        await tick(100);
+        assert.equal(session.status, "failed");
+        assert.match(session.error ?? "", /not allowed/);
+        assert.equal(backend.consumedPrompts.length, 1, "no cleanup turn should reach the revoked backend");
+        assert.equal(readFileSync(join(workdir, "change.txt"), "utf8"), "preserve uncommitted work\n");
+      } finally {
+        session.kill("user");
+        await session.waitForTeardown();
+        registerHarness(original);
+        rmSync(workdir, { recursive: true, force: true });
+      }
+    });
+
     it(`${harness} refuses a pinned model denied after suspension, before launching the backend`, async () => {
       const original = getHarness(harness);
       const backend = createFakeHarness(harness);

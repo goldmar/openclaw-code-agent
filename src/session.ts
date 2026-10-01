@@ -847,6 +847,7 @@ export class Session extends EventEmitter {
     this.dirtyWorktreeEntriesAtTurnEnd = undefined;
     if (dirtyEntries.length === 0) return false;
 
+    this.assertCurrentModelAllowed();
     this.worktreeFinalizationPromptIssued = true;
     const dirtyPreview = dirtyEntries.slice(0, 20).map((entry) => `- ${entry}`).join("\n");
     const moreLine = dirtyEntries.length > 20 ? `\n- ...and ${dirtyEntries.length - 20} more` : "";

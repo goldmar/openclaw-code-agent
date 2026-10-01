@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { Session } from "./session";
-import { pluginConfig, getDefaultHarnessName } from "./config";
+import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } from "./config";
+import { assertModelAllowedForHarness } from "./harness-models";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
 import { formatHarnessModelLabel } from "./session-display";
@@ -2234,6 +2235,10 @@ export class SessionManager {
     optionIndex: number,
     context: AskUserQuestionResolutionContext = {},
   ): boolean {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
+    }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
@@ -2252,7 +2257,7 @@ export class SessionManager {
       }
       return false;
     }
-    return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
+    return this.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
   /**
