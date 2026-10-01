@@ -1,5 +1,5 @@
 import { appendStatusMetadata, formatReasoningMetadataSuffix } from "./session-display";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
@@ -76,6 +76,7 @@ export interface SessionNotificationServiceOptions {
   maxNotificationDedupeRecords?: number;
   getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
   confirmCompletionWakeAdmission?: (ref: string, runId: string, outcomeKey: string) => Promise<boolean>;
+  confirmNotificationInjection?: (ref: string, key: string, injectionAttemptId: string) => Promise<boolean>;
 }
 
 const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
@@ -105,6 +106,7 @@ export class SessionNotificationService {
   private readonly notificationDedupe: NotificationDedupeCoordinator;
   private readonly getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
   private readonly confirmCompletionWakeAdmission?: SessionNotificationServiceOptions["confirmCompletionWakeAdmission"];
+  private readonly confirmNotificationInjection?: SessionNotificationServiceOptions["confirmNotificationInjection"];
   private readonly observedCompletionRuns = new Set<string>();
 
   constructor(
@@ -120,6 +122,7 @@ export class SessionNotificationService {
     });
     this.getPersistedSession = options.getPersistedSession;
     this.confirmCompletionWakeAdmission = options.confirmCompletionWakeAdmission;
+    this.confirmNotificationInjection = options.confirmNotificationInjection;
   }
 
   dispatch(
@@ -262,6 +265,9 @@ export class SessionNotificationService {
     const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifyFailed?.trim());
     const failureWakeConfirmsNotificationDelivery = dispatchRequest.failureWakeConfirmsNotificationDelivery !== false;
+    let injectionAttemptId: string | undefined;
+    let injectionQuarantined = false;
+    let confirmedInternalPages = 0;
     let notificationDedupeResolved = false;
     let notifyDeliveryFailed = false;
     let dispatchCancelled = false;
@@ -284,6 +290,33 @@ export class SessionNotificationService {
       : undefined;
 
     const mergedHooks: SessionNotificationHooks = {
+      beforeNotifyInternalChatSend: async () => {
+        if (!notificationDedupeKey || !this.confirmNotificationInjection) {
+          throw new Error("WebChat notification has no durable semantic injection journal");
+        }
+        injectionAttemptId ??= randomUUID();
+        injectionQuarantined = true;
+        const records = this.notificationDedupe.quarantineInjectionRecords(notificationDedupeKey,
+          this.getPersistedSession?.(deliveryRef)?.notificationDedupe, dispatchRequest.label, injectionAttemptId);
+        this.applyNotificationDedupePatch(deliveryRef, records);
+        if (!await this.confirmNotificationInjection(deliveryRef, notificationDedupeKey, injectionAttemptId)) {
+          throw new Error("WebChat injection quarantine could not be confirmed on disk");
+        }
+        await dispatchRequest.hooks?.beforeNotifyInternalChatSend?.();
+      },
+      onNotifyInternalChatNotSubmitted: () => {
+        if (notificationDedupeKey && injectionAttemptId && confirmedInternalPages === 0) {
+          const records = this.notificationDedupe.releaseUnsubmittedInjectionRecords(notificationDedupeKey,
+            injectionAttemptId, this.getPersistedSession?.(deliveryRef)?.notificationDedupe);
+          this.applyNotificationDedupePatch(deliveryRef, records);
+          injectionQuarantined = false;
+        }
+        dispatchRequest.hooks?.onNotifyInternalChatNotSubmitted?.();
+      },
+      onNotifyInternalChatConfirmed: () => {
+        confirmedInternalPages += 1;
+        dispatchRequest.hooks?.onNotifyInternalChatConfirmed?.();
+      },
       onNotifyStarted: () => {
         this.applyDeliveryState(deliveryRef, "notifying");
         dispatchRequest.hooks?.onNotifyStarted?.();
@@ -295,16 +328,16 @@ export class SessionNotificationService {
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         dispatchRequest.hooks?.onNotifyAdmitted?.();
       } } : {}),
-      ...(dispatchRequest.hooks?.onNotifyAmbiguous ? { onNotifyAmbiguous: () => {
+      onNotifyAmbiguous: () => {
         notificationDedupeResolved = true;
-        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        if (!injectionQuarantined) this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyNotifyDeliveryState(deliveryRef, "failed", undefined);
         this.completionSummaries.finish(completionSummaryDecision.key, false);
         dispatchRequest.hooks?.onNotifyAmbiguous?.();
-      } } : {}),
+      },
       onNotifySucceeded: () => {
         notificationDedupeResolved = true;
-        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label, confirmedInternalPages > 0);
         this.applyNotifyDeliveryState(
           deliveryRef,
           hasWakeAfterNotifySuccess ? "wake_pending" : "idle",
@@ -736,7 +769,10 @@ export class SessionNotificationService {
     return `notification:${this.digest(JSON.stringify({ scope, semanticKey }))}`;
   }
 
-  private markNotificationDedupeDelivered(ref: string, key: string | undefined, label: string): void {
+  private markNotificationDedupeDelivered(ref: string, key: string | undefined, label: string, confirmedInternalNotice = false): void {
+    const persistedRecords = ref ? this.getPersistedSession?.(ref)?.notificationDedupe : undefined;
+    // A different wake's receipt does not settle an uncertain transcript append.
+    if (!confirmedInternalNotice && persistedRecords?.some((record) => record.key === key && record.status === "injection_unknown")) return;
     const records = this.notificationDedupe.deliveredRecords(
       key,
       ref ? this.getPersistedSession?.(ref)?.notificationDedupe : undefined,

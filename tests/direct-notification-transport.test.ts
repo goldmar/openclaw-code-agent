@@ -3,7 +3,9 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyDurableSendResult,
+  directNotificationTransportInternals,
   DirectNotificationDeliveryError,
+  DirectNotificationDeliveryUnknownError,
   RuntimeDirectNotificationTransport,
   type DurableMessageBatchSendResult,
 } from "../src/direct-notification-transport";
@@ -270,5 +272,94 @@ describe("classifyDurableSendResult", () => {
       status: "failed",
       error: new Error("x"),
     } as unknown as DurableMessageBatchSendResult).delivered, false);
+  });
+});
+
+describe("RuntimeDirectNotificationTransport: internal chat (WebChat)", () => {
+  const WEBCHAT_ROUTE = {
+    channel: "webchat",
+    target: "agent:main:ios-00000000-0000-4000-8000-000000000001",
+    sessionKey: "agent:main:ios-00000000-0000-4000-8000-000000000001",
+  };
+  const realExecFile = directNotificationTransportInternals.execFile;
+  afterEach(() => {
+    directNotificationTransportInternals.execFile = realExecFile;
+    setPluginRuntime(undefined);
+  });
+
+  function sendInternal(transport: RuntimeDirectNotificationTransport,
+    ...[route, text, buttons, options]: Parameters<RuntimeDirectNotificationTransport["send"]>) {
+    return transport.send(route, text, buttons, { beforeInternalChatSend: async () => {}, ...options });
+  }
+
+  function fakeExecFile(err: Error | null, stderr = "", stdout = JSON.stringify({ ok: true, messageId: "notice-1" })) {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    directNotificationTransportInternals.execFile = ((file: string, args: string[], _opts: unknown, cb: Function) => {
+      calls.push({ file, args });
+      cb(err, stdout, stderr);
+    }) as never;
+    return calls;
+  }
+
+  it("appends the notice with chat.inject instead of the durable outbound queue", async () => {
+    setPluginRuntime({}, { channels: {} });
+    const calls = fakeExecFile(null);
+    const { calls: durableCalls, transport } = recordingTransport();
+
+    await sendInternal(transport, WEBCHAT_ROUTE, "🚀 [add-f4-foils] Launched");
+
+    assert.equal(durableCalls.length, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].file, "openclaw");
+    assert.deepEqual(calls[0].args.slice(0, 3), ["gateway", "call", "chat.inject"]);
+    assert.ok(calls[0].args.includes("--json"));
+    const params = JSON.parse(calls[0].args[calls[0].args.indexOf("--params") + 1]);
+    assert.deepEqual(params, { sessionKey: WEBCHAT_ROUTE.sessionKey, message: "🚀 [add-f4-foils] Launched" });
+  });
+
+  it("rejects controls before appending text or reporting admission", async () => {
+    const calls = fakeExecFile(null);
+    const { calls: durableCalls, transport } = recordingTransport();
+    let admitted = false;
+    await assert.rejects(sendInternal(transport, WEBCHAT_ROUTE, "Plan ready", [[
+      { label: "Approve", callbackData: "approve" },
+      { label: "View PR", callbackData: "", url: "https://example.com/pr" },
+    ]], { onDeliveryIntent: () => { admitted = true; } }), /cannot render notification buttons/);
+    assert.equal(calls.length, 0);
+    assert.equal(durableCalls.length, 0);
+    assert.equal(admitted, false);
+  });
+
+  it("leaves a failed subprocess acknowledgement unknown when the append may have succeeded", async () => {
+    const calls = fakeExecFile(new Error("connection closed after append"));
+    const { transport } = recordingTransport();
+    await assert.rejects(sendInternal(transport, WEBCHAT_ROUTE, "Already appended"), DirectNotificationDeliveryUnknownError);
+    assert.equal(calls.length, 1);
+  });
+
+  it("requires the host's successful transcript identity instead of trusting exit zero", async () => {
+    const { transport } = recordingTransport();
+    for (const stdout of ["", "not JSON", "{}", '{"ok":false,"messageId":"x"}', '{"ok":true,"messageId":""}']) {
+      const calls = fakeExecFile(null, "", stdout);
+      await assert.rejects(sendInternal(transport, WEBCHAT_ROUTE, "Unconfirmed"), DirectNotificationDeliveryUnknownError);
+      assert.equal(calls.length, 1);
+    }
+  });
+
+  it("treats a missing CLI executable as a definite failure before submission", async () => {
+    fakeExecFile(Object.assign(new Error("CLI missing"), { code: "ENOENT" }));
+    const { transport } = recordingTransport();
+    await assert.rejects(sendInternal(transport, WEBCHAT_ROUTE, "Never appended"), (error: unknown) =>
+      error instanceof DirectNotificationDeliveryError && !(error instanceof DirectNotificationDeliveryUnknownError));
+  });
+
+  it("falls back to the target as the session key and reports a failed inject", async () => {
+    fakeExecFile(new Error("exit 1"), "unknown session");
+    const { transport } = recordingTransport();
+
+    await assert.rejects(
+      sendInternal(transport, { channel: "webchat", target: "agent:main:ios-x" }, "✅ done"),
+      (err: unknown) => err instanceof DirectNotificationDeliveryError && /chat\.inject into agent:main:ios-x failed: unknown session/.test(err.message),
+    );
   });
 });

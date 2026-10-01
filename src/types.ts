@@ -56,7 +56,7 @@ export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "fail
 export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "fallback_delivered" | "failed";
 export type SessionApprovalPromptTransport = "none" | "direct-message" | "wake-only";
 export type SessionApprovalPromptMessageKind = "none" | "canonical_buttons" | "explicit_fallback_text";
-export type SessionNotificationDedupeStatus = "in_flight" | "delivered";
+export type SessionNotificationDedupeStatus = "in_flight" | "delivered" | "injection_unknown";
 export type ApprovalExecutionState =
   | "awaiting_plan_output"
   | "awaiting_approval"
@@ -325,6 +325,8 @@ export interface SessionActionToken {
 export interface SessionNotificationDedupeRecord {
   key: string;
   status: SessionNotificationDedupeStatus;
+  /** Identity of a non-idempotent append that may have reached the host. */
+  injectionAttemptId?: string;
   recordedAt: string;
   label?: string;
 }

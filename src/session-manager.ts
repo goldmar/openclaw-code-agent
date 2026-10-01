@@ -344,6 +344,7 @@ export class SessionManager {
       {
         getPersistedSession: (ref) => store.getPersistedSession(ref),
         confirmCompletionWakeAdmission: (ref, runId, outcomeKey) => store.confirmCompletionWakeAdmission(ref, runId, outcomeKey),
+        confirmNotificationInjection: (ref, key, attemptId) => store.confirmNotificationInjection(ref, key, attemptId),
       },
     );
     const worktrees = new SessionWorktreeController();
