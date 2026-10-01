@@ -7,7 +7,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -174,7 +174,7 @@ class AcceptanceRun {
   async fixtures() {
     this.providerUrl = await this.serve(async (request, response, body) => {
       const transport = request.url === "/host/v1/responses" ? "host-parent" : request.url === "/v1/responses" ? "native-codex" : "unexpected";
-      const attempt = { httpMethod: request.method, path: request.url, bodyHash: hash(body), transport };
+      const attempt = { httpMethod: request.method, path: request.url, bodyHash: hash(body), transport, receivedAt: new Date().toISOString() };
       this.modelRequests.push(attempt);
       assert.equal(request.method, "POST"); assert.notEqual(transport, "unexpected", "Only the two explicit loopback Responses routes are permitted");
       if (transport === "host-parent") {
@@ -308,9 +308,9 @@ class AcceptanceRun {
     if (!graceful) { try { process.kill(-child.pid, "SIGKILL"); } catch {} await exited; }
     this.children.delete(child);
   }
-  async rpc(method, params = {}) {
+  async rpc(method, params = {}, { timeoutMs } = {}) {
     // Use only the isolated config target/auth; URL overrides require explicit auth.
-    const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+    const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json", ...(timeoutMs ? ["--timeout", String(timeoutMs - 5000)] : [])], timeoutMs ? { timeoutMs } : {});
     return JSON.parse(output.slice(output.indexOf("{")));
   }
   async invoke(name, args, { channel = "webchat", target = this.sessionKey } = {}) {
@@ -385,6 +385,30 @@ class AcceptanceRun {
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
     writeFileSync(this.env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    // OCA's genuine chat.inject/agent.wait subprocesses invoke `openclaw` by
+    // name. Expose the unmodified pinned package bin, never a test CLI shim.
+    assert.equal(hostPackage.version, HOST_VERSION);
+    assert.equal(typeof hostPackage.bin?.openclaw, "string");
+    const officialEntry = realpathSync(resolve(hostRoot, hostPackage.bin.openclaw));
+    assert.ok(inside(realpathSync(hostRoot), officialEntry), "Official CLI bin stays inside the pinned package");
+    assert.equal(officialEntry, realpathSync(this.hostEntry));
+    assert.equal(fileHash(officialEntry), this.provenance.hostEntryHash);
+    accessSync(officialEntry, constants.X_OK);
+    assert.equal(readFileSync(officialEntry, "utf8").split("\n")[0], "#!/usr/bin/env node");
+    this.officialCliDirectory = join(this.directory, "official-cli");
+    mkdirSync(this.officialCliDirectory, { mode: 0o700 });
+    const officialCli = join(this.officialCliDirectory, "openclaw");
+    symlinkSync(officialEntry, officialCli);
+    assert.equal(realpathSync(officialCli), officialEntry);
+    this.env.PATH = [this.officialCliDirectory, dirname(process.execPath), this.env.PATH].filter(Boolean).join(":");
+    const resolvedNode = (await this.command("node", ["-p", "process.execPath"])).trim();
+    assert.equal(realpathSync(resolvedNode), realpathSync(process.execPath), "Official env-node shebang resolves the exact supported Node binary");
+    const resolvedNodeVersion = (await this.command("node", ["--version"])).trim();
+    assert.equal(resolvedNodeVersion, `v${this.options["node-version"]}`);
+    const officialVersion = (await this.command("openclaw", ["--version"])).trim();
+    assert.match(officialVersion, /(?:^|\s)2026\.9\.7(?:\s|$|\()/);
+    this.provenance.officialCli = { launcher: officialCli, entry: officialEntry, entryHash: fileHash(officialEntry), version: officialVersion, nodeExecutable: resolvedNode, nodeHash: fileHash(resolvedNode), nodeVersion: resolvedNodeVersion };
+    this.artifact("official-cli-path.json", this.provenance.officialCli);
     await this.command(process.execPath, [this.hostEntry, "plugins", "install", tarball, "--force", "--accept-capabilities"]);
     await this.command(process.execPath, [this.hostEntry, "plugins", "enable", "openclaw-code-agent"]);
     const installedRoot = join(this.env.OPENCLAW_STATE_DIR, "extensions/openclaw-code-agent");
@@ -533,6 +557,11 @@ class AcceptanceRun {
     for (const key of ["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "CODEX_HOME"]) {
       assert.equal(env[key], this.env[key], `Actual Gateway ${key} belongs to this disposable profile`); assert.ok(inside(this.directory, env[key])); profile[key] = env[key];
     }
+    assert.equal(env.PATH, this.env.PATH, "Actual owned Gateway inherits only the corrected disposable PATH");
+    assert.equal(env.PATH.split(":")[0], this.officialCliDirectory);
+    assert.equal(realpathSync(join(this.officialCliDirectory, "openclaw")), this.provenance.officialCli.entry);
+    assert.equal(fileHash(this.provenance.officialCli.entry), this.provenance.officialCli.entryHash);
+    profile.officialCliDirectory = this.officialCliDirectory;
     assert.equal(fileHash(this.provenance.installedEntry), this.provenance.installedEntryHash, "Owned host keeps the exact packed candidate entry");
     return { ...this.ownedProcessIdentity(pid), listenerPort: port, profile, installedEntry: this.provenance.installedEntry, installedEntryHash: this.provenance.installedEntryHash };
   }
@@ -558,27 +587,73 @@ class AcceptanceRun {
   }
   async settleGoalDelivery(task) {
     if (!task.sessionId) return;
-    const session = await waitFor(`actual ${task.name} delivery settled`, async () => {
-      const row = this.sessions().find((entry) => entry.sessionId === task.sessionId);
-      if (!row || ["notifying", "wake_pending"].includes(row.deliveryState) || row.notificationDedupe?.some((entry) => entry.status === "in_flight")) return false;
-      if (row.completionWakeFailedAt) throw new Error(`Actual completion delivery failed: ${JSON.stringify(row)}`);
-      const terminalLabel = task.status === "succeeded" ? "goal-task-succeeded" : task.status === "failed" ? "goal-task-failed" : "goal-task-stopped";
-      if (!row.notificationDedupe?.some((entry) => entry.label === terminalLabel && entry.status === "delivered")) return false;
-      if (task.status === "succeeded" && (row.completionWakeOutcomeKey !== `goal:${task.id}` || !row.completionWakeSucceededAt)) return false;
-      if (row.completionWakeRunId && !row.completionWakeSucceededAt && !row.completionWakeSkippedAt) return false;
-      if (row.completionWakeRunId) {
-        const terminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
-        if (terminal.status === "timeout" || terminal.status === "pending") return false;
-        assert.equal(terminal.status, "ok", "Actual completion parent run succeeded");
-        this.artifact(`delivery-${task.id}.json`, { session: row, terminal });
+    const terminalLabel = task.status === "succeeded" ? "goal-task-succeeded" : task.status === "failed" ? "goal-task-failed" : "goal-task-stopped";
+    const evidence = { goalId: task.id, sessionId: task.sessionId, expectedLabel: terminalLabel, expectedOutcome: `goal:${task.id}` };
+    let lastState;
+    const observe = (row) => {
+      const blockers = [];
+      if (!row) blockers.push("own persisted session row missing");
+      else {
+        if (["notifying", "wake_pending"].includes(row.deliveryState)) blockers.push(`deliveryState=${row.deliveryState}`);
+        if (row.notificationDedupe?.some((entry) => entry.status === "in_flight")) blockers.push("notification in flight");
+        if (!row.notificationDedupe?.some((entry) => entry.label === terminalLabel && entry.status === "delivered")) blockers.push("own terminal notification not delivered");
+        if (task.status === "succeeded" && row.completionWakeOutcomeKey !== evidence.expectedOutcome) blockers.push("required completion outcome identity missing/mismatched");
+        if (task.status === "succeeded" && !row.completionWakeSucceededAt) blockers.push("required completion wake success unproven");
+        if (row.completionWakeRunId && !row.completionWakeSucceededAt && !row.completionWakeSkippedAt) blockers.push("retained completion run not settled");
+        if (row.completionWakeFailedAt) blockers.push("required completion delivery failed");
       }
-      if (task.route?.provider === "telegram") {
-        const delivered = this.botMessages.findLast((message) => message.chat.id === 501002 && message.text?.includes(`[${task.name}] Goal task ${task.status}`));
-        if (!delivered) return false;
-        this.artifact(`telegram-terminal-${task.id}.json`, delivered);
+      if (task.route?.provider === "telegram" && !this.botMessages.some((message) => message.chat.id === 501002 && message.text?.includes(`[${task.name}] Goal task ${task.status}`))) blockers.push("correlated Telegram terminal message missing");
+      const state = { row, blockers };
+      if (JSON.stringify(state) !== lastState) {
+        lastState = JSON.stringify(state);
+        Object.assign(evidence, state, { observedAt: new Date().toISOString() });
+        this.artifact(`settlement-${task.id}.json`, evidence);
       }
-      return row;
-    });
+      return blockers;
+    };
+    let session;
+    try {
+      session = await waitFor(`actual ${task.name} delivery settled`, async () => {
+        const row = this.sessions().find((entry) => entry.sessionId === task.sessionId);
+        const blockers = observe(row);
+        if (row?.completionWakeFailedAt) throw new Error(`Actual completion delivery failed: ${JSON.stringify(row)}`);
+        if (blockers.length) return false;
+        if (row.completionWakeRunId) {
+          const terminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
+          if (terminal.status === "timeout" || terminal.status === "pending") return false;
+          assert.equal(terminal.status, "ok", "Actual completion parent run succeeded");
+          this.artifact(`delivery-${task.id}.json`, { session: row, terminal });
+        }
+        if (task.route?.provider === "telegram") {
+          const delivered = this.botMessages.findLast((message) => message.chat.id === 501002 && message.text?.includes(`[${task.name}] Goal task ${task.status}`));
+          if (!delivered) return false;
+          this.artifact(`telegram-terminal-${task.id}.json`, delivered);
+        }
+        return row;
+      });
+    } catch (error) {
+      // Observe the exact retained obligation without sending/retrying any
+      // parent work. Diagnostics cannot turn the original failure into PASS.
+      try {
+        const row = this.sessions().find((entry) => entry.sessionId === task.sessionId);
+        observe(row);
+        evidence.error = String(error); evidence.goal = this.goals().find((goal) => goal.id === task.id);
+        if (row?.completionWakeRunId) {
+          try { evidence.retainedRunTerminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 5000 }, { timeoutMs: 15_000 }); }
+          catch (diagnosticError) { evidence.retainedRunError = String(diagnosticError); }
+        }
+        const origin = row?.originSessionKey ?? task.originSessionKey ?? task.route?.sessionKey;
+        if (origin) {
+          try { evidence.originHistory = await this.rpc("chat.history", { sessionKey: origin, agentId: "main", limit: 20 }, { timeoutMs: 15_000 }); }
+          catch (diagnosticError) { evidence.originHistoryError = String(diagnosticError); }
+        }
+        evidence.requestReceipts = this.modelRequests.map((request, index) => ({ index: index + 1, transport: request.transport, case: request.case, receivedAt: request.receivedAt, responseCompleted: request.responseCompleted, path: join(this.directory, `responses-request-${index + 1}.json`) }));
+        this.artifact(`settlement-${task.id}.json`, evidence);
+      } catch (diagnosticError) {
+        console.error(this.redact(`Settlement diagnostics failed: ${String(diagnosticError)}`));
+      }
+      throw error;
+    }
     this.artifact(`session-${task.id}.json`, session);
   }
   async launchCase(id, { commands, extra = {}, expected = {}, script = {}, text = MARKER, execute = false, slash = false } = {}) {
