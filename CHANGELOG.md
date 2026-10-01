@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A typed plan decision ("Approve", "Revise" or "Reject") sent to a session that the idle timeout suspended while its plan awaited approval is now handled as the decision. Before, `respond` parsed typed decisions only in `awaiting_plan_decision`, so the session resumed with "Approve" as a new prompt and planned again.
+- Recheck the exact approved plan before starting a resumed worker, so a newer Reject or Revise received during queued launch or asynchronous preparation cannot be overwritten by the stale approval.
 - Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
 - Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.
 - Confirm completion follow-ups through the exact Gateway run's terminal delivery receipt rather than its admission acknowledgment. Persist the run and delivery contract before submission, preserve pending summaries on uncertain outcomes, and observe uncertain saved runs after restart without repeating the notification or turn. Retry only wakes proven not to have been submitted, using their saved message and identity.

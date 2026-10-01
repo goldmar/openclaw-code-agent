@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
+import type { Session } from "../src/session";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
 import { normalizePersistedEntry, STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
@@ -17,6 +18,8 @@ import { SessionWorktreeDecisionService } from "../src/session-worktree-decision
 import { computeSessionMetrics } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
 import { createFakeHarness, TEST_RUNTIME_LLM, tick } from "./helpers";
+import { executeRespond } from "../src/actions/respond";
+import type { SessionStore } from "../src/session-store";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { PersistedSessionInfo } from "../src/types";
 import type { NotificationButton } from "../src/session-interactions";
@@ -2292,6 +2295,88 @@ describe("SessionManager.notifySession()", () => {
 // =========================================================================
 
 describe("SessionManager resumed launch routing", () => {
+  for (const boundary of ["preparation", "queue"] as const) {
+    for (const decision of ["Reject", "Revise"] as const) {
+      it(`does not execute a suspended plan approval if typed ${decision} arrives during the resume ${boundary}`, async (t) => {
+        const harness = createFakeHarness(`suspended-approval-race-${boundary}-${decision.toLowerCase()}`);
+        registerHarness(harness);
+        const sm = new SessionManager(5, 5);
+        // Seed the real store through one private boundary; all responding,
+        // asynchronous preparation and session registration use production code.
+        const store = (sm as unknown as { store: SessionStore }).store;
+        const row: PersistedSessionInfo = {
+          sessionId: `suspended-race-${decision}`, harnessSessionId: `backend-race-${decision}`,
+          backendRef: { kind: "claude-code", conversationId: `backend-race-${decision}` },
+          harness: harness.name, name: `suspended-race-${decision}`, prompt: "Implement after approval", workdir: "/tmp",
+          status: "killed", lifecycle: "suspended", runtimeState: "stopped", killReason: "idle-timeout", costUsd: 0,
+          requestedPermissionMode: "plan", currentPermissionMode: "plan", pendingPlanApproval: true,
+          approvalState: "pending", planApproval: "ask", planApprovalContext: "plan-mode",
+          planDecisionVersion: 1, actionablePlanDecisionVersion: 1, worktreeStrategy: "off",
+          route: { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:direct:12345" },
+        };
+        store.replacePersistedSession(row);
+        let releasePolicy!: () => void;
+        let policyStarted!: () => void;
+        const policyGate = new Promise<void>((resolve) => { releasePolicy = resolve; });
+        const started = new Promise<void>((resolve) => { policyStarted = resolve; });
+        const originalCheck = sm.checkRepoPolicyForLaunch.bind(sm);
+        let firstPolicy = true;
+        t.mock.method(sm, "checkRepoPolicyForLaunch", async (...args: Parameters<typeof originalCheck>) => {
+          if (firstPolicy) {
+            firstPolicy = false;
+            policyStarted();
+            await policyGate;
+          }
+          return originalCheck(...args);
+        });
+        const launch = t.mock.method(harness, "launch", harness.launch.bind(harness));
+        let blocker: Promise<Session> | undefined;
+        if (boundary === "queue") {
+          blocker = sm.launchSession({
+            prompt: "hold the launch queue", name: "approval-queue-blocker", workdir: "/tmp",
+            harness: harness.name, worktreeStrategy: "off", permissionMode: "default", route: row.route,
+          });
+          await started;
+        }
+        let queuedResolve!: () => void;
+        const queued = new Promise<void>((resolve) => { queuedResolve = resolve; });
+        const originalLaunch = sm.launchSession.bind(sm);
+        t.mock.method(sm, "launchSession", (...args: Parameters<typeof originalLaunch>) => {
+          const result = originalLaunch(...args);
+          if (args[0].sessionIdOverride === row.sessionId) queuedResolve();
+          return result;
+        });
+        const approving = executeRespond(sm, { session: row.sessionId!, message: "Approve", userInitiated: true });
+        try {
+          await (boundary === "queue" ? queued : started);
+          const changed = await executeRespond(sm, {
+            session: row.sessionId!, message: decision, userInitiated: true, fromOrchestratorTurn: true,
+          });
+          assert.notEqual(changed.isError, true);
+          releasePolicy();
+          const result = await approving;
+          assert.equal(result.isError, true);
+          assert.match(result.text, /plan decision changed during resume preparation/);
+          if (blocker) await blocker;
+          assert.equal(launch.mock.calls.filter((call) => call.arguments[0].resumeSessionId === row.harnessSessionId).length, 0,
+            "a stale approval cannot start the backend");
+          assert.equal(sm.list("all").some((session) => session.id === row.sessionId), false,
+            "a stale approval cannot register an executable session");
+          const current = sm.getPersistedSession(row.sessionId!)!;
+          assert.equal(current.approvalState, decision === "Reject" ? "rejected" : "changes_requested");
+          assert.equal(current.pendingPlanApproval, false);
+          assert.equal(current.planDecisionVersion, 2);
+          assert.equal(current.currentPermissionMode, "plan");
+        } finally {
+          releasePolicy();
+          await approving;
+          await blocker;
+          await sm.shutdown();
+        }
+      });
+    }
+  }
+
   it("kills active sessions before waiting for a launch that is still preparing", async () => {
     const harness = createFakeHarness("shutdown-order-harness");
     registerHarness(harness);

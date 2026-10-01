@@ -307,6 +307,10 @@ describe("executeRespond", () => {
       requestedPermissionMode: "plan",
       currentPermissionMode: "plan",
       pendingPlanApproval: true,
+      approvalState: "pending",
+      planApproval: "ask",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
@@ -324,6 +328,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
     assert.equal(capturedConfig.pendingPlanApproval, false);
     assert.match(capturedConfig.prompt, /The user approved your plan/i);
+    assert.equal(capturedConfig.planDecisionVersion, 2);
   });
 
   it("passes a stable worktree resume ref when approving a stopped delegate worktree plan", async () => {
