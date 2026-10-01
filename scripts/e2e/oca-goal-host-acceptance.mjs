@@ -75,7 +75,7 @@ class AcceptanceRun {
     this.nativeExecutions = []; this.ownedProcesses = new Map();
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only"];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
-    for (const [key, folder] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "xdg-config", XDG_STATE_HOME: "xdg-state", XDG_DATA_HOME: "xdg-data", XDG_CACHE_HOME: "xdg-cache", CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", OPENCLAW_STATE_DIR: "state" })) {
+    for (const [key, folder] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "xdg-config", XDG_STATE_HOME: "xdg-state", XDG_DATA_HOME: "xdg-data", XDG_CACHE_HOME: "xdg-cache", XDG_RUNTIME_DIR: "xdg-runtime", CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", OPENCLAW_STATE_DIR: "state" })) {
       this.env[key] = join(this.directory, folder); mkdirSync(this.env[key], { recursive: true, mode: 0o700 });
     }
     this.env.TMPDIR = join(this.directory, "tmp"); mkdirSync(this.env.TMPDIR, { mode: 0o700 });
@@ -206,7 +206,7 @@ class AcceptanceRun {
       assert.equal(terminal.params.turn.status, "completed");
       assert.ok(frames.some((frame) => frame.method === "item/agentMessage/delta" && frame.params.delta.includes(MARKER)));
       this.artifact("native-preflight.json", { initialized, threadId: started.thread.id, frames, stderr });
-    } finally { lines.close(); await this.stop(child); }
+    } finally { lines.close(); this.observeNativeProcesses(child.pid); await this.stop(child); }
   }
   async stop(child) {
     if (!child?.pid || child.exitCode != null || child.signalCode != null) return;
