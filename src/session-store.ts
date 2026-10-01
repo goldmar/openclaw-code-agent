@@ -511,6 +511,34 @@ export class SessionStore {
     return new Promise((resolve) => { this.persistWaiters.push(resolve); });
   }
 
+  /** Admission may proceed only after an independent disk read confirms its journal. */
+  async confirmCompletionWakeAdmission(ref: string, runId: string, outcomeKey: string): Promise<boolean> {
+    const expected = this.getPersistedSession(ref);
+    const expectedMessage = expected?.completionWakeMessage;
+    const expectedRoutedReply = expected?.completionWakeRoutedReply;
+    const expectedFact = expected?.completionWakeSummaryFact;
+    if (!expectedMessage?.trim() || typeof expectedRoutedReply !== "boolean" || !expectedFact?.required) return false;
+    await this.whenPersisted();
+    const snapshot = readSessionStoreSnapshot(this.indexPath);
+    if (!snapshot || !("sessions" in snapshot)) return false;
+    return snapshot.sessions.some((raw) => {
+      if (!raw || typeof raw !== "object") return false;
+      const row = raw as Partial<PersistedSessionInfo>;
+      return (row.sessionId === ref || row.harnessSessionId === ref || row.name === ref
+        || getBackendConversationId(row) === ref)
+        && row.completionWakeRunId === runId
+        && row.completionWakeOutcomeKey === outcomeKey
+        && row.completionWakeSummaryRequired === true
+        && row.completionWakeSubmissionState === "unknown"
+        && row.completionWakeMessage === expectedMessage
+        && row.completionWakeRoutedReply === expectedRoutedReply
+        && row.completionWakeSummaryFact?.required === true
+        && row.completionWakeSummaryFact.producer === expectedFact.producer
+        && row.completionWakeSummaryFact.outcomeKey === expectedFact.outcomeKey
+        && row.completionWakeSummaryFact.fallbackFingerprint === expectedFact.fallbackFingerprint;
+    });
+  }
+
   private resolvePersistWaiters(): void {
     const waiters = this.persistWaiters;
     this.persistWaiters = [];

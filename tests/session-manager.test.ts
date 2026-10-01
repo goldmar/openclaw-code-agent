@@ -3694,7 +3694,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /send it with the message tool to originRoute/);
+    assert.match(request.wakeMessageOnNotifySuccess, /message\(action='send', final=true\) to originRoute/);
     assert.match(request.wakeMessageOnNotifySuccess, /The user saw: ✅ \[normal-session\] Completed/);
     assert.match(request.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
     assert.match(request.wakeMessageOnNotifySuccess, /Do not repeat the status line/);

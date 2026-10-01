@@ -105,6 +105,31 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("keeps WebChat launches internal when an opened external session supplies inherited thread metadata", () => {
+    for (const sessionKey of [
+      "agent:main:telegram:group:-100123:topic:77",
+      "agent:main:slack:channel:C123:thread:1718048480.000000",
+    ]) {
+      const result = resolveAgentLaunchRequest(
+        { prompt: "Start work", workdir: "/tmp" },
+        {
+          workspaceDir: "/tmp", sessionKey, messageChannel: "webchat",
+          deliveryContext: { channel: "webchat", to: sessionKey, accountId: "external-account", threadId: 77 },
+        },
+        { list: () => [], listPersistedSessions: () => [] },
+      );
+      assert.equal(result.kind, "resolved");
+      if (result.kind === "resolved") {
+        assert.equal(result.originSessionKey, sessionKey);
+        assert.equal(result.originChannel, `webchat|${sessionKey}`);
+        assert.equal(result.originThreadId, undefined);
+        assert.deepEqual(result.route, {
+          provider: "webchat", accountId: undefined, target: sessionKey, threadId: undefined, sessionKey,
+        });
+      }
+    }
+  });
+
   it("recovers a trustworthy direct route from the persisted resume target", () => {
     const result = resolveAgentLaunchRequest(
       { prompt: "Resume from a nested bridge", workdir: "/tmp", resume_session_id: "saved" },

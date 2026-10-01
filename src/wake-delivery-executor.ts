@@ -1,4 +1,5 @@
 import * as childProcess from "child_process";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { createLogger } from "./logger";
 
@@ -16,6 +17,7 @@ export type DispatchTarget = "chat.send" | "message.send" | "system.event";
 export type DispatchPhase = "notify" | "wake";
 export type DispatchSuccessValidationResult =
   | { outcome: "success" }
+  | { outcome: "ambiguous"; reason: string }
   | { outcome: "skipped"; reason: string }
   | { outcome: "failure"; reason: string };
 
@@ -37,10 +39,13 @@ type ExecuteOptions = {
    * callers never trigger a second delivery path for a send that may land later.
    */
   onAmbiguousResult?: () => void;
+  onAdmissionRejected?: () => void;
   onFinalFailure?: () => void;
-  successValidator?: (stdout: string) => DispatchSuccessValidationResult;
+  successValidator?: (stdout: string) => DispatchSuccessValidationResult | Promise<DispatchSuccessValidationResult>;
   shouldContinue?: () => boolean;
   terminalOnFailure?: boolean;
+  /** Explicit origin fields require authenticated admin scope, unavailable in CLI flags. */
+  gatewayRpc?: { method: "chat.send"; params: Record<string, unknown> };
 };
 
 function errorMessage(err: unknown): string {
@@ -54,12 +59,15 @@ class DispatchTimeoutError extends Error {
   }
 }
 
+class DispatchNotSubmittedError extends Error {}
+
 function createDispatchTimeoutError(): Error {
   return new DispatchTimeoutError();
 }
 
 export const wakeDeliveryExecutorInternals = {
   execFile: childProcess.execFile,
+  callGatewayFromCli,
 };
 
 type RetryTimerEntry = {
@@ -71,6 +79,7 @@ export class WakeDeliveryExecutor {
   private pendingRetryTimers: Map<string, Set<RetryTimerEntry>> = new Map();
   private orderedDispatches = new KeyedOperationQueue();
   private disposed = false;
+  private readonly gatewayRequests = new Set<AbortController>();
 
   clearPendingRetries(): void {
     for (const entries of this.pendingRetryTimers.values()) {
@@ -94,17 +103,35 @@ export class WakeDeliveryExecutor {
 
   dispose(): void {
     this.disposed = true;
+    for (const controller of this.gatewayRequests) controller.abort();
+    this.gatewayRequests.clear();
     this.clearPendingRetries();
     this.orderedDispatches.clear();
   }
 
   execute(args: string[], opts: ExecuteOptions, attempt: number = 1): void {
-    if (this.disposed) return;
+    if (this.disposed) {
+      if (opts.onAdmissionRejected) {
+        opts.onAdmissionRejected();
+        opts.onAmbiguousResult?.();
+      }
+      return;
+    }
     if (attempt === 1 && opts.orderingKey) {
       this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executeNow(args, opts, onSettled, attempt));
       return;
     }
     this.executeNow(args, opts, undefined, attempt);
+  }
+
+  /** Observe an admitted wake through the same CLI boundary without resending it. */
+  request(args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      wakeDeliveryExecutorInternals.execFile(
+        "openclaw", [...args], { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
+        (err, stdout) => err ? reject(err) : resolve(stdout ?? ""),
+      );
+    });
   }
 
   /**
@@ -128,6 +155,10 @@ export class WakeDeliveryExecutor {
     attempt: number = 1,
   ): void {
     if (this.disposed || opts.shouldContinue?.() === false) {
+      if (opts.onAdmissionRejected) {
+        opts.onAdmissionRejected();
+        opts.onAmbiguousResult?.();
+      }
       onSettled?.();
       return;
     }
@@ -145,20 +176,35 @@ export class WakeDeliveryExecutor {
       maxAttempts: WAKE_MAX_ATTEMPTS,
     });
 
-    // chat.send wakes shell out to the local OpenClaw CLI: the in-process gateway
-    // request surface is reserved for trusted plugins.
-    wakeDeliveryExecutorInternals.execFile(
-      "openclaw",
-      [...args],
-      { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
-      (err, stdout, stderr) => {
+    const onResult = async (err: unknown, stdout: string, stderr: string): Promise<void> => {
         if (this.disposed) {
           onSettled?.();
           return;
         }
         const elapsedMs = Date.now() - startedAt;
         if (!err) {
-          const validation = opts.successValidator?.(stdout ?? "");
+          let validation: DispatchSuccessValidationResult | undefined;
+          try {
+            validation = await opts.successValidator?.(stdout ?? "");
+          } catch {
+            // A validator may be observing an already admitted host run. An
+            // observation error cannot establish that resending is safe.
+            validation = { outcome: "ambiguous", reason: "wake result observation failed" };
+          }
+          if (this.disposed || opts.shouldContinue?.() === false) {
+            onSettled?.();
+            return;
+          }
+          if (validation?.outcome === "ambiguous") {
+            this.log("warn", "dispatch_ambiguous", {
+              label: opts.label, sessionId: opts.sessionId, target: opts.target,
+              phase: opts.phase, messageKind: opts.messageKind, route: opts.routeSummary,
+              attempt, elapsedMs: Date.now() - startedAt, reason: validation.reason,
+            });
+            opts.onAmbiguousResult?.();
+            onSettled?.();
+            return;
+          }
           if (validation?.outcome === "failure") {
             this.log("error", "dispatch_success_validation_failed", {
               label: opts.label,
@@ -222,6 +268,21 @@ export class WakeDeliveryExecutor {
           onSettled?.();
           return;
         }
+        const definitelyRejected = (err as NodeJS.ErrnoException).code === "ENOENT"
+          || stderr?.includes("originating route fields require admin scope") === true;
+        if (opts.onAmbiguousResult && opts.target === "chat.send" && !definitelyRejected) {
+          // A CLI timeout or connection failure can happen after admission.
+          // Keep the pending wake; never start a second heartbeat delivery.
+          opts.onAmbiguousResult();
+          onSettled?.();
+          return;
+        }
+        if (definitelyRejected && opts.onAdmissionRejected) {
+          opts.onAdmissionRejected();
+          opts.onFinalFailure?.();
+          onSettled?.();
+          return;
+        }
         if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
           this.log("error", "dispatch_failed", {
             label: opts.label,
@@ -277,7 +338,41 @@ export class WakeDeliveryExecutor {
           this.pendingRetryTimers.set(opts.sessionId, new Set());
         }
         this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
-      },
+    };
+    if (opts.gatewayRpc) {
+      const controller = new AbortController();
+      this.gatewayRequests.add(controller);
+      // This public helper creates an ordinary authenticated WS client. It
+      // requests admin scope; the Gateway still checks credentials and grants.
+      // It does not use the trusted plugin runtime.gateway.request surface.
+      void this.executePromiseWithTimeout(() => {
+        if (this.disposed || opts.shouldContinue?.() === false) throw new DispatchNotSubmittedError();
+        return wakeDeliveryExecutorInternals.callGatewayFromCli(
+          opts.gatewayRpc!.method,
+          { json: true, timeout: String(WAKE_CLI_TIMEOUT_MS) },
+          opts.gatewayRpc!.params,
+          { scopes: ["operator.admin"], progress: false, sharedStateMode: "read-only", signal: controller.signal },
+        );
+      }).finally(() => {
+        controller.abort();
+        this.gatewayRequests.delete(controller);
+      }).then(
+        (result) => onResult(null, JSON.stringify(result), ""),
+        (error: unknown) => {
+          if (error instanceof DispatchNotSubmittedError) {
+            opts.onAdmissionRejected?.();
+            opts.onAmbiguousResult?.();
+            onSettled?.();
+            return;
+          }
+          return onResult(error, "", errorMessage(error));
+        },
+      ).catch(() => { onSettled?.(); });
+      return;
+    }
+    wakeDeliveryExecutorInternals.execFile(
+      "openclaw", [...args], { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
+      (err, stdout, stderr) => { void onResult(err, stdout, stderr).catch(() => { onSettled?.(); }); },
     );
   }
 
@@ -435,7 +530,7 @@ export class WakeDeliveryExecutor {
       });
   }
 
-  private executePromiseWithTimeout(task: () => Promise<PromiseDeliveryResult>): Promise<PromiseDeliveryResult> {
+  private executePromiseWithTimeout<T>(task: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {

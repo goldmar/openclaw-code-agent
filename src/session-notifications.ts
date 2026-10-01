@@ -8,7 +8,7 @@ import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import { formatSessionStatsSuffix, type SessionNotificationStats } from "./session-notification-stats";
 import { NotificationDedupeCoordinator } from "./notification-dedupe";
-import { resolveNotificationRoute } from "./session-route";
+import { resolveNotificationRoute, ROUTED_REPLY_RULE } from "./session-route";
 import { areButtonDiagnosticsEnabled } from "./button-diagnostics";
 import {
   CompletionSummaryCoordinator,
@@ -75,6 +75,7 @@ export interface SessionNotificationServiceOptions {
   maxCompletedCompletionWakeKeys?: number;
   maxNotificationDedupeRecords?: number;
   getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
+  confirmCompletionWakeAdmission?: (ref: string, runId: string, outcomeKey: string) => Promise<boolean>;
 }
 
 const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
@@ -103,6 +104,8 @@ export class SessionNotificationService {
   private readonly completionSummaries: CompletionSummaryCoordinator;
   private readonly notificationDedupe: NotificationDedupeCoordinator;
   private readonly getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
+  private readonly confirmCompletionWakeAdmission?: SessionNotificationServiceOptions["confirmCompletionWakeAdmission"];
+  private readonly observedCompletionRuns = new Set<string>();
 
   constructor(
     private readonly wakeDispatcher: WakeDispatcher,
@@ -116,6 +119,7 @@ export class SessionNotificationService {
       maxRecords: options.maxNotificationDedupeRecords,
     });
     this.getPersistedSession = options.getPersistedSession;
+    this.confirmCompletionWakeAdmission = options.confirmCompletionWakeAdmission;
   }
 
   dispatch(
@@ -124,6 +128,40 @@ export class SessionNotificationService {
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
     const persistedSession = this.getPersistedSession?.(deliveryRef);
+    const originalCompletionSummaryFact = this.buildCompletionSummaryFact(request);
+    const completionOutcomeKey = this.getCompletionWakeOutcomeKey(request);
+    const admittedRunId = completionOutcomeKey
+      && persistedSession?.completionWakeSummaryRequired === true
+      && persistedSession.completionWakeOutcomeKey === completionOutcomeKey
+      ? persistedSession.completionWakeRunId
+      : undefined;
+    const observationKey = admittedRunId ? `${deliveryRef}:${completionOutcomeKey}:${admittedRunId}` : undefined;
+    const retryUnsubmittedWake = Boolean(admittedRunId
+      && persistedSession?.completionWakeSubmissionState === "not_submitted"
+      && persistedSession.completionWakeMessage?.trim());
+    if (observationKey && this.observedCompletionRuns.has(observationKey)) return;
+    if (admittedRunId) {
+      // The canonical notification may already be delivered. Recover only the
+      // admitted wake, without repeating that notification or admitting a turn.
+      request = {
+        ...request,
+        admittedWakeRunId: admittedRunId,
+        admittedWakeRoutedReply: persistedSession?.completionWakeRoutedReply,
+        retryUnsubmittedWake,
+        completionSummary: persistedSession?.completionWakeSummaryFact ?? originalCompletionSummaryFact,
+        idempotencyKey: retryUnsubmittedWake ? admittedRunId : request.idempotencyKey,
+        notifyUser: "never",
+        userMessage: undefined,
+        userMessages: undefined,
+        wakeMessage: retryUnsubmittedWake ? persistedSession?.completionWakeMessage
+          : request.wakeMessage ?? request.wakeMessageOnNotifySuccess ?? request.wakeMessageOnNotifyFailed
+            ?? "Observe the previously admitted completion follow-up.",
+        wakeMessageOnNotifySuccess: undefined,
+        wakeMessageOnNotifyFailed: undefined,
+        wakeDelivery: "now",
+        skipDeferredWake: undefined,
+      };
+    }
     const notificationDedupeKey = this.buildNotificationDedupeKey(session, request);
     const notificationDedupeClaim = this.notificationDedupe.claim(
       notificationDedupeKey,
@@ -133,7 +171,7 @@ export class SessionNotificationService {
     if (notificationDedupeClaim.records) {
       this.applyNotificationDedupePatch(deliveryRef, notificationDedupeClaim.records);
     }
-    if (!notificationDedupeClaim.allowed) {
+    if (!notificationDedupeClaim.allowed && !admittedRunId) {
       this.logNotificationDecision({
         session,
         request,
@@ -148,8 +186,8 @@ export class SessionNotificationService {
     }
     const completionSummaryFact = this.buildCompletionSummaryFact(request);
     const foregroundOwnsSummary =
-      request.completionSummaryOwner === "foreground" && completionSummaryFact?.required === true;
-    const completionSummaryDecision = foregroundOwnsSummary
+      !admittedRunId && request.completionSummaryOwner === "foreground" && completionSummaryFact?.required === true;
+    let completionSummaryDecision = foregroundOwnsSummary
       ? this.completionSummaries.recordVisibleDelivery(
           session,
           completionSummaryFact,
@@ -161,6 +199,16 @@ export class SessionNotificationService {
           completionSummaryFact,
           persistedSession?.completionSummaryDedupe,
         );
+    if (admittedRunId && completionSummaryDecision.required && !completionSummaryDecision.allowed) {
+      // Summary dedupe and the pending-run receipt are separate persisted
+      // writes. A crash between them must still reconcile the saved run;
+      // observing it repeats neither the status notification nor the turn.
+      completionSummaryDecision = {
+        ...completionSummaryDecision,
+        allowed: true,
+        key: completionSummaryDecision.dedupeKey,
+      };
+    }
     if (completionSummaryDecision.records) {
       this.applyCompletionSummaryDedupePatch(deliveryRef, completionSummaryDecision.records);
     }
@@ -202,6 +250,15 @@ export class SessionNotificationService {
       });
     }
     const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
+    let activeObservationKey = observationKey;
+    const finishObservation = (): void => {
+      if (activeObservationKey) this.observedCompletionRuns.delete(activeObservationKey);
+    };
+    const ownsCompletionOutcome = (): boolean => {
+      if (!completionOutcomeKey) return true;
+      const current = this.getPersistedSession?.(deliveryRef);
+      return !current?.completionWakeOutcomeKey || current.completionWakeOutcomeKey === completionOutcomeKey;
+    };
     const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifyFailed?.trim());
     const failureWakeConfirmsNotificationDelivery = dispatchRequest.failureWakeConfirmsNotificationDelivery !== false;
@@ -211,6 +268,7 @@ export class SessionNotificationService {
     const cancelDispatch = (): void => {
       if (dispatchCancelled) return;
       dispatchCancelled = true;
+      finishObservation();
       if (!notificationDedupeResolved) {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         notificationDedupeResolved = true;
@@ -272,7 +330,18 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
+        const currentOutcome = this.getPersistedSession?.(deliveryRef)?.completionWakeOutcomeKey;
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "wake_pending", completionWakePatch, {
+          ...(completionOutcomeKey ? {
+            completionWakeOutcomeKey: completionOutcomeKey,
+            ...(currentOutcome !== completionOutcomeKey ? {
+              completionWakeRunId: undefined,
+              completionWakeRoutedReply: undefined,
+              completionWakeMessage: undefined,
+              completionWakeSubmissionState: undefined,
+              completionWakeSummaryFact: undefined,
+            } : {}),
+          } : {}),
           completionWakeIssuedAt: new Date().toISOString(),
           completionWakeSucceededAt: undefined,
           completionWakeFailedAt: undefined,
@@ -281,7 +350,56 @@ export class SessionNotificationService {
         });
         dispatchRequest.hooks?.onWakeStarted?.();
       },
+      onWakeAdmitted: (runId, routedReply, wakeMessage) => {
+        activeObservationKey = `${deliveryRef}:${completionOutcomeKey}:${runId}`;
+        this.observedCompletionRuns.add(activeObservationKey);
+        if (completionWakePatch && ownsCompletionOutcome()) {
+          this.applyPersistedPatch(deliveryRef, {
+            ...completionWakePatch,
+            completionWakeRunId: runId,
+            completionWakeOutcomeKey: completionOutcomeKey,
+            completionWakeMessage: wakeMessage ?? dispatchRequest.wakeMessage
+              ?? dispatchRequest.wakeMessageOnNotifySuccess ?? dispatchRequest.wakeMessageOnNotifyFailed,
+            completionWakeSubmissionState: "unknown",
+            completionWakeSummaryFact: dispatchRequest.completionSummary ?? originalCompletionSummaryFact,
+            completionWakeRoutedReply: routedReply ?? (
+              resolveNotificationRoute(session)?.provider !== "webchat" && Boolean(resolveNotificationRoute(session))
+              || [dispatchRequest.wakeMessage, dispatchRequest.wakeMessageOnNotifySuccess, dispatchRequest.wakeMessageOnNotifyFailed]
+                .some((text) => text?.includes(ROUTED_REPLY_RULE))
+            ),
+          });
+        }
+        if (completionWakePatch && this.confirmCompletionWakeAdmission) {
+          return this.confirmCompletionWakeAdmission(deliveryRef, runId, completionOutcomeKey ?? "").then((confirmed) => {
+            if (!confirmed) throw new Error("Completion wake admission journal could not be confirmed on disk");
+            return dispatchRequest.hooks?.onWakeAdmitted?.(runId, routedReply, wakeMessage);
+          });
+        }
+        return dispatchRequest.hooks?.onWakeAdmitted?.(runId, routedReply, wakeMessage);
+      },
+      onWakeAdmissionRejected: (runId) => {
+        finishObservation();
+        const current = this.getPersistedSession?.(deliveryRef);
+        if (current?.completionWakeRunId === runId && current.completionWakeOutcomeKey === completionOutcomeKey) {
+          this.applyPersistedPatch(deliveryRef, {
+            completionWakeSubmissionState: "not_submitted",
+          });
+        }
+        dispatchRequest.hooks?.onWakeAdmissionRejected?.(runId);
+        this.completionSummaries.finish(completionSummaryDecision.key, false);
+      },
+      onWakeAmbiguous: (reason) => {
+        finishObservation();
+        if (ownsCompletionOutcome()) {
+          this.applyPersistedPatchWithCompletionWake(deliveryRef, "wake_pending", completionWakePatch, {});
+        }
+        this.completionSummaries.finish(completionSummaryDecision.key, false);
+        // A durable notification was already sent, and the accepted wake may
+        // still deliver. Keep both admissions and the pending obligation.
+        dispatchRequest.hooks?.onWakeAmbiguous?.(reason);
+      },
       onWakeSucceeded: () => {
+        finishObservation();
         notificationDedupeResolved = true;
         if (notifyDeliveryFailed && !failureWakeConfirmsNotificationDelivery) {
           this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
@@ -293,16 +411,19 @@ export class SessionNotificationService {
           completionSummaryDecision.key,
           dispatchRequest.label,
         );
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
-          completionWakeSucceededAt: new Date().toISOString(),
-          completionWakeFailedAt: undefined,
-          completionWakeSkippedAt: undefined,
-          completionWakeSkipReason: undefined,
-        });
+        if (ownsCompletionOutcome()) {
+          this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
+            completionWakeSucceededAt: new Date().toISOString(),
+            completionWakeFailedAt: undefined,
+            completionWakeSkippedAt: undefined,
+            completionWakeSkipReason: undefined,
+          });
+        }
         this.completionSummaries.finish(completionSummaryDecision.key, true);
         dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
+        finishObservation();
         if (dispatchCancelled) {
           dispatchRequest.hooks?.onWakeSkipped?.(reason);
           return;
@@ -319,25 +440,31 @@ export class SessionNotificationService {
           dispatchRequest.label,
           reason,
         );
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
-          completionWakeSucceededAt: undefined,
-          completionWakeFailedAt: undefined,
-          completionWakeSkippedAt: new Date().toISOString(),
-          completionWakeSkipReason: reason,
-        });
+        if (ownsCompletionOutcome()) {
+          this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
+            completionWakeSucceededAt: undefined,
+            completionWakeFailedAt: undefined,
+            completionWakeSkippedAt: new Date().toISOString(),
+            completionWakeSkipReason: reason,
+          });
+        }
         this.completionSummaries.finish(completionSummaryDecision.key, true);
         dispatchRequest.hooks?.onWakeSkipped?.(reason);
       },
       onWakeFailed: () => {
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
-          completionWakeFailedAt: new Date().toISOString(),
-        });
+        finishObservation();
+        if (ownsCompletionOutcome()) {
+          this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
+            completionWakeFailedAt: new Date().toISOString(),
+          });
+        }
         this.completionSummaries.finish(completionSummaryDecision.key, false);
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         notificationDedupeResolved = true;
         dispatchRequest.hooks?.onWakeFailed?.();
       },
     };
+    if (observationKey) this.observedCompletionRuns.add(observationKey);
 
     // All plugin-owned visible session headings pass through here, including
     // approval pages/fallbacks, progress, manual messages and worktree outcomes.
@@ -454,7 +581,33 @@ export class SessionNotificationService {
   }
 
   dispose(): void {
+    this.observedCompletionRuns.clear();
     this.wakeDispatcher.dispose();
+  }
+
+  /** Observe uncertain submissions after restart; retry only a proven non-submission. */
+  recoverAdmittedCompletionWakes(sessions: readonly PersistedSessionInfo[]): void {
+    for (const session of sessions) {
+      if (!session.completionWakeSummaryRequired || !session.completionWakeRunId || !session.completionWakeOutcomeKey) continue;
+      if (session.completionWakeSubmissionState === "not_submitted" && !session.completionWakeMessage?.trim()) continue;
+      this.dispatch(session, {
+        label: "completion-wake-recovery",
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: session.completionWakeOutcomeKey,
+        completionSummary: session.completionWakeSummaryFact,
+        wakeMessage: "Observe the previously admitted completion follow-up.",
+        notifyUser: "never",
+      });
+    }
+  }
+
+  private getCompletionWakeOutcomeKey(request: SessionNotificationRequest): string | undefined {
+    if (request.completionWakeSummaryRequired !== true) return undefined;
+    const fact = this.buildCompletionSummaryFact(request);
+    const explicit = fact?.outcomeKey?.trim();
+    if (explicit) return explicit;
+    const fingerprint = fact?.fallbackFingerprint?.trim();
+    return fingerprint ? `legacy:${createHash("sha256").update(fingerprint).digest("hex")}` : undefined;
   }
 
   private getDeliveryRef(session: RoutableSession | PersistedRoutingSession): string {
@@ -495,6 +648,12 @@ export class SessionNotificationService {
         | "completionWakeFailedAt"
         | "completionWakeSkippedAt"
         | "completionWakeSkipReason"
+        | "completionWakeRunId"
+        | "completionWakeOutcomeKey"
+        | "completionWakeRoutedReply"
+        | "completionWakeMessage"
+        | "completionWakeSubmissionState"
+        | "completionWakeSummaryFact"
       >
     >,
   ): void {

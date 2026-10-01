@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { CompletionSummaryFact } from "./completion-summary-coordinator";
@@ -52,6 +53,11 @@ export interface SessionNotificationRequest {
   completionWakeSummaryRequired?: boolean;
   completionWakeOutcomeKey?: string;
   idempotencyKey?: string;
+  /** Reobserve an admitted completion wake instead of submitting another turn. */
+  admittedWakeRunId?: string;
+  admittedWakeRoutedReply?: boolean;
+  /** Retry this identity only when the durable journal proves no CLI submission occurred. */
+  retryUnsubmittedWake?: boolean;
   deferConditionalWakeUntilNextTick?: boolean;
   deferConditionalWakeMs?: number;
   /** Delay an immediate `wakeMessage` (conditional wakes use `deferConditionalWakeMs`). */
@@ -75,6 +81,10 @@ export interface SessionNotificationHooks {
   onNotifyAmbiguous?: () => void;
   onNotifyFailed?: () => void;
   onWakeStarted?: () => void;
+  /** Retain the submitted run identity before transport; an acknowledgement can be lost. */
+  onWakeAdmitted?: (runId: string, routedReply?: boolean, wakeMessage?: string) => void | Promise<void>;
+  onWakeAdmissionRejected?: (runId: string) => void;
+  onWakeAmbiguous?: (reason: string) => void;
   onWakeSucceeded?: () => void;
   onWakeSkipped?: (reason: string) => void;
   onWakeFailed?: () => void;
@@ -82,60 +92,45 @@ export interface SessionNotificationHooks {
 }
 
 /**
- * A completion wake succeeded when `chat.send` answered at all. NO_REPLY is a
- * valid final answer: the orchestrator sends its summary with the message tool
- * to the origin route and then answers NO_REPLY (see `ROUTED_REPLY_RULE`).
+ * Validate the pinned host's agent.wait result, never its chat.send admission
+ * acknowledgement. Routed replies require the host's final source-send receipt;
+ * NO_REPLY or private assistant text alone does not establish delivery.
  */
-export function validateCompletionFollowupWakeSuccess(stdout: string, routedReply: boolean = true): DispatchSuccessValidationResult {
-  const finalText = extractWakeFinalText(stdout).trim();
-  if (!finalText) {
-    return { outcome: "failure", reason: "completion follow-up wake produced no final response" };
+export function validateCompletionFollowupWakeSuccess(
+  stdout: string,
+  routedReply: boolean = true,
+  expectedRunId?: string,
+): DispatchSuccessValidationResult {
+  const result = parseWakeResult(stdout);
+  if (!result || typeof result.runId !== "string" || !result.runId.trim()
+    || (expectedRunId !== undefined && result.runId !== expectedRunId)
+    || !["ok", "error", "timeout"].includes(String(result.status))) {
+    return { outcome: "ambiguous", reason: "completion wake has no matching terminal run result" };
   }
-  // Without a routed send the plain reply is the summary, so NO_REPLY means none was produced.
-  if (!routedReply && /^NO_REPLY$/i.test(finalText)) {
-    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY without a routed send" };
+  const receipt = asRecord(result.terminalReceipt);
+  if (routedReply && receipt?.runId === result.runId && receipt.sourceReplyDelivered === true) {
+    return { outcome: "success" };
   }
-  return { outcome: "success" };
+  const reply = asRecord(result.terminalReply);
+  if (!routedReply && result.status === "ok" && result.yielded !== true
+    && reply?.disposition === "visible" && typeof reply.text === "string"
+    && reply.text.trim() && !/^NO_REPLY$/i.test(reply.text.trim())) {
+    return { outcome: "success" };
+  }
+  return { outcome: "ambiguous", reason: "completion wake has no confirmed visible summary delivery" };
 }
 
-function extractWakeFinalText(stdout: string): string {
-  const trimmed = stdout.trim();
-  if (!trimmed) return "";
+function parseWakeResult(stdout: string): Record<string, unknown> | undefined {
   try {
-    return extractJsonFinalText(JSON.parse(trimmed)).trim();
+    return asRecord(JSON.parse(stdout));
   } catch {
-    return trimmed;
+    return undefined;
   }
 }
 
-function extractJsonFinalText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value.map((item) => extractJsonFinalText(item)).filter(Boolean).join("\n");
-  }
-  if (!value || typeof value !== "object") return "";
-
-  const record = value as Record<string, unknown>;
-  const directKeys = [
-    "final",
-    "finalResponse",
-    "final_response",
-    "assistantFinal",
-    "assistant_final",
-    "response",
-    "text",
-    "content",
-  ];
-  for (const key of directKeys) {
-    const direct = record[key];
-    if (typeof direct === "string" && direct.trim()) return direct;
-  }
-
-  for (const key of ["result", "message", "data"]) {
-    const nested = extractJsonFinalText(record[key]);
-    if (nested.trim()) return nested;
-  }
-  return "";
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
 }
 
 export interface WakeDispatcherOptions {
@@ -256,27 +251,85 @@ export class WakeDispatcher {
     successValidator?: (stdout: string) => DispatchSuccessValidationResult,
     onSkipped?: (reason: string) => void,
     idempotencyKey?: string,
+    wakeHooks?: Pick<SessionNotificationHooks, "onWakeAdmitted" | "onWakeAmbiguous" | "onWakeAdmissionRejected">,
+    admittedWakeRunId?: string,
+    admittedWakeRoutedReply?: boolean,
+    retryUnsubmittedWake: boolean = false,
   ): void {
     const route = this.routes.resolve(session);
+    const routedReply = admittedWakeRoutedReply
+      ?? (Boolean(route && route.channel !== "webchat") || text.includes(ROUTED_REPLY_RULE));
     const shouldContinue = shouldDispatch;
     if (shouldContinue?.() === false) return;
+    const onAmbiguous = (reason: string): void => {
+      log.warn(`[WakeDispatcher] Wake "${label}" has an unconfirmed delivery outcome; preserving the pending summary without a fallback resend.`);
+      wakeHooks?.onWakeAmbiguous?.(reason);
+    };
+    const observeRun = async (runId: string): Promise<DispatchSuccessValidationResult> => {
+      try {
+        for (let observation = 0; observation < 3; observation += 1) {
+          if (this.disposed || this.stopping || shouldContinue?.() === false) {
+            return { outcome: "ambiguous", reason: "completion wake observation interrupted" };
+          }
+          const stdout = await this.executor.request(this.transport.buildAgentWaitArgs(runId));
+          const validation = validateCompletionFollowupWakeSuccess(stdout, routedReply, runId);
+          const result = parseWakeResult(stdout);
+          if (validation.outcome === "success" || !result
+            || !["timeout", "pending"].includes(String(result.status)) || observation === 2) {
+            return validation;
+          }
+          // Queued turns can return pending immediately. Bound observation and
+          // use the owned timer set so Gateway stop interrupts the wait.
+          await new Promise<void>((resolve) => this.deferWake(resolve, 2000));
+        }
+        return { outcome: "ambiguous", reason: "completion wake terminal observation timed out" };
+      } catch {
+        return { outcome: "ambiguous", reason: "completion wake terminal observation failed" };
+      }
+    };
+    const observeOnly = Boolean(admittedWakeRunId && !retryUnsubmittedWake);
+    if (observeOnly && this.stopping) {
+      onAmbiguous("gateway stopped while an admitted completion wake was pending");
+      return;
+    }
     const sessionKey = route?.sessionKey?.trim();
-    if (!sessionKey || this.stopping) {
+    if ((!sessionKey || this.stopping) && !observeOnly) {
+      if (admittedWakeRunId) {
+        wakeHooks?.onWakeAdmissionRejected?.(admittedWakeRunId);
+        onAmbiguous("gateway unavailable before the retained wake could be submitted");
+        return;
+      }
       this.sendSystemEvent(session, text, {
         label: `${label}-${sessionKey ? "on-stop" : "system"}`,
         phase,
         messageKind: "wake",
         wakeNow: true,
         sessionKey,
-        onSuccess,
+        onSuccess: successValidator
+          ? () => onAmbiguous("system wake queued without terminal delivery proof")
+          : onSuccess,
         onFinalFailure,
         shouldContinue,
       });
       return;
     }
 
-    this.executor.execute(
-      this.transport.buildChatSendArgs(sessionKey, text, true, idempotencyKey),
+    let ambiguityReason = "wake delivery remains unconfirmed";
+    const submittedRunId = admittedWakeRunId ?? idempotencyKey ?? randomUUID();
+    const explicitOrigin = !observeOnly && route && (route.channel === "webchat" || text.includes(ROUTED_REPLY_RULE))
+      ? route : undefined;
+    // WebChat final events are visible internally without automatic channel
+    // delivery. Explicit deliver=true would switch the host out of its internal
+    // source policy and could require an external message-tool reply.
+    const deliver = route?.channel !== "webchat" && !text.includes(ROUTED_REPLY_RULE);
+    const args = observeOnly
+      ? this.transport.buildAgentWaitArgs(admittedWakeRunId!)
+      : this.transport.buildChatSendArgs(sessionKey!, text, deliver, submittedRunId,
+        explicitOrigin);
+    const dispatch = (): void => this.executor.execute(
+      // Routed external wakes send with the message tool; WebChat keeps the
+      // host's internal final-event path. Both suppress automatic channel delivery.
+      args,
       {
         label,
         sessionId: session.id,
@@ -284,6 +337,12 @@ export class WakeDispatcher {
         phase,
         routeSummary: `session:${sessionKey}`,
         messageKind: "wake",
+        ...(explicitOrigin ? {
+          gatewayRpc: {
+            method: "chat.send" as const,
+            params: this.transport.buildChatSendParams(sessionKey!, text, deliver, submittedRunId, explicitOrigin),
+          },
+        } : {}),
         dispatchContext: this.buildDispatchContext({
           routeSummary: `session:${sessionKey}`,
           route,
@@ -291,23 +350,92 @@ export class WakeDispatcher {
         }),
         onSuccess,
         onSkipped,
-        successValidator,
+        successValidator: observeOnly
+          ? async (stdout) => {
+            const validation = validateCompletionFollowupWakeSuccess(stdout, routedReply, submittedRunId);
+            const result = parseWakeResult(stdout);
+            return validation.outcome !== "success" && result
+              && ["timeout", "pending"].includes(String(result.status))
+              ? observeRun(submittedRunId) : validation;
+          }
+          : async (stdout) => {
+            const acknowledgement = parseWakeResult(stdout);
+            if (!acknowledgement || typeof acknowledgement.runId !== "string"
+              || !acknowledgement.runId.trim()
+              || acknowledgement.runId !== submittedRunId
+              || !["started", "in_flight", "queued", "ok", "accepted"].includes(String(acknowledgement.status))) {
+              return { outcome: "ambiguous", reason: "wake admission could not be confirmed" };
+            }
+            if (!successValidator) return { outcome: "success" };
+            const observation = await observeRun(acknowledgement.runId);
+            if (observation.outcome === "ambiguous") {
+              // Keep the reason available to the caller's persistence boundary.
+              ambiguityReason = observation.reason;
+            }
+            return observation;
+          },
+        onAmbiguousResult: () => onAmbiguous(ambiguityReason),
+        ...(!observeOnly ? {
+          onAdmissionRejected: () => wakeHooks?.onWakeAdmissionRejected?.(submittedRunId),
+        } : {}),
         shouldContinue,
         onFinalFailure: () => {
           if (shouldContinue?.() === false) return;
+          if (observeOnly) {
+            onAmbiguous("admitted completion wake could not be observed");
+            return;
+          }
+          if (successValidator) {
+            // Keep the proven-unsubmitted journal retryable. A heartbeat would
+            // create an untracked run that could deliver before that retry.
+            onAmbiguous("completion wake was rejected before admission");
+            return;
+          }
           this.sendSystemEvent(session, text, {
             label: `${label}-fallback`,
             phase,
             messageKind: "wake",
             wakeNow: true,
             sessionKey,
-            onSuccess,
+            onSuccess: successValidator
+              ? () => onAmbiguous("system wake queued without terminal delivery proof")
+              : onSuccess,
             onFinalFailure,
             shouldContinue,
           });
         },
       },
     );
+    if (observeOnly) {
+      dispatch();
+      return;
+    }
+    // The host uses idempotencyKey as runId. Retain it before submission so
+    // a lost acknowledgement or process restart never creates a fresh turn.
+    void Promise.resolve().then(() => wakeHooks?.onWakeAdmitted?.(submittedRunId, routedReply, text)).then(
+      () => {
+        if (this.disposed || this.stopping || shouldContinue?.() === false) {
+          wakeHooks?.onWakeAdmissionRejected?.(submittedRunId);
+          onAmbiguous("gateway stopped before the retained wake could be submitted");
+          return;
+        }
+        try {
+          dispatch();
+        } catch {
+          // An executor exception does not prove where submission stopped.
+          // Keep the durable identity unknown, never safely retryable.
+          onAmbiguous("wake submission could not be confirmed");
+        }
+      },
+      () => {
+        // No transport was attempted: this identity can safely be retried once
+        // its journal becomes writable, rather than observing a nonexistent run.
+        wakeHooks?.onWakeAdmissionRejected?.(submittedRunId);
+        onAmbiguous("wake run identity could not be retained before submission");
+      },
+    ).catch(() => {
+      log.warn(`[WakeDispatcher] Wake "${label}" could not update its retained delivery state.`);
+    });
   }
 
   private sendUserNotification(
@@ -736,6 +864,10 @@ export class WakeDispatcher {
           wakeSuccessValidatorFor(wakeText),
           hooks?.onWakeSkipped,
           request.idempotencyKey,
+          hooks,
+          request.admittedWakeRunId,
+          request.admittedWakeRoutedReply,
+          request.retryUnsubmittedWake,
         );
       };
       const dispatchWake = (wakeText: string, queueOnly = false): void => {
@@ -864,6 +996,10 @@ export class WakeDispatcher {
         wakeSuccessValidatorFor(wakeMessage),
         hooks?.onWakeSkipped,
         request.idempotencyKey,
+        hooks,
+        request.admittedWakeRunId,
+        request.admittedWakeRoutedReply,
+        request.retryUnsubmittedWake,
       );
     };
     if (request.deferWakeMs !== undefined && request.deferWakeMs > 0) {

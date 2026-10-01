@@ -13,6 +13,11 @@ import { register, routeFromInteractiveContext } from "../index";
 import { autoUpdateService, goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
+import { SessionStore } from "../src/session-store";
+import { SessionNotificationService } from "../src/session-notifications";
+import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { ROUTED_REPLY_RULE } from "../src/session-route";
+import type { PersistedSessionInfo } from "../src/types";
 import { GoalController } from "../src/goal-controller";
 import { resetSharedRuntimeSlotForTests } from "../src/process-runtime";
 import { createFakeHost, type FakeHost, type FakeHostOptions } from "./fake-host";
@@ -730,6 +735,110 @@ describe("plugin entry source", () => {
 
     await host.stopServices();
     assert.equal(sessionManager, null);
+  });
+
+  it("recovers persisted completion runs only after Gateway readiness and after a ready lazy restart", async (t) => {
+    for (const submissionState of ["unknown", "not_submitted"] as const) {
+      const host = createPluginHost({ autoUpdate: false });
+      const previousIndexPath = process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH;
+      const indexPath = join(host.stateDir, "completion-recovery.json");
+      process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = indexPath;
+      const row: PersistedSessionInfo = {
+        sessionId: `startup-${submissionState}`, harnessSessionId: `backend-${submissionState}`,
+        harness: "claude-code", backendRef: { kind: "claude-code", conversationId: `backend-${submissionState}` },
+        name: "Startup completion", prompt: "Finish task", workdir: "/tmp", status: "completed", costUsd: 0,
+        route: { provider: "telegram", target: "chat", sessionKey: "agent:main:telegram:group:chat" },
+        completionWakeSummaryRequired: true,
+        completionWakeRunId: `saved-${submissionState}`,
+        completionWakeOutcomeKey: `terminal:startup-${submissionState}`,
+        completionWakeRoutedReply: true,
+        completionWakeMessage: ROUTED_REPLY_RULE,
+        completionWakeSubmissionState: submissionState,
+        completionWakeSummaryFact: { required: true, producer: "terminal", outcomeKey: `terminal:startup-${submissionState}` },
+      };
+      new SessionStore({ indexPath }).replacePersistedSession(row);
+      let hostReady = false;
+      const methods: string[] = [];
+      const cli = t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file: string, args: string[], _options: unknown,
+        callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+        assert.equal(hostReady, true, "the Gateway still rejects RPC work before its ready hook");
+        const method = args[2]!;
+        const params = JSON.parse(args[args.indexOf("--params") + 1]!);
+        methods.push(method);
+        const runId = String(params.runId ?? params.idempotencyKey);
+        queueMicrotask(() => callback(null, JSON.stringify(method === "chat.send"
+          ? { runId, status: "started" }
+          : { runId, status: "ok", terminalReceipt: { runId, sourceReplyDelivered: true } }), ""));
+        return {};
+      }) as typeof wakeDeliveryExecutorInternals.execFile);
+      const sdk = t.mock.method(wakeDeliveryExecutorInternals, "callGatewayFromCli", async (...[method, opts, params, extra]: Parameters<typeof wakeDeliveryExecutorInternals.callGatewayFromCli>) => {
+        assert.deepEqual(extra?.scopes, ["operator.admin"]);
+        assert.equal(extra?.sharedStateMode, "read-only");
+        return await new Promise<Record<string, unknown>>((resolve, reject) => {
+          wakeDeliveryExecutorInternals.execFile("openclaw", ["gateway", "call", method, "--json", "--timeout", opts.timeout!, "--params", JSON.stringify(params)], {},
+            (error, stdout) => {
+              if (error) { reject(error); return; }
+              try { resolve(JSON.parse(stdout)); } catch (parseError) { reject(parseError); }
+            });
+        });
+      });
+      const waitForDelivery = async () => {
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          if (!sessionManager?.getPersistedSession(row.sessionId!)?.completionWakeSummaryRequired) return;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        assert.fail("ready completion recovery did not finish");
+      };
+      try {
+        register(host.api);
+        await host.startServices(GATEWAY_CONFIG);
+        assert.equal(host.gatewayStartHooks.length, 1);
+        assert.deepEqual(methods, [], "constructing services must preserve the unsent/unknown journal without RPC");
+        assert.equal(sessionManager?.getPersistedSession(row.sessionId!)?.completionWakeSubmissionState, submissionState);
+        hostReady = true;
+        await host.emitGatewayStart({ abortSignal: new AbortController().signal });
+        await waitForDelivery();
+        assert.deepEqual(methods, submissionState === "unknown" ? ["agent.wait"] : ["chat.send", "agent.wait"]);
+        await host.emitGatewayStart();
+        await host.runTool("agent_sessions", {});
+        const deliveredCallCount = methods.length;
+        assert.equal(methods.length, submissionState === "unknown" ? 1 : 2, "shared manager recovery runs once");
+
+        const originalManager = sessionManager;
+        sessionManager!.updatePersistedSession(row.sessionId!, {
+          completionWakeSummaryRequired: true,
+          completionWakeSucceededAt: undefined,
+          completionWakeRunId: `lazy-restart-${submissionState}`,
+          completionWakeSubmissionState: "unknown",
+        });
+        await host.stopServices();
+        await host.runTool("agent_sessions", {});
+        assert.notEqual(sessionManager, originalManager);
+        await waitForDelivery();
+        assert.deepEqual(methods.slice(deliveredCallCount), ["agent.wait"], "a recreated runtime on the ready Gateway recovers without another host hook");
+      } finally {
+        await host.stopServices();
+        cli.mock.restore();
+        sdk.mock.restore();
+        if (previousIndexPath === undefined) delete process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH;
+        else process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = previousIndexPath;
+      }
+    }
+  });
+
+  it("does not recover completion work from an aborted or retired Gateway hook", async (t) => {
+    const recover = t.mock.method(SessionNotificationService.prototype, "recoverAdmittedCompletionWakes", () => {});
+    const host = createPluginHost({ autoUpdate: false });
+    register(host.api);
+    await host.startServices(GATEWAY_CONFIG);
+    const aborted = new AbortController();
+    aborted.abort();
+    await host.emitGatewayStart({ abortSignal: aborted.signal });
+    await host.runTool("agent_sessions", {});
+    assert.equal(recover.mock.callCount(), 0);
+    for (const dispose of host.disposers) await dispose();
+    await host.emitGatewayStart();
+    assert.equal(recover.mock.callCount(), 0);
   });
 
   it("does not create the self-updater when autoUpdate is false", async () => {
