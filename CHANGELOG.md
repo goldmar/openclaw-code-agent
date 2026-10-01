@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deliver plain plugin notices to OpenClaw WebChat sessions through authenticated `chat.inject`, confirming the appended transcript identity before reporting success. Reject unsupported button presentations before appending text so plan approvals use their explicit reply fallback. Persist and independently confirm a nonexpiring notice quarantine before injection. Lost callbacks, process restarts, or malformed acknowledgments retain it without a second injection, system event, or failure wake; proven non-submissions can retry safely. WebChat wakes retain explicit internal origin and visible-final guidance.
 - Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
 - Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.
 - Confirm completion follow-ups through the exact Gateway run's terminal delivery receipt rather than its admission acknowledgment. Persist the run and delivery contract before submission, preserve pending summaries on uncertain outcomes, and observe uncertain saved runs after restart without repeating the notification or turn. Retry only wakes proven not to have been submitted, using their saved message and identity.

@@ -261,6 +261,21 @@ export function isDirectSessionRoute(route?: SessionRoute): boolean {
   return Boolean(route?.provider && route.target && route.provider !== "system" && route.target !== "system");
 }
 
+/**
+ * Internal chat surfaces: OpenClaw WebChat, which the Control UI and the native
+ * iOS/Android/macOS apps use. They are not outbound channels ("`webchat` is the
+ * internal WebChat UI channel and is not a configurable outbound channel"), so
+ * a `message` send or a durable outbound send to them always fails with
+ * "Outbound not configured for channel: webchat". In such a conversation the
+ * orchestrator's own reply is the message, and plugin notices are appended to
+ * the conversation with the Gateway's `chat.inject`.
+ */
+const INTERNAL_CHAT_PROVIDERS = new Set(["webchat"]);
+
+export function isInternalChatProvider(provider?: string): boolean {
+  return Boolean(provider && INTERNAL_CHAT_PROVIDERS.has(provider.trim().toLowerCase()));
+}
+
 export function routeFromOriginMetadata(
   originChannel?: string,
   originThreadId?: string | number,
