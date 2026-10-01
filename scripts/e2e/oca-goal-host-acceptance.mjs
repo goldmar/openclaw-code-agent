@@ -104,6 +104,47 @@ function verifyEffectAssertionControls() {
   return { scope: "Effect assertion controls only, not simulated host execution", positive: "identical snapshot", negatives: mutations.map((entry) => Object.keys(entry)[0]) };
 }
 
+function assertCompletionTerminal(result, retainedRunId, routedReply) {
+  assert.equal(typeof routedReply, "boolean", "Actual completion routing mode must be explicit");
+  assert.equal(result.runId, retainedRunId, "Actual terminal belongs to the exact retained completion run");
+  assert.equal(result.status, "ok", "Actual completion parent run succeeded");
+  if (routedReply) {
+    assert.equal(result.terminalReceipt?.runId, retainedRunId, "Actual source delivery receipt belongs to the retained run");
+    assert.equal(result.terminalReceipt.sourceReplyDelivered, true, "Actual routed completion reply reached its source");
+  } else {
+    assert.notEqual(result.yielded, true, "A yielded parent run is not a completed visible reply");
+    assert.equal(result.terminalReply?.disposition, "visible", "Actual internal completion reply is visible");
+    assert.equal(typeof result.terminalReply.text, "string");
+    assert.ok(result.terminalReply.text.trim(), "Actual internal completion reply is nonempty");
+    assert.doesNotMatch(result.terminalReply.text.trim(), /^NO_REPLY$/i, "A silent marker is not a visible completion summary");
+  }
+}
+
+function verifyCompletionAssertionControls() {
+  const id = "control-retained-run";
+  const visible = { runId: id, status: "ok", yielded: false, terminalReply: { disposition: "visible", text: "Required checks completed." } };
+  const routed = { runId: id, status: "ok", terminalReceipt: { runId: id, sourceReplyDelivered: true } };
+  assertCompletionTerminal(visible, id, false);
+  assertCompletionTerminal(routed, id, true);
+  const negatives = [
+    ["wrong visible run", { ...visible, runId: "other" }, false],
+    ["wrong routed run", { ...routed, runId: "other" }, true],
+    ["failed run with delivered source", { ...routed, status: "error" }, true],
+    ["yielded visible run", { ...visible, yielded: true }, false],
+    ["silent disposition", { ...visible, terminalReply: { disposition: "silent", text: "NO_REPLY" } }, false],
+    ["missing visible reply", { runId: id, status: "ok" }, false],
+    ["empty visible reply", { ...visible, terminalReply: { disposition: "visible", text: " " } }, false],
+    ["visible silent marker", { ...visible, terminalReply: { disposition: "visible", text: " no_reply " } }, false],
+    ["missing source receipt", { runId: id, status: "ok" }, true],
+    ["wrong source receipt run", { ...routed, terminalReceipt: { runId: "other", sourceReplyDelivered: true } }, true],
+    ["source not delivered", { ...routed, terminalReceipt: { runId: id, sourceReplyDelivered: false } }, true],
+    ["unknown routing mode", visible, undefined],
+    ["nonboolean routing mode", visible, "false"],
+  ];
+  for (const [, result, mode] of negatives) assert.throws(() => assertCompletionTerminal(result, id, mode));
+  return { scope: "Completion assertion controls only; no host run or delivery is simulated", positives: ["exact visible nonyielded internal run", "exact delivered routed source receipt"], negatives: negatives.map(([name]) => name) };
+}
+
 class AcceptanceRun {
   constructor(options) {
     this.options = options;
@@ -364,6 +405,7 @@ class AcceptanceRun {
     const pluginToolNames = json(join(ROOT, "openclaw.plugin.json")).contracts.tools.filter((name) => name !== "agent_send_plan_offer");
     this.artifact("inventory-assertion-controls.json", verifyInventoryAssertionControls(pluginToolNames));
     this.artifact("effect-assertion-controls.json", verifyEffectAssertionControls());
+    this.artifact("completion-assertion-controls.json", verifyCompletionAssertionControls());
     this.pluginToolNames = pluginToolNames;
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
@@ -621,7 +663,7 @@ class AcceptanceRun {
         if (row.completionWakeRunId) {
           const terminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
           if (terminal.status === "timeout" || terminal.status === "pending") return false;
-          assert.equal(terminal.status, "ok", "Actual completion parent run succeeded");
+          assertCompletionTerminal(terminal, row.completionWakeRunId, row.completionWakeRoutedReply);
           this.artifact(`delivery-${task.id}.json`, { session: row, terminal });
         }
         if (task.route?.provider === "telegram") {
