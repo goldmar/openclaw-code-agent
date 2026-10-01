@@ -291,6 +291,46 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
 
+  it("treats a typed Approve to a suspended plan session as the plan approval", async () => {
+    const sm = createStubSessionManager();
+    (sm as any).store.persisted.set("harness-plan-typed", {
+      sessionId: "dead-plan-typed",
+      harnessSessionId: "harness-plan-typed",
+      backendRef: { kind: "claude-code", conversationId: "harness-plan-typed" },
+      name: "plan-session-typed",
+      prompt: "Plan only and stop.",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "suspended",
+      resumable: true,
+      killReason: "idle-timeout",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "plan",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planApproval: "ask",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      costUsd: 0.05,
+      harness: "respond-resume-harness",
+    } as any);
+    (sm as any).store.idIndex.set("dead-plan-typed", "harness-plan-typed");
+
+    let capturedConfig: any;
+    sm.launchSession = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "plan-session-typed", id: "dead-plan-typed" });
+    };
+
+    const result = await executeRespond(sm, { session: "dead-plan-typed", message: "Approve", userInitiated: true });
+
+    assert.match(result.text, /Plan approved for session/);
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.equal(capturedConfig.pendingPlanApproval, false);
+    assert.match(capturedConfig.prompt, /The user approved your plan/i);
+    assert.equal(capturedConfig.planDecisionVersion, 2);
+  });
+
   it("passes a stable worktree resume ref when approving a stopped delegate worktree plan", async () => {
     const sm = createStubSessionManager();
     (sm as any).store.persisted.set("019e6c36-1321-7130-a871-7b4303e8ff32", {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A typed plan decision ("Approve", "Revise" or "Reject") sent to a session that the idle timeout suspended while its plan awaited approval is now handled as the decision. Before, `respond` parsed typed decisions only in `awaiting_plan_decision`, so the session resumed with "Approve" as a new prompt and planned again.
+- Recheck the exact approved plan before starting a resumed worker, so a newer Reject or Revise received during queued launch or asynchronous preparation cannot be overwritten by the stale approval.
 - Deliver plain plugin notices to OpenClaw WebChat sessions through authenticated `chat.inject`, confirming the appended transcript identity before reporting success. Reject unsupported button presentations before appending text so plan approvals use their explicit reply fallback. Persist and independently confirm a nonexpiring notice quarantine before injection. Lost callbacks, process restarts, or malformed acknowledgments retain it without a second injection, system event, or failure wake; proven non-submissions can retry safely. WebChat wakes retain explicit internal origin and visible-final guidance.
 - Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
 - Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.

@@ -584,12 +584,23 @@ export class SessionManager {
    * and session-id checks must see the previous launch already registered.
    */
   launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
-    const launch = this.spawnTail.then((): Promise<Session> => this.launchSerialized(config, options));
+    const persisted = config.resumeSessionId && config.sessionIdOverride
+      ? this.getPersistedSession(config.sessionIdOverride) : undefined;
+    const approval = persisted ? buildResumedPlanState(persisted, config.permissionMode ?? pluginConfig.permissionMode) : undefined;
+    const expectedApproval = approval?.approvalApplied ? {
+      decisionVersion: approval.decisionVersion,
+      backendConversationId: getBackendConversationId(persisted!),
+    } : undefined;
+    const launch = this.spawnTail.then((): Promise<Session> => this.launchSerialized(config, options, expectedApproval));
     this.spawnTail = launch.then((): void => undefined, (): void => undefined);
     return launch;
   }
 
-  private async launchSerialized(config: SessionConfig, options: LaunchOptions): Promise<Session> {
+  private async launchSerialized(
+    config: SessionConfig,
+    options: LaunchOptions,
+    expectedApproval?: { decisionVersion?: number; backendConversationId?: string },
+  ): Promise<Session> {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
@@ -597,6 +608,20 @@ export class SessionManager {
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
     }
+
+    const assertCurrentApproval = (): void => {
+      if (!expectedApproval) return;
+      const current = this.getPersistedSession(config.sessionIdOverride!);
+      const approval = current ? buildResumedPlanState(current, "bypassPermissions") : undefined;
+      if (!approval?.approvalApplied
+        || approval.decisionVersion !== expectedApproval.decisionVersion
+        || getBackendConversationId(current!) !== expectedApproval.backendConversationId
+        || expectedApproval.backendConversationId !== config.resumeSessionId) {
+        throw new Error(`Cannot resume approved plan: its plan decision changed during resume preparation.`);
+      }
+    };
+    // Approval may have been superseded while this launch waited in spawnTail.
+    assertCurrentApproval();
 
     let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
     let startAfter: Promise<void> | undefined;
@@ -691,6 +716,9 @@ export class SessionManager {
     if (!config.route?.provider || !config.route.target) {
       throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
     }
+
+    // Reject/Revise may also arrive during asynchronous repo/worktree preparation.
+    assertCurrentApproval();
 
     // Inject AskUserQuestion intercept for CC sessions. Codex App Server exposes
     // structured pending input natively, so only Claude needs the tool intercept.
