@@ -17,6 +17,8 @@ const HOST_COMMIT = "c074824a27c96d3983043f9eeb33823cd1772d8c";
 const NATIVE_VERSION = "0.159.3";
 const MODEL = "gpt-6-luna";
 const MARKER = "OCA501_NATIVE_PREREQUISITE_OK";
+const PARENT_MODEL = `oca501/${MODEL}`;
+const PARENT_MARKER = "OCA501_HOST_PROVIDER_OK";
 const LABEL = "real pinned OpenClaw + real native Codex + deterministic loopback provider/channel fixtures";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -95,7 +97,7 @@ class AcceptanceRun {
     this.children = new Set(); this.servers = new Set(); this.results = []; this.commandCounter = 0;
     this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = []; this.botMenus = new Map();
     this.nativeExecutions = []; this.ownedProcesses = new Map();
-    this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only"];
+    this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only", randomBytes(24).toString("hex")];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     for (const [key, folder] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "xdg-config", XDG_STATE_HOME: "xdg-state", XDG_DATA_HOME: "xdg-data", XDG_CACHE_HOME: "xdg-cache", XDG_RUNTIME_DIR: "xdg-runtime", CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", OPENCLAW_STATE_DIR: "state" })) {
       this.env[key] = join(this.directory, folder); mkdirSync(this.env[key], { recursive: true, mode: 0o700 });
@@ -154,12 +156,20 @@ class AcceptanceRun {
   }
   async fixtures() {
     this.providerUrl = await this.serve(async (request, response, body) => {
-      assert.equal(request.method, "POST"); assert.equal(request.url, "/v1/responses");
+      const transport = request.url === "/host/v1/responses" ? "host-parent" : request.url === "/v1/responses" ? "native-codex" : "unexpected";
+      const attempt = { httpMethod: request.method, path: request.url, bodyHash: hash(body), transport };
+      this.modelRequests.push(attempt);
+      assert.equal(request.method, "POST"); assert.notEqual(transport, "unexpected", "Only the two explicit loopback Responses routes are permitted");
+      if (transport === "host-parent") {
+        assert.equal(request.headers.authorization, `Bearer ${this.secrets[2]}`, "Genuine parent client uses only the synthetic local API key");
+        attempt.authorization = "validated synthetic fixture key";
+      }
       const input = JSON.parse(body); assert.equal(input.model, MODEL); assert.equal(input.stream, true);
-      this.modelRequests.push({ path: request.url, bodyHash: hash(body), model: input.model });
+      attempt.model = input.model;
       if (this.gateway?.pid) this.observeNativeProcesses(this.gateway.pid);
       const id = `resp_${this.modelRequests.length}`; const itemId = `msg_${this.modelRequests.length}`;
-      const item = { id: itemId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: MARKER, annotations: [], logprobs: [] }] };
+      const marker = transport === "host-parent" ? PARENT_MARKER : MARKER;
+      const item = { id: itemId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
       const base = { id, object: "response", created_at: Math.floor(Date.now() / 1000), model: MODEL, status: "in_progress", output: [], error: null, incomplete_details: null };
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
@@ -167,12 +177,13 @@ class AcceptanceRun {
       event("response.created", { response: base });
       event("response.output_item.added", { output_index: 0, item: { ...item, status: "in_progress", content: [] } });
       event("response.content_part.added", { item_id: itemId, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [], logprobs: [] } });
-      event("response.output_text.delta", { item_id: itemId, output_index: 0, content_index: 0, delta: MARKER, logprobs: [] });
-      event("response.output_text.done", { item_id: itemId, output_index: 0, content_index: 0, text: MARKER, logprobs: [] });
+      event("response.output_text.delta", { item_id: itemId, output_index: 0, content_index: 0, delta: marker, logprobs: [] });
+      event("response.output_text.done", { item_id: itemId, output_index: 0, content_index: 0, text: marker, logprobs: [] });
       event("response.content_part.done", { item_id: itemId, output_index: 0, content_index: 0, part: item.content[0] });
       event("response.output_item.done", { output_index: 0, item });
       event("response.completed", { response: { ...base, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
       response.end();
+      attempt.responseCompleted = true;
     });
     let messageId = 0;
     this.botUrl = await this.serve(async (request, response, body) => {
@@ -307,7 +318,15 @@ class AcceptanceRun {
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
       logging: { file: join(this.directory, "openclaw-runtime.log") },
-      agents: { defaults: { workspace: this.workspace, heartbeat: { every: "0m" } } },
+      models: { mode: "replace", catalogRefresh: { enabled: false }, providers: { oca501: {
+        baseUrl: `${this.providerUrl}/host/v1`, api: "openai-responses", auth: "api-key", apiKey: this.secrets[2], request: { allowPrivateNetwork: true },
+        models: [{ id: MODEL, name: "OCA501 Fixture", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 131072, maxTokens: 4096 }],
+      } } },
+      agents: { defaults: {
+        workspace: this.workspace, heartbeat: { every: "0m" }, model: { primary: PARENT_MODEL, fallbacks: [] }, modelPolicy: { allow: [PARENT_MODEL] },
+        utilityModel: PARENT_MODEL, decisionModel: "", experimental: { decisionAssistance: false }, thinkingDefault: "off", fastModeDefault: false,
+        embeddedAgent: { cyberFailover: { mode: "off" } }, compaction: { enabled: false, memoryFlush: { enabled: false }, postIndexSync: "off" },
+      } },
       memory: { search: { enabled: false } },
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
       tools: { profile: "full", allow: pluginToolNames },
@@ -331,6 +350,18 @@ class AcceptanceRun {
       try { const response = await fetch(`${this.gatewayUrl}/readyz`, { signal: AbortSignal.timeout(2000) }); return response.ok; } catch { return false; }
     });
     this.provenance.gatewayPid = this.gateway.pid;
+    const loadedConfig = await this.rpc("config.get");
+    const loadedModels = loadedConfig.config.models;
+    const loadedDefaults = loadedConfig.config.agents.defaults;
+    assert.equal(loadedModels.mode, "replace"); assert.deepEqual(Object.keys(loadedModels.providers), ["oca501"]);
+    assert.equal(loadedModels.providers.oca501.baseUrl, `${this.providerUrl}/host/v1`);
+    assert.equal(loadedModels.providers.oca501.request.allowPrivateNetwork, true);
+    assert.equal(loadedModels.catalogRefresh.enabled, false);
+    assert.deepEqual(loadedDefaults.model, { primary: PARENT_MODEL, fallbacks: [] });
+    assert.deepEqual(loadedDefaults.modelPolicy.allow, [PARENT_MODEL]); assert.equal(loadedDefaults.utilityModel, PARENT_MODEL);
+    assert.equal(loadedDefaults.decisionModel, ""); assert.equal(loadedDefaults.experimental.decisionAssistance, false);
+    assert.equal(loadedDefaults.embeddedAgent.cyberFailover.mode, "off");
+    this.artifact("model-isolation-config.json", { configHash: loadedConfig.hash, parentBaseUrl: loadedModels.providers.oca501.baseUrl, modelMode: loadedModels.mode, configuredProviders: Object.keys(loadedModels.providers), catalogRefresh: loadedModels.catalogRefresh, primaryAndFallbacks: loadedDefaults.model, modelPolicy: loadedDefaults.modelPolicy, utilityModel: loadedDefaults.utilityModel, decisionModel: loadedDefaults.decisionModel, experimental: loadedDefaults.experimental, embeddedAgent: loadedDefaults.embeddedAgent, compaction: loadedDefaults.compaction, nativeBaseUrl: `${this.providerUrl}/v1`, limits: "Provider account/model inference and real Telegram service acceptance remain unproven; fixture responses are deterministic" });
     // Genuine host creation with no initial turn or naming prompt materializes
     // the canonical WebChat session. Do not fabricate host storage/context.
     const beforeCreationRequests = this.modelRequests.length;
@@ -340,11 +371,43 @@ class AcceptanceRun {
     assert.ok(created.sessionId); assert.ok(created.entry); assert.equal(created.runStarted, false);
     assert.equal(this.modelRequests.length, beforeCreationRequests, "Host session creation starts no model turn");
     this.sessionKey = created.key;
+    assert.ok(this.gatewayLog.includes(`agent model: ${PARENT_MODEL}`), "Actual Gateway reports the isolated parent model");
+    const modelSession = await this.rpc("sessions.list", { agentId: "main", limit: 10 });
+    this.artifact("parent-model-session-before.json", modelSession);
+    const effectiveSession = modelSession.sessions.find((entry) => entry.key === this.sessionKey);
+    assert.ok(effectiveSession, "Real host lists the created parent session");
+    assert.equal(effectiveSession.modelProvider, "oca501"); assert.equal(effectiveSession.model, MODEL);
+    if (effectiveSession.activeModelProvider !== undefined) assert.equal(effectiveSession.activeModelProvider, "oca501");
+    if (effectiveSession.activeModel !== undefined) assert.equal(effectiveSession.activeModel, MODEL);
     const effective = await this.rpc("tools.effective", { agentId: "main", sessionKey: this.sessionKey });
     this.artifact("tools-effective.json", effective);
     const enabledOcaTools = assertEffectiveOcaTools(effective, pluginToolNames);
     this.artifact("tools-effective-oca-enabled.json", { expectedIds: pluginToolNames.toSorted(), effectiveIds: enabledOcaTools.map((entry) => entry.id).toSorted(), entries: enabledOcaTools });
     this.artifact("goal-config-schema.json", await this.rpc("config.schema.lookup", { path: "plugins.entries.openclaw-code-agent.config" }));
+    // Exercise the genuine embedded parent client, not only its configuration.
+    const beforeParentProbe = this.modelRequests.length;
+    const nativeRequestsBefore = this.modelRequests.filter((entry) => entry.transport === "native-codex").length;
+    const parentRun = await this.rpc("chat.send", { sessionKey: this.sessionKey, agentId: "main", message: `Reply exactly ${PARENT_MARKER}. Use no tools.`, thinking: "off", deliver: false, idempotencyKey: `oca501-parent-${randomBytes(12).toString("hex")}` });
+    this.artifact("parent-probe-admission.json", parentRun);
+    assert.ok(parentRun.runId, "Real host accepted a parent turn");
+    const parentHistory = await waitFor("genuine parent loopback turn in canonical history", async () => {
+      if (!this.modelRequests.slice(beforeParentProbe).some((entry) => entry.transport === "host-parent" && entry.responseCompleted)) return false;
+      const history = await this.rpc("chat.history", { sessionKey: this.sessionKey, agentId: "main", limit: 10 });
+      return history.messages.some((entry) => entry.role === "assistant" && entry.content?.some((part) => part.type === "text" && part.text === PARENT_MARKER)) ? history : false;
+    });
+    const parentRequests = this.modelRequests.slice(beforeParentProbe);
+    assert.ok(parentRequests.length > 0); assert.ok(parentRequests.every((entry) => entry.transport === "host-parent" && entry.authorization === "validated synthetic fixture key"));
+    assert.equal(this.modelRequests.filter((entry) => entry.transport === "native-codex").length, nativeRequestsBefore, "Parent probe starts no native Codex turn");
+    assert.ok(!existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH), "Parent marker turn launches no goal");
+    const parentTerminal = await this.rpc("agent.wait", { runId: parentRun.runId, timeoutMs: 5000 });
+    assert.equal(parentTerminal.status, "ok", "Genuine host parent run reached successful terminal state");
+    const parentSessionAfter = await this.rpc("sessions.list", { agentId: "main", limit: 10 });
+    const afterRow = parentSessionAfter.sessions.find((entry) => entry.key === this.sessionKey);
+    assert.equal(afterRow?.sessionId, created.sessionId); assert.equal(afterRow.modelProvider, "oca501"); assert.equal(afterRow.model, MODEL);
+    if (afterRow.activeModelProvider !== undefined) assert.equal(afterRow.activeModelProvider, "oca501");
+    if (afterRow.activeModel !== undefined) assert.equal(afterRow.activeModel, MODEL);
+    this.artifact("parent-loopback-probe.json", { run: parentRun, terminal: parentTerminal, history: parentHistory, effectiveSession: afterRow, requests: parentRequests, model: PARENT_MODEL, fixtureBoundary: "Actual embedded host provider/client; only external Responses output is deterministic" });
+    this.provenance.parentModel = PARENT_MODEL; this.provenance.parentProviderBaseUrl = `${this.providerUrl}/host/v1`;
     const beforeRequests = this.modelRequests.length;
     const admitted = await this.invoke("agent_goal", { action: "launch", goal: "Return the prerequisite marker; make no edits.", name: "host-prerequisite", workdir: this.workspace, harness: "codex", max_iterations: 1, permission_mode: "bypassPermissions" });
     assert.equal(admitted.status, 200); assert.equal(admitted.output.ok, true); assert.notEqual(admitted.output.result?.isError, true);
@@ -354,7 +417,7 @@ class AcceptanceRun {
     assert.equal(terminal.status, "succeeded", JSON.stringify(terminal));
     assert.deepEqual(terminal.requiredVerifierCommands, ["bash ci.sh"]);
     assert.equal(readFileSync(join(this.workspace, "receipt.txt"), "utf8"), "CI\n");
-    assert.ok(this.modelRequests.length > beforeRequests, "Real native host session reached the loopback provider");
+    assert.ok(this.modelRequests.slice(beforeRequests).some((entry) => entry.transport === "native-codex" && entry.responseCompleted), "Real native host session reached its distinct loopback provider");
     assert.ok(this.nativeExecutions.some((entry) => entry.parentPid === this.gateway.pid), "Observed genuine native binary spawned by actual Gateway/OCA");
     assert.ok(this.botRequests.some((entry) => entry.method === "getUpdates"), "Actual pinned Telegram adapter polls loopback Bot API");
     assert.deepEqual(this.fixtureErrors, []);
