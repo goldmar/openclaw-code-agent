@@ -53,3 +53,17 @@ export function canonicalAllowedModelForHarness(
   });
   return canonicalizeModelForHarness("codex", matched) ?? model;
 }
+
+/** Recheck persisted/internal launches against the current harness policy before execution. */
+export function assertModelAllowedForHarness(
+  harness: string,
+  model: string | undefined,
+  allowedModels: string[] | undefined,
+): void {
+  if (!isModelFormatSupportedForHarness(harness, model)) {
+    throw new Error(`Model "${model}" is not supported for harness "${harness}". Use a bare Codex model id.`);
+  }
+  if (!isModelAllowedForHarness(harness, model, allowedModels)) {
+    throw new Error(`Model "${model ?? "undefined"}" is not allowed for harness "${harness}". Permitted models: ${allowedModels?.join(", ")}`);
+  }
+}

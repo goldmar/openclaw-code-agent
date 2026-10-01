@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import { formatHarnessModelLabel } from "./session-display";
 import { formatResumedLaunchMessage } from "./launch-summary";
-import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
+import type { SessionConfig, SessionStatus } from "./types";
 import { createLogger } from "./logger";
 
 const log = createLogger("session-runtime-bootstrap-service");
@@ -27,13 +27,10 @@ export class SessionRuntimeBootstrapService {
     private readonly deps: {
       hydrateSpawnedSession: (session: Session, preparedLaunch: PreparedLaunch, config: SessionConfig) => void;
       markRunning: (session: Session) => void;
-      syncTaskMirror: (session: Session) => void;
       handleTerminal: (session: Session) => Promise<void>;
       handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
       formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string | Promise<string>;
       notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
-      /** Stop a session whose host TaskFlow was cancelled. */
-      cancelSession?: (session: Session) => void;
     },
   ) {}
 
@@ -44,27 +41,15 @@ export class SessionRuntimeBootstrapService {
     options: LaunchOptions = {},
   ): Promise<Session> {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
-    this.observeMirror(config.taskLifecycle?.create(session, {
-      onCancelRequested: () => this.deps.cancelSession?.(session),
-    }), session);
 
     session.on("statusChange", (_session: Session, newStatus: SessionStatus) => {
       if (newStatus === "running") {
         if (session.harnessSessionId) {
           this.deps.markRunning(session);
         }
-        this.observeMirror(config.taskLifecycle?.progress(session), session);
       } else if (newStatus === "completed" || newStatus === "failed" || newStatus === "killed") {
-        const finalized = config.taskLifecycle?.finalize(session);
-        const terminal = finalized
-          ? finalized.catch((err) => this.warnMirror(session, err)).then(() => this.deps.handleTerminal(session))
-          : this.deps.handleTerminal(session);
-        this.track(terminal, session, "handleTerminal");
+        this.track(this.deps.handleTerminal(session), session, "handleTerminal");
       }
-    });
-
-    session.on("lifecycleChange", (_session: Session, _next: SessionLifecycle) => {
-      this.observeMirror(config.taskLifecycle?.progress(session), session);
     });
 
     session.on("turnEnd", (_session: Session, hadQuestion: boolean) => {
@@ -98,16 +83,6 @@ export class SessionRuntimeBootstrapService {
     while (this.pending.size > 0) {
       await Promise.all([...this.pending]);
     }
-  }
-
-  private observeMirror(completion: void | Promise<void>, session: Session): void {
-    if (completion) {
-      this.track(completion.then(() => this.deps.syncTaskMirror(session)), session, "task mirror");
-    }
-  }
-
-  private warnMirror(session: Session, err: unknown): void {
-    log.warn(`[SessionRuntimeBootstrap] task mirror failed for session ${session.id}:`, err);
   }
 
   private track(operation: Promise<void>, session: Session, action: string): void {

@@ -4,8 +4,6 @@ import assert from "node:assert/strict";
 import { completeRuntimeLlmText } from "../src/runtime-llm";
 import { setPluginRuntime } from "../src/runtime-store";
 import { RuntimeSystemEventTransport } from "../src/wake-transport";
-import { resolveSessionTaskLifecycle } from "../src/session-task-lifecycle";
-import { Session } from "../src/session";
 import {
   createFakeHost,
   type DurableSendParams,
@@ -102,25 +100,4 @@ describe("host SDK call shapes", () => {
     assert.deepEqual(host.durableSends, [expected]);
   });
 
-  it("mirrors a session into a managed Task Flow through tasks.async.managedFlows", async () => {
-    host = createFakeHost();
-    setPluginRuntime(host.runtime);
-    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:1" });
-    const session = new Session({ prompt: "Mirror me", workdir: "/tmp", permissionMode: "default" }, "mirror");
-
-    await sink.create(session);
-    session.transition("running");
-    await sink.progress(session);
-    session.complete("done");
-    await sink.finalize(session);
-
-    const [flow] = host.flows.values();
-    assert.equal(flow?.ownerKey, "agent:main:telegram:group:1");
-    assert.equal(flow?.controllerId, "openclaw-code-agent");
-    assert.equal(flow?.status, "succeeded");
-    // Only the mirror fields are kept from the host's full record (goal, state JSON, ...).
-    assert.deepEqual(session.taskFlowMirror, { flowId: flow?.flowId, revision: flow?.revision, status: "succeeded" });
-    assert.equal(host.flowCalls[0]?.method, "tryCreateManaged");
-    assert.equal(host.flowCalls.at(-1)?.method, "finish");
-  });
 });

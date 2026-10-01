@@ -14,15 +14,9 @@ import {
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
 import { resolveExistingTargetPrUpdateBranch } from "../src/tools/agent-pr";
 import { createPR, formatWorktreeOutcomeLine } from "../src/worktree";
-import { reconcilePersistedSessionTaskMirror } from "../src/session-task-lifecycle";
-import { setPluginRuntime } from "../src/runtime-store";
-import { TEST_RUNTIME_LLM } from "./helpers";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { buildCompletedPayload } from "../src/session-notification-builder";
-import { SessionManager } from "../src/session-manager";
-import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
-import type { PersistedSessionInfo } from "../src/types";
 
 const repoRoot = join(import.meta.dirname, "..");
 
@@ -517,144 +511,6 @@ describe("OCA Codex Crabbox integration harness", () => {
     assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/331\./u);
     assert.equal(requests[1]?.userMessage, "✅ Merged: agent/notify-integ → main (3 files, +14/-2)");
     assert.equal(patches.some(({ patch }) => patch.completionWakeSummaryRequired === true), true);
-  });
-
-  it("reconciles orphan running TaskFlow mirrors after runtime recovery", async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    setPluginRuntime({
-      llm: TEST_RUNTIME_LLM,
-      tasks: {
-        async: {
-          managedFlows: {
-            fromToolContext() {
-              return {
-                async setWaiting(params: Record<string, unknown>) {
-                  calls.push({ method: "setWaiting", params });
-                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
-                },
-                async finish(params: Record<string, unknown>) {
-                  calls.push({ method: "finish", params });
-                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
-                },
-                async fail(params: Record<string, unknown>) {
-                  calls.push({ method: "fail", params });
-                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
-                },
-              };
-            },
-          },
-        },
-      },
-    });
-    try {
-      const session = {
-        sessionId: "session-orphan",
-        harnessSessionId: "h-orphan",
-        backendRef: { kind: "codex-app-server", conversationId: "h-orphan" },
-        name: "orphan",
-        prompt: "p",
-        workdir: "/tmp",
-        status: "killed",
-        lifecycle: "terminal",
-        killReason: "unknown",
-        runtimeState: "stopped",
-        runtimeRecovery: {
-          recoveredAt: "2026-07-01T00:00:00.000Z",
-          reason: "persisted-running-without-runtime",
-          rawStatus: "running",
-          rawLifecycle: "active",
-          rawRuntimeState: "live",
-          normalizedStatus: "killed",
-          normalizedLifecycle: "suspended",
-          normalizedRuntimeState: "stopped",
-        },
-        costUsd: 0,
-        route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
-        taskFlowMirror: { flowId: "flow-1", revision: 7, status: "running" },
-      } satisfies PersistedSessionInfo;
-
-      const reconciled = await reconcilePersistedSessionTaskMirror(session);
-      assert.deepEqual(calls.map((call) => call.method), ["fail"]);
-      assert.equal(calls[0].params.expectedRevision, 7);
-      assert.equal(calls[0].params.blockedSummary, "Lost after OpenClaw Code Agent restart without live process");
-      assert.equal(reconciled?.revision, 8);
-    } finally {
-      setPluginRuntime(undefined);
-    }
-  });
-
-  it("reconciles persisted running TaskFlow mirrors through SessionManager after a restart", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "oca-crabbox-manager-restart-"));
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    try {
-      const indexPath = join(dir, "sessions.json");
-      writeFileSync(indexPath, JSON.stringify({
-        schemaVersion: STORE_SCHEMA_VERSION,
-        sessions: [{
-          sessionId: "session-restart-orphan",
-          harnessSessionId: "h-restart-orphan",
-          backendRef: { kind: "codex-app-server", conversationId: "thread-restart-orphan" },
-          name: "restart-orphan",
-          prompt: "p",
-          workdir: "/tmp",
-          status: "running",
-          lifecycle: "active",
-          runtimeState: "live",
-          costUsd: 0,
-          route: {
-            provider: "telegram",
-            target: "123",
-            sessionKey: "agent:main:telegram:group:123",
-          },
-          taskFlowMirror: { flowId: "flow-restart", revision: 4, status: "running" },
-        }],
-        actionTokens: [],
-        repoPolicies: [],
-      }));
-      setPluginRuntime({
-        llm: TEST_RUNTIME_LLM,
-        tasks: {
-          async: {
-            managedFlows: {
-              fromToolContext() {
-                return {
-                  async setWaiting(params: Record<string, unknown>) {
-                    calls.push({ method: "setWaiting", params });
-                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
-                  },
-                  async finish(params: Record<string, unknown>) {
-                    calls.push({ method: "finish", params });
-                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
-                  },
-                  async fail(params: Record<string, unknown>) {
-                    calls.push({ method: "fail", params });
-                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
-                  },
-                };
-              },
-            },
-          },
-        },
-      });
-
-      const manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
-      try {
-        await manager.ready;
-        const persisted = manager.getPersistedSession("session-restart-orphan");
-        assert.equal(persisted?.status, "killed");
-        assert.equal(persisted?.runtimeState, "stopped");
-        assert.equal(persisted?.runtimeRecovery?.reason, "persisted-running-without-runtime");
-        assert.equal(persisted?.taskFlowMirror?.revision, 5);
-        assert.deepEqual(calls.map((call) => call.method), ["fail"]);
-        assert.equal(calls[0].params.flowId, "flow-restart");
-        assert.equal(calls[0].params.expectedRevision, 4);
-      } finally {
-        manager.dispose();
-      }
-    } finally {
-      setPluginRuntime(undefined);
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("catches release metadata drift before deploy or release", () => {

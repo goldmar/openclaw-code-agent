@@ -102,7 +102,7 @@ Keep a found counterexample as a plain regression test next to the fix.
 
 ### Test Fakes
 
-- `tests/fake-host.ts`: a fake OpenClaw host. `createFakeHost()` returns an `OpenClawPluginApi` whose members OCA uses are typed as the SDK members: `runtime.llm.complete` (scripted replies; fails like a host without a model by default), `runtime.system.enqueueSystemEvent` / `requestHeartbeat`, `runtime.tasks.async.managedFlows` (an in-memory managed Task Flow store with revisions), `runtime.logging`, `runtime.config.current`, `runtime.state.resolveStateDir`, a `sendDurableMessageBatch` stand-in (`directNotificationTransport()` wires it into `RuntimeDirectNotificationTransport`), and tool, command, service, and interactive-handler registration with `runTool`, `runCommand`, `runInteractive`, `startServices`, and `stopServices`. Every call is recorded. `tests/host-sdk-contract.test.ts` pins OCA's payloads to the SDK types with `satisfies`.
+- `tests/fake-host.ts`: a fake OpenClaw host. `createFakeHost()` returns an `OpenClawPluginApi` whose members OCA uses are typed as the SDK members: `runtime.llm.complete` (scripted replies; fails like a host without a model by default), `runtime.system.enqueueSystemEvent` / `requestHeartbeat`, `runtime.logging`, `runtime.config.current`, `runtime.state.resolveStateDir`, a `sendDurableMessageBatch` stand-in (`directNotificationTransport()` wires it into `RuntimeDirectNotificationTransport`), and tool, command, service, and interactive-handler registration with `runTool`, `runCommand`, `runInteractive`, `startServices`, and `stopServices`. Every call is recorded. `tests/host-sdk-contract.test.ts` pins OCA's payloads to the SDK types with `satisfies`.
 - `tests/fake-github.ts`: real git repositories behind a `git@github.com:<owner>/<repo>.git` remote (served offline from a local bare repository through a repo-local `core.sshCommand`, so OCA's GitHub detection sees github.com) and a scriptable `gh` on `PATH` backed by a JSON state file (`pr list/view/create/edit/comment`, failure switches, recorded calls). `tests/agent-pr-execute.test.ts` drives `agent_pr` and the auto-PR worktree strategy through it.
 - `tests/harness-backends.ts`: fake Claude, Codex, and OpenCode backends behind the production harness classes (see below). The Codex fake builds its frames from `tests/codex-fixtures.ts`, typed with the vendored protocol types, and both the Codex and the OpenCode fake validate every frame they send and receive against the vendored schemas (`tests/protocol-schema.ts`); a mismatch throws where it happens and fails the fixture's `dispose()`. `tests/codex-harness.test.ts` checks OCA's Codex request params and its mock's replies the same way.
 
@@ -140,7 +140,7 @@ Automated updates wait out Dependabot's 3-day cooldown. pnpm's `minimumReleaseAg
 
 Pinned runtime dependencies (`@hono/node-server`, `express-rate-limit`, `fast-uri`, `hono`, `ip-address`, `qs`) have two values, each kept in one place. The pinned version is the exact entry in `package.json` `dependencies`. The security floor, the lowest release with the relevant advisory fixes, is `RUNTIME_SECURITY_FLOORS` in `scripts/lib/runtime-dependency-pins.mjs`; raise it only for a new advisory. `scripts/check-npm-shrinkwrap.mjs` (part of `pnpm check-static-guardrails`) requires each pin to be an exact direct dependency at or above its floor that the shrinkwrap resolves, and requires any `pnpm-workspace.yaml` override of the same package to read `<name>@<<version>: <version>` with the `package.json` version. `pnpm verify:npm-consumer` reads the same pins. To bump a pin, change `package.json` and the matching override, then regenerate both lock files.
 
-OpenClaw 2026.9.6 supports Node 24.16.0+ on Node 24 and Node 26.1.0+ on Node 26; Node 22 and 25 are unsupported. CI covers both supported lines and release verification pins Node 24.16.0. Plugin-behavior review should also include:
+OpenClaw 2026.9.7 supports Node 24.16.0+ on Node 24 and Node 26.1.0+ on Node 26; Node 22 and 25 are unsupported. CI covers both supported lines and release verification pins Node 24.16.0. Plugin-behavior review should also include:
 
 ```bash
 pnpm check-plugin-security
@@ -287,8 +287,8 @@ Use `pnpm smoke:opencode-live` only when a real OpenCode environment is availabl
 
 ## Service Lifecycle
 
-- `start()` runs on Gateway startup or lazily on the first tool, command, or callback: load config, create `SessionManager` and wait for it to restore persisted sessions and reconcile the Task Flow mirror, create and start the `GoalController`, create the auto-update service when `autoUpdate` is on, and bootstrap maintenance schedules (worktree retention cleanup, reminders, output-file cleanup)
-- `stop()`: stop the goal controller, then `SessionManager.shutdown()` disposes maintenance, stops active sessions (`shutdown`), waits for in-flight launches, maintenance, and session teardown, and drains the Task Flow mirror; finally the runtime and singletons are cleared
+- `start()` runs on Gateway startup or lazily on the first tool, command, or callback: load config, create `SessionManager` and wait for it to restore persisted sessions, create and start the `GoalController`, create the auto-update service when `autoUpdate` is on, and bootstrap maintenance schedules (worktree retention cleanup, reminders, output-file cleanup)
+- `stop()`: stop the goal controller, then `SessionManager.shutdown()` disposes maintenance, stops active sessions (`shutdown`), waits for in-flight launches, maintenance, and session teardown, and drains terminal persistence and cleanup; finally the runtime and singletons are cleared
 
 ## Docs Maintenance Checklist
 
@@ -301,3 +301,9 @@ Before merging a behavior change, confirm:
 5. `package.json` compatibility/build metadata matches the intended OpenClaw release floor.
 6. `package.json.version` and `openclaw.plugin.json.version` match the intended release version.
 7. Approval docs mention both interactive Approve / Revise / Reject buttons and plain-text fallback behavior.
+
+### OpenClaw 2026.9.7 compatibility release proof
+
+Run `pnpm verify`, `pnpm check-plugin-security`, `pnpm validate:release-metadata`, `pnpm verify:npm-consumer`, `pnpm audit:prod`, and `npm pack --dry-run` against the candidate. The consumer dependency check uses a stub host; it does not prove SDK/runtime loading. The packed-plugin security check installs into an isolated profile with the actual pinned OpenClaw package, enables OCA, and checks runtime loading and required tool registration before the security audit. This is CLI registry proof, not a running Gateway turn or effective tool admission. Record the exact candidate commit and package version for each result.
+
+The workflow named OCA Codex Telegram Proof currently executes local smoke; it is not live Telegram proof. Native proof remains guarded by `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live`, and requires separate authorization for external messaging and QA infrastructure. Before shipping, use a disposable Gateway and QA topic to verify Start Plan/Dismiss, plan revisions and approvals, completion, duplicate/unauthorized callback rejection, topic routing, and retained work across reload/restart. Deterministic tests and earlier upstream PR/package proofs do not waive that gate. Keep real routing identifiers, credentials, transcripts and captures out of this public repository.

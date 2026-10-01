@@ -80,7 +80,6 @@ import {
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
-import { reconcilePersistedSessionTaskMirror } from "./session-task-lifecycle";
 import { buildPendingDecisionPatch } from "./worktree-session-patches";
 import {
   createRepoPolicyRecord,
@@ -297,7 +296,7 @@ export class SessionManager {
     this.runtimeBootstrap = services.runtimeBootstrap;
     this.worktreeMessages = services.worktreeMessages;
     this.maintenance = services.maintenance;
-    this.ready = this.reconcilePersistedTaskFlowMirrors();
+    this.ready = Promise.resolve();
   }
 
   private static createServiceBundle(
@@ -481,12 +480,6 @@ export class SessionManager {
         manager.pendingPlanResumeClaims.delete(session.id);
         manager.onPersistedSessionChanged(store.getPersistedSession(session.id));
       },
-      syncTaskMirror: (session) => {
-        if (sessions.get(session.id) !== session || !session.taskFlowMirror) return;
-        const persisted = store.getPersistedSession(session.id);
-        if (!persisted || persisted.taskFlowMirror === session.taskFlowMirror) return;
-        manager.updatePersistedSession(session.id, { taskFlowMirror: session.taskFlowMirror });
-      },
       handleTerminal: async (session) => {
         if (sessions.get(session.id) !== session) return;
         const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
@@ -509,10 +502,6 @@ export class SessionManager {
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
-      cancelSession: (session) => {
-        if (sessions.get(session.id) !== session || !KILLABLE_STATUSES.has(session.status)) return;
-        manager.kill(session.id, "user");
-      },
     });
 
     return {
@@ -1831,25 +1820,6 @@ export class SessionManager {
     }
     this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
     this.syncSessionOutputCleanupDeadline();
-  }
-
-  private async reconcilePersistedTaskFlowMirrors(): Promise<void> {
-    let changed = false;
-    for (const session of this.store.listPersistedSessions()) {
-      let reconciled: Awaited<ReturnType<typeof reconcilePersistedSessionTaskMirror>>;
-      try {
-        reconciled = await reconcilePersistedSessionTaskMirror(session);
-      } catch (err) {
-        log.warn(`[SessionTaskLifecycle] reconciliation failed for session ${session.sessionId}:`, err);
-        continue;
-      }
-      if (!reconciled) continue;
-      session.taskFlowMirror = reconciled;
-      changed = true;
-    }
-    if (changed) {
-      this.store.saveIndex();
-    }
   }
 
   /** Usage metrics derived from the persisted index plus live sessions. */

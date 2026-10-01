@@ -13,7 +13,6 @@ import {
   resolveAgentLaunchRequest,
   type AgentLaunchParams,
 } from "./agent-launch-resolution";
-import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import { buildResumedPlanState } from "../plan-decision-state";
 import { createLogger } from "../logger";
 import { awaitLaunchEarlyOutcome, launchHandoffNote } from "./launch-early-outcome";
@@ -286,7 +285,6 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originSessionKey,
           route,
           harness,
-          taskLifecycle: resolveSessionTaskLifecycle(ctx),
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,

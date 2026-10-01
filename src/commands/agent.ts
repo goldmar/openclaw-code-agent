@@ -1,6 +1,5 @@
 import { sessionManager } from "../singletons";
 import { formatHarnessModelLabel } from "../session-display";
-import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
 import { tokenizeCommandArgs } from "./args";
@@ -107,7 +106,6 @@ export function registerAgentCommand(api: CommandApi): void {
           harness: resolution.harness,
           permissionMode: resolution.permissionMode,
           planApproval: resolution.planApproval,
-          taskLifecycle: resolveSessionTaskLifecycle(ctx as OpenClawPluginToolContext),
         }, { notifyLaunch: false });
 
         // A harness that throws during startup has already failed the session.

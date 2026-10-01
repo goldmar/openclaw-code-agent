@@ -8,7 +8,7 @@ export {
 // Host types come from the published SDK above (`OpenClawPluginApi["runtime"]` is
 // the public `PluginRuntime`; see src/runtime-store.ts). The interactive handler
 // contexts below stay local: the public SDK only publishes the generic
-// `PluginInteractiveRegistration<unknown>` (OpenClaw 2026.9.6), and the concrete
+// `PluginInteractiveRegistration<unknown>` (OpenClaw 2026.9.7), and the concrete
 // Telegram/Discord callback contexts are owned by the channel plugins without a
 // public export. This is the subset of those contracts this plugin consumes.
 export type PluginInteractiveHandlerResult = { handled?: boolean } | void;

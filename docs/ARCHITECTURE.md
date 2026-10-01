@@ -61,7 +61,7 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service
 
-The service starts on Gateway startup or lazily on the first tool, command, or callback. Startup loads config, instantiates `SessionManager`, restores persisted state and reconciles the Task Flow mirror, starts the `GoalController` and (with `autoUpdate` on) the update service, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
+The service starts on Gateway startup or lazily on the first tool, command, or callback. Startup loads config, instantiates `SessionManager`, restores persisted state, starts the `GoalController` and (with `autoUpdate` on) the update service, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
 
 ### Runtime Model: One Runtime Per Gateway Process
 
@@ -70,7 +70,7 @@ OpenClaw can load OCA more than once in one Gateway process: the active registry
 `src/process-runtime.ts` keeps one runtime per process in a `globalThis` slot keyed by `Symbol.for("openclaw-code-agent.process-runtime.v1")`, which every module graph shares:
 
 - Every `register()` call is an owner. Tools, commands, interactive handlers, and the service attach to the shared runtime on first use, and the last owner to stop (service stop, `api.lifecycle.onDispose`, or the lifecycle abort signal) shuts it down.
-- The runtime holds the `SessionManager` (with its task-flow mirror, timers, and maintenance), the `GoalController`, and the auto-updater.
+- The runtime holds the `SessionManager` (with its timers and maintenance), the `GoalController`, and the auto-updater.
 - The runtime runs with the host handles (`api.runtime`, the service config, the plugin config, and the logger derived from `api.runtime`) of the newest live owner. When that owner retires, the runtime switches to the next newest owner before the retire returns, and clears the handles when the last owner stops.
 - The slot records a build identity (package version plus a digest of the entry module). When a build registered after the running build's owners starts, it takes over: the old runtime persists and stops first (the same as a service stop), then the new build loads the store. A registration that only inspects the plugin and never starts changes nothing. A registration made before the owners of another build that has already run refuses to start, even when no runtime is running now, instead of creating a second writer; a later re-registration of that build (host recovery) may run.
 - A newer registration of the same build rebuilds the runtime only when the effective settings the runtime is built from differ (`maxSessions`, `maxPersistedSessions`, `autoUpdate`, with defaults applied). All other settings follow the newest owner live.
@@ -116,11 +116,7 @@ Plan-gated sessions also persist deterministic approval/execution context:
 - the current effective permission mode
 - an explicit approval/execution state such as `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
-Sessions launched with a bound OpenClaw session key also mirror high-level lifecycle progress into a gateway-owned flow record through `api.runtime.tasks.async.managedFlows`. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring stays opportunistic: a failed mutation is logged and retried on the next lifecycle event, and a host that cannot persist the flow (`tryCreateManaged` returns `null`) leaves the session unmirrored. Flows are created with `tryCreateManaged`; a user stop records `requestCancel` so the host settles the flow as `cancelled`. The mirror also honors host-side cancellation (`openclaw tasks flow cancel`): it re-reads the flow every 15 s and inspects every mutation result, and a cancel intent stops the session through `SessionManager.kill`.
-
-Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. The async managed-flow binding is part of the supported OpenClaw floor (2026.9.6), so OCA uses it directly; no synchronous or legacy mirror surface is consulted.
-
-The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual async SQLite mutations, delayed creation, terminal drainage, and persisted recovery against an independently installed OpenClaw source checkout. From the OCA checkout, set `OPENCLAW_TASKFLOW_CANDIDATE` to an OpenClaw source checkout at `v2026.9.6` or later and `TSX_TSCONFIG_PATH` to its `tsconfig.json`, then run `node --import "$OPENCLAW_TASKFLOW_CANDIDATE/scripts/tsx.mjs" --test tests/session-task-lifecycle-candidate.test.ts` on each supported Node lane. The test uses temporary state and closes the candidate's workers; the regular verification suite skips this optional source gate.
+OpenClaw 2026.9.7 removed the Task Flow runtime. OCA owns its session lifecycle and completion delivery directly; old `taskFlowMirror` records are retained as inert history, never reconciled. No duplicate host ledger or native completion custody is created.
 
 ### Harness Abstraction
 

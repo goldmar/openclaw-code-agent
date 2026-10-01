@@ -1,5 +1,4 @@
 export type { OpenClawPluginToolContext } from "../api";
-import type { SessionTaskLifecycleSink } from "./session-task-lifecycle";
 import type { HarnessLaunchOptions } from "./harness/types";
 
 // Plugin types
@@ -447,8 +446,6 @@ export interface SessionConfig {
   canUseTool?: CanUseToolCallback;
   /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
   backendRef?: SessionBackendRef;
-  /** Mirrors the session into a host-managed Task Flow (`runtime.tasks.async.managedFlows`). */
-  taskLifecycle?: SessionTaskLifecycleSink;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */
@@ -644,6 +641,7 @@ export interface PersistedSessionInfo {
   resumable?: boolean;
 }
 
+/** Historical metadata only: OpenClaw 2026.9.7 removed the Task Flow runtime. */
 export interface PersistedTaskFlowMirror {
   flowId: string;
   revision: number;
