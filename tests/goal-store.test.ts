@@ -81,7 +81,7 @@ describe("GoalTaskStore", () => {
     const original = {
       id: "history", name: "history", goal: "Ship", workdir: "/tmp/project", status: "failed",
       verifierCommands: [null, { command: "", unrecognized: false }, "raw"],
-      requiredVerifierCommands: null, historicalEvidence: { unknown: [] },
+      requiredVerifierCommands: null as null, historicalEvidence: { unknown: [] as unknown[] },
       route: { provider: "telegram", target: "fixture", extension: "raw" },
     };
     writeFileSync(path, JSON.stringify([original]), "utf8");
