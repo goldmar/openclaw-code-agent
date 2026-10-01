@@ -5,11 +5,9 @@ import { register } from "../index";
 import { AutoUpdateService } from "../src/auto-update";
 import { resolveAllowedModelsForHarness, setPluginConfig } from "../src/config";
 import { getSharedRuntime, resetSharedRuntimeSlotForTests } from "../src/process-runtime";
-import { getManagedTaskFlowRuntime, setPluginRuntime } from "../src/runtime-store";
-import { resolveSessionTaskLifecycle } from "../src/session-task-lifecycle";
+import { setPluginRuntime } from "../src/runtime-store";
 import { sessionManager } from "../src/singletons";
-import { makeAgentRuntimePolicyTool } from "../src/tools/agent-runtime-policy";
-import type { Session } from "../src/session";
+import { makeAgentRuntimePolicyTool, readCodexRuntimePolicy } from "../src/tools/agent-runtime-policy";
 import { createFakeHost, type FakeHost } from "./fake-host";
 
 type PolicyResult = { isError?: boolean; content: Array<{ text: string }> };
@@ -28,7 +26,7 @@ function readPolicy(result: unknown) {
 
 describe("loaded runtime policy diagnostic", () => {
   it("reads current loaded launch policy, copies lists, and exposes only allowlisted fields", async () => {
-    const tool = makeAgentRuntimePolicyTool(() => true);
+    const tool = makeAgentRuntimePolicyTool(readCodexRuntimePolicy);
     setPluginConfig({
       defaultWorkdir: "/private/repository",
       harnesses: { codex: { defaultModel: "gpt-6.1-sol", allowedModels: ["gpt-6.1-sol"] } },
@@ -42,7 +40,9 @@ describe("loaded runtime policy diagnostic", () => {
       codex: { defaultModel: "gpt-6.1-sol", allowedModels: ["gpt-6.1-sol"] },
       managedTaskMirror: { available: false },
     });
-    policy.codex.allowedModels.push("changed-by-caller");
+    const snapshot = readCodexRuntimePolicy();
+    assert.ok(snapshot.allowedModels);
+    snapshot.allowedModels.push("changed-by-caller");
     assert.deepEqual(resolveAllowedModelsForHarness("codex"), ["gpt-6.1-sol"]);
 
     setPluginConfig({ harnesses: { codex: { defaultModel: "gpt-6-astra", allowedModels: [] } } });
@@ -66,7 +66,7 @@ describe("loaded runtime policy diagnostic", () => {
     assert.equal(sessionManager, null);
     assert.equal(getSharedRuntime(), undefined);
     assert.equal(host.logs.length, before);
-    assert.equal(host.flowCalls.length + host.llmCalls.length + host.durableSends.length, 0);
+    assert.equal(host.llmCalls.length + host.durableSends.length, 0);
   });
 
   it("reads an existing owner without service, config, update, or task activity and rejects retired owners", async (t) => {
@@ -86,17 +86,14 @@ describe("loaded runtime policy diagnostic", () => {
     t.mock.method(host.fakeRuntime.config, "current", () => {
       throw new Error("diagnostic must not reread runtime configuration");
     });
-    t.mock.method(host.fakeRuntime.tasks.async.managedFlows, "fromToolContext", () => {
-      throw new Error("diagnostic must not bind a task flow");
-    });
     const before = host.logs.length;
     const result = readPolicy(await host.runTool("agent_runtime_policy", {}));
     assert.equal(result.ready, true);
-    assert.equal(result.managedTaskMirror.available, true);
+    assert.equal(result.managedTaskMirror.available, false);
     assert.equal(sessionManager, currentManager);
     assert.equal(updateChecks, checksBefore);
     assert.equal(host.logs.length, before);
-    assert.equal(host.flowCalls.length + host.llmCalls.length + host.durableSends.length, 0);
+    assert.equal(host.llmCalls.length + host.durableSends.length, 0);
 
     const stopping = host.stopServices();
     assert.equal(readPolicy(await host.runTool("agent_runtime_policy", {})).ready, false);
@@ -107,27 +104,13 @@ describe("loaded runtime policy diagnostic", () => {
   });
 });
 
-describe("optional native task mirror API", () => {
-  it("keeps a NOOP adapter when a newer host omits any part of the SDK surface", async () => {
+describe("removed native task mirror API", () => {
+  it("reports unavailable without inspecting obsolete host surfaces", async () => {
     for (const runtime of [undefined, {}, { tasks: {} }, { tasks: { async: {} } }]) {
       setPluginRuntime(runtime);
-      assert.equal(getManagedTaskFlowRuntime(), undefined);
-      const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:test" });
-      await sink.create({} as Session);
-      await sink.progress({} as Session);
-      await sink.finalize({} as Session);
+      assert.equal(readPolicy(await makeAgentRuntimePolicyTool(readCodexRuntimePolicy).execute("read", {})).managedTaskMirror.available, false);
     }
-  });
-
-  it("retains present-host delegation without binding flows during diagnosis", async () => {
-    const contexts: unknown[] = [];
-    const managedFlows = { fromToolContext(ctx: unknown) { contexts.push(ctx); return {}; } };
-    setPluginRuntime({ tasks: { async: { managedFlows } } });
-    assert.equal(getManagedTaskFlowRuntime(), managedFlows);
-    assert.equal(readPolicy(await makeAgentRuntimePolicyTool(() => true).execute("read", {})).managedTaskMirror.available, true);
-    assert.deepEqual(contexts, []);
-    const ctx = { sessionKey: "agent:main:test" };
-    resolveSessionTaskLifecycle(ctx);
-    assert.deepEqual(contexts, [ctx]);
+    setPluginRuntime({ get tasks() { throw new Error("obsolete API must not be read"); } });
+    assert.equal(readPolicy(await makeAgentRuntimePolicyTool(readCodexRuntimePolicy).execute("read", {})).managedTaskMirror.available, false);
   });
 });

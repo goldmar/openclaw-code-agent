@@ -47,7 +47,7 @@ env:
 
 jobs:
   codex_telegram_proof:
-    name: Codex harness Telegram proof
+    name: Codex proof smoke (no live Telegram)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: qa-live-shared

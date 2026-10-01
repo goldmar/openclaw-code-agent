@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-09-30
+
+### Changed
+
+- Require and build against OpenClaw `2026.9.7` for installation, the plugin SDK/API, Gateway, and npm peer dependency.
+- Remove Task Flow lifecycle projection and host-side Task Flow cancellation after OpenClaw retired `runtime.tasks` without a compatibility facade ([upstream #159179](https://github.com/openclaw/openclaw/pull/159179)). OCA retains its session lifecycle, plan approvals, worktree decisions, goal loops, and completion/wake delivery. Use OCA's Stop controls or `agent_kill`; the retired `openclaw tasks flow cancel` path is no longer available. Historical `taskFlowMirror` metadata remains inert and preserved through session persistence; no replacement ledger or host migration is introduced.
+- Recheck harness model restrictions before internal/resumed backend startup and follow-up input. A saved model denied by current configuration fails rather than launching a different model. Preserve the Codex and Claude Code defaults and pins already established on main.
+- Preserve the requester's async context on host LLM completions instead of detaching into plugin-load context. Host model-policy denials retain their error code; expired background request scopes use deterministic summary and PR-metadata fallbacks.
+
+### Verification boundary
+
+Compatibility evidence must identify the OCA commit and published OpenClaw package tested. Earlier upstream CI and upgrade witnesses do not prove this plugin's final head. Native Telegram topic/button delivery and deployment remain separate live release gates; the existing Telegram Proof workflow runs local smoke only.
+
 ## [5.0.0] - 2026-09-26
 
 5.0.0 makes OCA thinner on top of OpenClaw 2026.9.6: it adopts the public plugin-SDK surfaces for delivery, logging, state, and system events; moves the Claude Code, OpenCode, and Codex harnesses onto their native protocols; and removes 4.x compatibility layers. Read **Breaking changes** before upgrading; [REFERENCE.md](docs/REFERENCE.md#upgrading-from-4x) has the migration steps. OpenClaw `2026.9.6` is both the installation target and the minimum supported host.

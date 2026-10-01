@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { Session } from "./session";
-import { pluginConfig, getDefaultHarnessName } from "./config";
+import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } from "./config";
+import { assertModelAllowedForHarness } from "./harness-models";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
 import { formatHarnessModelLabel } from "./session-display";
@@ -80,7 +81,6 @@ import {
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
-import { reconcilePersistedSessionTaskMirror } from "./session-task-lifecycle";
 import { buildPendingDecisionPatch } from "./worktree-session-patches";
 import {
   createRepoPolicyRecord,
@@ -297,7 +297,7 @@ export class SessionManager {
     this.runtimeBootstrap = services.runtimeBootstrap;
     this.worktreeMessages = services.worktreeMessages;
     this.maintenance = services.maintenance;
-    this.ready = this.reconcilePersistedTaskFlowMirrors();
+    this.ready = Promise.resolve();
   }
 
   private static createServiceBundle(
@@ -481,12 +481,6 @@ export class SessionManager {
         manager.pendingPlanResumeClaims.delete(session.id);
         manager.onPersistedSessionChanged(store.getPersistedSession(session.id));
       },
-      syncTaskMirror: (session) => {
-        if (sessions.get(session.id) !== session || !session.taskFlowMirror) return;
-        const persisted = store.getPersistedSession(session.id);
-        if (!persisted || persisted.taskFlowMirror === session.taskFlowMirror) return;
-        manager.updatePersistedSession(session.id, { taskFlowMirror: session.taskFlowMirror });
-      },
       handleTerminal: async (session) => {
         if (sessions.get(session.id) !== session) return;
         const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
@@ -509,10 +503,6 @@ export class SessionManager {
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
-      cancelSession: (session) => {
-        if (sessions.get(session.id) !== session || !KILLABLE_STATUSES.has(session.status)) return;
-        manager.kill(session.id, "user");
-      },
     });
 
     return {
@@ -1833,25 +1823,6 @@ export class SessionManager {
     this.syncSessionOutputCleanupDeadline();
   }
 
-  private async reconcilePersistedTaskFlowMirrors(): Promise<void> {
-    let changed = false;
-    for (const session of this.store.listPersistedSessions()) {
-      let reconciled: Awaited<ReturnType<typeof reconcilePersistedSessionTaskMirror>>;
-      try {
-        reconciled = await reconcilePersistedSessionTaskMirror(session);
-      } catch (err) {
-        log.warn(`[SessionTaskLifecycle] reconciliation failed for session ${session.sessionId}:`, err);
-        continue;
-      }
-      if (!reconciled) continue;
-      session.taskFlowMirror = reconciled;
-      changed = true;
-    }
-    if (changed) {
-      this.store.saveIndex();
-    }
-  }
-
   /** Usage metrics derived from the persisted index plus live sessions. */
   getMetrics(): SessionMetrics {
     return computeSessionMetrics(this.store.listPersistedSessions(), [...this.sessions.values()]);
@@ -2264,6 +2235,10 @@ export class SessionManager {
     optionIndex: number,
     context: AskUserQuestionResolutionContext = {},
   ): boolean {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
+    }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
@@ -2282,7 +2257,7 @@ export class SessionManager {
       }
       return false;
     }
-    return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
+    return this.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
   /**

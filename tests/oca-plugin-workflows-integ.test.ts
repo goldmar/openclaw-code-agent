@@ -8,7 +8,6 @@ import { createCallbackHandler } from "../src/callback-handler";
 import { setPluginConfig } from "../src/config";
 import { SessionManager } from "../src/session-manager";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
-import { reconcilePersistedSessionTaskMirror } from "../src/session-task-lifecycle";
 import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
 import { executeRespond } from "../src/actions/respond";
@@ -407,67 +406,4 @@ describe("OCA plugin workflow integration coverage", () => {
     }
   });
 
-  it("finalizes TaskFlow mirrors for completed and failed terminal sessions", async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    setPluginRuntime({
-      tasks: {
-        async: {
-          managedFlows: {
-            fromToolContext() {
-              return {
-                async setWaiting(params: Record<string, unknown>) {
-                  calls.push({ method: "setWaiting", params });
-                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10 } };
-                },
-                async finish(params: Record<string, unknown>) {
-                  calls.push({ method: "finish", params });
-                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "succeeded" } };
-                },
-                async fail(params: Record<string, unknown>) {
-                  calls.push({ method: "fail", params });
-                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "failed" } };
-                },
-              };
-            },
-          },
-        },
-      },
-    });
-
-    const base = {
-      sessionId: "taskflow-terminal",
-      harnessSessionId: "h-taskflow-terminal",
-      backendRef: { kind: "codex-app-server", conversationId: "h-taskflow-terminal" },
-      name: "taskflow-terminal",
-      prompt: "p",
-      workdir: "/tmp",
-      lifecycle: "terminal",
-      runtimeState: "stopped",
-      costUsd: 0,
-      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
-    } satisfies Partial<PersistedSessionInfo>;
-
-    const completedMirror = await reconcilePersistedSessionTaskMirror({
-      ...base,
-      status: "completed",
-      killReason: "done",
-      taskFlowMirror: { flowId: "flow-complete", revision: 9, status: "running" },
-    } as PersistedSessionInfo);
-    const failedMirror = await reconcilePersistedSessionTaskMirror({
-      ...base,
-      sessionId: "taskflow-failed",
-      harnessSessionId: "h-taskflow-failed",
-      status: "failed",
-      killReason: "unknown",
-      taskFlowMirror: { flowId: "flow-failed", revision: 9, status: "running" },
-    } as PersistedSessionInfo);
-
-    assert.deepEqual(calls.map((call) => call.method), ["finish", "fail"]);
-    assert.equal(calls[0].params.flowId, "flow-complete");
-    assert.equal(calls[0].params.expectedRevision, 9);
-    assert.equal(calls[1].params.flowId, "flow-failed");
-    assert.equal(calls[1].params.expectedRevision, 9);
-    assert.equal(completedMirror?.revision, 10);
-    assert.equal(failedMirror?.revision, 10);
-  });
 });

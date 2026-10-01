@@ -220,6 +220,58 @@ describe("one OCA runtime per Gateway process", () => {
     }
   });
 
+  it("reads the active policy from every attached graph through owner changes", async () => {
+    const a = await loadPluginCopy("policy-a");
+    const b = await loadPluginCopy("policy-b");
+    const c = await loadPluginCopy("policy-c");
+    const config = (model: string) => ({
+      autoUpdate: false,
+      harnesses: { codex: { defaultModel: model, allowedModels: [model] } },
+    });
+    const pluginA = createPluginHost("A", config("gpt-6.1-sol"));
+    const pluginB = createPluginHost("B", config("gpt-6-sol"));
+    const pluginC = createPluginHost("C", config("gpt-6-astra"));
+    a.index.register(pluginA.api);
+    b.index.register(pluginB.api);
+    c.index.register(pluginC.api);
+    const read = async (host: FakeHost) => {
+      const result = await runTool(host, "agent_runtime_policy") as { content: Array<{ text: string }> };
+      return JSON.parse(result.content[0].text);
+    };
+    const assertModel = async (host: FakeHost, model: string) => {
+      const policy = await read(host);
+      assert.equal(policy.ready, true);
+      assert.deepEqual(policy.codex, { defaultModel: model, allowedModels: [model] });
+      assert.deepEqual(policy.managedTaskMirror, { available: false });
+    };
+    try {
+      await startService(pluginA);
+      await startService(pluginB);
+      await assertModel(pluginB, "gpt-6-sol");
+      const runtime = getSharedRuntime();
+      await startService(pluginC);
+      assert.equal(getSharedRuntime(), runtime, "model policy changes share the existing runtime");
+      await assertModel(pluginA, "gpt-6-astra");
+      await assertModel(pluginB, "gpt-6-astra");
+      await assertModel(pluginC, "gpt-6-astra");
+
+      // Updating the current owner's handles must reach other captured graphs too.
+      pluginC.api.pluginConfig = config("gpt-6-luna");
+      await startService(pluginC);
+      await assertModel(pluginB, "gpt-6-luna");
+      await disposeHost(pluginC);
+      await assertModel(pluginB, "gpt-6-sol");
+      assert.equal((await read(pluginC)).ready, false);
+      await disposeHost(pluginA);
+      await assertModel(pluginB, "gpt-6-sol");
+      assert.equal((await read(pluginA)).ready, false);
+      await disposeHost(pluginB);
+      assert.equal((await read(pluginB)).ready, false);
+    } finally {
+      await stopAll(pluginA, pluginB, pluginC);
+    }
+  });
+
   it("rebuilds the runtime when a newer registration brings different plugin settings", async () => {
     const a = await loadPluginCopy("config-a");
     const b = await loadPluginCopy("config-b");

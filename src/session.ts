@@ -40,11 +40,12 @@ import type {
 import {
   pluginConfig,
   resolveDefaultModelForHarness,
+  resolveAllowedModelsForHarness,
   resolveFastModeForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
 import { getBackendConversationId } from "./session-backend-ref";
-import { canonicalizeModelForHarness } from "./harness-models";
+import { canonicalizeModelForHarness, assertModelAllowedForHarness } from "./harness-models";
 import {
   reduceSessionControlState,
   SESSION_STATUS_TRANSITIONS,
@@ -290,6 +291,7 @@ export class Session extends EventEmitter {
   latestPlanArtifact?: PlanArtifact;
   latestPlanArtifactVersion?: number;
   runtimeState: SessionRuntimeState = "live";
+  /** Inert legacy metadata; never projected into a host task runtime. */
   taskFlowMirror?: PersistedTaskFlowMirror;
   deliveryState: SessionDeliveryState = "idle";
 
@@ -845,6 +847,7 @@ export class Session extends EventEmitter {
     this.dirtyWorktreeEntriesAtTurnEnd = undefined;
     if (dirtyEntries.length === 0) return false;
 
+    this.assertCurrentModelAllowed();
     this.worktreeFinalizationPromptIssued = true;
     const dirtyPreview = dirtyEntries.slice(0, 20).map((entry) => `- ${entry}`).join("\n");
     const moreLine = dirtyEntries.length > 20 ? `\n- ...and ${dirtyEntries.length - 20} more` : "";
@@ -870,6 +873,10 @@ export class Session extends EventEmitter {
     return true;
   }
 
+  private assertCurrentModelAllowed(): void {
+    assertModelAllowedForHarness(this.harnessName, this.model, resolveAllowedModelsForHarness(this.harnessName));
+  }
+
   // -- Lifecycle --
 
   /** Launch the configured harness and start consuming harness messages. */
@@ -882,6 +889,7 @@ export class Session extends EventEmitter {
       hasBackendRef: Boolean(this.backendRef),
     });
     try {
+      this.assertCurrentModelAllowed();
       let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
         this.messageStream = new MessageStream();
@@ -951,6 +959,7 @@ export class Session extends EventEmitter {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
 
+    this.assertCurrentModelAllowed();
     this.resetIdleTimer();
     const planDecisionPending = !!this.pendingModeSwitch
       || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
@@ -1040,6 +1049,7 @@ export class Session extends EventEmitter {
     if (this._status !== "running") {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
+    this.assertCurrentModelAllowed();
     const supported = this.harness.capabilities.threadActions ?? [];
     if (!supported.includes(action.kind) || !this.harness.buildThreadActionMessage) {
       throw new Error(`The ${this.harness.name} harness does not support the "${action.kind}" thread action.`);
@@ -1123,6 +1133,7 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
+    this.assertCurrentModelAllowed();
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;
@@ -1150,6 +1161,7 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;
     }
+    this.assertCurrentModelAllowed();
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;

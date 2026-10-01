@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,19 @@ const allowedPluginSafetyFindings = [
 const allowedPluginSafetyFindingPatterns = [
   /^- \[dangerous-exec-truncated\] \d+ additional dangerous-exec matches omitted after \d+ findings \(.+:\d+\)$/u,
 ];
+
+/** Reject metadata-only inspection or incomplete runtime registration as package proof. */
+export function validatePackedPluginRuntime(report, expectedVersion, expectedTools) {
+  if (report.plugin?.version !== expectedVersion || report.plugin?.status !== "loaded") {
+    throw new Error(`Packed plugin did not load at the expected version ${expectedVersion}`);
+  }
+  const errors = (report.diagnostics ?? []).filter((entry) => entry.level === "error");
+  if (errors.length) throw new Error("Packed plugin runtime reported error diagnostics");
+  const tools = (report.tools ?? []).flatMap((entry) => entry.names);
+  if (expectedTools.some((name) => !tools.includes(name))) {
+    throw new Error("Packed plugin runtime is missing required OCA tool registrations");
+  }
+}
 
 export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginName = pluginName) {
   const findings = Array.isArray(auditResult?.findings) ? auditResult.findings : [];
@@ -166,6 +180,27 @@ async function main() {
       process.exitCode = install.code;
       return;
     }
+
+    // Load the installed tarball through the actual published host, independently
+    // of the dependency-graph consumer check (which intentionally uses a stub).
+    const enable = await runCommand("pnpm", ["exec", "openclaw", "plugins", "enable", pluginName], {
+      cwd: workspaceDir, env: isolatedEnv,
+    });
+    if (enable.code !== 0) throw new Error("Packed plugin activation failed");
+    const inspection = await runCommand("pnpm", ["exec", "openclaw", "plugins", "inspect", pluginName, "--runtime", "--json"], {
+      cwd: workspaceDir, env: isolatedEnv, forwardStdout: false,
+    });
+    if (inspection.code !== 0) throw new Error("Packed plugin runtime inspection failed");
+    const report = JSON.parse(inspection.stdout);
+    const expected = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
+    const expectedTools = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8"))
+      .contracts.tools.filter((name) => name !== "agent_send_plan_offer");
+    validatePackedPluginRuntime(report, expected.version, expectedTools);
+    const actualHost = JSON.parse(readFileSync(join(rootDir, "node_modules", "openclaw", "package.json"), "utf8"));
+    if (actualHost.version !== expected.openclaw.build.openclawVersion) {
+      throw new Error("Packed plugin proof used an unexpected OpenClaw package version");
+    }
+    console.error(`Packed ${pluginName}@${expected.version} loaded through OpenClaw ${expected.openclaw.build.openclawVersion}`);
 
     const audit = await runCommand("pnpm", [
       "exec",

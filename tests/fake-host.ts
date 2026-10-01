@@ -8,7 +8,6 @@
  *
  * - `runtime.llm.complete` (scripted replies or failures),
  * - `runtime.system.enqueueSystemEvent` / `requestHeartbeat`,
- * - `runtime.tasks.async.managedFlows` (an in-memory managed Task Flow store),
  * - `runtime.logging.getChildLogger`, `runtime.config.current`,
  *   `runtime.state.resolveStateDir`,
  * - `sendDurableMessageBatch` (for `RuntimeDirectNotificationTransport`),
@@ -31,7 +30,7 @@ import type {
   PluginInteractiveTelegramHandlerContext,
 } from "../api";
 import { RuntimeDirectNotificationTransport } from "../src/direct-notification-transport";
-import type { ManagedTaskFlowRuntime, PluginRuntime } from "../src/runtime-store";
+import type { PluginRuntime } from "../src/runtime-store";
 
 type Api = OpenClawPluginApi;
 export type ToolRegistration = { tool: Parameters<Api["registerTool"]>[0]; options?: Parameters<Api["registerTool"]>[1] };
@@ -49,9 +48,6 @@ export type SystemEventOptions = Parameters<PluginRuntime["system"]["enqueueSyst
 export type HeartbeatRequest = Parameters<PluginRuntime["system"]["requestHeartbeat"]>[0];
 type RuntimeLogger = ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
 type RuntimeConfigSnapshot = ReturnType<PluginRuntime["config"]["current"]>;
-export type BoundManagedFlows = ReturnType<ManagedTaskFlowRuntime["fromToolContext"]>;
-export type ManagedFlowRecord = Awaited<ReturnType<BoundManagedFlows["createManaged"]>>;
-type ManagedFlowMutation = Awaited<ReturnType<BoundManagedFlows["resume"]>>;
 
 type ChannelOutboundModule = typeof import("openclaw/plugin-sdk/channel-outbound");
 export type SendDurableMessageBatch = ChannelOutboundModule["sendDurableMessageBatch"];
@@ -66,13 +62,11 @@ export type FakeRuntime = {
   system: Pick<PluginRuntime["system"], "enqueueSystemEvent" | "requestHeartbeat">;
   logging: Pick<PluginRuntime["logging"], "getChildLogger" | "shouldLogVerbose">;
   state: Pick<PluginRuntime["state"], "resolveStateDir">;
-  tasks: { async: { managedFlows: ManagedTaskFlowRuntime } };
 };
 
 export type LlmReply = string | Error | ((params: LlmCompleteParams) => string | Promise<string>);
 export type LogEntry = { level: "debug" | "info" | "warn" | "error"; bindings: Record<string, unknown>; message: string };
 export type SystemEventCall = { text: string; options: SystemEventOptions };
-export type FlowMutationCall = { method: string; params: unknown };
 
 export type FakeHostOptions = {
   pluginConfig?: Record<string, unknown>;
@@ -101,8 +95,6 @@ export type FakeHost = {
   heartbeats: HeartbeatRequest[];
   durableSends: DurableSendParams[];
   logs: LogEntry[];
-  flows: Map<string, ManagedFlowRecord>;
-  flowCalls: FlowMutationCall[];
   tools: ToolRegistration[];
   commands: CommandDefinition[];
   services: ServiceDefinition[];
@@ -145,103 +137,6 @@ function isAgentTool(value: unknown): value is AgentToolLike {
   return !!value && typeof value === "object" && typeof (value as { execute?: unknown }).execute === "function";
 }
 
-function createManagedFlows(flows: Map<string, ManagedFlowRecord>, calls: FlowMutationCall[]): ManagedTaskFlowRuntime {
-  let flowCounter = 0;
-  const now = (): number => Date.now();
-  const mutate = (
-    method: string,
-    params: { flowId: string; expectedRevision: number },
-    patch: (flow: ManagedFlowRecord) => Partial<ManagedFlowRecord>,
-  ): ManagedFlowMutation => {
-    calls.push({ method, params });
-    const current = flows.get(params.flowId);
-    if (!current) return { applied: false, code: "not_found" };
-    if (current.revision !== params.expectedRevision) return { applied: false, code: "revision_conflict", current };
-    const next: ManagedFlowRecord = { ...current, ...patch(current), revision: current.revision + 1, updatedAt: now() };
-    flows.set(next.flowId, next);
-    return { applied: true, flow: next };
-  };
-  const optional = <T>(value: T | null | undefined): T | undefined => value ?? undefined;
-
-  const bind = (sessionKey: string): BoundManagedFlows => {
-    const owned = (): ManagedFlowRecord[] => [...flows.values()].filter((flow) => flow.ownerKey === sessionKey);
-    const create = (method: "createManaged" | "tryCreateManaged"): BoundManagedFlows["createManaged"] => async (params) => {
-      calls.push({ method, params });
-      flowCounter += 1;
-      const createdAt = params.createdAt ?? now();
-      const flow: ManagedFlowRecord = {
-        flowId: `flow-${flowCounter}`,
-        syncMode: "managed",
-        ownerKey: sessionKey,
-        controllerId: params.controllerId,
-        revision: 1,
-        status: params.status ?? "queued",
-        notifyPolicy: params.notifyPolicy ?? "done_only",
-        goal: params.goal,
-        currentStep: optional(params.currentStep),
-        stateJson: optional(params.stateJson),
-        waitJson: optional(params.waitJson),
-        cancelRequestedAt: optional(params.cancelRequestedAt),
-        createdAt,
-        updatedAt: params.updatedAt ?? createdAt,
-        endedAt: optional(params.endedAt),
-      };
-      flows.set(flow.flowId, flow);
-      return flow;
-    };
-    return {
-      sessionKey,
-      createManaged: create("createManaged"),
-      tryCreateManaged: create("tryCreateManaged"),
-      get: async (flowId) => flows.get(flowId),
-      list: async () => owned(),
-      findLatest: async () => owned().at(-1),
-      resolve: async (token) => flows.get(token),
-      getTaskSummary: async () => undefined,
-      setWaiting: async (params) => mutate("setWaiting", params, () => ({
-        status: "waiting",
-        currentStep: optional(params.currentStep),
-        stateJson: optional(params.stateJson),
-        waitJson: optional(params.waitJson),
-        blockedTaskId: optional(params.blockedTaskId),
-        blockedSummary: optional(params.blockedSummary),
-      })),
-      resume: async (params) => mutate("resume", params, () => ({
-        status: params.status ?? "running",
-        currentStep: optional(params.currentStep),
-        stateJson: optional(params.stateJson),
-        waitJson: undefined,
-      })),
-      finish: async (params) => mutate("finish", params, () => ({
-        status: "succeeded",
-        stateJson: optional(params.stateJson),
-        endedAt: params.endedAt ?? now(),
-      })),
-      fail: async (params) => mutate("fail", params, () => ({
-        status: "failed",
-        stateJson: optional(params.stateJson),
-        blockedTaskId: optional(params.blockedTaskId),
-        blockedSummary: optional(params.blockedSummary),
-        endedAt: params.endedAt ?? now(),
-      })),
-      requestCancel: async (params) => mutate("requestCancel", params, () => ({
-        cancelRequestedAt: params.cancelRequestedAt ?? now(),
-      })),
-      runTask: async () => {
-        throw new Error("fake host: managed Task Flow child tasks are not used by OCA");
-      },
-    };
-  };
-
-  return {
-    bindSession: ({ sessionKey }) => bind(sessionKey),
-    fromToolContext: (ctx) => {
-      if (!ctx.sessionKey) throw new Error("fake host: managed Task Flows need a session key");
-      return bind(ctx.sessionKey);
-    },
-  };
-}
-
 export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
   const stateDir = mkdtempSync(join(tmpdir(), "oca-fake-host-state-"));
   mkdirSync(stateDir, { recursive: true });
@@ -254,8 +149,6 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
   const heartbeats: HeartbeatRequest[] = [];
   const durableSends: DurableSendParams[] = [];
   const logs: LogEntry[] = [];
-  const flows = new Map<string, ManagedFlowRecord>();
-  const flowCalls: FlowMutationCall[] = [];
   const tools: ToolRegistration[] = [];
   const commands: CommandDefinition[] = [];
   const services: ServiceDefinition[] = [];
@@ -289,7 +182,7 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
   };
 
   const fakeRuntime: FakeRuntime = {
-    version: options.version ?? "2026.9.6",
+    version: options.version ?? "2026.9.7",
     config: { current: () => config },
     llm: { complete },
     system: {
@@ -306,7 +199,6 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
       getChildLogger: (bindings = {}) => loggerFor(bindings),
     },
     state: { resolveStateDir: () => stateDir },
-    tasks: { async: { managedFlows: createManagedFlows(flows, flowCalls) } },
   };
   // The full PluginRuntime has hundreds of members OCA never touches.
   const runtime = fakeRuntime as unknown as PluginRuntime;
@@ -336,7 +228,7 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
   const apiMembers = {
     id: "openclaw-code-agent",
     name: "Code Agent",
-    version: options.version ?? "2026.9.6",
+    version: options.version ?? "2026.9.7",
     source: "fake-host",
     registrationMode: "full",
     config: serviceContext.config,
@@ -385,8 +277,6 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
     heartbeats,
     durableSends,
     logs,
-    flows,
-    flowCalls,
     tools,
     commands,
     services,

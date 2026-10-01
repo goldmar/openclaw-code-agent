@@ -10,7 +10,7 @@ This plugin is an orchestration layer around local developer tooling. It is expe
 - run local `git` / `gh` commands for worktree, merge, and PR flows
 - run a repository's own `.openclaw/worktree-setup.sh` when it creates a worktree
 - optionally run verifier shell commands in explicit goal-task flows, after the user confirms them
-- use OpenClaw's in-process runtime for notifications, system events, logging, LLM summaries, and Task Flow mirroring, and the local `openclaw` CLI for the few host operations external plugins cannot call in-process
+- use OpenClaw's in-process runtime for notifications, system events, logging, LLM summaries, and the local `openclaw` CLI for the few host operations external plugins cannot call in-process
 
 Anyone who can launch an OCA session can make a coding agent run arbitrary commands in the chosen repository. The orchestrator is itself a model: it fills in tool parameters such as the launch `workdir` and goal `verifier_commands` from the conversation, so a prompt it reads can steer them. Treat access to the orchestrator, and every repository the Gateway user can reach, accordingly.
 
@@ -53,7 +53,7 @@ Coding-agent processes (the Claude Code executable, the Codex App Server, and th
 - System events and wake fallbacks: `api.runtime.system.enqueueSystemEvent` plus `requestHeartbeat` (`src/wake-transport.ts`).
 - LLM summaries: `api.runtime.llm.complete` against the default agent's model (`src/runtime-llm.ts`); OCA never requests a model, agent, or auth-profile override.
 - Logging: `api.runtime.logging.getChildLogger` (`src/logger.ts`).
-- Task Flow mirroring: `api.runtime.tasks.async.managedFlows` (`src/session-task-lifecycle.ts`).
+- Historical Task Flow metadata is retained without host projection or mutation; OpenClaw 2026.9.7 removed that runtime.
 
 ## Codex Sandbox
 

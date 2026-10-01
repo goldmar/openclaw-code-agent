@@ -5,6 +5,7 @@ import {
   buildPackedPluginInstallArgs,
   createIsolatedOpenClawEnv,
   findUnexpectedPluginSafetyFindings,
+  validatePackedPluginRuntime,
 } from "../scripts/check-plugin-security.mjs";
 
 const expectedFinding = {
@@ -91,5 +92,18 @@ describe("packed-plugin environment isolation", () => {
       "--force",
       "--accept-capabilities",
     ]);
+  });
+});
+
+describe("packed plugin runtime evidence", () => {
+  const report = { plugin: { version: "5.0.1", status: "loaded" }, tools: [{ names: ["agent_launch"] }], diagnostics: [] as { level: string }[] };
+  it("accepts loaded registration at the expected artifact version", () => {
+    assert.doesNotThrow(() => validatePackedPluginRuntime(report, "5.0.1", ["agent_launch"]));
+  });
+  it("rejects snapshots, mismatched versions, missing tools, and runtime errors", () => {
+    assert.throws(() => validatePackedPluginRuntime({ ...report, plugin: { version: "5.0.1", status: "disabled" } }, "5.0.1", ["agent_launch"]), /did not load/);
+    assert.throws(() => validatePackedPluginRuntime(report, "5.0.0", ["agent_launch"]), /did not load/);
+    assert.throws(() => validatePackedPluginRuntime(report, "5.0.1", ["agent_pr"]), /missing required/);
+    assert.throws(() => validatePackedPluginRuntime({ ...report, diagnostics: [{ level: "error" }] }, "5.0.1", ["agent_launch"]), /error diagnostics/);
   });
 });

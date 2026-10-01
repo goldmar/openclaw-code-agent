@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("runtime.llm completion adapter", () => {
-  it("runs the completion outside a closed request work scope inherited from an earlier tool call", async () => {
+  it("preserves requester authority and refuses a closed request work scope", async () => {
     // Stand-in for the host's per-request async work scope: session events keep
     // the ALS context of the tool call that started the session, and the host
     // rejects work admitted into a scope that has already closed.
@@ -40,8 +40,20 @@ describe("runtime.llm completion adapter", () => {
       })), 1);
     }));
     scope.closed = true;
-    const text = await workScope.run(scope, () => inherited());
-    assert.equal(text, "ok");
+    await assert.rejects(workScope.run(scope, () => inherited()), /Async work scope is closed/);
+  });
+
+  it("does not lose a named-role model denial when calling the host", async () => {
+    const role = new AsyncLocalStorage<{ allowed: boolean }>();
+    const complete = async () => {
+      if (role.getStore()?.allowed === false) {
+        throw Object.assign(new Error("Role model denied"), { code: "LLM_COMPLETION_NOT_AUTHORIZED" });
+      }
+      return { text: "allowed" } as never;
+    };
+    await assert.rejects(role.run({ allowed: false }, () => completeRuntimeLlmText(complete, {
+      purpose: "openclaw-code-agent.test", systemPrompt: "s", prompt: "p", maxTokens: 10,
+    })), { code: "LLM_COMPLETION_NOT_AUTHORIZED" });
   });
 
   it("sends the host LlmCompleteParams shape and returns LlmCompleteResult.text", async () => {

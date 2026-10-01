@@ -141,7 +141,7 @@ describe("notification reasoning visibility", () => {
       session.start = async () => {};
       const { service, requests } = recorder();
       const bootstrap = new SessionRuntimeBootstrapService({
-        hydrateSpawnedSession: () => {}, markRunning: () => {}, syncTaskMirror: () => {}, handleTerminal: async () => {},
+        hydrateSpawnedSession: () => {}, markRunning: () => {}, handleTerminal: async () => {},
         handleTurnEnd: async () => {}, formatLaunchWorkdirLabel: () => "/tmp",
         notifySession: (target, text, label) => service.dispatch(target, { label: label!, userMessage: text }),
       });

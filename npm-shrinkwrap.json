@@ -1,12 +1,12 @@
 {
   "name": "openclaw-code-agent",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw-code-agent",
-      "version": "5.0.0",
+      "version": "5.0.1",
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.282",
@@ -24,7 +24,7 @@
         "node": ">=24.16.0 <25 || >=26.1.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.9.6"
+        "openclaw": ">=2026.9.7"
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk": {
