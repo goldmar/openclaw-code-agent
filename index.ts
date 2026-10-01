@@ -15,6 +15,7 @@ import { makeAgentSessionActionTool } from "./src/tools/agent-session-action";
 import { makeAgentEscalateTool } from "./src/tools/agent-escalate";
 import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
 import { makeAgentStatsTool } from "./src/tools/agent-stats";
+import { makeAgentRuntimePolicyTool } from "./src/tools/agent-runtime-policy";
 import { makeAgentRepoPolicyTool } from "./src/tools/agent-repo-policy";
 import { makeAgentMergeTool } from "./src/tools/agent-merge";
 import { makeAgentPrTool } from "./src/tools/agent-pr";
@@ -377,6 +378,10 @@ export function register(api: OpenClawPluginApi): void {
   };
 
   // Tools
+  // Diagnostics must bypass the service-start and auto-update wrapper.
+  const isRuntimeReady = (): boolean => attached && !retired && !starting && !stopping
+    && getSharedRuntime()?.owners.has(ownerId) === true;
+  registerTool(() => makeAgentRuntimePolicyTool(isRuntimeReady), { optional: false, name: "agent_runtime_policy" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false, name: "agent_launch" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false, name: "agent_sessions" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false, name: "agent_kill" });

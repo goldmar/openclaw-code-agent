@@ -639,6 +639,14 @@ Terminate a running session or mark it complete.
 
 Any other parameter is rejected with `Invalid parameters` and nothing is stopped.
 
+### `agent_runtime_policy`
+
+Read the already-loaded Codex default model, model allowlist, and native task-mirror availability. Takes no parameters and does not start services, check updates, read the session store, or contact a backend.
+
+Returns JSON with schema `openclaw-code-agent.runtime-policy.v1`, `ready`, `codex.defaultModel`, `codex.allowedModels`, and `managedTaskMirror.available`. A `null` allowlist means model selection is unrestricted; an empty list is retained as configured. If the runtime owner is not ready or has retired, returns an error containing only the schema and `ready: false`. An unavailable native task mirror leaves the existing NOOP adapter in place; it does not mean mirroring has been restored.
+
+To verify an active deployment, invoke this tool through the live Gateway and compare `plugins.list` generation before and after the read. A standalone tool registry or configuration file does not prove the loaded policy.
+
 ### `agent_stats`
 
 Show session counts (from the persisted store), estimated cost, average duration, and the most expensive session. When Codex ChatGPT-login sessions have observed account rate limits, each account's latest primary/secondary usage windows and reset times are appended (labelled `account N` when there are several; account ids are never shown).

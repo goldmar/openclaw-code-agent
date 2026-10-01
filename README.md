@@ -11,7 +11,7 @@ Start a job from Telegram, Discord, or any other OpenClaw channel, approve the p
 ## What's New In 5.0
 
 - **Fewer, clearer messages.** A default task now reaches you as a plan-approved line with the reason, the finished status, and one merge line with a short summary. Questions, plan prompts and merge prompts name the session, reminders back off (3 hours, a day, a week, then stop), and `/agent_status` lists everything that is waiting for you.
-- **A smaller tool surface for your agent.** 14 tools instead of 19 (goal loops in one `agent_goal` tool, hand-offs to you in one `agent_escalate` tool), with shorter descriptions, so each agent turn spends about 2,000 fewer tokens on OCA's tool definitions.
+- **A smaller tool surface for your agent.** 15 tools instead of 19 (goal loops in one `agent_goal` tool, hand-offs to you in one `agent_escalate` tool), with shorter descriptions, so each agent turn spends about 2,000 fewer tokens on OCA's tool definitions.
 - **Each coding agent on its native protocol.** Codex gets its system prompt, reasoning effort and fast mode through the App Server and can be steered, rewound, compacted and asked for a code review. Claude Code plans through its own `ExitPlanMode` step. OpenCode shares one server and supports multi-select questions.
 - **Worktrees that fit your repository.** `.worktreeinclude` copies files such as `.env` into new worktrees and `.openclaw/worktree-setup.sh` prepares them.
 - **Faster and safer.** Messages go through OpenClaw's durable delivery queue, git and GitHub calls no longer block the Gateway, and every release passes ClawHub's static scan over the files it ships.
@@ -286,6 +286,7 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_sessions` | List active and recent sessions; `status="waiting"` lists what needs a decision or answer |
 | `agent_kill` | Stop or mark a session completed |
 | `agent_stats` | Show aggregate usage, cost, and Codex usage-limit windows |
+| `agent_runtime_policy` | Read loaded Codex model policy and native task-mirror availability without starting work |
 | `agent_repo_policy` | Show, set, reset, or clean up the per-repository merge and PR policy |
 | `agent_merge` | Merge a worktree branch back to base, optionally with a `summary` for the user |
 | `agent_pr` | Create or update a GitHub PR, optionally with a `summary` for the user |

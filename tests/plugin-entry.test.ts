@@ -457,6 +457,7 @@ describe("plugin entry source", () => {
 
   it("keeps declared tool contracts synced with runtime registrations", () => {
     const expectedToolNames = [
+      "agent_runtime_policy",
       "agent_launch",
       "agent_sessions",
       "agent_kill",
@@ -480,10 +481,10 @@ describe("plugin entry source", () => {
     };
     const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
     const registeredToolNames = Array.from(
-      indexSource.matchAll(/registerCodeAgentTool\([\s\S]*?,\s*\{([^}]*)\}\s*\)/g),
+      indexSource.matchAll(/(?:registerCodeAgentTool|registerTool)\(\s*\([^)]*\)\s*=>\s*make\w+Tool\([^)]*\),\s*\{([^}]*)\}\s*\)/g),
       (match) => {
         const name = match[1]?.match(/\bname:\s*"([^"]+)"/)?.[1];
-        assert.ok(name, `missing explicit tool name in registerCodeAgentTool options: ${match[1] ?? ""}`);
+        assert.ok(name, `missing explicit tool name in tool registration options: ${match[1] ?? ""}`);
         return name;
       },
     );
@@ -680,13 +681,13 @@ describe("plugin entry source", () => {
     const plain = createPluginHost();
     register(plain.api);
     assert.equal(toolNames(plain).includes("agent_send_plan_offer"), false);
-    assert.equal(toolNames(plain).length, 14);
+    assert.equal(toolNames(plain).length, 15);
     resetSharedRuntimeSlotForTests();
 
     const optedIn = createPluginHost({ planOfferTool: true });
     register(optedIn.api);
     assert.equal(toolNames(optedIn).includes("agent_send_plan_offer"), true);
-    assert.equal(toolNames(optedIn).length, 15);
+    assert.equal(toolNames(optedIn).length, 16);
   });
 
   it("keeps tool construction side-effect free and starts before execution", async () => {

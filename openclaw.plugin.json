@@ -5,6 +5,7 @@
   "version": "5.0.0",
   "contracts": {
     "tools": [
+      "agent_runtime_policy",
       "agent_launch",
       "agent_sessions",
       "agent_kill",
