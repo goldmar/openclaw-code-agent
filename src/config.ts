@@ -111,7 +111,7 @@ let goalVerifierPolicyRevision = 0;
 export function getGoalVerifierPolicyRevision(): number {
   const raw: unknown = pluginConfig.requiredGoalVerifierCommands;
   const key = raw === undefined ? "absent" : Array.isArray(raw) && raw.length > 0
-    && raw.every((entry) => typeof entry === "string" && entry.trim())
+    && Array.from(raw).every((entry) => typeof entry === "string" && entry.trim())
     ? JSON.stringify(raw.map((entry: string) => entry.trim())) : "invalid";
   if (key !== goalVerifierPolicyKey) {
     goalVerifierPolicyKey = key;

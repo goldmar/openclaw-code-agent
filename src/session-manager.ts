@@ -599,12 +599,28 @@ export class SessionManager {
       return { ...config, assertGoalTaskAuthorized: undefined };
     }
     const owners = new Set<string>();
-    for (const ref of [config.sessionIdOverride, config.resumeSessionId, config.resumeWorktreeFrom]) {
+    for (const [ref, identity] of [
+      [config.sessionIdOverride, "stable"],
+      [config.resumeSessionId, "backend"],
+      [config.resumeWorktreeFrom, "either"],
+    ] as const) {
       if (!ref) continue;
-      const active = this.resolve(ref);
-      const persisted = this.getPersistedSession(ref);
-      if (active?.goalTaskId) owners.add(active.goalTaskId);
-      if (persisted?.goalTaskId) owners.add(persisted.goalTaskId);
+      // Refresh disk metadata, then prefer canonical identities across ALL rows.
+      // A human-facing name alias must never mask an actual goal backend owner.
+      const persistedAlias = this.getPersistedSession(ref);
+      const active = this.registry.list().filter((candidate) => (
+        (identity !== "backend" && candidate.id === ref)
+        || (identity !== "stable" && getBackendConversationId(candidate) === ref)
+      ));
+      const persisted = this.listPersistedSessions().filter((candidate) => (
+        (identity !== "backend" && candidate.sessionId === ref)
+        || (identity !== "stable" && getBackendConversationId(candidate) === ref)
+      ));
+      const exact = [...active, ...persisted];
+      const candidates = exact.length ? exact : [this.resolve(ref), persistedAlias];
+      for (const candidate of candidates) {
+        if (candidate?.goalTaskId) owners.add(candidate.goalTaskId);
+      }
     }
     if (owners.size > 1) throw new Error("Conflicting canonical goal owners for this resume.");
     const original = [...owners][0];

@@ -530,3 +530,136 @@ describe("independent M1 review regressions", () => {
     });
   }
 });
+
+
+describe("sparse runtime input admission (R5)", () => {
+  it("rejects every sparse explicit command/spec position before insertion or execution", async () => {
+    const f = fixture();
+    for (const missing of [0, 1, 2]) {
+      const strings = ["true", "true", "true"];
+      delete strings[missing];
+      setPluginConfig({ requiredGoalVerifierCommands: ["true", "true", "true"] });
+      assert.equal(resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: strings }, ctx).kind, "error");
+      const entries = specs(["true", "true", "true"]);
+      delete entries[missing];
+      for (const verifierCommands of [entries, Array(3)]) {
+        await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph", verifierCommands, requireVerifierConfirmation: true }));
+        assert.deepEqual(f.store.list(), []);
+        assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
+      }
+    }
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    assert.equal(resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: Array(1) }, ctx).kind, "error");
+    await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph", verifierCommands: Array(1) }));
+    assert.deepEqual(f.store.list(), []);
+    const dense = await f.controller.launchTask({ goal: "Dense", workdir: f.dir, verifierCommands: specs(["true"]) });
+    assert.deepEqual(dense.requiredVerifierCommands, ["true"], "dense matching suite still admits");
+    assert.equal(f.counters().launches, 1);
+  });
+
+  it("fails closed for sparse operator config even when injected without config copying", async () => {
+    const f = fixture();
+    for (const inject of [false, true]) {
+      setPluginConfig({ requiredGoalVerifierCommands: Array(1) });
+      if (inject) pluginConfig.requiredGoalVerifierCommands = Array(1);
+      assert.equal(resolveGoalLaunchRequest({ goal: "Malformed" }, ctx).kind, "error");
+      await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph" }), /requiredGoalVerifierCommands/);
+      assert.deepEqual(f.store.list(), []);
+      assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
+    }
+  });
+
+  it("preserves sparse serialized binding evidence as null and denies active use without changing history", () => {
+    const f = fixture();
+    const active = task(["true"], { id: "active-sparse", requiredVerifierCommands: Array(1) });
+    const historical = task(["true"], { id: "terminal-sparse", status: "succeeded", requiredVerifierCommands: Array(1), lastVerifierSummary: "original evidence" });
+    const path = join(f.dir, "sparse-binding.json");
+    writeFileSync(path, JSON.stringify([active, historical]));
+    const store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: path });
+    (f.controller as any).store = store;
+    assert.throws(() => f.authorize("active-sparse"), /binding/);
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    assert.deepEqual(saved[0].requiredVerifierCommands, [null]);
+    assert.equal(saved[0].status, "failed");
+    assert.deepEqual(saved[1], JSON.parse(JSON.stringify(historical)));
+  });
+});
+
+
+describe("canonical session identity precedes human aliases (R6)", () => {
+  for (const persistedOnly of [false, true]) {
+    for (const permitted of [false, true]) {
+      it(`${persistedOnly ? "persisted" : "active"} backend owner hidden by a name alias is ${permitted ? "inherited" : "denied before launch"}`, async () => {
+        const f = fixture();
+        const current = task(["true"]);
+        f.store.upsert(current);
+        setPluginConfig({ requiredGoalVerifierCommands: [permitted ? "true" : "false"] });
+        const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "sessions.json") } });
+        manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+        const source = createStubSession({ id: "original-session", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+        const mask = createStubSession({ id: "unrelated-session", name: "original-thread", status: "killed", backendRef: { kind: "claude-code", conversationId: "unrelated-thread" } });
+        if (!persistedOnly) {
+          (manager as any).sessions.set(source.id, source);
+          (manager as any).sessions.set(mask.id, mask);
+          assert.equal(manager.resolve("original-thread"), mask, "human-facing alias lookup is unchanged");
+        } else {
+          const sourceRow = { sessionId: source.id, name: source.name, status: "killed", goalTaskId: "goal", backendRef: source.backendRef, harnessSessionId: "original-thread", route: { provider: "system", target: "system" }, createdAt: 1 };
+          const maskRow = { sessionId: mask.id, name: mask.name, status: "killed", backendRef: mask.backendRef, harnessSessionId: "unrelated-thread", route: { provider: "system", target: "system" }, createdAt: 2 };
+          (manager as any).store.replacePersistedSession(sourceRow);
+          (manager as any).store.replacePersistedSession(maskRow);
+          assert.equal(manager.getPersistedSession("original-thread")?.sessionId, mask.id);
+        }
+        const originalDisk = existsSync(join(f.dir, "sessions.json")) ? readFileSync(join(f.dir, "sessions.json"), "utf8") : undefined;
+        let preparation = 0;
+        let initialization = 0;
+        (manager as any).checkRepoPolicyForLaunch = async () => ({ ok: true, resolution: { source: "none", provider: "unsupported", prAvailable: false } });
+        (manager as any).restore.prepareSpawn = async () => { preparation += 1; return { actualWorkdir: f.dir, originalWorkdir: f.dir }; };
+        (manager as any).runtimeBootstrap.initializeSession = async (session: Session) => { initialization += 1; return session; };
+        const launch = { prompt: "Continue original", workdir: f.dir, resumeSessionId: "original-thread", harness: "claude-code", worktreeStrategy: "off" as const, route: { provider: "system", target: "system" } };
+        const beforeCount = (manager as any).sessions.size;
+        if (permitted) {
+          const resumed = await manager.launchSession(launch);
+          assert.equal(resumed.goalTaskId, "goal");
+          assert.equal(resumed.resumeSessionId, "original-thread");
+          assert.equal(preparation, 1);
+          assert.equal(initialization, 1);
+        } else {
+          await assert.rejects(manager.launchSession(launch), /policy changed/);
+          assert.equal(preparation, 0);
+          assert.equal(initialization, 0);
+          assert.equal((manager as any).sessions.size, beforeCount, "no registration or replacement");
+          assert.equal(current.status, "failed");
+          assert.equal(existsSync(join(f.dir, "sessions.json")) ? readFileSync(join(f.dir, "sessions.json"), "utf8") : undefined, originalDisk, "session evidence was not rewritten");
+        }
+        (manager as any).sessions.clear();
+      });
+    }
+  }
+
+  for (const persistedOnly of [false, true]) {
+    it(`rejects conflicting ${persistedOnly ? "persisted" : "active"} stable/backend goal owners before preparation`, async () => {
+      const f = fixture();
+      const first = task(["true"], { id: "first" });
+      const second = task(["true"], { id: "second" });
+      f.store.upsert(first); f.store.upsert(second);
+      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "conflicts.json") } });
+      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      const sourceA = createStubSession({ id: "stable-a", name: "first", status: "killed", goalTaskId: "first", backendRef: { kind: "claude-code", conversationId: "backend-a" } });
+      const sourceB = createStubSession({ id: "stable-b", name: "second", status: "killed", goalTaskId: "second", backendRef: { kind: "claude-code", conversationId: "backend-b" } });
+      for (const source of [sourceA, sourceB]) {
+        if (!persistedOnly) (manager as any).sessions.set(source.id, source);
+        else (manager as any).store.replacePersistedSession({ sessionId: source.id, name: source.name, status: "killed", goalTaskId: source.goalTaskId, backendRef: source.backendRef, harnessSessionId: source.backendRef!.conversationId, route: { provider: "system", target: "system" } });
+      }
+      let preparation = 0;
+      (manager as any).restore.prepareSpawn = () => { preparation += 1; throw new Error("must not prepare"); };
+      await assert.rejects(manager.launchSession({ prompt: "Continue", workdir: f.dir, sessionIdOverride: "stable-a", resumeSessionId: "backend-b" }), /Conflicting canonical goal owners/);
+      assert.equal(preparation, 0);
+      assert.equal(first.requiredVerifierCommands, undefined);
+      assert.equal(second.requiredVerifierCommands, undefined);
+      assert.equal(first.status, "running");
+      assert.equal(second.status, "running");
+      (manager as any).sessions.clear();
+    });
+  }
+});

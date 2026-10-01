@@ -11,14 +11,19 @@ export function requiredGoalVerifierCommands(): string[] | undefined {
 }
 
 function commandStrings(raw: unknown, reason: string): string[] {
-  if (!Array.isArray(raw) || raw.length === 0 || raw.some((entry) => typeof entry !== "string" || !entry.trim())) {
+  const entries: unknown[] | undefined = Array.isArray(raw) ? Array.from(raw) : undefined;
+  if (!entries || entries.length === 0 || entries.some((entry) => typeof entry !== "string" || !entry.trim())) {
     throw new Error(reason);
   }
-  return raw.map((entry: string) => entry.trim());
+  return (entries as string[]).map((entry) => entry.trim());
 }
 
 function sameCommands(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((command, index) => command === right[index]);
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (typeof left[index] !== "string" || left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 export function resolveRequiredGoalSelection(commands: unknown): string[] | undefined {
@@ -32,10 +37,11 @@ export function resolveRequiredGoalSelection(commands: unknown): string[] | unde
 
 /** Validate BEFORE compatibility normalization can discard blank/malformed entries. */
 export function verifierSpecCommands(specs: unknown): string[] {
-  if (!Array.isArray(specs) || specs.length === 0 || specs.some((spec) => !spec
+  const entries = Array.isArray(specs) ? Array.from(specs) : undefined;
+  if (!entries || entries.length === 0 || entries.some((spec) => !spec
     || typeof spec !== "object" || typeof spec.label !== "string" || typeof spec.command !== "string"
     || !spec.command.trim())) throw new Error(SELECTION_ERROR);
-  return specs.map((spec: GoalVerifierSpec) => spec.command.trim());
+  return entries.map((spec: GoalVerifierSpec) => spec.command.trim());
 }
 
 /** Returns a binding to establish on an active legacy task, never substitutes checks. */
