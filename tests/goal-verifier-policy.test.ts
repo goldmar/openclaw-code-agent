@@ -14,7 +14,7 @@ import { Session } from "../src/session";
 import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap-service";
 import { makeAgentGoalTool } from "../src/tools/agent-goal";
 import { registerGoalCommand } from "../src/commands/goal";
-import { executeRespond } from "../src/actions/respond";
+import { executeRespond, requestPlanDecisionChanges, rejectPlanDecision } from "../src/actions/respond";
 import { registerHarness } from "../src/harness";
 import { setGoalController } from "../src/singletons";
 import { createFakeHarness, createStubSession, tick } from "./helpers";
@@ -405,6 +405,128 @@ describe("goal-owned session execution boundaries", () => {
       assert.equal(harness.consumedPrompts.length, before, "no queued follow-up after an invalidated await");
       assert.equal(current.status, "failed");
       session.kill("user"); harness.endMessages();
+    });
+  }
+});
+
+
+describe("independent M1 review regressions", () => {
+  for (const loopMode of ["verifier", "ralph"] as const) {
+    for (const exit of ["true", "false"]) {
+      it(`rejects A -> B -> A in final proof await before ${loopMode} ${exit === "true" ? "success" : "repair"}`, async () => {
+        const f = fixture();
+        const command = `printf X >> proof; ${exit}`;
+        setPluginConfig({ requiredGoalVerifierCommands: [command] });
+        const current = task([command], { workdir: f.dir, maxIterations: 8, loopMode, completionPromise: "DONE" });
+        f.store.upsert(current);
+        const run = (f.controller as any).runVerifiers.bind(f.controller);
+        (f.controller as any).runVerifiers = (target: GoalTaskState) => {
+          const pending = run(target);
+          pending.then(() => {
+            setPluginConfig({ requiredGoalVerifierCommands: ["different-policy"] });
+            setPluginConfig({ requiredGoalVerifierCommands: [command] });
+          });
+          return pending;
+        };
+        await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
+        assert.equal(readFileSync(join(f.dir, "proof"), "utf8"), "X", "real shell batch executed");
+        assert.equal(current.status, "failed");
+        assert.match(current.failureReason ?? "", /before the check result was consumed/);
+        assert.equal(f.counters().launches, 0, "stale failure proof cannot initiate repair either");
+      });
+    }
+  }
+
+  it("missing canonical goal IDs cannot authorize through a different task's name", async () => {
+    const f = fixture();
+    const unrelated = task(["true"], { id: "actual", name: "missing-id" });
+    f.store.upsert(unrelated);
+    const evidence = JSON.stringify(unrelated);
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    assert.equal(f.controller.getTask("missing-id"), unrelated, "human-facing name lookup remains available");
+    assert.throws(() => f.authorize("missing-id"), /owner is missing/);
+    const manager = new SessionManager(5);
+    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    const original = createStubSession({ id: "original", status: "killed", goalTaskId: "missing-id", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+    (manager as any).sessions.set(original.id, original);
+    let preparation = 0;
+    (manager as any).restore.prepareSpawn = () => { preparation += 1; throw new Error("must not prepare"); };
+    await assert.rejects(manager.launchSession({ prompt: "Continue", workdir: f.dir, resumeSessionId: "original-thread" }), /owner is missing/);
+    assert.equal(preparation, 0);
+    assert.equal(manager.get(original.id), original);
+    assert.equal(JSON.stringify(unrelated), evidence, "no binding or failure mutation of unrelated task");
+    (manager as any).sessions.clear();
+  });
+
+  for (const persistedOnly of [false, true]) {
+    it(`fork cannot replace a ${persistedOnly ? "persisted-only" : "live"} goal stable identity; legitimate fork remains independent`, async () => {
+      const f = fixture();
+      const current = task(["true"], { sessionId: "original" });
+      f.store.upsert(current);
+      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const manager = new SessionManager(5);
+      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      const original = createStubSession({ id: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+      if (!persistedOnly) (manager as any).sessions.set(original.id, original);
+      const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: original.backendRef };
+      manager.getPersistedSession = (ref: string) => ["original", "original-thread"].includes(ref) ? saved as any : undefined;
+      let preparation = 0;
+      let persistedWrites = 0;
+      manager.updatePersistedSession = () => { persistedWrites += 1; return true; };
+      (manager as any).checkRepoPolicyForLaunch = async () => ({ ok: true, resolution: { source: "none", provider: "unsupported", prAvailable: false } });
+      (manager as any).restore.prepareSpawn = async () => { preparation += 1; return { actualWorkdir: f.dir, originalWorkdir: f.dir }; };
+      (manager as any).runtimeBootstrap.initializeSession = async (session: Session) => session;
+      const base = { prompt: "Fork", workdir: f.dir, harness: "claude-code", resumeSessionId: "original-thread", forkSession: true, worktreeStrategy: "off" as const, route: { provider: "system", target: "system" } };
+      for (const resumeSessionId of ["original-thread", "different-thread"]) {
+        await assert.rejects(manager.launchSession({ ...base, resumeSessionId, sessionIdOverride: "original" }), /cannot reuse an existing session identity/);
+      }
+      assert.equal(preparation, 0);
+      assert.equal(persistedWrites, 0);
+      assert.equal((manager as any).sessions.get("original"), persistedOnly ? undefined : original);
+      assert.equal(saved.goalTaskId, "goal");
+      const independent = await manager.launchSession(base);
+      assert.notEqual(independent.id, "original");
+      assert.equal(independent.goalTaskId, undefined);
+      assert.equal(preparation, 1);
+      assert.equal(saved.goalTaskId, "goal");
+      assert.equal(current.status, "running");
+      assert.equal(current.sessionId, "original");
+      independent.emit("turnEnd");
+      assert.equal(current.status, "running", "independent fork cannot complete the original goal");
+      (manager as any).sessions.clear();
+    });
+  }
+
+  for (const persistedOnly of [false, true]) {
+    it(`direct Revise callback action denies ${persistedOnly ? "persisted-only" : "active"} goal workflow before side effects, while Reject stays available`, () => {
+      const f = fixture();
+      const current = task(["true"]);
+      f.store.upsert(current);
+      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      const manager = new SessionManager(5);
+      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      const original = createStubSession({ id: "original", name: "original", status: "running", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 });
+      if (!persistedOnly) (manager as any).sessions.set(original.id, original);
+      const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 };
+      manager.getPersistedSession = () => saved as any;
+      const effects: string[] = [];
+      manager.clearPlanDecisionTokens = () => { effects.push("tokens"); };
+      manager.updatePersistedSession = () => { effects.push("persist"); return true; };
+      manager.queueOrchestratorContext = () => { effects.push("context"); return true; };
+      manager.kill = () => { effects.push("kill"); return true; };
+      const blocked = requestPlanDecisionChanges(manager, "original");
+      assert.equal(blocked.isError, true);
+      assert.match(blocked.text, /policy changed/);
+      assert.deepEqual(effects, []);
+      assert.equal(original.approvalState, "pending");
+      assert.equal(saved.approvalState, "pending");
+      assert.equal(current.status, "failed");
+      setPluginConfig({ requiredGoalVerifierCommands: [] });
+      assert.equal(rejectPlanDecision(manager, "original").isError, undefined);
+      assert.ok(effects.includes("tokens"));
+      assert.ok(effects.includes("persist"));
+      assert.ok(!effects.includes("context"));
+      (manager as any).sessions.clear();
     });
   }
 });

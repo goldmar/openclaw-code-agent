@@ -857,7 +857,7 @@ export class GoalController {
   /** Late-bound execution guard used by goal-owned SessionManager sessions. */
   assertTaskAuthorized(id: string): void {
     const task = this.store.get(id);
-    if (!task) throw new Error("Goal owner is missing; start a new goal before resuming this session.");
+    if (!task || task.id !== id) throw new Error("Goal owner is missing; start a new goal before resuming this session.");
     this.authorizeTask(task);
   }
 
@@ -873,6 +873,13 @@ export class GoalController {
       this.markTaskFailed(task, errorMessage(err));
       throw err;
     }
+  }
+
+  private checkVerifierProofAuthorized(task: GoalTaskState, revision: number): boolean {
+    if (!this.checkTaskAuthorized(task)) return false;
+    if (getGoalVerifierPolicyRevision() === revision) return true;
+    this.markTaskFailed(task, "Required goal verifier policy changed before the check result was consumed. Start a new goal; the old result cannot prove the current suite.");
+    return false;
   }
 
   private checkTaskAuthorized(task: GoalTaskState): boolean {
@@ -1224,8 +1231,10 @@ export class GoalController {
           return;
         }
 
+        // Retain proof identity across the final await, through success/repair consumption.
+        const proofRevision = getGoalVerifierPolicyRevision();
         const verifier = await this.runVerifiers(task);
-        if (!verifier || !this.checkTaskAuthorized(task)) return;
+        if (!verifier || !this.checkVerifierProofAuthorized(task, proofRevision)) return;
         task.lastVerifierSummary = verifier.summary;
         task.updatedAt = Date.now();
 
@@ -1302,8 +1311,9 @@ export class GoalController {
       return;
     }
 
+    const proofRevision = getGoalVerifierPolicyRevision();
     const verifier = await this.runVerifiers(task);
-    if (!verifier || !this.checkTaskAuthorized(task)) return;
+    if (!verifier || !this.checkVerifierProofAuthorized(task, proofRevision)) return;
     task.lastVerifierSummary = verifier.summary;
     task.updatedAt = Date.now();
 

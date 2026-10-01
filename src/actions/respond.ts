@@ -321,6 +321,9 @@ export function requestPlanDecisionChanges(
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
+  try { if (target?.goalTaskId) sm.assertGoalTaskAuthorized(target.goalTaskId); } catch (err) {
+    return { text: `Error: ${errorMessage(err)}`, isError: true };
+  }
   const name = target?.name ?? sessionId;
 
   sm.clearPlanDecisionTokens?.(sessionId);

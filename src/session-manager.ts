@@ -591,6 +591,10 @@ export class SessionManager {
 
   private goalOwnedLaunch(config: SessionConfig): SessionConfig {
     if (config.forkSession) {
+      if (config.sessionIdOverride && (this.sessions.has(config.sessionIdOverride)
+        || this.getPersistedSession(config.sessionIdOverride))) {
+        throw new Error("An independent fork cannot reuse an existing session identity. Omit sessionIdOverride to create a new session.");
+      }
       if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
       return { ...config, assertGoalTaskAuthorized: undefined };
     }
