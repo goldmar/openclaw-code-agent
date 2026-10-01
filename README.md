@@ -8,25 +8,6 @@
 
 Start a job from Telegram, Discord, or any other OpenClaw channel, approve the plan with a button, and get the merged branch or the open PR back in the same thread. Every step stays observable after the first message.
 
-## What's New In 5.0
-
-- **Fewer, clearer messages.** A default task now reaches you as a plan-approved line with the reason, the finished status, and one merge line with a short summary. Questions, plan prompts and merge prompts name the session, reminders back off (3 hours, a day, a week, then stop), and `/agent_status` lists everything that is waiting for you.
-- **A smaller tool surface for your agent.** 14 tools instead of 19 (goal loops in one `agent_goal` tool, hand-offs to you in one `agent_escalate` tool), with shorter descriptions, so each agent turn spends about 2,000 fewer tokens on OCA's tool definitions.
-- **Each coding agent on its native protocol.** Codex gets its system prompt, reasoning effort and fast mode through the App Server and can be steered, rewound, compacted and asked for a code review. Claude Code plans through its own `ExitPlanMode` step. OpenCode shares one server and supports multi-select questions.
-- **Worktrees that fit your repository.** `.worktreeinclude` copies files such as `.env` into new worktrees and `.openclaw/worktree-setup.sh` prepares them.
-- **Faster and safer.** Messages go through OpenClaw's durable delivery queue, git and GitHub calls no longer block the Gateway, and every release passes ClawHub's static scan over the files it ships.
-
-**Upgrading from 4.x?** 5.0 is a major release. Before upgrading, read the [upgrade steps](docs/REFERENCE.md#upgrading-from-4x) and the breaking changes in the 5.0.0 section of the [CHANGELOG](CHANGELOG.md), and back up your session store so you can roll back. The ones most likely to affect you:
-
-- The flat `defaultModel`, `model`, `reasoningEffort`, and `allowedModels` keys are gone. Move them under `harnesses.<name>`, or OpenClaw refuses to load the plugin.
-- OpenClaw `2026.9.7` is the minimum host for 5.0.1, and Codex sessions need Codex CLI `0.156.1` or newer.
-- `OPENCLAW_HOME` now means the home directory, as it does for the Gateway. Point OCA at a state directory with `OPENCLAW_STATE_DIR`.
-- Output transcripts (previously in `/tmp`) and auto-update state moved to `<stateDir>/plugin-state/openclaw-code-agent/`.
-- `agent_kill` accepts only `session` and `reason`.
-- With `harnesses.codex.permissionProfile`, `approvalPolicy`, and `approvalsReviewer` unset, Codex follows the host `tools.exec.mode`, whatever the OCA `permissionMode`: `bypassPermissions` no longer gives Codex full access on its own. Hosts on `auto` get the `:workspace` sandbox with reviewed escalations instead of full access.
-- Restrictive tool allowlists need the new `agent_session_action` tool added.
-- Tools were merged: `agent_goal_launch`, `agent_goal_status`, `agent_goal_edit` and `agent_goal_stop` became `agent_goal(action=...)`; `agent_request_plan_approval` and `agent_request_worktree_decision` became `agent_escalate(kind='plan'|'worktree')`. `agent_send_plan_offer` needs `planOfferTool: true`. `/agent_goal_status`, `/agent_goal_stop` and `/agent_goal_edit` became `/agent_goal status|stop|edit`. Update tool allowlists, and see the migration table in the CHANGELOG.
-
 ## Highlights
 
 - **Plan -> Review -> Execute**. `plan` is the default launch mode, and plan approval defaults to `delegate`, so the orchestrator reviews the full plan before it approves or escalates to the user. All three harnesses feed the same approval UX.
@@ -41,6 +22,16 @@ Start a job from Telegram, Discord, or any other OpenClaw channel, approve the p
 - **One continuation path**. Follow-ups, approvals, revisions, question answers, interrupts, and redirects all continue the existing session instead of launching a duplicate.
 
 This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime and provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code, Codex, and experimental OpenCode harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
+
+## What's New In v5
+
+- **Clearer chat updates.** Decisions name the session; fewer notices and `/agent_status` make pending work easier to track.
+- **Simpler tools.** Goal loops use `agent_goal`; plan and worktree escalations use `agent_escalate`.
+- **Native agent controls.** Codex supports steering, rewind, compaction, and inline review; Claude Code uses native plan approval; experimental OpenCode shares one server and supports multi-select questions.
+- **Worktree setup and durable delivery.** Worktrees honor committed `.worktreeinclude` and `.openclaw/worktree-setup.sh`; notifications use OpenClaw's durable queue, and git/GitHub operations run asynchronously.
+- **Upgrade requirements.** v5.0.1 requires OpenClaw `2026.9.7`; Codex sessions require Codex CLI `0.156.1` or newer.
+
+**From 4.x:** Back up session and goal-task stores before upgrading: v5 rewrites session state in place. Move removed flat model settings under `harnesses.<name>` and update tool allowlists. Unset Codex execution settings now follow the host's `tools.exec.mode`; `bypassPermissions` alone no longer grants full access. Follow the [4.x migration and rollback steps](docs/REFERENCE.md#upgrading-from-4x), including state-path changes. For v5.0.0 users, see the [v5.0.1 upgrade notes](docs/REFERENCE.md#upgrading-from-500) for retired host Task Flow controls. Full release details are in the [CHANGELOG](CHANGELOG.md).
 
 ## From Chat To Resolved Work
 
