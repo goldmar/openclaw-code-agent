@@ -889,6 +889,7 @@ describe("plugin entry source", () => {
       const session = await sm.launchAndAwaitRunning({
         name: "ordinary-active", prompt: "Wait", workdir: rootDir,
         harness: harness.name, permissionMode: "bypassPermissions", worktreeStrategy: "off",
+        route: { provider: "system", target: "system" },
       });
       assert.equal(session.status, "running");
       assert.equal(session.goalTaskId, undefined);
@@ -908,7 +909,10 @@ describe("plugin entry source", () => {
     } finally {
       if (previousPath === undefined) delete process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH;
       else process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH = previousPath;
-      await host.stopServices();
+      // If setup/assertion failed before the expected stop, still tear down the
+      // owned runtime without replacing that original failure with its known
+      // unhealthy-store rejection. A completed stop has already detached it.
+      if (getSharedRuntime()) await assert.rejects(host.stopServices(), /store is unavailable/);
     }
   });
 
