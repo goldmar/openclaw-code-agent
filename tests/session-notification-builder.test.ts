@@ -581,8 +581,8 @@ describe("session-notification-builder", () => {
       originThreadLine: formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey: "agent:main:direct:5551234" } }),
       preview: "Done",
     }).wakeMessageOnNotifySuccess;
-    assert.match(routed, /To tell the user anything, send it with the message tool to originRoute/);
-    assert.match(routed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
+    assert.match(routed, /To tell the user anything, use message\(action='send', final=true\) to originRoute/);
+    assert.match(routed, /Send it with message\(action='send', final=true\) to originRoute, then answer NO_REPLY\.$/);
     assert.doesNotMatch(routed, /Your reply is sent to the user/);
 
     const unrouted = buildCompletedPayload({ session, originThreadLine: "", preview: "Done" }).wakeMessageOnNotifySuccess;
@@ -595,7 +595,7 @@ describe("session-notification-builder", () => {
       preview: "",
       worktreeAutoCleaned: false,
     }).wakeMessage;
-    assert.match(failed, /Send it with the message tool to originRoute, then answer NO_REPLY\.$/);
+    assert.match(failed, /Send it with message\(action='send', final=true\) to originRoute, then answer NO_REPLY\.$/);
   });
 
   it("builds marker-free goal success follow-up wakes", () => {

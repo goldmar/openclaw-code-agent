@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Deliver plugin notices to sessions launched from OpenClaw WebChat (the Control UI and the native iOS/Android/macOS apps). Their `webchat|<sessionKey>` route was treated as an outbound channel, so every notice failed with "Outbound not configured for channel: webchat" and every wake told the orchestrator to send to a route the `message` tool rejects ("Unknown channel"). Notices on a WebChat route are now appended to the conversation with the Gateway's `chat.inject`, and wakes carry no origin-route block there, so the orchestrator's plain reply is the message.
+- Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
+- Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.
+- Confirm completion follow-ups through the exact Gateway run's terminal delivery receipt rather than its admission acknowledgment. Persist the run and delivery contract before submission, preserve pending summaries on uncertain outcomes, and observe uncertain saved runs after restart without repeating the notification or turn. Retry only wakes proven not to have been submitted, using their saved message and identity.
 
 ## [5.0.1] - 2026-09-30
 

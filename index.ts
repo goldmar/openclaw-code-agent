@@ -167,6 +167,13 @@ export function register(api: OpenClawPluginApi): void {
 
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
+  let gatewayReady = false;
+  let gatewayLifetimeSignal: AbortSignal | undefined;
+
+  const recoverCompletionWakesIfReady = (): void => {
+    if (!gatewayReady || retired || gatewayLifetimeSignal?.aborted) return;
+    sm?.recoverCompletionWakes();
+  };
 
   const ownerHandles = (): RuntimeHostHandles => ({
     runtime: api.runtime,
@@ -291,6 +298,7 @@ export function register(api: OpenClawPluginApi): void {
       setSessionManager(sm);
       setGoalController(gc);
       setAutoUpdateService(autoUpdate);
+      recoverCompletionWakesIfReady();
       maybeCheckForAutoUpdate();
     })();
     try {
@@ -412,6 +420,16 @@ export function register(api: OpenClawPluginApi): void {
   registerGoalCommand(commandApi);
 
   // Service
+  // Services start while chat.send and agent.wait remain startup-locked. The
+  // public ready hook runs after RPC admission opens; its lifetime signal also
+  // keeps a draining registry from restarting recovery producers.
+  api.on("gateway_start", async (_event, ctx) => {
+    if (retired || ctx.abortSignal?.aborted) return;
+    gatewayReady = true;
+    gatewayLifetimeSignal = ctx.abortSignal;
+    await startCodeAgentService();
+    recoverCompletionWakesIfReady();
+  });
   api.registerService({
     id: "openclaw-code-agent",
     start: startCodeAgentService,

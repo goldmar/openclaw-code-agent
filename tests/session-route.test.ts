@@ -1,6 +1,7 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { SessionRoute } from "../src/types";
 import {
   canonicalizeSessionRoute,
   formatOriginRouteWakeBlock,
@@ -261,6 +262,90 @@ describe("session-route", () => {
     });
   });
 
+  it("repairs an internal webchat CLI envelope from an authoritative Telegram session key", () => {
+    const route = routeFromOriginMetadata(
+      "webchat|cli",
+      undefined,
+      "agent:main:telegram:direct:123456789",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "123456789",
+      threadId: undefined,
+      sessionKey: "agent:main:telegram:direct:123456789",
+    });
+  });
+
+  it("preserves real WebChat origins when the UI opens an external-channel session", () => {
+    for (const sessionKey of [
+      "agent:main:telegram:group:-100123:topic:77",
+      "agent:main:discord:channel:1400000000000000001",
+      "agent:main:slack:channel:C123:thread:1718048480.000000",
+    ]) {
+      const expected: SessionRoute = {
+        provider: "webchat",
+        accountId: undefined,
+        target: sessionKey,
+        threadId: undefined,
+        sessionKey,
+      };
+      assert.deepEqual(routeFromOriginMetadata(`webchat|${sessionKey}`, undefined, sessionKey), expected);
+      assert.deepEqual(canonicalizeSessionRoute({ route: expected }), expected);
+    }
+  });
+
+  it("does not treat other explicit WebChat targets as CLI continuation envelopes", () => {
+    const sessionKey = "agent:main:telegram:group:-100123:topic:77";
+    for (const originChannel of ["webchat|dashboard", "webchat|account|cli"]) {
+      const route = routeFromOriginMetadata(originChannel, undefined, sessionKey);
+      assert.equal(route?.provider, "webchat");
+      assert.equal(route?.threadId, undefined);
+    }
+  });
+
+  it("removes external account and thread metadata from persisted WebChat UI routes and wake blocks", () => {
+    const sessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const source = {
+      route: { provider: "webchat", accountId: "telegram-bot", target: sessionKey, threadId: "77", sessionKey },
+      originChannel: `webchat|${sessionKey}`,
+      originSessionKey: sessionKey,
+      originThreadId: 77,
+    };
+    assert.deepEqual(canonicalizeSessionRoute(source), {
+      provider: "webchat", accountId: undefined, target: sessionKey, threadId: undefined, sessionKey,
+    });
+    const block = formatOriginRouteWakeBlock(source);
+    assert.match(block, /"provider":"webchat"/);
+    assert.match(block, new RegExp(`"target":"${sessionKey}"`));
+    assert.doesNotMatch(block, /"(?:accountId|threadId)":/);
+    assert.ok(!block.includes(ROUTED_REPLY_RULE));
+    assert.match(block, /ordinary visible final answer in this WebChat session/);
+    assert.match(block, /Do not use the message tool/);
+    assert.doesNotMatch(block, /NO_REPLY/);
+  });
+
+  it("recovers the CLI route's account and topic while respecting an explicit thread", () => {
+    const sessionKey = "agent:main:telegram:second-bot:direct:123456789:topic:77";
+    assert.deepEqual(routeFromOriginMetadata("webchat|cli", 88, sessionKey), {
+      provider: "telegram",
+      accountId: "second-bot",
+      target: "123456789",
+      threadId: "88",
+      sessionKey,
+    });
+  });
+
+  it("preserves a webchat CLI envelope when no external session route is recoverable", () => {
+    const route = routeFromOriginMetadata("webchat|cli");
+    assert.deepEqual(route, {
+      provider: "webchat",
+      accountId: undefined,
+      target: "cli",
+      threadId: undefined,
+      sessionKey: undefined,
+    });
+  });
+
   it("falls back when a three-part origin channel is missing its target segment", () => {
     const route = routeFromOriginMetadata(
       "telegram|bot|",
@@ -319,8 +404,9 @@ describe("wake reply rule", () => {
       const block = formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey } });
       assert.equal(block, `originRoute: {"provider":"telegram","target":"5551234"}\n${ROUTED_REPLY_RULE}`);
     }
-    assert.match(ROUTED_REPLY_RULE, /message tool to originRoute/);
+    assert.match(ROUTED_REPLY_RULE, /message\(action='send', final=true\) to originRoute/);
     assert.match(ROUTED_REPLY_RULE, /accountId and threadId only when originRoute has them/);
+    assert.match(ROUTED_REPLY_RULE, /ordinary final assistant reply to this wake is private/);
     const scoped = formatOriginRouteWakeBlock({
       route: { provider: "telegram", accountId: "second-bot", target: "5551234", sessionKey: "agent:main:telegram:direct:5551234" },
     });
