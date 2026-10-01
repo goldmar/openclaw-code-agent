@@ -65,13 +65,35 @@ function treeHashes(root) {
   return result;
 }
 
+function assertEffectiveOcaTools(inventory, expected) {
+  assert.ok(Array.isArray(inventory.groups), "Actual host inventory has tool groups");
+  const entries = inventory.groups.flatMap((group) => {
+    assert.ok(Array.isArray(group.tools), "Actual host inventory group has tool entries");
+    return group.tools;
+  });
+  const enabled = entries.filter((entry) => entry.source === "plugin" && entry.pluginId === "openclaw-code-agent" && entry.deniedBySession !== true);
+  const ids = enabled.map((entry) => entry.id);
+  assert.equal(new Set(ids).size, ids.length, "Effective OCA inventory has no duplicate IDs");
+  assert.deepEqual(ids.toSorted(), [...expected].toSorted(), "Actual enabled OCA tool IDs equal the unchanged public contract");
+  return enabled;
+}
+
+function verifyInventoryAssertionControls(expected) {
+  const enabled = expected.map((id) => ({ id, source: "plugin", pluginId: "openclaw-code-agent" }));
+  assert.deepEqual(assertEffectiveOcaTools({ groups: [{ tools: enabled }] }, expected), enabled);
+  for (const tools of [[], enabled.map((entry) => ({ ...entry, deniedBySession: true })), enabled.map((entry) => ({ ...entry, pluginId: "unrelated-plugin" })), enabled.map((entry) => ({ ...entry, source: "core" }))]) {
+    assert.throws(() => assertEffectiveOcaTools({ toolAccess: { allow: expected }, groups: [{ tools }] }, expected));
+  }
+  return { scope: "Inventory assertion controls only; these inputs do not simulate host admission", positive: "enabled OCA plugin entries", negatives: ["names only in diagnostics", "session-denied entries", "wrong plugin owner", "wrong tool source"] };
+}
+
 class AcceptanceRun {
   constructor(options) {
     this.options = options;
     mkdirSync(options.artifacts, { recursive: true, mode: 0o700 });
     this.directory = mkdtempSync(join(options.artifacts, "oca501-host-"));
     this.children = new Set(); this.servers = new Set(); this.results = []; this.commandCounter = 0;
-    this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = [];
+    this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = []; this.botMenus = new Map();
     this.nativeExecutions = []; this.ownedProcesses = new Map();
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only"];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
@@ -154,19 +176,30 @@ class AcceptanceRun {
     });
     let messageId = 0;
     this.botUrl = await this.serve(async (request, response, body) => {
-      assert.equal(request.method, "POST");
-      const method = request.url?.split("/").at(-1);
-      assert.ok(request.url?.startsWith(`/bot${this.secrets[1]}/`), "Unexpected Bot API credential/path");
-      const params = body ? request.headers["content-type"]?.includes("application/json") ? JSON.parse(body) : Object.fromEntries(new URLSearchParams(body)) : {};
-      this.botRequests.push({ method, params: this.redact(JSON.stringify(params)) });
+      const url = new URL(request.url, this.botUrl);
+      const method = url.pathname.split("/").at(-1);
+      const attempt = { httpMethod: request.method, url: this.redact(request.url), method, bodyHash: hash(body) };
+      this.botRequests.push(attempt); // Preserve the real wire attempt even if validation or parsing fails.
+      assert.equal(url.pathname, `/bot${this.secrets[1]}/${method}`, "Unexpected Bot API credential/path");
+      assert.ok(request.method === "POST" || (request.method === "GET" && ["getMe", "getWebhookInfo"].includes(method)), "Unexpected Bot API HTTP method");
+      if (request.method === "GET") assert.equal(body, "", "Telegram GET probes carry no body");
+      const params = request.method === "GET" ? Object.fromEntries(url.searchParams) : body ? request.headers["content-type"]?.includes("application/json") ? JSON.parse(body) : Object.fromEntries(new URLSearchParams(body)) : {};
+      attempt.params = this.redact(JSON.stringify(params));
+      const objectParam = (value) => typeof value === "string" ? JSON.parse(value) : value;
+      const menuKey = JSON.stringify({ scope: objectParam(params.scope) ?? { type: "default" }, language_code: params.language_code ?? "" });
       const bot = { id: 501001, is_bot: true, first_name: "OCA501 Fixture", username: "oca501_fixture_bot" };
       let result;
       switch (method) {
         case "getMe": result = bot; break;
         case "getUpdates": await delay(250); result = []; break;
         case "getWebhookInfo": result = { url: "", has_custom_certificate: false, pending_update_count: 0 }; break;
-        case "getMyCommands": result = []; break;
-        case "deleteWebhook": case "setMyCommands": case "answerCallbackQuery": case "editMessageReplyMarkup": case "sendChatAction": result = true; break;
+        case "getMyCommands": result = this.botMenus.get(menuKey) ?? []; break;
+        case "setMyCommands": {
+          const commands = objectParam(params.commands); assert.ok(Array.isArray(commands));
+          this.botMenus.set(menuKey, commands); result = true; break;
+        }
+        case "deleteMyCommands": this.botMenus.delete(menuKey); result = true; break;
+        case "deleteWebhook": case "answerCallbackQuery": case "editMessageReplyMarkup": case "sendChatAction": result = true; break;
         case "sendMessage": case "editMessageText": {
           result = { message_id: params.message_id ? Number(params.message_id) : ++messageId, date: Math.floor(Date.now() / 1000), from: bot, chat: { id: Number(params.chat_id), type: "private", first_name: "Fixture" }, text: params.text };
           if (params.reply_markup) result.reply_markup = typeof params.reply_markup === "string" ? JSON.parse(params.reply_markup) : params.reply_markup;
@@ -270,6 +303,7 @@ class AcceptanceRun {
     const port = portReservation.address().port; await new Promise((done) => portReservation.close(done));
     this.gatewayUrl = `http://127.0.0.1:${port}`;
     const pluginToolNames = json(join(ROOT, "openclaw.plugin.json")).contracts.tools.filter((name) => name !== "agent_send_plan_offer");
+    this.artifact("inventory-assertion-controls.json", verifyInventoryAssertionControls(pluginToolNames));
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
       logging: { file: join(this.directory, "openclaw-runtime.log") },
@@ -306,9 +340,10 @@ class AcceptanceRun {
     assert.ok(created.sessionId); assert.ok(created.entry); assert.equal(created.runStarted, false);
     assert.equal(this.modelRequests.length, beforeCreationRequests, "Host session creation starts no model turn");
     this.sessionKey = created.key;
-    this.artifact("tools-effective.json", await this.rpc("tools.effective", { agentId: "main", sessionKey: this.sessionKey }));
-    const effective = readFileSync(join(this.directory, "tools-effective.json"), "utf8");
-    for (const name of pluginToolNames) assert.ok(effective.includes(`"${name}"`), `Actual host tool inventory missing ${name}`);
+    const effective = await this.rpc("tools.effective", { agentId: "main", sessionKey: this.sessionKey });
+    this.artifact("tools-effective.json", effective);
+    const enabledOcaTools = assertEffectiveOcaTools(effective, pluginToolNames);
+    this.artifact("tools-effective-oca-enabled.json", { expectedIds: pluginToolNames.toSorted(), effectiveIds: enabledOcaTools.map((entry) => entry.id).toSorted(), entries: enabledOcaTools });
     this.artifact("goal-config-schema.json", await this.rpc("config.schema.lookup", { path: "plugins.entries.openclaw-code-agent.config" }));
     const beforeRequests = this.modelRequests.length;
     const admitted = await this.invoke("agent_goal", { action: "launch", goal: "Return the prerequisite marker; make no edits.", name: "host-prerequisite", workdir: this.workspace, harness: "codex", max_iterations: 1, permission_mode: "bypassPermissions" });
@@ -395,7 +430,7 @@ class AcceptanceRun {
     }
     this.artifact("cleanup.json", { ownedProcesses: [...this.ownedProcesses.values()], checkedPorts: ports, classification: failures.length ? "BLOCKED" : "PASS", failures });
     this.artifact("gateway.log", this.gatewayLog ?? "Gateway not started");
-    this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
+    this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, botMenus: [...this.botMenus.entries()], fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
     this.artifact("provenance.json", this.provenance);
     this.artifact("results.json", this.results);
   }
