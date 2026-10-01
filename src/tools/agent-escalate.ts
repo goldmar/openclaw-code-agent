@@ -1,3 +1,4 @@
+import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
@@ -37,14 +38,18 @@ export function makeAgentEscalateTool(_ctx?: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
-        return { isError: true, content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+        return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentEscalateParams(params)) {
-        return { isError: true, content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, kind: 'plan' | 'worktree', summary }." }] };
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, kind: 'plan' | 'worktree', summary }.");
       }
+      const sm = sessionManager;
+      const session = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
+      if (!session) return unknownSessionError(params.session);
+      const ref = "id" in session ? session.id : session.sessionId ?? session.backendRef?.conversationId ?? session.harnessSessionId;
       const text = params.kind === "plan"
-        ? sessionManager.requestPlanApprovalFromUser(params.session, params.summary)
-        : await sessionManager.requestWorktreeDecisionFromUser(params.session, params.summary);
+        ? sm.requestPlanApprovalFromUser(ref, params.summary)
+        : await sm.requestWorktreeDecisionFromUser(ref, params.summary);
       return {
         isError: text.startsWith("Error:"),
         content: [{ type: "text", text }],

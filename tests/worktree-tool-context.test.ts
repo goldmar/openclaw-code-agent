@@ -1,4 +1,5 @@
 import "./test-env";
+import { withGenerationMethods } from "./session-generation-fixture";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -7,12 +8,11 @@ import { join } from "node:path";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
-  getPersistedTargetMutationRefs,
   listWorktreeToolTargets,
   matchesWorktreeToolRef,
   resolveWorktreeToolLifecycle,
   resolveWorktreeToolSessions,
-  resolveWorktreeToolTarget,
+  resolveWorktreeToolTarget as resolveTarget,
 } from "../src/tools/worktree-tool-context";
 
 describe("worktree-tool-context", () => {
@@ -183,31 +183,6 @@ describe("worktree-tool-context", () => {
     );
   });
 
-  it("uses explicit persisted-session overrides when building mutation refs", () => {
-    const refs = getPersistedTargetMutationRefs({
-      activeSession: {
-        id: "active-runtime",
-        name: "active-name",
-        harnessSessionId: "active-harness",
-        backendRef: { kind: "claude-code", conversationId: "active-backend" },
-      } as any,
-      persistedSession: {
-        sessionId: "fresh-persisted",
-        name: "fresh-name",
-        harnessSessionId: "fresh-harness",
-        backendRef: { kind: "claude-code", conversationId: "fresh-backend" },
-      } as any,
-      sessionName: "active-name",
-    });
-
-    assert.deepEqual(refs, [
-      "fresh-persisted",
-      "fresh-backend",
-      "active-runtime",
-      "active-backend",
-    ]);
-  });
-
   it("preserves persisted-only notification target identity and origin metadata", () => {
     const target = resolveWorktreeToolTarget({
       resolve: (): undefined => undefined,
@@ -305,3 +280,7 @@ describe("worktree-tool-context", () => {
     assert.equal(formatWorktreePreserveReason("custom_reason"), "custom reason");
   });
 });
+
+function resolveWorktreeToolTarget(manager: any, ref: string) {
+  return resolveTarget(withGenerationMethods(manager), ref);
+}

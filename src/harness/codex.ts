@@ -22,7 +22,8 @@ import type {
   HarnessSession,
 } from "./types";
 import type { JsonRpcClient, JsonRpcId } from "./codex-rpc";
-import { JSON_RPC_METHOD_NOT_FOUND, JsonRpcResponseError, StdioJsonRpcClient } from "./codex-rpc";
+import { JSON_RPC_METHOD_NOT_FOUND, JsonRpcRemoteError, JsonRpcResponseError, StdioJsonRpcClient } from "./codex-rpc";
+import { FollowUpDeliveryUnconfirmedError } from "./follow-up-delivery-error";
 import {
   codexAccountType,
   estimateCodexApiCostUsd,
@@ -1089,22 +1090,32 @@ export class CodexHarness implements AgentHarness {
       if (closed || !turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
         return false;
       }
+      const expectedTurnId = turn.turnId;
       try {
-        await codexRequest(client, "turn/steer", buildTurnSteerParams({
+        const response = await codexRequest(client, "turn/steer", buildTurnSteerParams({
           threadId,
-          expectedTurnId: turn.turnId,
+          expectedTurnId,
           text,
         }), timeoutMs);
+        if (typeof response?.turnId !== "string" || !response.turnId || response.turnId !== expectedTurnId) {
+          throw new FollowUpDeliveryUnconfirmedError();
+        }
         logCodexHarnessDiagnostic("turn.steer.done", threadDiagnosticFields({ threadId, turnId: turn.turnId }));
         return true;
       } catch (error) {
-        // Typically "no active turn" or an expectedTurnId mismatch because the
-        // turn just ended; the caller queues the message as a new turn.
-        logCodexHarnessDiagnostic("turn.steer.rejected", {
-          ...threadDiagnosticFields({ threadId, turnId: turn.turnId }),
-          error: errorMessage(error),
-        });
-        return false;
+        // Only these typed, verified NotSubmitted responses permit a queued
+        // fallback. A lost acknowledgement may follow an accepted steer.
+        const mismatch = error instanceof JsonRpcRemoteError
+          ? /^expected active turn id `([^`]+)` but found `([^`]+)`$/.exec(error.remoteMessage)
+          : null;
+        if (error instanceof JsonRpcRemoteError && error.method === "turn/steer" && error.code === -32600 && error.data == null
+          && (error.remoteMessage === "no active turn to steer"
+            || (mismatch?.[0] === error.remoteMessage && mismatch[1] === expectedTurnId && !!mismatch[2] && mismatch[2] !== expectedTurnId))) {
+          logCodexHarnessDiagnostic("turn.steer.rejected", { reason: mismatch ? "expected-turn-mismatch" : "no-active-turn" });
+          return false;
+        }
+        logCodexHarnessDiagnostic("turn.steer.unconfirmed", { acceptance: "unknown" });
+        throw new FollowUpDeliveryUnconfirmedError();
       }
     };
 

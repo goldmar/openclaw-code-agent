@@ -862,6 +862,33 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
+  it("uses uniquely proven legacy worktree metadata at the canonical active-ID decision boundary", async () => {
+    const fixture = await createPendingDelegateDecisionFixture("pr-required");
+    try {
+      const id = "s-live-policy-pr-required";
+      const active = fixture.sm.get(id)!;
+      const backendRef = { kind: "claude-code" as const, conversationId: "legacy-decision-backend" };
+      const route = { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:group:12345" };
+      fixture.sm["store"].replacePersistedSession({
+        harnessSessionId: "legacy-decision-key", backendRef, name: active.name, prompt: active.prompt,
+        workdir: active.originalWorkdir!, status: "completed", costUsd: 0, route,
+        worktreePath: active.worktreePath, worktreeBranch: active.worktreeBranch,
+        worktreeBaseBranch: "main", worktreeStrategy: "delegate",
+      });
+      Object.assign(active, { backendRef, route, originalWorkdir: undefined, worktreePath: undefined,
+        worktreeBranch: undefined, worktreeBaseBranch: undefined });
+      const response = await fixture.sm.requestWorktreeDecisionFromUser(id, "Review the legacy worktree.");
+      assert.match(response, /Canonical worktree decision prompt sent/);
+      const [target, request] = fixture.dispatchCalls().at(-1)!;
+      assert.equal(target.id, id);
+      assert.match(request.userMessage, /Review the legacy worktree/);
+      assert.equal(hasButton(buttonLabels(request.buttons), "Open PR"), true);
+      assert.equal(hasButton(buttonLabels(request.buttons), "Merge"), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   for (const policy of ["never-pr", "manual"] as const) {
     it(`uses live ${policy} policy for explicit pending worktree decision PR buttons without a session snapshot`, async () => {
       const fixture = await createPendingDelegateDecisionFixture(policy);

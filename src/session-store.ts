@@ -14,6 +14,7 @@ import { canonicalizeSessionRoute } from "./session-route";
 import { SessionActionTokenStore } from "./session-action-token-store";
 import { getBackendConversationId, resolveHarnessName } from "./session-backend-ref";
 import { SessionStoreQueries } from "./session-store-queries";
+import type { SessionGeneration } from "./session-generation";
 import {
   cleanupOrphanOutputFiles,
   cleanupSessionOutputFiles,
@@ -965,6 +966,12 @@ export class SessionStore {
     // session it resumed is never returned from this store's stale cache.
     if (!this.syncing) this.syncFromDisk("session-lookup");
     return this.queries.getPersistedSession(ref);
+  }
+
+  /** Read a captured generation without name/backend alias fallback. */
+  getSessionGeneration(generation: SessionGeneration): PersistedSessionInfo | undefined {
+    if (!this.syncing) this.syncFromDisk("session-generation-lookup");
+    return this.queries.getSessionGeneration(generation);
   }
 
   replacePersistedSession(entry: PersistedSessionInfo): void {

@@ -10,7 +10,7 @@ import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefau
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-pr");
@@ -470,17 +470,20 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? await detectDefaultBranch(originalWorkdir);
+      const decisionRef = worktreeDecisionRef(sm, target);
+      if (!decisionRef) return { content: [{ type: "text", text: "Error: The selected session changed before PR preparation." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       const hookRefusal = await refuseHookChangesWithoutUser({
         sessionManager: sm,
         toolCallId: _id,
-        sessionRef: params.session,
+        sessionRef: decisionRef,
+        decisionRef: () => worktreeDecisionRef(sm, target),
         repoDir: originalWorkdir,
         branchName,
         baseBranch,
         action: "pr",
       });
       if (hookRefusal) {
-        return { content: [{ type: "text", text: hookRefusal }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
       const metadataProvider = options.metadataProvider ?? createRuntimePrMetadataProvider();
       const persistPrOpen = (args: {
@@ -503,8 +506,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             disposition: args.disposition,
           },
         );
-        for (const mutationRef of getPersistedTargetMutationRefs(target)) {
-          sm.updatePersistedSession(mutationRef, patch);
+        if (!patchWorktreeTarget(sm, target, patch)) {
+          throw new Error("PR operation completed, but its selected session state could not be updated. Reconcile before retrying.");
         }
       };
 
@@ -737,8 +740,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           worktreeDisposition: "merged",
           worktreeDecisionSnoozedUntil: undefined,
         };
-        for (const mutationRef of getPersistedTargetMutationRefs(target)) {
-          sm.updatePersistedSession(mutationRef, mergedPatch);
+        if (!patchWorktreeTarget(sm, target, mergedPatch)) {
+          return { content: [{ type: "text", text: "Error: PR is merged, but its selected session state could not be updated. Reconcile before retrying." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
         }
         return {
           content: [{

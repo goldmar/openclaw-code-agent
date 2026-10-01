@@ -1,7 +1,7 @@
 import "./test-env";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeAgentPrTool } from "../src/tools/agent-pr";
@@ -196,6 +196,60 @@ afterEach(async () => {
 });
 
 describe("agent_pr execute(): new PRs", () => {
+  it("revalidates canonical resolution after the awaited hook diff before decision dispatch", async () => {
+    const f = await setup();
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    const originalResolve = f.sm.resolve.bind(f.sm);
+    let scheduled = false;
+    f.sm.resolve = (ref) => {
+      const selected = originalResolve(ref);
+      if (ref === SESSION_ID && !scheduled) {
+        scheduled = true;
+        queueMicrotask(() => f.sm["sessions"].set("foreign-b", {
+          id: "foreign-b", name: SESSION_ID, status: "running", startedAt: Date.now(),
+        } as any));
+      }
+      return selected;
+    };
+    let escalated = false;
+    f.sm.requestWorktreeDecisionFromUser = async () => { escalated = true; return "Decision queued"; };
+    const result = await f.run();
+    assert.equal(originalResolve(SESSION_ID)?.id, "foreign-b", "negative control: supported ref now resolves foreign live B");
+    assert.equal(escalated, false);
+    assert.equal((result as any).details?.code, "session_target_changed");
+    assert.equal(f.gh.ghCalls("create").length, 0);
+    f.sm["sessions"].delete("foreign-b");
+  });
+
+  it("escalates hook changes for captured A after the name alias moves to B during preparation", async () => {
+    const f = await setup({ persisted: { worktreeBaseBranch: undefined } });
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    const selectedA = f.persisted()!;
+    const originalRead = f.sm.getPersistedSession.bind(f.sm);
+    let scheduled = false;
+    f.sm.getPersistedSession = (ref) => {
+      const selected = originalRead(ref);
+      if (ref === SESSION_NAME && !scheduled) {
+        scheduled = true;
+        queueMicrotask(() => f.sm["store"].replacePersistedSession({
+          ...selectedA, sessionId: "foreign-b", harnessSessionId: "foreign-hb", createdAt: Date.now() + 1,
+          worktreeBranch: "agent/foreign-b", route: { sessionKey: "foreign-route" },
+        }));
+      }
+      return selected;
+    };
+    let escalated: string | undefined;
+    f.sm.requestWorktreeDecisionFromUser = async (ref) => { escalated = ref; return "Decision queued"; };
+    const result = await f.run();
+    assert.equal(originalRead(SESSION_NAME)?.sessionId, "foreign-b", "negative control: alias actually moved");
+    assert.equal(escalated, SESSION_ID);
+    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.equal(f.gh.ghCalls("create").length, 0);
+    assert.equal(originalRead("foreign-b")?.worktreePrUrl, undefined);
+  });
+
   it("pushes the branch and opens a draft PR with LLM metadata from runtime.llm", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     const head = git(f.worktreePath, "rev-parse", "HEAD");

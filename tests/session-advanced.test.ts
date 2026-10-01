@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Session } from "../src/session";
+import { FollowUpDeliveryUnconfirmedError } from "../src/harness/follow-up-delivery-error";
 import { registerHarness } from "../src/harness/index";
 import { createFakeHarness, makeSessionConfig, tick } from "./helpers";
 import type { FakeHarness } from "./helpers";
@@ -1156,6 +1157,24 @@ describe("Session steering and thread actions", () => {
     } finally {
       session.kill("user");
     }
+  });
+
+  it("does not queue a follow-up whose steer acceptance is unknown", async () => {
+    const harness = createFakeHarness("steer-harness-unconfirmed");
+    const originalLaunch = harness.launch.bind(harness);
+    const accepted: string[] = [];
+    harness.launch = (options) => ({ ...originalLaunch(options), steer: async (text: string) => {
+      accepted.push(text); // Fixture accepted input before losing its acknowledgement.
+      throw new FollowUpDeliveryUnconfirmedError();
+    } });
+    const session = await startWith(harness);
+    try {
+      await assert.rejects(session.sendMessage("EXACT_INPUT"), FollowUpDeliveryUnconfirmedError);
+      await tick(20);
+      assert.deepEqual(accepted, ["EXACT_INPUT"]);
+      assert.equal(harness.consumedPrompts.length, 1, "No fallback entered the prompt queue");
+      assert.equal(session.autoRespondCount, 0);
+    } finally { session.kill("user"); }
   });
 
   it("never steers plan-decision messages", async () => {
