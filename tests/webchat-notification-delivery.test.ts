@@ -9,6 +9,7 @@ import { setPluginRuntime } from "../src/runtime-store";
 import { buildWaitingForInputPayload, buildPlanApprovalFallbackMessages } from "../src/session-notification-builders/waiting";
 import { SessionLifecycleService } from "../src/session-lifecycle-service";
 import { SessionNotificationService } from "../src/session-notifications";
+import { isCurrentPendingPlanDecision } from "../src/session-plan-approval-delivery";
 import { SessionStore } from "../src/session-store";
 import { WakeDispatcher } from "../src/wake-dispatcher";
 import { createStubSession } from "./helpers";
@@ -35,6 +36,7 @@ describe("WebChat notification delivery", () => {
     const session = createStubSession({
       id: "webchat-plan", name: "webchat-plan", harnessSessionId: "worker-plan",
       pendingPlanApproval: true, planDecisionVersion: 1, actionablePlanDecisionVersion: 1,
+      approvalState: "pending", lifecycle: "awaiting_plan_decision",
       originSessionKey: UI_KEY, originChannel: `webchat|${UI_KEY}`,
       route: { provider: "webchat", target: UI_KEY, sessionKey: UI_KEY },
     });
@@ -42,6 +44,8 @@ describe("WebChat notification delivery", () => {
       sessionId: session.id, harnessSessionId: session.harnessSessionId, name: session.name,
       harness: "claude-code", backendRef: session.backendRef,
       prompt: "Test a plan", workdir: "/tmp", status: "running", costUsd: 0,
+      pendingPlanApproval: true, planDecisionVersion: 1, actionablePlanDecisionVersion: 1,
+      approvalState: "pending", lifecycle: "awaiting_plan_decision",
       route: session.route,
     });
     const patch = (ref: string, update: Partial<PersistedSessionInfo>): boolean => {
@@ -100,10 +104,14 @@ describe("WebChat notification delivery", () => {
       extractLastOutputLine: () => undefined, getOutputPreview: () => preview,
       originThreadLine: () => "", debounceWaitingEvent: () => true, isAlreadyMerged: () => false,
     });
+    assert.equal(isCurrentPendingPlanDecision(f.session, 1), true, "the production guard must admit the pending plan fixture");
     await lifecycle.emitWaitingForInput(f.session);
     await until(() => f.session.approvalPromptStatus === "fallback_delivered");
     const persisted = new SessionStore({ indexPath: f.indexPath }).getPersistedSession(f.session.id)!;
     assert.equal(persisted.approvalPromptMessageKind, "explicit_fallback_text");
+    assert.equal(persisted.approvalPromptRequiredVersion, 1);
+    assert.equal(persisted.approvalPromptVersion, 1);
+    assert.equal(isCurrentPendingPlanDecision(f.session, 1), true, "the delivered fallback remains actionable for this plan");
     assert.equal(persisted.canonicalPlanPromptVersion, undefined);
     assert.equal(injected.length, fallback.length, "the rejected canonical sequence appends zero pages; only the explicit fallback appears");
     assert.deepEqual(injected.map((entry) => entry.message), fallback.map((page) => page.text));
