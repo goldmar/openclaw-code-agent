@@ -267,12 +267,13 @@ class AcceptanceRun {
     this.gatewayUrl = `http://127.0.0.1:${port}`;
     const pluginToolNames = json(join(ROOT, "openclaw.plugin.json")).contracts.tools.filter((name) => name !== "agent_send_plan_offer");
     const config = {
-      gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hot" } },
+      gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
       agents: { defaults: { workspace: this.workspace, heartbeat: { every: "0m" }, memorySearch: { enabled: false } } },
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
       tools: { profile: "full", allow: pluginToolNames },
       plugins: { allow: ["openclaw-code-agent", "telegram"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", requiredGoalVerifierCommands: ["bash ci.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } },
       channels: { telegram: { enabled: true, botToken: this.secrets[1], apiRoot: this.botUrl, dmPolicy: "allowlist", allowFrom: ["501002"], streaming: "off" } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
     writeFileSync(this.env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     await this.command(process.execPath, [this.hostEntry, "plugins", "install", tarball, "--force", "--accept-capabilities"]);
