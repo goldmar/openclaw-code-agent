@@ -610,7 +610,9 @@ export class SessionManager {
       const persistedAlias = this.getPersistedSession(ref);
       const active = this.registry.list().filter((candidate) => (
         (identity !== "backend" && candidate.id === ref)
-        || (identity !== "stable" && getBackendConversationId(candidate) === ref)
+        // A registered deferred resume owns its requested backend before the
+        // harness publishes backendRef. Once published, that identity wins.
+        || (identity !== "stable" && (getBackendConversationId(candidate) || candidate.resumeSessionId) === ref)
       ));
       const persisted = this.listPersistedSessions().filter((candidate) => (
         (identity !== "backend" && candidate.sessionId === ref)

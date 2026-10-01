@@ -663,3 +663,114 @@ describe("canonical session identity precedes human aliases (R6)", () => {
     });
   }
 });
+
+describe("pending resume ownership before backend initialization (R7)", () => {
+  async function deferredOwner() {
+    const f = fixture();
+    const current = task(["true"]);
+    f.store.upsert(current);
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "pending-sessions.json") } });
+    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    const harness = createFakeHarness(`goal-pending-${f.dir}`);
+    registerHarness(harness);
+    const barrier = Promise.withResolvers<void>();
+    const effects = { repo: 0, preparation: 0, initialization: 0, writes: 0 };
+    (manager as any).checkRepoPolicyForLaunch = async () => {
+      effects.repo += 1;
+      return { ok: true, resolution: { source: "none", provider: "unsupported", prAvailable: false } };
+    };
+    (manager as any).restore.prepareSpawn = async () => {
+      effects.preparation += 1;
+      return { actualWorkdir: f.dir, originalWorkdir: f.dir };
+    };
+    const bootstrap = new SessionRuntimeBootstrapService({ hydrateSpawnedSession: () => {},
+      markRunning: () => { effects.writes += 1; }, handleTerminal: async () => { effects.writes += 1; },
+      handleTurnEnd: async () => {}, formatLaunchWorkdirLabel: () => f.dir, notifySession: () => {} });
+    (manager as any).runtimeBootstrap.initializeSession = async (session: Session, prepared: any, config: any) => {
+      effects.initialization += 1;
+      return bootstrap.initializeSession(session, prepared, config, { startAfter: barrier.promise, notifyLaunch: false });
+    };
+    const launch = { prompt: "Continue", workdir: f.dir, harness: harness.name, resumeSessionId: "original-thread",
+      worktreeStrategy: "off" as const, route: { provider: "system", target: "system" } };
+    const source = await manager.launchSession({ ...launch, goalTaskId: "goal" });
+    assert.equal(source.status, "starting");
+    assert.equal(source.resumeSessionId, "original-thread");
+    assert.equal(source.backendRef, undefined);
+    assert.equal(harness.lastLaunchOptions, undefined, "real bootstrap awaits teardown before harness launch");
+    const cleanup = async () => {
+      for (const session of (manager as any).sessions.values() as Iterable<Session>) {
+        if (session.status === "starting") session.transition("killed");
+      }
+      barrier.resolve();
+      await tick(10);
+      (manager as any).sessions.clear();
+    };
+    return { f, current, manager, harness, barrier, effects, launch, source, cleanup };
+  }
+
+  for (const permitted of [false, true]) {
+    it(`a real deferred public launch owner is ${permitted ? "inherited with a live startup guard" : "denied with zero launch effects"}`, async () => {
+      const d = await deferredOwner();
+      try {
+        const before = { ...d.effects };
+        const beforeCount = (d.manager as any).sessions.size;
+        const diskPath = join(d.f.dir, "pending-sessions.json");
+        const diskBefore = existsSync(diskPath) ? readFileSync(diskPath, "utf8") : undefined;
+        if (!permitted) setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        if (permitted) {
+          const resumed = await d.manager.launchSession(d.launch);
+          assert.equal(resumed.goalTaskId, "goal");
+          assert.equal(resumed.resumeSessionId, "original-thread");
+          assert.equal(resumed.status, "starting");
+          setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+          d.barrier.resolve();
+          await tick(10);
+          assert.equal(resumed.status, "failed", "inherited live owner rejects policy revoked during deferred startup");
+          assert.equal(d.source.status, "failed");
+          assert.equal(d.harness.lastLaunchOptions, undefined, "neither backend starts after revocation");
+        } else {
+          await assert.rejects(d.manager.launchSession(d.launch), /policy changed/);
+          assert.deepEqual(d.effects, before, "no repo lookup, worktree preparation, bootstrap or session writes");
+          assert.equal((d.manager as any).sessions.size, beforeCount);
+          assert.equal((d.manager as any).sessions.get(d.source.id), d.source);
+          assert.equal(d.harness.lastLaunchOptions, undefined);
+          assert.equal(existsSync(diskPath) ? readFileSync(diskPath, "utf8") : undefined, diskBefore);
+          assert.equal(d.current.status, "failed");
+        }
+      } finally { await d.cleanup(); }
+    });
+  }
+
+  it("rejects conflicting pending and finalized owners before launch or goal mutation", async () => {
+    const d = await deferredOwner();
+    try {
+      const second = task(["true"], { id: "second", name: "second" });
+      d.f.store.upsert(second);
+      const finalized = new Session({ ...d.launch, resumeSessionId: "previous-thread", goalTaskId: second.id,
+        backendRef: { kind: "claude-code", conversationId: "original-thread" } }, "finalized-owner");
+      (d.manager as any).sessions.set(finalized.id, finalized);
+      const before = { ...d.effects };
+      const count = (d.manager as any).sessions.size;
+      await assert.rejects(d.manager.launchSession(d.launch), /Conflicting canonical goal owners/);
+      assert.deepEqual(d.effects, before);
+      assert.equal((d.manager as any).sessions.size, count);
+      assert.equal(d.current.status, "running");
+      assert.equal(second.status, "running");
+      assert.equal(second.requiredVerifierCommands, undefined, "conflict does not bind another goal");
+      assert.equal(d.harness.lastLaunchOptions, undefined);
+    } finally { await d.cleanup(); }
+  });
+
+  it("uses finalized backend identity ahead of the old requested resume identity", async () => {
+    const d = await deferredOwner();
+    try {
+      d.source.backendRef = { kind: "claude-code", conversationId: "final-thread" };
+      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      const ordinary = await d.manager.launchSession(d.launch);
+      assert.equal(ordinary.goalTaskId, undefined, "old request identity no longer claims the original goal");
+      assert.equal(d.current.status, "running");
+      assert.equal(d.harness.lastLaunchOptions, undefined);
+    } finally { await d.cleanup(); }
+  });
+});
