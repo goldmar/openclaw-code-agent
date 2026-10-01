@@ -51,7 +51,7 @@ describe("loaded runtime policy diagnostic", () => {
     });
     setPluginConfig({ harnesses: { codex: { defaultModel: "gpt-6.1-sol" } } });
     assert.equal(readPolicy(await tool.execute("unrestricted", {})).codex.allowedModels, null);
-    assert.equal(tool.parameters.additionalProperties, false);
+    assert.equal(Reflect.get(tool.parameters, "additionalProperties"), false);
   });
 
   it("does not initialize a registered runtime or expose unbound defaults", async () => {
