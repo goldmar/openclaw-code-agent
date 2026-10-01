@@ -13,12 +13,21 @@ export type DurableMessageBatchSendResult = Awaited<ReturnType<SendDurableMessag
 
 export type MessagePresentation = NonNullable<DurableSendParams["payloads"][number]["presentation"]>;
 
+export interface DirectNotificationSendOptions {
+  onDeliveryIntent?: () => void;
+  /** Required disk-confirmed quarantine before a non-idempotent internal append. */
+  beforeInternalChatSend?: () => Promise<void>;
+  onInternalChatSendNotSubmitted?: () => void;
+  onInternalChatSendConfirmed?: () => void;
+  shouldContinue?: () => boolean;
+}
+
 export interface DirectNotificationTransport {
   send(
     route: NotificationRoute,
     text: string,
     buttons?: Array<Array<NotificationButton>>,
-    options?: { onDeliveryIntent?: () => void },
+    options?: DirectNotificationSendOptions,
   ): Promise<void>;
 }
 
@@ -27,6 +36,11 @@ export class DirectNotificationDeliveryError extends Error {
     super(message, options);
     this.name = "DirectNotificationDeliveryError";
   }
+}
+
+/** The transcript may have been appended; starting another delivery could duplicate it. */
+export class DirectNotificationDeliveryUnknownError extends DirectNotificationDeliveryError {
+  override name = "DirectNotificationDeliveryUnknownError";
 }
 
 async function loadSendDurableMessageBatch(): Promise<SendDurableMessageBatch> {
@@ -51,9 +65,10 @@ const CHAT_INJECT_TIMEOUT_MS = 30_000;
  * Append a notice to an internal chat (WebChat: Control UI and native apps)
  * with `openclaw gateway call chat.inject`, which writes an assistant note to
  * the session transcript and broadcasts it to connected clients without an
- * agent run. It is a CLI subprocess for the same reason `chat.send` wakes are:
+ * agent run. The ordinary authenticated CLI requests admin scope for this RPC;
  * the in-process gateway request surface is reserved for trusted plugins.
- * Buttons have no rendering there, so the text is sent alone.
+ * This RPC has no idempotency field. A lost or malformed acknowledgement must
+ * remain unknown, and buttons must be rejected before any text is appended.
  */
 async function injectIntoInternalChat(route: NotificationRoute, text: string): Promise<void> {
   const sessionKey = (route.sessionKey?.trim() || route.target).trim();
@@ -61,6 +76,7 @@ async function injectIntoInternalChat(route: NotificationRoute, text: string): P
     "gateway",
     "call",
     "chat.inject",
+    "--json",
     "--timeout",
     String(CHAT_INJECT_TIMEOUT_MS),
     "--params",
@@ -71,10 +87,21 @@ async function injectIntoInternalChat(route: NotificationRoute, text: string): P
       "openclaw",
       args,
       { timeout: CHAT_INJECT_TIMEOUT_MS + 5_000, killSignal: "SIGKILL" },
-      (err, _stdout, stderr) => {
-        if (!err) return resolve();
+      (err, stdout, stderr) => {
+        if (!err) {
+          try {
+            const acknowledgement: unknown = JSON.parse(stdout);
+            if (acknowledgement && typeof acknowledgement === "object"
+              && "ok" in acknowledgement && acknowledgement.ok === true
+              && "messageId" in acknowledgement && typeof acknowledgement.messageId === "string"
+              && acknowledgement.messageId.trim()) return resolve();
+          } catch { /* An append may have succeeded before its response was lost. */ }
+          return reject(new DirectNotificationDeliveryUnknownError("OpenClaw chat.inject has no confirmed transcript acknowledgement"));
+        }
         const detail = String(stderr || "").trim() || errorMessage(err);
-        reject(new DirectNotificationDeliveryError(
+        const ErrorType = (err as NodeJS.ErrnoException).code === "ENOENT"
+          ? DirectNotificationDeliveryError : DirectNotificationDeliveryUnknownError;
+        reject(new ErrorType(
           `OpenClaw chat.inject into ${sessionKey} failed: ${detail.slice(0, 300)}`,
           { cause: err },
         ));
@@ -101,7 +128,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     route: NotificationRoute,
     text: string,
     buttons?: Array<Array<NotificationButton>>,
-    options?: { onDeliveryIntent?: () => void },
+    options?: DirectNotificationSendOptions,
   ): Promise<void> {
     const presentation = buildPresentation(buttons);
     logButtonDiagnostic("direct_send_started", {
@@ -111,12 +138,25 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
       ...(presentation ? summarizePresentation(presentation) : {}),
     });
     if (isInternalChatProvider(route.channel)) {
+      if (presentation) {
+        throw new DirectNotificationDeliveryError("OpenClaw chat.inject cannot render notification buttons; use the explicit reply fallback");
+      }
       try {
+        if (!options?.beforeInternalChatSend) {
+          throw new DirectNotificationDeliveryError("WebChat notification needs a disk-confirmed injection quarantine");
+        }
+        await options.beforeInternalChatSend();
+        if (options.shouldContinue?.() === false) {
+          throw new DirectNotificationDeliveryError("WebChat notification was cancelled before submission");
+        }
         await injectIntoInternalChat(route, text);
       } catch (err) {
+        if (!(err instanceof DirectNotificationDeliveryUnknownError)) options?.onInternalChatSendNotSubmitted?.();
         logButtonDiagnostic("direct_send_failed", { ...summarizeRoute(route), ...summarizeButtons(buttons), error: errorMessage(err) });
         throw err;
       }
+      try { options?.onInternalChatSendConfirmed?.(); }
+      catch (err) { throw new DirectNotificationDeliveryUnknownError("WebChat notice appended but its completion hook failed", { cause: err }); }
       logButtonDiagnostic("direct_send_succeeded", { ...summarizeRoute(route), ...summarizeButtons(buttons), transport: "chat.inject" });
       return;
     }

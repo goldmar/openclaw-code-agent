@@ -45,6 +45,7 @@ export class NotificationDedupeCoordinator {
       this.delivered.has(key)
       || this.inFlight.has(key)
       || persistedRecord?.status === "delivered"
+      || persistedRecord?.status === "injection_unknown"
       || (persistedRecord?.status === "in_flight" && this.isFreshInFlight(persistedRecord, now))
     ) {
       return {
@@ -84,6 +85,28 @@ export class NotificationDedupeCoordinator {
     });
   }
 
+  /** Write-ahead quarantine: an append has no host idempotency key. */
+  quarantineInjectionRecords(
+    key: string,
+    persistedRecords: SessionNotificationDedupeRecord[] | undefined,
+    label: string,
+    injectionAttemptId: string,
+  ): SessionNotificationDedupeRecord[] {
+    return this.upsert(this.prune(persistedRecords ?? [], this.now()), {
+      key, status: "injection_unknown", injectionAttemptId, label, recordedAt: this.now().toISOString(),
+    });
+  }
+
+  releaseUnsubmittedInjectionRecords(
+    key: string,
+    injectionAttemptId: string,
+    persistedRecords: SessionNotificationDedupeRecord[] | undefined,
+  ): SessionNotificationDedupeRecord[] {
+    this.inFlight.delete(key);
+    return this.prune(persistedRecords ?? [], this.now()).filter((record) =>
+      !(record.key === key && record.status === "injection_unknown" && record.injectionAttemptId === injectionAttemptId));
+  }
+
   releasedRecords(
     key: string | undefined,
     persistedRecords: SessionNotificationDedupeRecord[] | undefined,
@@ -98,10 +121,10 @@ export class NotificationDedupeCoordinator {
 
   private prune(records: SessionNotificationDedupeRecord[], now: Date): SessionNotificationDedupeRecord[] {
     const pruned = records.filter((record) => {
-      if (record.status === "delivered") return true;
+      if (record.status === "delivered" || record.status === "injection_unknown") return true;
       return this.isFreshInFlight(record, now);
     });
-    return pruned.slice(Math.max(0, pruned.length - this.maxRecords));
+    return this.cap(pruned);
   }
 
   private isFreshInFlight(record: SessionNotificationDedupeRecord, now: Date): boolean {
@@ -110,12 +133,17 @@ export class NotificationDedupeCoordinator {
     return now.getTime() - recordedAt < this.inFlightTtlMs;
   }
 
+  private cap(records: SessionNotificationDedupeRecord[]): SessionNotificationDedupeRecord[] {
+    const ordinary = records.filter((record) => record.status !== "injection_unknown").slice(-this.maxRecords);
+    return records.filter((record) => record.status === "injection_unknown" || ordinary.includes(record));
+  }
+
   private upsert(
     records: SessionNotificationDedupeRecord[],
     next: SessionNotificationDedupeRecord,
   ): SessionNotificationDedupeRecord[] {
     const withoutKey = records.filter((record) => record.key !== next.key);
     const capped = [...withoutKey, next];
-    return capped.slice(Math.max(0, capped.length - this.maxRecords));
+    return this.cap(capped);
   }
 }

@@ -414,16 +414,22 @@ describe("wake reply rule", () => {
     assert.match(scoped, /accountId and threadId only when originRoute has them/);
   });
 
-  it("gives an internal chat (WebChat) no origin-route block, so the plain reply is the message", () => {
+  it("gives internal chat keys explicit visible-final guidance without a message-tool route", () => {
     const key = "agent:main:ios-00000000-0000-4000-8000-000000000001";
     assert.equal(isInternalChatProvider("webchat"), true);
     assert.equal(isInternalChatProvider("WebChat"), true);
     assert.equal(isInternalChatProvider("telegram"), false);
-    assert.equal(formatOriginRouteWakeBlock({ route: { provider: "webchat", target: key, sessionKey: key } }), "");
-    assert.equal(formatOriginRouteWakeBlock({ originChannel: `webchat|${key}`, originSessionKey: key }), "");
+    for (const source of [
+      { route: { provider: "webchat", target: key, sessionKey: key } },
+      { originChannel: `webchat|${key}`, originSessionKey: key },
+    ]) {
+      const block = formatOriginRouteWakeBlock(source);
+      assert.match(block, /ordinary visible final answer/);
+      assert.ok(!block.includes(ROUTED_REPLY_RULE));
+    }
     // The Control UI's (and newer apps') conversation keys take the same path.
     const dashboardKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000002";
-    assert.equal(formatOriginRouteWakeBlock({ route: { provider: "webchat", target: dashboardKey, sessionKey: dashboardKey } }), "");
+    assert.match(formatOriginRouteWakeBlock({ route: { provider: "webchat", target: dashboardKey, sessionKey: dashboardKey } }), /ordinary visible final answer/);
     assert.match(formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234" } }), /originRoute/);
   });
 });

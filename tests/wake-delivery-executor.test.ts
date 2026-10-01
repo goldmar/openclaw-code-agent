@@ -620,6 +620,22 @@ describe("WakeDeliveryExecutor", () => {
     assert.deepEqual(outcomes, []);
   });
 
+  it("never falls back from an unknown delivery when ambiguity bookkeeping throws", async () => {
+    const executor = new WakeDeliveryExecutor();
+    let attempts = 0;
+    let fallback = false;
+    executor.executePromise(async () => { attempts += 1; return "ambiguous" as const; }, {
+      label: "webchat-notice", sessionId: "unknown-append", target: "message.send", phase: "notify",
+      routeSummary: "webchat:test", messageKind: "notify", terminalOnFailure: true,
+      onAmbiguousResult: () => { throw new Error("cannot persist diagnostic state"); },
+      onFinalFailure: () => { fallback = true; },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 1);
+    assert.equal(fallback, false, "a bookkeeping exception must not repeat the possibly appended notice");
+    executor.dispose();
+  });
+
   it("clears only the failed session's pending retries", async (t) => {
     const executor = new WakeDeliveryExecutor();
     const attempts = new Map<string, number>();

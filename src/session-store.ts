@@ -539,6 +539,21 @@ export class SessionStore {
     });
   }
 
+  /** Independently confirm the non-idempotent notice quarantine before append. */
+  async confirmNotificationInjection(ref: string, key: string, injectionAttemptId: string): Promise<boolean> {
+    await this.whenPersisted();
+    const snapshot = readSessionStoreSnapshot(this.indexPath);
+    if (!snapshot || !("sessions" in snapshot)) return false;
+    return snapshot.sessions.some((raw) => {
+      if (!raw || typeof raw !== "object") return false;
+      const row = raw as Partial<PersistedSessionInfo>;
+      return (row.sessionId === ref || row.harnessSessionId === ref || row.name === ref
+        || getBackendConversationId(row) === ref)
+        && row.notificationDedupe?.some((record) => record.key === key
+          && record.status === "injection_unknown" && record.injectionAttemptId === injectionAttemptId) === true;
+    });
+  }
+
   private resolvePersistWaiters(): void {
     const waiters = this.persistWaiters;
     this.persistWaiters = [];

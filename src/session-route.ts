@@ -385,8 +385,7 @@ export const ROUTED_REPLY_RULE =
 
 export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const route = canonicalizeSessionRoute(source);
-  // An internal chat has no route the message tool can send to: the plain reply is the message.
-  if (!isDirectSessionRoute(route) || isInternalChatProvider(route?.provider)) return "";
+  if (!isDirectSessionRoute(route)) return "";
 
   // The session key is left out: it is not an address the message tool takes.
   const originRoute = compactRouteObject({

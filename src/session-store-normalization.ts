@@ -285,7 +285,7 @@ function toOptionalDeliveryState(value: unknown): SessionDeliveryState | undefin
 }
 
 function toOptionalNotificationDedupeStatus(value: unknown): SessionNotificationDedupeStatus | undefined {
-  return value === "in_flight" || value === "delivered" ? value : undefined;
+  return value === "in_flight" || value === "delivered" || value === "injection_unknown" ? value : undefined;
 }
 
 function normalizeNotificationDedupeRecords(value: unknown): SessionNotificationDedupeRecord[] | undefined {
@@ -302,10 +302,13 @@ function normalizeNotificationDedupeRecords(value: unknown): SessionNotification
         status,
         recordedAt,
         label: toOptionalString(raw.label),
+        ...(toOptionalString(raw.injectionAttemptId) ? { injectionAttemptId: toOptionalString(raw.injectionAttemptId) } : {}),
       };
     })
     .filter((record): record is SessionNotificationDedupeRecord => Boolean(record));
-  return records.length > 0 ? records.slice(-64) : undefined;
+  // Unknown non-idempotent appends must not become replayable through age or retention.
+  const ordinary = records.filter((record) => record.status !== "injection_unknown").slice(-64);
+  return records.length > 0 ? records.filter((record) => record.status === "injection_unknown" || ordinary.includes(record)) : undefined;
 }
 
 function normalizeCompletionSummaryRecords(value: unknown): SessionCompletionSummaryRecord[] | undefined {

@@ -3,14 +3,14 @@ import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
-import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
+import { DirectNotificationDeliveryUnknownError, RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import {
   WakeDeliveryExecutor,
   type DispatchPhase,
   type DispatchSuccessValidationResult,
 } from "./wake-delivery-executor";
 import { WakeRouteResolver, type NotificationRoute } from "./wake-route-resolver";
-import { ROUTED_REPLY_RULE } from "./session-route";
+import { ROUTED_REPLY_RULE, isInternalChatProvider } from "./session-route";
 import {
   RuntimeSystemEventTransport,
   WakeTransport,
@@ -74,6 +74,9 @@ export interface SessionNotificationRequest {
 
 export interface SessionNotificationHooks {
   onNotifyStarted?: () => void;
+  beforeNotifyInternalChatSend?: () => Promise<void>;
+  onNotifyInternalChatNotSubmitted?: () => void;
+  onNotifyInternalChatConfirmed?: () => void;
   /** Host durable queue accepted the send intent; its retries now own delivery. */
   onNotifyAdmitted?: () => void;
   onNotifySucceeded?: () => void;
@@ -450,6 +453,7 @@ export class WakeDispatcher {
     wakeFollows: boolean = false,
     onAdmitted?: () => void,
     onAmbiguous?: () => void,
+    internalHooks?: SessionNotificationHooks,
   ): void {
     if (shouldDispatch?.() === false) return;
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
@@ -627,12 +631,21 @@ export class WakeDispatcher {
           // the tokens were being persisted: never show buttons that are stale.
           if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
-        await this.directNotifications.send(route, text, buttons, {
-          onDeliveryIntent: () => {
-            durableIntentRecorded = true;
-            onAdmitted?.();
-          },
-        });
+        try {
+          await this.directNotifications.send(route, text, buttons, {
+            beforeInternalChatSend: internalHooks?.beforeNotifyInternalChatSend,
+            onInternalChatSendNotSubmitted: internalHooks?.onNotifyInternalChatNotSubmitted,
+            onInternalChatSendConfirmed: internalHooks?.onNotifyInternalChatConfirmed,
+            shouldContinue: () => !this.disposed && shouldDispatch?.() !== false,
+            onDeliveryIntent: () => {
+              durableIntentRecorded = true;
+              onAdmitted?.();
+            },
+          });
+        } catch (error) {
+          if (error instanceof DirectNotificationDeliveryUnknownError) return "ambiguous" as const;
+          throw error;
+        }
       },
       options,
     );
@@ -742,6 +755,7 @@ export class WakeDispatcher {
     wakeFollows: boolean = false,
     onAdmitted?: () => void,
     onAmbiguous?: () => void,
+    internalHooks?: SessionNotificationHooks,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -752,6 +766,13 @@ export class WakeDispatcher {
       .filter((message) => message.text.length > 0);
 
     if (normalizedMessages.length === 0) {
+      onAllFailed?.();
+      return;
+    }
+    // Plan approval controls are on the final page. Reject the complete UI
+    // presentation before appending any earlier page or quarantining its key.
+    if (isInternalChatProvider(this.routes.resolve(session)?.channel)
+      && normalizedMessages.some((message) => message.buttons?.some((row) => row.length > 0))) {
       onAllFailed?.();
       return;
     }
@@ -809,6 +830,7 @@ export class WakeDispatcher {
         wakeFollows,
         onAdmitted,
         onAmbiguous,
+        internalHooks,
       );
     };
 
@@ -832,6 +854,12 @@ export class WakeDispatcher {
     })).filter((message) => message.text.length > 0);
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
+    const onNotifyAmbiguous = (): void => {
+      if (shouldDispatch?.() === false) return;
+      if (hooks?.onNotifyAmbiguous) hooks.onNotifyAmbiguous();
+      else hooks?.onNotifyFailed?.();
+      // A failure wake or reply fallback could repeat a notice already appended.
+    };
     const wakeSuccessValidatorFor = (wakeText: string) => request.completionWakeSummaryRequired === true
       ? (stdout: string) => validateCompletionFollowupWakeSuccess(stdout, wakeText.includes(ROUTED_REPLY_RULE))
       : undefined;
@@ -913,7 +941,8 @@ export class WakeDispatcher {
           // A queued (next-turn) success wake does not run a turn, so the fallback must.
           Boolean(wakeOnSuccess) && request.wakeDelivery !== "next-turn",
           hooks?.onNotifyAdmitted,
-          hooks?.onNotifyAmbiguous,
+          onNotifyAmbiguous,
+          hooks,
         );
       } else {
         onFailed();
@@ -941,7 +970,8 @@ export class WakeDispatcher {
         shouldDispatch,
         Boolean(wakeMessage),
         hooks?.onNotifyAdmitted,
-        hooks?.onNotifyAmbiguous,
+        onNotifyAmbiguous,
+        hooks,
       );
     }
 
@@ -974,7 +1004,8 @@ export class WakeDispatcher {
         shouldDispatch,
         true,
         hooks?.onNotifyAdmitted,
-        hooks?.onNotifyAmbiguous,
+        onNotifyAmbiguous,
+        hooks,
       );
     }
 

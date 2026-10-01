@@ -10,8 +10,8 @@ const WAKE_RETRY_BASE_DELAY_MS = 2_000;
 const WAKE_RETRY_MAX_DELAY_MS = 20_000;
 const WAKE_MAX_ATTEMPTS = 4;
 
-/** What a promise delivery task reports: nothing (sent) or that it skipped sending. */
-export type PromiseDeliveryResult = void | "skipped";
+/** A delivery task can confirm success, skip, or leave its outcome unknown. */
+export type PromiseDeliveryResult = void | "skipped" | "ambiguous";
 
 export type DispatchTarget = "chat.send" | "message.send" | "system.event";
 export type DispatchPhase = "notify" | "wake";
@@ -34,7 +34,7 @@ type ExecuteOptions = {
   onSuccess?: () => void;
   onSkipped?: (reason: string) => void;
   /**
-   * The task timed out while it may still complete (the task is not cancelled).
+   * The task timed out or reported an unknown outcome after possible delivery.
    * When set, a timeout calls this instead of retrying or `onFinalFailure`, so
    * callers never trigger a second delivery path for a send that may land later.
    */
@@ -407,6 +407,10 @@ export class WakeDeliveryExecutor {
           return;
         }
         const elapsedMs = Date.now() - startedAt;
+        if (result === "ambiguous") {
+          this.settleAmbiguousResult(opts, onSettled);
+          return;
+        }
         if (result === "skipped") {
           this.log("info", "dispatch_skipped", {
             label: opts.label,
@@ -467,8 +471,7 @@ export class WakeDeliveryExecutor {
             terminal: true,
             ambiguousResult: true,
           });
-          opts.onAmbiguousResult();
-          onSettled?.();
+          this.settleAmbiguousResult(opts, onSettled);
           return;
         }
         if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
@@ -528,6 +531,19 @@ export class WakeDeliveryExecutor {
         }
         this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
       });
+  }
+
+  /** Unknown delivery stays terminal even if caller bookkeeping fails. */
+  private settleAmbiguousResult(opts: ExecuteOptions, onSettled?: () => void): void {
+    for (const callback of [opts.onAmbiguousResult, onSettled]) {
+      try { callback?.(); }
+      catch {
+        this.log("error", "dispatch_ambiguity_hook_failed", {
+          label: opts.label, sessionId: opts.sessionId, target: opts.target,
+          phase: opts.phase, ambiguousResult: true,
+        });
+      }
+    }
   }
 
   private executePromiseWithTimeout<T>(task: () => Promise<T>): Promise<T> {
