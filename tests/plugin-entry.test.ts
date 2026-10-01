@@ -870,9 +870,11 @@ describe("plugin entry source", () => {
     }
     process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH = path;
     const harness = createFakeHarness("unhealthy-store-ordinary-session");
+    const backendId = "unhealthy-store-ordinary-thread";
     const launch = harness.launch.bind(harness);
     harness.launch = (options) => {
       const handle = launch(options);
+      harness.pushMessage({ type: "init", session_id: backendId });
       return { ...handle, interrupt: async () => { await handle.interrupt?.(); harness.endMessages(); } };
     };
     registerHarness(harness);
@@ -886,12 +888,21 @@ describe("plugin entry source", () => {
       assert.deepEqual(gc.listTasks(), []);
       const shutdown = sm.shutdown.bind(sm);
       const observedShutdown = t.mock.method(sm, "shutdown", shutdown);
-      const session = await sm.launchAndAwaitRunning({
+      const startup = sm.launchAndAwaitRunning({
         name: "ordinary-active", prompt: "Wait", workdir: rootDir,
         harness: harness.name, permissionMode: "bypassPermissions", worktreeStrategy: "off",
         route: { provider: "system", target: "system" },
       });
+      let startupTimer: ReturnType<typeof setTimeout> | undefined;
+      const session = await Promise.race([
+        startup,
+        new Promise<never>((_, reject) => {
+          startupTimer = setTimeout(() => reject(new Error("Ordinary fixture session did not initialize within 5 seconds.")), 5_000);
+        }),
+      ]).finally(() => clearTimeout(startupTimer));
       assert.equal(session.status, "running");
+      assert.equal(session.harnessSessionId, backendId);
+      assert.equal(sm.resolveBackendConversationId(session.id), backendId);
       assert.equal(session.goalTaskId, undefined);
       assert.ok(harness.lastLaunchOptions);
       await assert.rejects(host.stopServices(), /store is unavailable/);
