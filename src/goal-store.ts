@@ -20,6 +20,10 @@ const GOAL_TASK_STATUSES: ReadonlySet<GoalTaskState["status"]> = new Set([
   "stopped",
 ]);
 
+function isTerminalTask(task: { status: unknown }): boolean {
+  return task.status === "succeeded" || task.status === "failed" || task.status === "stopped";
+}
+
 function resolveGoalTasksPath(env: NodeJS.ProcessEnv): string {
   const explicit = env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH?.trim();
   if (explicit) return explicit;
@@ -158,6 +162,14 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
 function normalizeTaskStore(raw: unknown): GoalTaskState[] | undefined {
   if (!Array.isArray(raw)) return undefined;
 
+  // A duplicate persisted ID cannot identify an authoritative owner. Reject the
+  // entire file before normalization or Map insertion can discard either row.
+  const ids = new Set<string>();
+  for (const item of raw) {
+    if (!isRecord(item) || typeof item.id !== "string" || ids.has(item.id)) return undefined;
+    ids.add(item.id);
+  }
+
   const tasks: GoalTaskState[] = [];
   for (const item of raw) {
     const task = normalizeTask(item);
@@ -170,6 +182,8 @@ function normalizeTaskStore(raw: unknown): GoalTaskState[] | undefined {
 export class GoalTaskStore {
   private readonly path: string;
   private readonly tasks: Map<string, GoalTaskState> = new Map();
+  private readonly terminalRows: Map<string, Record<string, unknown>> = new Map();
+  private writesBlocked = false;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
     this.path = resolveGoalTasksPath(env);
@@ -183,40 +197,74 @@ export class GoalTaskStore {
       const parsed = JSON.parse(raw) as unknown;
       const tasks = normalizeTaskStore(parsed);
       if (!tasks) {
-        if (archiveGoalTasksFile(this.path, "invalid")) this.save();
+        this.archiveInvalidStore("invalid");
         return;
       }
 
       this.tasks.clear();
-      for (const task of tasks) this.tasks.set(task.id, task);
+      for (const [index, task] of tasks.entries()) {
+        this.tasks.set(task.id, task);
+        if (isTerminalTask(task)) {
+          // Read compatibility defaults must never replace original evidence,
+          // including unknown metadata, malformed checks and absent fields.
+          this.terminalRows.set(task.id, structuredClone((parsed as Record<string, unknown>[])[index]!));
+        }
+      }
       this.save();
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-      if (archiveGoalTasksFile(this.path, "corrupt or unreadable")) this.save();
+      this.archiveInvalidStore("corrupt or unreadable");
+    }
+  }
+
+  private archiveInvalidStore(reason: string): void {
+    if (archiveGoalTasksFile(this.path, reason)) this.save();
+    else this.writesBlocked = true;
+  }
+
+  private assertWritable(): void {
+    if (this.writesBlocked) {
+      throw new Error("Goal task store is unavailable: invalid saved evidence could not be archived.");
     }
   }
 
   save(): void {
+    this.assertWritable();
     assertTestSafeStatePath(this.path, "write the goal task store");
     try {
-      saveJsonFile(this.path, [...this.tasks.values()]);
+      saveJsonFile(this.path, [...this.tasks.values()].map((task) => this.terminalRows.get(task.id) ?? task));
     } catch (err: unknown) {
       log.warn(`[GoalTaskStore] Failed to save ${this.path}: ${errorMessage(err)}`);
     }
   }
 
   upsert(task: GoalTaskState): void {
-    this.tasks.set(task.id, task);
+    this.assertWritable();
+    if (this.terminalRows.has(task.id)) {
+      if (!isTerminalTask(task)) throw new Error("A terminal goal task identity cannot be reused.");
+      // Repeated terminal notifications/upserts remain harmless and idempotent.
+      return;
+    }
+    if (isTerminalTask(task)) {
+      // Capture exactly the JSON record emitted at the terminal transition.
+      this.terminalRows.set(task.id, JSON.parse(JSON.stringify(task)) as Record<string, unknown>);
+      this.tasks.set(task.id, structuredClone(task));
+    } else this.tasks.set(task.id, task);
     this.save();
+  }
+
+  private readTask(task: GoalTaskState): GoalTaskState {
+    return this.terminalRows.has(task.id) ? structuredClone(task) : task;
   }
 
   get(ref: string): GoalTaskState | undefined {
     const byId = this.tasks.get(ref);
-    if (byId) return byId;
-    return [...this.tasks.values()].find((task) => task.name === ref);
+    if (byId) return this.readTask(byId);
+    const byName = [...this.tasks.values()].find((task) => task.name === ref);
+    return byName ? this.readTask(byName) : undefined;
   }
 
   list(): GoalTaskState[] {
-    return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt);
+    return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt).map((task) => this.readTask(task));
   }
 }
