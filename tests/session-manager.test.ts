@@ -2341,7 +2341,7 @@ describe("SessionManager resumed launch routing", () => {
         }
         let queuedResolve!: () => void;
         const queued = new Promise<void>((resolve) => { queuedResolve = resolve; });
-        const originalLaunch: SessionManager["launchSession"] = sm.launchSession.bind(sm);
+        const originalLaunch: typeof sm.launchSession = sm.launchSession.bind(sm);
         t.mock.method(sm, "launchSession", (...args: Parameters<typeof originalLaunch>) => {
           const result = originalLaunch(...args);
           if (args[0].sessionIdOverride === row.sessionId) queuedResolve();
