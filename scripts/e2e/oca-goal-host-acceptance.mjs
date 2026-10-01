@@ -365,7 +365,9 @@ class AcceptanceRun {
     // Genuine host creation with no initial turn or naming prompt materializes
     // the canonical WebChat session. Do not fabricate host storage/context.
     const beforeCreationRequests = this.modelRequests.length;
-    const created = await this.rpc("sessions.create", { key: "agent:main:main", agentId: "main", idempotencyKey: `oca501-${randomBytes(12).toString("hex")}` });
+    // This fresh, one-shot bootstrap uses the normal creation path. Optional
+    // creation idempotency requires a principal/device this token CLI lacks.
+    const created = await this.rpc("sessions.create", { key: "agent:main:main", agentId: "main" });
     this.artifact("host-session-created.json", created);
     assert.equal(created.ok, true); assert.equal(created.key, "agent:main:main");
     assert.ok(created.sessionId); assert.ok(created.entry); assert.equal(created.runStarted, false);
