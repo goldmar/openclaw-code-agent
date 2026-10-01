@@ -221,8 +221,9 @@ class AcceptanceRun {
     const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
     return JSON.parse(output.slice(output.indexOf("{")));
   }
-  async invoke(name, args, { channel = "webchat", target = "agent:main:main" } = {}) {
-    const body = JSON.stringify({ name, args, sessionKey: "agent:main:main" });
+  async invoke(name, args, { channel = "webchat", target = this.sessionKey } = {}) {
+    assert.ok(this.sessionKey, "Use an actual host-created session");
+    const body = JSON.stringify({ name, args, sessionKey: this.sessionKey });
     const response = await fetch(`${this.gatewayUrl}/tools/invoke`, { method: "POST", headers: { authorization: `Bearer ${this.secrets[0]}`, "content-type": "application/json", "x-openclaw-message-channel": channel, "x-openclaw-message-to": target }, body, signal: AbortSignal.timeout(90_000) });
     const output = await response.json(); this.artifact(`invoke-${hash(body).slice(0, 12)}.json`, { method: "POST /tools/invoke", requestHash: hash(body), status: response.status, output });
     return { status: response.status, output };
@@ -296,7 +297,16 @@ class AcceptanceRun {
       try { const response = await fetch(`${this.gatewayUrl}/readyz`, { signal: AbortSignal.timeout(2000) }); return response.ok; } catch { return false; }
     });
     this.provenance.gatewayPid = this.gateway.pid;
-    this.artifact("tools-effective.json", await this.rpc("tools.effective", { agentId: "main", sessionKey: "agent:main:main" }));
+    // Genuine host creation with no initial turn or naming prompt materializes
+    // the canonical WebChat session. Do not fabricate host storage/context.
+    const beforeCreationRequests = this.modelRequests.length;
+    const created = await this.rpc("sessions.create", { key: "agent:main:main", agentId: "main", idempotencyKey: `oca501-${randomBytes(12).toString("hex")}` });
+    this.artifact("host-session-created.json", created);
+    assert.equal(created.ok, true); assert.equal(created.key, "agent:main:main");
+    assert.ok(created.sessionId); assert.ok(created.entry); assert.equal(created.runStarted, false);
+    assert.equal(this.modelRequests.length, beforeCreationRequests, "Host session creation starts no model turn");
+    this.sessionKey = created.key;
+    this.artifact("tools-effective.json", await this.rpc("tools.effective", { agentId: "main", sessionKey: this.sessionKey }));
     const effective = readFileSync(join(this.directory, "tools-effective.json"), "utf8");
     for (const name of pluginToolNames) assert.ok(effective.includes(`"${name}"`), `Actual host tool inventory missing ${name}`);
     this.artifact("goal-config-schema.json", await this.rpc("config.schema.lookup", { path: "plugins.entries.openclaw-code-agent.config" }));
