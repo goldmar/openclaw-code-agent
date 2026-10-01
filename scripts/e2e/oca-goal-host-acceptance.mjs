@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HOST_VERSION = "2026.9.7";
@@ -39,7 +40,7 @@ function parseOptions(argv) {
   assert.equal(process.platform, "linux"); assert.equal(process.arch, "x64", "This Hetzner fixture pins the Linux x64 native package");
   assert.ok(options.artifacts && isAbsolute(options.artifacts), "--artifacts must be absolute");
   assert.ok(!inside(ROOT, resolve(options.artifacts)), "Keep evidence outside the checkout");
-  assert.ok(["prerequisites", "matrix-h01-h05"].includes(options.phase ?? "prerequisites"), "Use an explicitly reviewed milestone phase");
+  assert.ok(["prerequisites", "matrix-h01-h05", "routed-negative"].includes(options.phase ?? "prerequisites"), "Use an explicitly reviewed milestone phase");
   return options;
 }
 
@@ -145,6 +146,71 @@ function verifyCompletionAssertionControls() {
   return { scope: "Completion assertion controls only; no host run or delivery is simulated", positives: ["exact visible nonyielded internal run", "exact delivered routed source receipt"], negatives: negatives.map(([name]) => name) };
 }
 
+function messageText(entry) {
+  return typeof entry.content === "string" ? entry.content : (entry.content ?? []).map((part) => part.text ?? "").join("\n");
+}
+
+function actualToolPayload(entry) {
+  assert.equal(entry.type, "function_call_output");
+  let payload = entry.output;
+  for (let depth = 0; depth < 8; depth++) {
+    if (typeof payload === "string") { payload = JSON.parse(payload); continue; }
+    if (Array.isArray(payload)) {
+      if (!payload.every((part) => ["text", "input_text"].includes(part.type) && typeof part.text === "string")) return payload;
+      payload = payload.map((part) => part.text).join("\n"); continue;
+    }
+    if (payload?.content && Array.isArray(payload.content)) { assert.notEqual(payload.isError, true); payload = payload.content; continue; }
+    return payload;
+  }
+  throw new Error("Actual tool output has an unsupported payload format");
+}
+
+function matchesHostCallId(value, call) {
+  // Pinned @openclaw/ai keeps the Responses call_id|fc_item_id pair in
+  // canonical history, and uses bare call_id on subsequent provider requests.
+  return value === call.id || value === `${call.id}|${call.itemId}`;
+}
+
+function selectRoutedCompletion(input, goals) {
+  assert.ok(Array.isArray(input.input));
+  const index = input.input.findLastIndex((entry) => entry.role === "user" && !messageText(entry).trim().startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"));
+  if (index < 0 || !input.tools?.length) return;
+  const wake = messageText(input.input[index]);
+  const lines = wake.split("\n").filter((line) => line.startsWith("originRoute: "));
+  if (!lines.length) return;
+  assert.equal(lines.length, 1, "Ambiguous current wake route");
+  const route = JSON.parse(lines[0].slice("originRoute: ".length));
+  if (route.provider === "webchat") return;
+  assert.deepEqual(Object.keys(route).toSorted(), ["accountId", "provider", "target"].toSorted(), "No unobserved thread/alternate route");
+  assert.deepEqual(route, { provider: "telegram", accountId: "default", target: "501002" });
+  assert.ok(wake.includes("use message(action='send', final=true) to originRoute"));
+  const matching = goals.filter((goal) => ["succeeded", "failed", "stopped"].includes(goal.status) && wake.includes(`[${goal.name}] Goal task ${goal.name} ${goal.status}. ID: ${goal.sessionId}`));
+  assert.equal(matching.length, 1, "Current routed completion selects exactly one actual goal/session");
+  const goal = matching[0];
+  assert.equal(goal.route?.provider, "telegram"); assert.equal(goal.route?.target, "501002"); assert.equal(goal.route?.accountId, "default");
+  return { goal, route, wake, index };
+}
+
+function verifyParentProtocolControls() {
+  const goal = { id: "control-goal", sessionId: "control-session", name: "control", status: "succeeded", route: { provider: "telegram", accountId: "default", target: "501002" } };
+  const wake = `[control] Goal task control succeeded. ID: control-session\noriginRoute: ${JSON.stringify(goal.route)}\nuse message(action='send', final=true) to originRoute`;
+  const input = { input: [{ role: "user", content: wake }], tools: [{ name: "tool_search" }] };
+  assert.equal(selectRoutedCompletion(input, [goal]).goal.id, goal.id);
+  assert.equal(selectRoutedCompletion({ ...input, input: [...input.input, { role: "user", content: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nquoted data\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>" }] }, [goal]).goal.id, goal.id);
+  assert.equal(selectRoutedCompletion({ ...input, input: [...input.input, { role: "user", content: "Unrelated current request" }] }, [goal]), undefined);
+  assert.equal(selectRoutedCompletion({ ...input, tools: [] }, [goal]), undefined);
+  for (const changed of [wake.replace("501002", "other"), wake.replace("default", "foreign"), wake.replace("control-session", "wrong-session"), `${wake}\noriginRoute: {}`, wake.replace("use message(action='send', final=true) to originRoute", "quoted auxiliary recap")]) assert.throws(() => selectRoutedCompletion({ ...input, input: [{ role: "user", content: changed }] }, [goal]));
+  const payload = [{ id: "actual-control-id", name: "message", source: "openclaw", sourceName: "core" }];
+  assert.deepEqual(actualToolPayload({ type: "function_call_output", output: JSON.stringify(payload) }), payload);
+  assert.deepEqual(actualToolPayload({ type: "function_call_output", output: JSON.stringify({ content: [{ type: "text", text: JSON.stringify(payload) }] }) }), payload);
+  assert.throws(() => actualToolPayload({ type: "function_call_output", output: "not JSON" }));
+  assert.throws(() => actualToolPayload({ type: "function_call_output", output: { isError: true, content: [{ type: "text", text: "[]" }] } }));
+  const call = { id: "call_control", itemId: "fc_control" };
+  assert.ok(matchesHostCallId(call.id, call)); assert.ok(matchesHostCallId(`${call.id}|${call.itemId}`, call));
+  assert.equal(matchesHostCallId(`${call.id}|fc_foreign`, call), false); assert.equal(matchesHostCallId("call_foreign|fc_control", call), false);
+  return { scope: "Pure fixture protocol controls only; no host/native/tool delivery simulated", positives: ["current own completion", "host internal context attachment", "actual-shaped direct/nested JSON output"], negatives: ["old completion in history", "tool-less auxiliary", "wrong route/account/session", "multiple route lines", "no source authorization", "invalid/error payload"] };
+}
+
 class AcceptanceRun {
   constructor(options) {
     this.options = options;
@@ -153,6 +219,7 @@ class AcceptanceRun {
     this.children = new Set(); this.servers = new Set(); this.results = []; this.commandCounter = 0;
     this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = []; this.botMenus = new Map();
     this.nativeExecutions = []; this.ownedProcesses = new Map();
+    this.artifactFiles = new Set(); this.parentDeliveries = []; this.negativeDeliveryGoal = undefined;
     this.botUpdates = []; this.updateId = 1000; this.receiptWorkdirs = new Set(); this.patchCounter = 0;
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only", randomBytes(24).toString("hex")];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
@@ -165,10 +232,14 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")) };
   }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
-  artifact(name, value) { writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`), { mode: 0o600 }); }
+  artifact(name, value) {
+    assert.match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+    writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`), { mode: 0o600 });
+    this.artifactFiles.add(name);
+  }
   async command(command, args, { cwd = ROOT, env = this.env, timeoutMs = 180_000 } = {}) {
     const child = spawn(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.children.add(child);
@@ -177,9 +248,11 @@ class AcceptanceRun {
     child.stderr.on("data", (chunk) => { stderr += this.redact(chunk); });
     const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, timeoutMs);
     try {
-      const exit = await new Promise((done, reject) => { child.once("error", reject); child.once("exit", (code, signal) => done({ code, signal })); });
-      this.artifact(`command-${++this.commandCounter}.json`, { command, args, cwd, exit, stdout, stderr });
-      assert.equal(exit.code, 0, `${command} ${args.join(" ")} failed (${exit.signal ?? exit.code}): ${(stdout + stderr).slice(-6000)}`);
+      const exit = await new Promise((done) => { child.once("error", (error) => done({ code: null, signal: null, spawnError: this.redact(error.stack ?? error) })); child.once("exit", (code, signal) => done({ code, signal })); });
+      const identity = `command-${++this.commandCounter}`;
+      this.artifact(`${identity}.stdout.log`, stdout); this.artifact(`${identity}.stderr.log`, stderr);
+      this.artifact(`${identity}.json`, { command, args, cwd, exit, stdout, stderr, stdoutFile: `${identity}.stdout.log`, stderrFile: `${identity}.stderr.log` });
+      assert.equal(exit.code, 0, `${command} ${args.join(" ")} failed (${exit.signal ?? exit.code}): ${exit.spawnError ?? (stdout + stderr).slice(-6000)}`);
       return stdout;
     } finally { clearTimeout(timer); this.children.delete(child); }
   }
@@ -229,8 +302,17 @@ class AcceptanceRun {
       const id = `resp_${this.modelRequests.length}`; const itemId = `msg_${this.modelRequests.length}`;
       const fixture = transport === "native-codex" ? this.nativeFixture : undefined;
       if (fixture) { assert.ok(body.includes(fixture.tag), "Actual native request contains this case's unique goal tag"); attempt.case = fixture.tag; }
-      const marker = transport === "host-parent" ? PARENT_MARKER : fixture?.text ?? MARKER;
+      let marker = transport === "host-parent" ? PARENT_MARKER : fixture?.text ?? MARKER;
       let item = { id: itemId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
+      if (transport === "host-parent") {
+        const decision = await this.parentResponse(input, attempt, itemId);
+        if (decision?.item) item = decision.item;
+        if (decision?.text) {
+          marker = decision.text;
+          item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
+        }
+        this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
+      }
       if (fixture?.execute && !fixture.commandSent) {
         const names = input.tools?.map((tool) => tool.name ?? tool.function?.name) ?? [];
         const name = ["exec_command", "shell_command"].find((candidate) => names.includes(candidate));
@@ -275,6 +357,7 @@ class AcceptanceRun {
       if (request.method === "GET") assert.equal(body, "", "Telegram GET probes carry no body");
       const params = request.method === "GET" ? Object.fromEntries(url.searchParams) : body ? request.headers["content-type"]?.includes("application/json") ? JSON.parse(body) : Object.fromEntries(new URLSearchParams(body)) : {};
       attempt.params = this.redact(JSON.stringify(params));
+      if (["sendMessage", "editMessageText"].includes(method)) assert.equal(String(params.chat_id), "501002", "No message may leave the owned fixture route");
       const objectParam = (value) => typeof value === "string" ? JSON.parse(value) : value;
       const menuKey = JSON.stringify({ scope: objectParam(params.scope) ?? { type: "default" }, language_code: params.language_code ?? "" });
       const bot = { id: 501001, is_bot: true, first_name: "OCA501 Fixture", username: "oca501_fixture_bot" };
@@ -307,8 +390,83 @@ class AcceptanceRun {
         }
         default: throw new Error(`Unimplemented real Bot API endpoint: ${method}`);
       }
+      attempt.result = structuredClone(result); attempt.respondedAt = new Date().toISOString();
       response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ ok: true, result }));
     });
+  }
+  async parentResponse(input, attempt, itemId) {
+    // Ignore only the host's explicitly delimited context attached to a user
+    // request. A quoted completion in an older turn cannot select a case.
+    const selected = selectRoutedCompletion(input, this.goals());
+    if (!selected) return;
+    const { goal, route, wake, index } = selected;
+    const entries = input.input;
+    const tools = input.tools ?? [];
+    if (!tools.length) return; // Tool-less auxiliary/compaction request is not source delivery.
+    attempt.case = goal.name; attempt.goalId = goal.id; attempt.wakeHash = hash(wake);
+    if (this.options.phase === "routed-negative" && goal.name === "routed-source-negative") {
+      this.negativeDeliveryGoal = goal.id; attempt.expectedUnfulfilled = true; return;
+    }
+    const tail = entries.slice(index + 1);
+    let state = this.parentDeliveries.findLast((delivery) => delivery.goalId === goal.id && delivery.wakeHash === hash(wake) && delivery.calls.some((call) => tail.some((entry) => entry.call_id === call.id)));
+    if (!state) {
+      state = { goalId: goal.id, sessionId: goal.sessionId, wakeHash: hash(wake), route, calls: [], summary: `OCA501 source receipt ${goal.id}: ${goal.name} ${goal.status}.`, admittedAt: attempt.receivedAt };
+      this.parentDeliveries.push(state);
+    }
+    attempt.parentDelivery = { goalId: state.goalId, sessionId: state.sessionId, wakeHash: state.wakeHash };
+    const advertised = (name) => {
+      const matches = tools.filter((tool) => (tool.name ?? tool.function?.name) === name);
+      assert.equal(matches.length, 1, `Actual host must advertise exactly one ${name} capability`);
+      return matches[0].parameters ?? matches[0].function?.parameters;
+    };
+    const emit = async (name, args, stage) => {
+      const schema = advertised(name);
+      const valid = this.validateHostSchema({ schema, value: args, cacheKey: `oca501:${hash(JSON.stringify(schema))}` });
+      assert.equal(valid.ok, true, `Fixture arguments must match the actual advertised ${name} schema: ${JSON.stringify(valid.errors)}`);
+      const id = `call_oca501_parent_${this.modelRequests.length}`;
+      const functionItemId = `fc_oca501_parent_${this.modelRequests.length}`;
+      state.calls.push({ id, itemId: functionItemId, name, stage, args, request: this.modelRequests.length });
+      attempt.parentCall = state.calls.at(-1);
+      this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
+      return { item: { id: functionItemId, type: "function_call", call_id: id, name, arguments: JSON.stringify(args) } };
+    };
+    const consume = (call) => {
+      const outputs = tail.filter((entry) => entry.type === "function_call_output" && entry.call_id === call.id);
+      assert.equal(outputs.length, 1, "Consume only the actual matching tool response");
+      call.actualOutput = outputs[0]; attempt.consumedCallId = call.id;
+      return actualToolPayload(outputs[0]);
+    };
+    const args = { action: "send", channel: "telegram", accountId: "default", target: "501002", final: true, message: state.summary };
+    const prior = state.calls.at(-1);
+    if (prior?.stage === "send") {
+      const output = consume(prior);
+      assert.ok(output && !output.isError && output.result?.isError !== true, "Actual message execution did not fail");
+      if (prior.name === "tool_call") {
+        assert.equal(output.tool?.id, state.tool.id); assert.equal(output.tool.name, "message"); assert.equal(output.tool.source, "openclaw");
+      }
+      state.resultTransport = "actual Responses function_call_output"; state.actualSendResult = output;
+      assert.ok(this.botRequests.some((request) => request.method === "sendMessage" && request.result?.text === state.summary && request.result.chat.id === 501002), "Actual source send precedes NO_REPLY");
+      this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
+      return { text: "NO_REPLY" };
+    }
+    if (!prior && tools.some((tool) => (tool.name ?? tool.function?.name) === "message")) return emit("message", args, "send");
+    if (!prior) return emit("tool_search", { query: "message send", limit: 5 }, "search");
+    if (prior.stage === "search") {
+      const candidates = consume(prior);
+      assert.ok(Array.isArray(candidates), "Actual single Tool Search returns candidates");
+      const matching = candidates.filter((candidate) => candidate.name === "message" && candidate.source === "openclaw" && candidate.sourceName === "core");
+      assert.equal(matching.length, 1, "Actual search admits exactly the existing core message tool");
+      assert.equal(typeof matching[0].id, "string"); state.tool = matching[0];
+      return emit("tool_describe", { id: state.tool.id }, "describe");
+    }
+    assert.equal(prior.stage, "describe");
+    const description = consume(prior);
+    assert.equal(description.id, state.tool.id); assert.equal(description.name, "message"); assert.equal(description.source, "openclaw"); assert.equal(description.sourceName, "core");
+    assert.ok(description.parameters);
+    const valid = this.validateHostSchema({ schema: description.parameters, value: args, cacheKey: `oca501:message:${hash(JSON.stringify(description.parameters))}` });
+    assert.equal(valid.ok, true, `Message args match actual described schema: ${JSON.stringify(valid.errors)}`);
+    state.description = description;
+    return emit("tool_call", { id: state.tool.id, args }, "send");
   }
   async nativePreflight() {
     const child = spawn(this.nativeExecutable, ["app-server", "--listen", "stdio://"], { cwd: this.workspace, env: this.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -339,7 +497,10 @@ class AcceptanceRun {
       assert.equal(terminal.params.turn.status, "completed");
       assert.ok(frames.some((frame) => frame.method === "item/agentMessage/delta" && frame.params.delta.includes(MARKER)));
       this.artifact("native-preflight.json", { initialized, threadId: started.thread.id, frames, stderr });
-    } finally { lines.close(); this.observeNativeProcesses(child.pid); await this.stop(child); }
+    } finally {
+      this.artifact("native-preflight-observed.json", { frames, stderr, processPid: child.pid, scope: "Actual frames observed even when preflight fails" });
+      lines.close(); this.observeNativeProcesses(child.pid); await this.stop(child);
+    }
   }
   async stop(child) {
     if (!child?.pid || child.exitCode != null || child.signalCode != null) return;
@@ -367,6 +528,10 @@ class AcceptanceRun {
     this.provenance.sourceArchiveHash = hash(execFileSync("git", ["archive", "HEAD"], { cwd: ROOT, maxBuffer: 50_000_000 }));
     const hostRoot = realpathSync(join(ROOT, "node_modules/openclaw"));
     const hostPackage = json(join(hostRoot, "package.json")); assert.equal(hostPackage.version, HOST_VERSION);
+    const validatorPath = join(hostRoot, "dist/schema-validator-BP6RVpTv.mjs");
+    this.validateHostSchema = (await import(validatorPath)).validateJsonSchemaValue;
+    assert.equal(typeof this.validateHostSchema, "function");
+    this.provenance.fixtureSchemaValidator = { path: validatorPath, hash: fileHash(validatorPath), scope: "Unmodified pinned pure JSON-schema validator; no host execution hooks" };
     this.provenance.hostVersion = hostPackage.version;
     this.hostEntry = join(hostRoot, "openclaw.mjs");
     this.provenance.hostEntryHash = fileHash(this.hostEntry); this.provenance.hostPackageHash = fileHash(join(hostRoot, "package.json"));
@@ -406,6 +571,7 @@ class AcceptanceRun {
     this.artifact("inventory-assertion-controls.json", verifyInventoryAssertionControls(pluginToolNames));
     this.artifact("effect-assertion-controls.json", verifyEffectAssertionControls());
     this.artifact("completion-assertion-controls.json", verifyCompletionAssertionControls());
+    this.artifact("parent-protocol-assertion-controls.json", verifyParentProtocolControls());
     this.pluginToolNames = pluginToolNames;
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
@@ -421,7 +587,7 @@ class AcceptanceRun {
       } },
       memory: { search: { enabled: false } },
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
-      tools: { profile: "full", allow: pluginToolNames },
+      tools: { profile: "full", allow: [...pluginToolNames, "message"] },
       plugins: { allow: ["openclaw-code-agent", "telegram"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", requiredGoalVerifierCommands: ["bash ci.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } },
       channels: { telegram: { enabled: true, botToken: this.secrets[1], apiRoot: this.botUrl, dmPolicy: "allowlist", allowFrom: ["501002"], streaming: { mode: "off" } } },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
@@ -459,8 +625,9 @@ class AcceptanceRun {
     this.provenance.installedEntry = realpathSync(join(installedRoot, "dist/index.js"));
     this.provenance.installedEntryHash = fileHash(this.provenance.installedEntry);
     this.gateway = spawn(process.execPath, [this.hostEntry, "gateway", "run", "--bind", "loopback", "--port", String(port)], { cwd: this.workspace, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    this.children.add(this.gateway); this.gatewayLog = "";
-    for (const stream of [this.gateway.stdout, this.gateway.stderr]) stream.on("data", (chunk) => { this.gatewayLog += this.redact(chunk); });
+    this.children.add(this.gateway); this.gatewayLog = ""; this.gatewayStdout = ""; this.gatewayStderr = "";
+    this.gateway.stdout.on("data", (chunk) => { const text = this.redact(chunk); this.gatewayStdout += text; this.gatewayLog += text; });
+    this.gateway.stderr.on("data", (chunk) => { const text = this.redact(chunk); this.gatewayStderr += text; this.gatewayLog += text; });
     await waitFor("actual pinned Gateway readiness", async () => {
       assert.equal(this.gateway.exitCode, null, this.gatewayLog);
       try { const response = await fetch(`${this.gatewayUrl}/readyz`, { signal: AbortSignal.timeout(2000) }); return response.ok; } catch { return false; }
@@ -502,6 +669,7 @@ class AcceptanceRun {
     const effective = await this.rpc("tools.effective", { agentId: "main", sessionKey: this.sessionKey });
     this.artifact("tools-effective.json", effective);
     const enabledOcaTools = assertEffectiveOcaTools(effective, pluginToolNames);
+    assert.ok(effective.groups.flatMap((group) => group.tools).some((entry) => entry.id === "message" && entry.source !== "plugin" && entry.deniedBySession !== true), "Actual host exposes the existing core message under the narrow fixture policy");
     this.artifact("tools-effective-oca-enabled.json", { expectedIds: pluginToolNames.toSorted(), effectiveIds: enabledOcaTools.map((entry) => entry.id).toSorted(), entries: enabledOcaTools });
     this.artifact("goal-config-schema.json", await this.rpc("config.schema.lookup", { path: "plugins.entries.openclaw-code-agent.config" }));
     // Exercise the genuine embedded parent client, not only its configuration.
@@ -531,6 +699,7 @@ class AcceptanceRun {
     const beforeRequests = this.modelRequests.length;
     const admitted = await this.invoke("agent_goal", { action: "launch", goal: "Return the prerequisite marker; make no edits.", name: "host-prerequisite", workdir: this.workspace, harness: "codex", max_iterations: 1, permission_mode: "bypassPermissions" });
     assert.equal(admitted.status, 200); assert.equal(admitted.output.ok, true); assert.notEqual(admitted.output.result?.isError, true);
+    this.hostGoalAdmitted = true;
     const goals = () => existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) ? json(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) : [];
     const terminal = await waitFor("real host goal terminal and shell gate", () => goals().find((goal) => goal.name === "host-prerequisite" && ["succeeded", "failed", "stopped"].includes(goal.status)));
     this.artifact("prerequisite-goals.json", goals());
@@ -545,6 +714,7 @@ class AcceptanceRun {
     this.results.push({ ...this.provenance, scenario: "H01", classification: "UNPROVEN", unprovenReason: "Prerequisite phase does not yet execute the host tool-denial control" });
     for (let id = 2; id <= 12; id++) this.results.push({ scenario: `H${String(id).padStart(2, "0")}`, classification: "UNPROVEN", unprovenReason: "Scenario implementation belongs to the next independently reviewed milestone", ...this.provenance });
     if (this.options.phase === "matrix-h01-h05") await this.matrixH01H05();
+    if (this.options.phase === "routed-negative") await this.routedNegative();
   }
   goals() { return existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) ? json(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) : []; }
   sessions() { return existsSync(this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH) ? json(this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH).sessions : []; }
@@ -664,7 +834,8 @@ class AcceptanceRun {
           const terminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
           if (terminal.status === "timeout" || terminal.status === "pending") return false;
           assertCompletionTerminal(terminal, row.completionWakeRunId, row.completionWakeRoutedReply);
-          this.artifact(`delivery-${task.id}.json`, { session: row, terminal });
+          const source = row.completionWakeRoutedReply ? await this.sourceDeliveryEvidence(task, row, terminal) : undefined;
+          this.artifact(`delivery-${task.id}.json`, { session: row, terminal, source });
         }
         if (task.route?.provider === "telegram") {
           const delivered = this.botMessages.findLast((message) => message.chat.id === 501002 && message.text?.includes(`[${task.name}] Goal task ${task.status}`));
@@ -697,6 +868,73 @@ class AcceptanceRun {
       throw error;
     }
     this.artifact(`session-${task.id}.json`, session);
+  }
+  async sourceDeliveryEvidence(task, row, terminal) {
+    assertCompletionTerminal(terminal, row.completionWakeRunId, true);
+    const candidates = this.parentDeliveries.filter((state) => state.goalId === task.id && state.sessionId === task.sessionId && state.calls.at(-1)?.stage === "send");
+    assert.ok(candidates.length, "Genuine provider emitted an admitted current-source message call");
+    const origin = row.originSessionKey ?? task.originSessionKey ?? task.route?.sessionKey;
+    assert.ok(origin);
+    const history = await this.rpc("chat.history", { sessionKey: origin, agentId: "main", limit: 100 });
+    const proved = candidates.map((state) => {
+      const call = state.calls.at(-1);
+      const wire = this.botRequests.filter((request) => request.method === "sendMessage" && request.result?.text === state.summary && request.result.chat.id === 501002);
+      const transcript = history.messages.flatMap((entry) => {
+        if (entry.__openclaw?.runId !== row.completionWakeRunId) return [];
+        const top = matchesHostCallId(entry.toolCallId, call) && entry.role === "toolResult" && [call.name, "message"].includes(entry.toolName) ? [{ record: entry, historyEntry: entry }] : [];
+        // The supported history projection preserves genuine nested execution
+        // as toolResult blocks, with its actual owning run and parent call ID.
+        const nested = Array.isArray(entry.content) ? entry.content.filter((part) => part.type === "toolResult" && part.toolName === "message" && matchesHostCallId(part.parentToolCallId, call) && part.runId === row.completionWakeRunId).map((record) => ({ record, historyEntry: entry })) : [];
+        return [...top, ...nested];
+      });
+      return { state, call, wire, transcript };
+    }).filter((proof) => proof.wire.length && proof.transcript.length);
+    assert.equal(proved.length, 1, "Exactly one actual source-send protocol/result/wire is correlated with this completion");
+    const proof = proved[0];
+    assert.equal(proof.wire.length, 1, "One actual current-source summary send, with no duplicate delivery");
+    for (const { record, historyEntry } of proof.transcript) {
+      assert.notEqual(historyEntry.__openclaw?.truncated, true, "Canonical message result must not be truncated");
+      assert.ok(record.content?.some((part) => typeof part.text === "string" && part.text.trim()), "Actual canonical message result has visible result content");
+      assert.notEqual(record.isError, true);
+    }
+    for (const wire of proof.wire) { assert.ok(Number.isSafeInteger(wire.result.message_id)); assert.ok(wire.respondedAt); }
+    const source = { retainedRunId: row.completionWakeRunId, terminalReceipt: terminal.terminalReceipt, protocol: proof.state, messageCallId: proof.call.id, wire: proof.wire, canonicalHistory: history, resultTransport: proof.state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool transcript and terminal source receipt (final hook ended before next Responses request)" };
+    this.artifact(`source-delivery-${task.id}.json`, source);
+    return source;
+  }
+  async routedNegative() {
+    // A distinct command invocation creates a new own profile, port and state;
+    // it cannot contaminate positive-profile settlement or consume its fence.
+    this.currentScenario = "routed-source-negative";
+    await this.settleGoalDelivery(this.goals().find((goal) => goal.name === "host-prerequisite"));
+    const id = "routed-source-negative";
+    const workdir = await this.workdir(id);
+    this.nativeFixture = { tag: `OCA501_CASE_${id}`, text: MARKER, workdir };
+    const admission = await this.invoke("agent_goal", this.goalArgs(id, workdir), { channel: "telegram", target: "501002" });
+    assert.equal(admission.status, 200); assert.notEqual(admission.output.result?.isError, true);
+    const task = await waitFor("separate negative goal admitted before completion", () => this.goals().find((goal) => goal.name === id));
+    this.negativeDeliveryGoal = task.id;
+    const completed = await waitFor("separate negative native/check success", () => this.goals().find((goal) => goal.id === task.id && goal.status === "succeeded"));
+    assert.deepEqual(completed.requiredVerifierCommands, ["bash ci.sh"]); assert.equal(readFileSync(join(workdir, "receipt.txt"), "utf8"), "CI\n");
+    const row = await waitFor("actual retained negative completion run", () => {
+      const candidate = this.sessions().find((entry) => entry.sessionId === completed.sessionId);
+      return candidate?.completionWakeRunId && candidate.completionWakeRoutedReply === true ? candidate : false;
+    });
+    const terminal = await waitFor("actual negative parent run terminal", async () => {
+      const result = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
+      return ["pending", "timeout"].includes(result.status) ? false : result;
+    });
+    assert.equal(terminal.runId, row.completionWakeRunId); assert.equal(terminal.status, "ok");
+    assert.notEqual(terminal.terminalReceipt?.sourceReplyDelivered, true);
+    assert.throws(() => assertCompletionTerminal(terminal, row.completionWakeRunId, true));
+    const preserved = this.sessions().find((entry) => entry.sessionId === completed.sessionId);
+    assert.ok(!preserved.completionWakeSucceededAt, "No source send cannot satisfy the retained obligation");
+    assert.ok(this.modelRequests.some((request) => request.goalId === task.id && request.expectedUnfulfilled && request.responseCompleted));
+    assert.ok(!this.parentDeliveries.some((state) => state.goalId === task.id));
+    assert.ok(!this.botMessages.some((message) => message.text?.startsWith(`OCA501 source receipt ${task.id}:`)));
+    const evidence = { classification: "EXPECTED_UNFULFILLED", admission, task: completed, session: preserved, terminal, assertions: ["genuine routed goal/check succeeded", "deterministic plain model output made no message call", "actual source receipt absent", "strict acceptance predicate rejected own retained run", "unfulfilled obligation preserved; no C1 successful fence"] };
+    this.artifact("routed-source-negative.json", evidence);
+    this.results.push({ ...this.provenance, scenario: id, classification: "EXPECTED_UNFULFILLED", exitCode: 0, assertions: evidence.assertions, logPath: join(this.directory, "routed-source-negative.json") });
   }
   async launchCase(id, { commands, extra = {}, expected = {}, script = {}, text = MARKER, execute = false, slash = false } = {}) {
     this.currentScenario = id;
@@ -953,9 +1191,33 @@ class AcceptanceRun {
     }
     this.artifact("cleanup.json", { ownedProcesses: [...this.ownedProcesses.values()], checkedPorts: ports, classification: failures.length ? "BLOCKED" : "PASS", failures });
     this.artifact("gateway.log", this.gatewayLog ?? "Gateway not started");
+    this.artifact("gateway.stdout.log", this.gatewayStdout ?? ""); this.artifact("gateway.stderr.log", this.gatewayStderr ?? "");
     this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, botMenus: [...this.botMenus.entries()], fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
     this.artifact("provenance.json", this.provenance);
     this.artifact("results.json", this.results);
+  }
+  exportEvidence() {
+    // Registration is the allowlist: only actual receipt writes through
+    // artifact(), plus three explicitly identified owned runtime/store files.
+    // Config/auth/env, caches, native rollout/binary and package archives are
+    // deliberately excluded, even though they live under the disposable root.
+    const entries = [...this.artifactFiles].map((name) => ({ name, alreadyRedacted: true }));
+    const unavailable = [];
+    for (const name of ["goals.json", "sessions.json", "openclaw-runtime.log"]) {
+      if (existsSync(join(this.directory, name))) entries.push({ name, alreadyRedacted: false });
+      else {
+        assert.ok(!this.hostGoalAdmitted, `Required ${name} evidence missing after real admission`);
+        unavailable.push({ name, reason: "Not generated before setup failed; no runtime acceptance claimed" });
+      }
+    }
+    for (const name of ["cleanup.json", "gateway.log", "fixtures.json", "provenance.json", "results.json", "acceptance-command.stdout.log", "acceptance-command.stderr.log"]) assert.ok(this.artifactFiles.has(name), `Required evidence not captured: ${name}`);
+    const cleanup = json(join(this.directory, "cleanup.json"));
+    const metadata = { ...this.provenance, phase: this.options.phase ?? "prerequisites", scriptExitCode: process.exitCode ?? 0, primaryFailure: this.primaryFailure ?? null, cleanup: { classification: cleanup.classification, failures: cleanup.failures }, independentErrors: this.independentErrors ?? [], unavailable, excludes: ["openclaw.json/raw config", "auth/environment/provider keys", "native binaries/rollout/cache", "tarballs/unpacked/install trees", "unrelated files"], sourceReceipts: "Command stdout/stderr captured separately; artifact receipts already exact-key redacted, runtime/store original hashes precede export redaction" };
+    const bundle = buildEvidence(this.directory, entries, metadata, this.secrets);
+    const framed = frameEvidence(bundle);
+    // Awaiting the write callback keeps the complete end/digest inside the
+    // owning job lifetime rather than relying on later warm-server recovery.
+    return new Promise((done, reject) => process.stdout.write(framed, (error) => error ? reject(error) : done()));
   }
 }
 
@@ -964,6 +1226,7 @@ try {
   run = new AcceptanceRun(parseOptions(process.argv.slice(2)));
   await run.setup();
 } catch (error) {
+  if (run) { run.primaryFailure = run.redact(error.stack ?? error); run.stderrCapture = `${run.primaryFailure}\n`; }
   if (run) run.results.push({ ...run.provenance, scenario: run.currentScenario ?? "H01-prerequisite", classification: "BLOCKED", exitCode: 1, unprovenReason: run.redact(error.stack ?? error), logPath: run.directory });
   console.error(run ? run.redact(error.stack ?? error) : String(error));
   process.exitCode = 1;
@@ -971,8 +1234,20 @@ try {
   if (run) {
     try { await run.cleanup(); } catch (error) {
       process.exitCode = 1;
-      console.error(`Cleanup/evidence failure: ${run.redact(error.stack ?? error)}`);
+      (run.independentErrors ??= []).push({ stage: "cleanup", error: run.redact(error.stack ?? error) });
+      const message = `Cleanup/evidence failure: ${run.redact(error.stack ?? error)}`;
+      run.stderrCapture = (run.stderrCapture ?? "") + `${message}\n`; console.error(message);
     }
+    const summary = `${LABEL}: ${run.options.phase ?? "prerequisites"} ${process.exitCode ? "BLOCKED" : "MILESTONE COMPLETE"}; H06–H12 remain UNPROVEN in these milestone phases; evidence ${run.directory}`;
+    run.artifact("acceptance-command.stdout.log", `${summary}\n`);
+    run.artifact("acceptance-command.stderr.log", run.stderrCapture ?? "");
+    try { await run.exportEvidence(); } catch (error) {
+      process.exitCode = 1;
+      (run.independentErrors ??= []).push({ stage: "export", error: run.redact(error.stack ?? error) });
+      // A failed export cannot leave an apparently complete PASS bundle.
+      console.error(`Evidence export BLOCKED: ${run.redact(error.stack ?? error)}`);
+      console.log(`OCA501_EVIDENCE ${JSON.stringify({ type: "incomplete", complete: false, candidateSha: run.provenance.candidateSha, primaryFailure: run.primaryFailure ?? null, independentErrors: run.independentErrors })}`);
+    }
+    console.log(`${summary}${process.exitCode ? "; exit blocked (see errors/export)" : ""}`);
   }
 }
-if (run) console.log(`${LABEL}: ${run.options.phase ?? "prerequisites"} ${process.exitCode ? "BLOCKED" : "PASS"}; H06–H12 remain UNPROVEN in these milestone phases; evidence ${run.directory}`);
