@@ -167,7 +167,7 @@ describe("WebChat notification delivery", () => {
   it("does not append if its current quarantine cannot be independently confirmed on disk", async (t) => {
     const f = fixture(t);
     let injections = 0;
-    t.mock.method(directNotificationTransportInternals, "execFile", (() => { injections += 1; return {}; }) as typeof directNotificationTransportInternals.execFile);
+    t.mock.method(directNotificationTransportInternals, "execFile", (() => { injections += 1; return {}; }) as unknown as typeof directNotificationTransportInternals.execFile);
     // Deterministic disk-write failure: memory updates continue, disk retains the old snapshot.
     t.mock.method(f.store, "saveIndex", () => {});
     let failed = false;
@@ -237,7 +237,7 @@ describe("WebChat notification delivery", () => {
       return original(...args);
     });
     let injections = 0;
-    t.mock.method(directNotificationTransportInternals, "execFile", (() => { injections += 1; return {}; }) as typeof directNotificationTransportInternals.execFile);
+    t.mock.method(directNotificationTransportInternals, "execFile", (() => { injections += 1; return {}; }) as unknown as typeof directNotificationTransportInternals.execFile);
     f.service.dispatch(f.session, { label: "disposed-notice", idempotencyKey: "disposed-notice", userMessage: "Never submit" });
     await until(() => confirming);
     f.service.dispose();
