@@ -53,6 +53,9 @@ export function agentGoalParamsError(params: unknown): string | undefined {
     case "stop":
       return optionalString(record.task) ? undefined : "action 'stop' requires task.";
     case "edit":
+      if (["verifier_commands", "goal_mode", "completion_promise"].some((field) => record[field] !== undefined)) {
+        return "action 'edit' changes goal text only; verifier commands, mode and completion promise cannot be edited.";
+      }
       return optionalString(record.task) && optionalString(record.goal)
         ? undefined
         : "action 'edit' requires task and goal.";
@@ -66,7 +69,7 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_goal",
     description:
-      "Goal loops: a session that repeats until verifier commands pass ('verifier') or a completion promise appears ('ralph'). Use only when the user asks for a goal/autonomous loop. action: launch | status | edit | stop.",
+      "Goal loops: a session that repeats until verifier commands pass ('verifier') or a completion promise appears ('ralph'). Operator-required verifiers apply in both modes: omit verifier_commands to use the complete configured suite; supplied commands must match it exactly. Use only when the user asks for a goal/autonomous loop. action: launch | status | edit | stop.",
     parameters: Type.Object({
       action: Type.StringEnum(GOAL_ACTIONS, { description: "launch needs goal; stop needs task; edit needs task and goal; status lists all or one task" }),
       task: Type.Optional(Type.String({ description: "Goal task name or ID (status, edit, stop)" })),
@@ -83,7 +86,7 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
       allowed_tools: Type.Optional(Type.Array(Type.String())),
       max_iterations: Type.Optional(Type.Number({ minimum: 1, description: "Default 8, capped at 25" })),
       max_cost_usd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Stop starting iterations once the task cost this much (ChatGPT-login Codex counts at the API-price estimate)" })),
-      goal_mode: Type.Optional(Type.StringEnum(["ralph", "verifier"], { description: "Default: verifier when verifier_commands are given, else ralph" })),
+      goal_mode: Type.Optional(Type.StringEnum(["ralph", "verifier"], { description: "Default: verifier when checks are supplied or operator-required, else ralph" })),
       completion_promise: Type.Optional(Type.String({ description: "ralph: text that ends the loop (default DONE)" })),
       permission_mode: Type.Optional(Type.StringEnum(["default", "plan", "bypassPermissions"],
         { description: "First iteration's mode; default: the plugin permissionMode (plan, so the first plan goes through plan approval)" },
@@ -104,7 +107,9 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
       }
       if (p.action === "edit") {
         const task = optionalString(p.task)!;
-        return text(renderGoalEditResult(goalController.editTask(task, p.goal!), task));
+        try { return text(renderGoalEditResult(goalController.editTask(task, p.goal!), task)); } catch (err) {
+          return text(`Error editing goal task: ${err instanceof Error ? err.message : String(err)}`, true);
+        }
       }
 
       const resolution = resolveGoalLaunchRequest({
@@ -122,7 +127,7 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
         completionPromise: p.completion_promise,
         maxCostUsd: p.max_cost_usd,
       }, ctx);
-      if (resolution.kind !== "resolved") return text(resolution.text);
+      if (resolution.kind !== "resolved") return text(resolution.text, true);
 
       try {
         const task = await goalController.launchTask({

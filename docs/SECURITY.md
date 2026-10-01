@@ -9,12 +9,18 @@ This plugin is an orchestration layer around local developer tooling. It is expe
 - start local coding-agent backends as child processes (Claude Code through the Claude Agent SDK, which spawns its bundled `claude` executable; Codex and OpenCode directly)
 - run local `git` / `gh` commands for worktree, merge, and PR flows
 - run a repository's own `.openclaw/worktree-setup.sh` when it creates a worktree
-- optionally run verifier shell commands in explicit goal-task flows, after the user confirms them
+- optionally run verifier shell commands in explicit goal-task flows, after user confirmation or operator configuration
 - use OpenClaw's in-process runtime for notifications, system events, logging and LLM summaries, its authenticated public Gateway SDK for explicit-origin wakes, and the local `openclaw` CLI for wakes without explicit origins, run observation and self-update
 
 Anyone who can launch an OCA session can make a coding agent run arbitrary commands in the chosen repository. The orchestrator is itself a model: it fills in tool parameters such as the launch `workdir` and goal `verifier_commands` from the conversation, so a prompt it reads can steer them. Treat access to the orchestrator, and every repository the Gateway user can reach, accordingly.
 
 The package declares OpenClaw install metadata in `package.json` and dangerous configuration flags in `openclaw.plugin.json`, so review tools can identify it as an executable, high-trust developer automation plugin rather than an instruction-only helper.
+
+## Operator-required goal checks
+
+`requiredGoalVerifierCommands` optionally fixes the complete ordered suite for OCA goal success, including Ralph mode. Callers cannot choose a subset or weaker command, bypass it through confirmation, or detach a nonfork goal-session resume from its owning goal. Existing bound tasks keep their original checks if the setting is removed; incompatible policy changes deny further OCA-controlled work. Terminal historical evidence is preserved. Policy reload cannot undo a command or agent turn already started.
+
+This is a command-selection boundary, not verifier integrity or host confinement. Agents can change scripts/tests, dependencies, interpreter/PATH resolution, cwd/repository inputs, HOME/XDG configuration and host setup whenever their execution authority permits. The global suite uses the caller-selected workdir. Protect config, state and authoritative checks using the owning OS/harness and protected CI controls; use an operator-owned wrapper to validate repository identity when needed. An unrestricted agent sharing the operator's filesystem privileges can modify the policy itself. The verifier is spawned directly by this trusted in-process plugin, outside OpenClaw's core exec-tool approval path. OCA goal success is not release authorization and does not grant permission to install packages or change the host.
 
 ## Subprocess Inventory
 

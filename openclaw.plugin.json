@@ -254,6 +254,16 @@
         "type": "boolean",
         "default": true,
         "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Skip this version buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
+      },
+      "requiredGoalVerifierCommands": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "description": "Complete ordered mandatory goal verifier suite. Omitted goal verifiers use this suite; explicit verifiers must match it exactly after outer trimming. All checks must pass, including in Ralph mode. Empty or invalid settings deny goal work."
       }
     }
   },
@@ -347,6 +357,11 @@
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
       "help": "Applies to all sessions that don't specify worktree_strategy explicitly. Repo policy can downgrade unsafe or impossible merge/PR follow-through. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees for sessions that don't request one. 'manual' creates a worktree and keeps it for explicit follow-through. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them.",
+      "advanced": true
+    },
+    "requiredGoalVerifierCommands": {
+      "label": "Required goal verifier suite",
+      "help": "Operator-owned ordered checks required for every goal. For example [\"bash ci.sh\"]. Every entry runs; callers cannot select a subset. Remove the setting to restore defaults for new goals; existing bound goals retain their checks.",
       "advanced": true
     }
   },

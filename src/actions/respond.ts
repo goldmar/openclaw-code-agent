@@ -138,6 +138,7 @@ async function spawnFreshRelaunch(
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
       planApproval: session.planApproval,
       harness: "harnessName" in session ? session.harnessName : session.harness,
+      goalTaskId: session.goalTaskId,
     };
     const relaunched = await sm.launchAndAwaitRunning(freshConfig, { notifyLaunch: false });
     sm.notifySession(
@@ -513,6 +514,12 @@ export async function executeRespond(
   // as revision feedback would keep a rejected plan alive. Text approve/revise
   // shortcuts stay user-only (the orchestrator approves with approve=true).
   const textPlanDecision = replyDecision === "reject" || params.userInitiated ? replyDecision : undefined;
+  // Reject remains available even when policy denies additional goal work.
+  if (textPlanDecision !== "reject") {
+    try { if (target.goalTaskId) sm.assertGoalTaskAuthorized(target.goalTaskId); } catch (err) {
+      return { text: `Error: ${errorMessage(err)}`, isError: true };
+    }
+  }
   if (textPlanDecision === "approve") {
     return executeRespond(sm, {
       ...params,

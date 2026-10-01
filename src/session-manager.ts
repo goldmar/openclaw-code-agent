@@ -576,6 +576,41 @@ export class SessionManager {
     this.maintenance.dispose();
   }
 
+  private goalTaskAuthorizer?: (id: string) => void;
+
+  /** Internal owner callback; session callers cannot provide an authorization snapshot. */
+  setGoalTaskAuthorizer(authorizer: (id: string) => void): void {
+    this.goalTaskAuthorizer = authorizer;
+  }
+
+  assertGoalTaskAuthorized(id?: string): void {
+    if (!id) return;
+    if (!this.goalTaskAuthorizer) throw new Error("Goal controller unavailable; this goal session cannot continue.");
+    this.goalTaskAuthorizer(id);
+  }
+
+  private goalOwnedLaunch(config: SessionConfig): SessionConfig {
+    if (config.forkSession) {
+      if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
+      return { ...config, assertGoalTaskAuthorized: undefined };
+    }
+    const owners = new Set<string>();
+    for (const ref of [config.sessionIdOverride, config.resumeSessionId, config.resumeWorktreeFrom]) {
+      if (!ref) continue;
+      const active = this.resolve(ref);
+      const persisted = this.getPersistedSession(ref);
+      if (active?.goalTaskId) owners.add(active.goalTaskId);
+      if (persisted?.goalTaskId) owners.add(persisted.goalTaskId);
+    }
+    if (owners.size > 1) throw new Error("Conflicting canonical goal owners for this resume.");
+    const original = [...owners][0];
+    if (original && config.goalTaskId && config.goalTaskId !== original) throw new Error("A resumed session cannot change its goal owner.");
+    const goalTaskId = original ?? config.goalTaskId;
+    this.assertGoalTaskAuthorized(goalTaskId);
+    return { ...config, goalTaskId, assertGoalTaskAuthorized: goalTaskId
+      ? () => this.assertGoalTaskAuthorized(goalTaskId) : undefined };
+  }
+
   /**
    * Spawn and start a new session, wiring lifecycle listeners and launch notification.
    *
@@ -584,6 +619,7 @@ export class SessionManager {
    * and session-id checks must see the previous launch already registered.
    */
   launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    try { config = this.goalOwnedLaunch(config); } catch (err) { return Promise.reject(err); }
     const persisted = config.resumeSessionId && config.sessionIdOverride
       ? this.getPersistedSession(config.sessionIdOverride) : undefined;
     const approval = persisted ? buildResumedPlanState(persisted, config.permissionMode ?? pluginConfig.permissionMode) : undefined;
@@ -604,6 +640,7 @@ export class SessionManager {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
+    config = this.goalOwnedLaunch(config);
     const activeCount = this.registry.activeSessionCount();
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
@@ -702,7 +739,9 @@ export class SessionManager {
     config.repoIntegrationPolicySource = launchPolicy.resolution.source === "none" ? undefined : launchPolicy.resolution.source;
     config.repoProvider = launchPolicy.resolution.provider;
 
+    config = this.goalOwnedLaunch(config);
     const preparedLaunch = await this.restore.prepareSpawn(config, name);
+    config = this.goalOwnedLaunch(config);
     // Repo-policy lookup and worktree preparation await git; shutdown may have
     // started meanwhile, and a session registered now would outlive it.
     if (this.shuttingDown) {
@@ -2262,7 +2301,10 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    return this.questions.handleAskUserQuestion(session, input, context);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
+    const answer = await this.questions.handleAskUserQuestion(session, input, context);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
+    return answer;
   }
 
   /**
@@ -2275,6 +2317,7 @@ export class SessionManager {
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
+      this.assertGoalTaskAuthorized(session.goalTaskId);
       assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
     }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);

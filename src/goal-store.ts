@@ -138,14 +138,11 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
     permissionMode: typeof value.permissionMode === "string" ? value.permissionMode as GoalTaskState["permissionMode"] : undefined,
     loopMode: value.loopMode === "ralph" ? "ralph" : "verifier",
     completionPromise: typeof value.completionPromise === "string" ? value.completionPromise : undefined,
-    verifierCommands: Array.isArray(value.verifierCommands)
-      ? value.verifierCommands
-          .filter((item): item is { label: string; command: string; timeoutMs?: number } =>
-            Boolean(item)
-            && typeof item === "object"
-            && typeof (item as { label?: unknown }).label === "string"
-            && typeof (item as { command?: unknown }).command === "string")
-      : [],
+    // Keep raw selection evidence, including malformed entries. Policy validation
+    // rejects active invalid tasks before normalization; history is never sanitized.
+    verifierCommands: (Object.hasOwn(value, "verifierCommands") ? value.verifierCommands : []) as GoalTaskState["verifierCommands"],
+    ...(Object.hasOwn(value, "requiredVerifierCommands")
+      ? { requiredVerifierCommands: value.requiredVerifierCommands as string[] } : {}),
     lastVerifierSummary: typeof value.lastVerifierSummary === "string" ? value.lastVerifierSummary : undefined,
     lastVerifierFingerprint: typeof value.lastVerifierFingerprint === "string" ? value.lastVerifierFingerprint : undefined,
     repeatedFailureCount: typeof value.repeatedFailureCount === "number" ? value.repeatedFailureCount : 0,

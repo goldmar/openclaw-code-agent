@@ -205,6 +205,7 @@ export class Session extends EventEmitter {
   // Multi-turn
   readonly multiTurn: boolean;
   readonly goalTaskId?: string;
+  private readonly goalTaskAuthorizer?: () => void;
   private messageStream?: MessageStream;
   /** A finished turn kept open only because a pulled prompt had not started its turn yet. */
   private turnHeldForOutstandingPrompt = false;
@@ -345,6 +346,7 @@ export class Session extends EventEmitter {
     this.rewindTurns = config.rewindTurns;
     this.multiTurn = config.multiTurn ?? true;
     this.goalTaskId = config.goalTaskId;
+    this.goalTaskAuthorizer = config.assertGoalTaskAuthorized;
     this.worktreeStrategy = config.worktreeStrategy;
     this.repoIntegrationPolicy = config.repoIntegrationPolicy;
     this.repoIntegrationPolicySource = config.repoIntegrationPolicySource;
@@ -874,6 +876,10 @@ export class Session extends EventEmitter {
   }
 
   private assertCurrentModelAllowed(): void {
+    if (this.goalTaskId) {
+      if (!this.goalTaskAuthorizer) throw new Error("Goal controller authorization is unavailable for this session.");
+      this.goalTaskAuthorizer();
+    }
     assertModelAllowedForHarness(this.harnessName, this.model, resolveAllowedModelsForHarness(this.harnessName));
   }
 
@@ -964,12 +970,15 @@ export class Session extends EventEmitter {
     const planDecisionPending = !!this.pendingModeSwitch
       || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
     if (this.turnInProgress && !planDecisionPending && this.harnessHandle?.steer) {
-      if (await this.harnessHandle.steer(text)) {
+      const steered = await this.harnessHandle.steer(text);
+      this.assertCurrentModelAllowed();
+      if (steered) {
         this.logDiagnostic("turn.steered", { chars: text.length });
         return "steered";
       }
     }
 
+    this.assertCurrentModelAllowed();
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
 
@@ -980,6 +989,7 @@ export class Session extends EventEmitter {
       if (await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode })) {
         // The backend received the approval as the native permission result
         // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
+        this.assertCurrentModelAllowed();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
         if (isBareApprovalMessage(text)) return "queued";
@@ -992,6 +1002,7 @@ export class Session extends EventEmitter {
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
+        this.assertCurrentModelAllowed();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
         if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
@@ -1014,6 +1025,7 @@ export class Session extends EventEmitter {
       if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text })) return "queued";
       if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
+      this.assertCurrentModelAllowed();
       // Re-assert plan mode at the backend level so revision stays read-only.
       if (this.harnessHandle?.setPermissionMode) {
         try {
@@ -1026,6 +1038,7 @@ export class Session extends EventEmitter {
       }
     }
 
+    this.assertCurrentModelAllowed();
     if (this.multiTurn && this.messageStream) {
         this.messageStream.push(
           this.harness.buildUserMessage(effectiveText, this.backendConversationId ?? ""),
@@ -1058,6 +1071,7 @@ export class Session extends EventEmitter {
       throw new Error("Session does not support follow-up actions (launched in single-turn mode).");
     }
     this.resetIdleTimer();
+    this.assertCurrentModelAllowed();
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
     this.messageStream.push(this.harness.buildThreadActionMessage(action));
@@ -1067,12 +1081,16 @@ export class Session extends EventEmitter {
     decision: Parameters<NonNullable<HarnessSession["resolvePlanDecision"]>>[0],
   ): Promise<boolean> {
     if (!this.harnessHandle?.resolvePlanDecision) return false;
+    this.assertCurrentModelAllowed();
+    let resolved: boolean;
     try {
-      return await this.harnessHandle.resolvePlanDecision(decision);
+      resolved = await this.harnessHandle.resolvePlanDecision(decision);
     } catch (err: unknown) {
       log.warn(`[Session ${this.id}] native plan decision (${decision.kind}) failed: ${errorMessage(err)}`);
-      return false;
+      resolved = false;
     }
+    this.assertCurrentModelAllowed();
+    return resolved;
   }
 
   private applyApprovedPermissionMode(mode: PermissionMode): void {
@@ -1138,6 +1156,7 @@ export class Session extends EventEmitter {
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
+    this.assertCurrentModelAllowed();
     if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
   }
@@ -1166,6 +1185,7 @@ export class Session extends EventEmitter {
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputText(text);
+    this.assertCurrentModelAllowed();
     if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
   }
