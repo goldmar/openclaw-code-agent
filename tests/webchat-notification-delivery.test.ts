@@ -40,6 +40,7 @@ describe("WebChat notification delivery", () => {
     });
     store.replacePersistedSession({
       sessionId: session.id, harnessSessionId: session.harnessSessionId, name: session.name,
+      harness: "claude-code", backendRef: session.backendRef,
       prompt: "Test a plan", workdir: "/tmp", status: "running", costUsd: 0,
       route: session.route,
     });
@@ -90,7 +91,7 @@ describe("WebChat notification delivery", () => {
       persistSession: () => {}, clearWaitingTimestamp: () => {},
       handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
       resolveWorktreeRepoDir: () => undefined, updatePersistedSession: f.patch,
-      dispatchSessionNotification: (session, request) => f.service.dispatchSessionNotification(session, request),
+      dispatchSessionNotification: (session, request) => f.service.dispatch(session, request),
       notifySession: () => {}, clearRetryTimersForSession: () => {},
       hasTurnCompleteWakeMarker: () => false, shouldEmitTurnCompleteWake: () => true,
       shouldEmitTerminalWake: () => true, resolvePlanApprovalMode: () => "ask",
@@ -129,7 +130,7 @@ describe("WebChat notification delivery", () => {
       return {};
     }) as typeof directNotificationTransportInternals.execFile);
     const request = { label: "crash-notice", idempotencyKey: "crash-notice-v1", userMessage: "Appended before crash" };
-    f.service.dispatchSessionNotification(f.session, request);
+    f.service.dispatch(f.session, request);
     await until(() => injections === 1);
     f.service.dispose();
     const reloaded = new SessionStore({ indexPath: f.indexPath });
@@ -150,7 +151,7 @@ describe("WebChat notification delivery", () => {
       confirmNotificationInjection: (ref, key, attemptId) => normalized.confirmNotificationInjection(ref, key, attemptId) });
     t.after(() => restarted.dispose());
     let duplicate = false;
-    restarted.dispatchSessionNotification(f.session, { ...request, hooks: { onDuplicateSkipped: () => { duplicate = true; } } });
+    restarted.dispatch(f.session, { ...request, hooks: { onDuplicateSkipped: () => { duplicate = true; } } });
     assert.equal(duplicate, true);
     assert.equal(injections, 1);
   });
@@ -162,7 +163,7 @@ describe("WebChat notification delivery", () => {
     // Deterministic disk-write failure: memory updates continue, disk retains the old snapshot.
     t.mock.method(f.store, "saveIndex", () => {});
     let failed = false;
-    f.service.dispatchSessionNotification(f.session, {
+    f.service.dispatch(f.session, {
       label: "unpersisted-notice", idempotencyKey: "unpersisted-notice", userMessage: "Never append",
       requireDirectUserNotification: true, hooks: { onNotifyFailed: () => { failed = true; } },
     });
@@ -185,10 +186,10 @@ describe("WebChat notification delivery", () => {
     }) as typeof directNotificationTransportInternals.execFile);
     const request = { label: "safe-retry", idempotencyKey: "safe-retry", userMessage: "Retry after executable restore", requireDirectUserNotification: true };
     let failed = false;
-    f.service.dispatchSessionNotification(f.session, { ...request, hooks: { onNotifyFailed: () => { failed = true; } } });
+    f.service.dispatch(f.session, { ...request, hooks: { onNotifyFailed: () => { failed = true; } } });
     await until(() => failed);
     let delivered = false;
-    f.service.dispatchSessionNotification(f.session, { ...request, hooks: { onNotifySucceeded: () => { delivered = true; } } });
+    f.service.dispatch(f.session, { ...request, hooks: { onNotifySucceeded: () => { delivered = true; } } });
     await until(() => delivered);
     assert.equal(attempts, 2);
     assert.equal(f.store.getPersistedSession(f.session.id)?.notificationDedupe?.[0]?.status, "delivered");
@@ -206,7 +207,7 @@ describe("WebChat notification delivery", () => {
       return {};
     }) as typeof directNotificationTransportInternals.execFile);
     let failed = false;
-    f.service.dispatchSessionNotification(f.session, {
+    f.service.dispatch(f.session, {
       label: "multipart-notice", idempotencyKey: "multipart-notice", requireDirectUserNotification: true,
       userMessages: [{ text: "First page", requiredForSequenceSuccess: true }, { text: "Second page", requiredForSequenceSuccess: true }],
       hooks: { onNotifyFailed: () => { failed = true; } },
@@ -229,7 +230,7 @@ describe("WebChat notification delivery", () => {
     });
     let injections = 0;
     t.mock.method(directNotificationTransportInternals, "execFile", (() => { injections += 1; return {}; }) as typeof directNotificationTransportInternals.execFile);
-    f.service.dispatchSessionNotification(f.session, { label: "disposed-notice", idempotencyKey: "disposed-notice", userMessage: "Never submit" });
+    f.service.dispatch(f.session, { label: "disposed-notice", idempotencyKey: "disposed-notice", userMessage: "Never submit" });
     await until(() => confirming);
     f.service.dispose();
     release();
@@ -253,7 +254,7 @@ describe("WebChat notification delivery", () => {
         label: "completion-notice", idempotencyKey: "same-notice", userMessage: "Already appended",
         wakeMessageOnNotifyFailed: "Repeat the notice", onUserNotifyFailed: () => { fallback = true; },
       };
-      f.service.dispatchSessionNotification(f.session, request);
+      f.service.dispatch(f.session, request);
       await until(() => f.store.getPersistedSession(f.session.id)?.deliveryState === "failed");
       assert.equal(injections, 1);
       assert.equal(fallback, false);
@@ -268,7 +269,7 @@ describe("WebChat notification delivery", () => {
         confirmNotificationInjection: (ref, key, attemptId) => reloaded.confirmNotificationInjection(ref, key, attemptId) });
       t.after(() => restarted.dispose());
       let duplicate = false;
-      restarted.dispatchSessionNotification(f.session, {
+      restarted.dispatch(f.session, {
         ...request, hooks: { onDuplicateSkipped: () => { duplicate = true; } },
       });
       assert.equal(duplicate, true);
