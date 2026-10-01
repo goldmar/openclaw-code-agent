@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-10-01
+
+### Changed
+
+- Default new Codex sessions to GPT-6.1 Sol (`gpt-6.1-sol`) with `medium` reasoning. Resume and fork preserve saved model and effort pins unless explicitly overridden. Add GPT-6.1 Sol API cost estimates, including cached input, long-context rates, and supported priority/flex tiers; unknown snapshots remain unpriced.
+- Require and build against OpenClaw `2026.9.7` for installation, the plugin SDK/API, Gateway, and npm peer dependency.
+- Remove Task Flow lifecycle projection and host-side Task Flow cancellation after OpenClaw retired `runtime.tasks` without a compatibility facade ([upstream #159179](https://github.com/openclaw/openclaw/pull/159179)). OCA retains its session lifecycle, plan approvals, worktree decisions, goal loops, and completion/wake delivery. Use OCA's Stop controls or `agent_kill`; the retired `openclaw tasks flow cancel` path is no longer available. Historical `taskFlowMirror` metadata remains inert and preserved through session persistence; no replacement ledger or host migration is introduced.
+- Recheck harness model restrictions before internal/resumed backend startup and follow-up input. A saved model denied by current configuration fails rather than launching a different model. Preserve the Codex and Claude Code defaults and pins already established on main.
+- Preserve the requester's async context on host LLM completions instead of detaching into plugin-load context. Host model-policy denials retain their error code; expired background request scopes use deterministic summary and PR-metadata fallbacks.
+
 ### Fixed
 
 - A typed plan decision ("Approve", "Revise" or "Reject") sent to a session that the idle timeout suspended while its plan awaited approval is now handled as the decision. Before, `respond` parsed typed decisions only in `awaiting_plan_decision`, so the session resumed with "Approve" as a new prompt and planned again.
@@ -15,15 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recover external session-key routes for the internal `webchat|cli` continuation envelope, while preserving genuine WebChat origins when the UI opens an external-channel session.
 - Suppress automatic delivery for routed wake turns and explicitly mark message-tool follow-ups as final, avoiding invisible or duplicate completion summaries.
 - Confirm completion follow-ups through the exact Gateway run's terminal delivery receipt rather than its admission acknowledgment. Persist the run and delivery contract before submission, preserve pending summaries on uncertain outcomes, and observe uncertain saved runs after restart without repeating the notification or turn. Retry only wakes proven not to have been submitted, using their saved message and identity.
-
-## [5.0.1] - 2026-09-30
-
-### Changed
-
-- Require and build against OpenClaw `2026.9.7` for installation, the plugin SDK/API, Gateway, and npm peer dependency.
-- Remove Task Flow lifecycle projection and host-side Task Flow cancellation after OpenClaw retired `runtime.tasks` without a compatibility facade ([upstream #159179](https://github.com/openclaw/openclaw/pull/159179)). OCA retains its session lifecycle, plan approvals, worktree decisions, goal loops, and completion/wake delivery. Use OCA's Stop controls or `agent_kill`; the retired `openclaw tasks flow cancel` path is no longer available. Historical `taskFlowMirror` metadata remains inert and preserved through session persistence; no replacement ledger or host migration is introduced.
-- Recheck harness model restrictions before internal/resumed backend startup and follow-up input. A saved model denied by current configuration fails rather than launching a different model. Preserve the Codex and Claude Code defaults and pins already established on main.
-- Preserve the requester's async context on host LLM completions instead of detaching into plugin-load context. Host model-policy denials retain their error code; expired background request scopes use deterministic summary and PR-metadata fallbacks.
 
 ### Verification boundary
 
