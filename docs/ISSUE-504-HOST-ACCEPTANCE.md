@@ -8,7 +8,7 @@ loopback ports, synthetic credentials, and local Git repositories. It requires
 both actual HTTP tool execution and subscribed embedded direct/deferred tool
 execution; missing capabilities produce a blocking failure.
 
-Run on the supported Hetzner wrapper, serially with other host fixtures:
+Run through the supported Hetzner wrapper. Jobs may share available slots when each uses its allocated workspace/cgroup, separate profiles, ephemeral ports, logs and PID cleanup, and verified private Node/pnpm installations with separate HOME/config/cache/store. Cross-floor jobs must avoid `--toolchain node`, which changes shared toolchains. Respect available slots and exclusive jobs; never bypass runner locks.
 
 ```sh
 node --import tsx scripts/e2e/oca-issue-504-host-acceptance.ts \
