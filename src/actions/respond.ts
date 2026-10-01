@@ -500,9 +500,12 @@ export async function executeRespond(
   const target = session ?? persisted!;
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 
+  // A session suspended (idle timeout) while its plan waited is still waiting
+  // for that decision: "Approve" typed to it must approve, not resume it with
+  // "Approve" as a new prompt that makes it plan again.
   const replyDecision =
     !params.approve
-    && target.lifecycle === "awaiting_plan_decision"
+    && (target.lifecycle === "awaiting_plan_decision" || target.lifecycle === "suspended")
     && target.pendingPlanApproval
       ? normalizePlanReplyDecision(params.message)
       : undefined;

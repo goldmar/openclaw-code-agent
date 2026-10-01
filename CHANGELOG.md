@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A typed plan decision ("Approve", "Revise" or "Reject") sent to a session that the idle timeout suspended while its plan awaited approval is now handled as the decision. Before, `respond` parsed typed decisions only in `awaiting_plan_decision`, so the session resumed with "Approve" as a new prompt and planned again.
+
 ## [5.0.1] - 2026-09-30
 
 ### Changed
