@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   canonicalizeSessionRoute,
   formatOriginRouteWakeBlock,
+  isInternalChatProvider,
   ROUTED_REPLY_RULE,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
@@ -325,5 +326,18 @@ describe("wake reply rule", () => {
     });
     assert.match(scoped, /"accountId":"second-bot"/);
     assert.match(scoped, /accountId and threadId only when originRoute has them/);
+  });
+
+  it("gives an internal chat (WebChat) no origin-route block, so the plain reply is the message", () => {
+    const key = "agent:main:ios-00000000-0000-4000-8000-000000000001";
+    assert.equal(isInternalChatProvider("webchat"), true);
+    assert.equal(isInternalChatProvider("WebChat"), true);
+    assert.equal(isInternalChatProvider("telegram"), false);
+    assert.equal(formatOriginRouteWakeBlock({ route: { provider: "webchat", target: key, sessionKey: key } }), "");
+    assert.equal(formatOriginRouteWakeBlock({ originChannel: `webchat|${key}`, originSessionKey: key }), "");
+    // The Control UI's (and newer apps') conversation keys take the same path.
+    const dashboardKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000002";
+    assert.equal(formatOriginRouteWakeBlock({ route: { provider: "webchat", target: dashboardKey, sessionKey: dashboardKey } }), "");
+    assert.match(formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234" } }), /originRoute/);
   });
 });

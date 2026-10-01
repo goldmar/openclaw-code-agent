@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyDurableSendResult,
+  directNotificationTransportInternals,
   DirectNotificationDeliveryError,
   RuntimeDirectNotificationTransport,
   type DurableMessageBatchSendResult,
@@ -270,5 +271,52 @@ describe("classifyDurableSendResult", () => {
       status: "failed",
       error: new Error("x"),
     } as unknown as DurableMessageBatchSendResult).delivered, false);
+  });
+});
+
+describe("RuntimeDirectNotificationTransport: internal chat (WebChat)", () => {
+  const WEBCHAT_ROUTE = {
+    channel: "webchat",
+    target: "agent:main:ios-00000000-0000-4000-8000-000000000001",
+    sessionKey: "agent:main:ios-00000000-0000-4000-8000-000000000001",
+  };
+  const realExecFile = directNotificationTransportInternals.execFile;
+  afterEach(() => {
+    directNotificationTransportInternals.execFile = realExecFile;
+    setPluginRuntime(undefined);
+  });
+
+  function fakeExecFile(err: Error | null, stderr = "") {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    directNotificationTransportInternals.execFile = ((file: string, args: string[], _opts: unknown, cb: Function) => {
+      calls.push({ file, args });
+      cb(err, "", stderr);
+    }) as never;
+    return calls;
+  }
+
+  it("appends the notice with chat.inject instead of the durable outbound queue", async () => {
+    setPluginRuntime({}, { channels: {} });
+    const calls = fakeExecFile(null);
+    const { calls: durableCalls, transport } = recordingTransport();
+
+    await transport.send(WEBCHAT_ROUTE, "🚀 [add-f4-foils] Launched", [[{ label: "View output", callbackData: "t1" }]]);
+
+    assert.equal(durableCalls.length, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].file, "openclaw");
+    assert.deepEqual(calls[0].args.slice(0, 3), ["gateway", "call", "chat.inject"]);
+    const params = JSON.parse(calls[0].args[calls[0].args.indexOf("--params") + 1]);
+    assert.deepEqual(params, { sessionKey: WEBCHAT_ROUTE.sessionKey, message: "🚀 [add-f4-foils] Launched" });
+  });
+
+  it("falls back to the target as the session key and reports a failed inject", async () => {
+    fakeExecFile(new Error("exit 1"), "unknown session");
+    const { transport } = recordingTransport();
+
+    await assert.rejects(
+      transport.send({ channel: "webchat", target: "agent:main:ios-x" }, "✅ done"),
+      (err: unknown) => err instanceof DirectNotificationDeliveryError && /chat\.inject into agent:main:ios-x failed: unknown session/.test(err.message),
+    );
   });
 });

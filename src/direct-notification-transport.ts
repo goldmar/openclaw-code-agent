@@ -1,4 +1,6 @@
+import * as childProcess from "child_process";
 import { logButtonDiagnostic, summarizeButtons, summarizePresentation } from "./button-diagnostics";
+import { isInternalChatProvider } from "./session-route";
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
 import { getRuntimeConfig } from "./runtime-store";
 import type { NotificationButton } from "./session-interactions";
@@ -40,7 +42,46 @@ async function loadSendDurableMessageBatch(): Promise<SendDurableMessageBatch> {
  */
 export const directNotificationTransportInternals = {
   loadSendDurableMessageBatch,
+  execFile: childProcess.execFile,
 };
+
+const CHAT_INJECT_TIMEOUT_MS = 30_000;
+
+/**
+ * Append a notice to an internal chat (WebChat: Control UI and native apps)
+ * with `openclaw gateway call chat.inject`, which writes an assistant note to
+ * the session transcript and broadcasts it to connected clients without an
+ * agent run. It is a CLI subprocess for the same reason `chat.send` wakes are:
+ * the in-process gateway request surface is reserved for trusted plugins.
+ * Buttons have no rendering there, so the text is sent alone.
+ */
+async function injectIntoInternalChat(route: NotificationRoute, text: string): Promise<void> {
+  const sessionKey = (route.sessionKey?.trim() || route.target).trim();
+  const args = [
+    "gateway",
+    "call",
+    "chat.inject",
+    "--timeout",
+    String(CHAT_INJECT_TIMEOUT_MS),
+    "--params",
+    JSON.stringify({ sessionKey, message: text }),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    directNotificationTransportInternals.execFile(
+      "openclaw",
+      args,
+      { timeout: CHAT_INJECT_TIMEOUT_MS + 5_000, killSignal: "SIGKILL" },
+      (err, _stdout, stderr) => {
+        if (!err) return resolve();
+        const detail = String(stderr || "").trim() || errorMessage(err);
+        reject(new DirectNotificationDeliveryError(
+          `OpenClaw chat.inject into ${sessionKey} failed: ${detail.slice(0, 300)}`,
+          { cause: err },
+        ));
+      },
+    );
+  });
+}
 
 /**
  * Direct user notifications through the host's durable outbound queue
@@ -69,6 +110,16 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
       ...summarizeButtons(buttons),
       ...(presentation ? summarizePresentation(presentation) : {}),
     });
+    if (isInternalChatProvider(route.channel)) {
+      try {
+        await injectIntoInternalChat(route, text);
+      } catch (err) {
+        logButtonDiagnostic("direct_send_failed", { ...summarizeRoute(route), ...summarizeButtons(buttons), error: errorMessage(err) });
+        throw err;
+      }
+      logButtonDiagnostic("direct_send_succeeded", { ...summarizeRoute(route), ...summarizeButtons(buttons), transport: "chat.inject" });
+      return;
+    }
     const cfg = getRuntimeConfig();
     if (cfg == null) {
       throw new DirectNotificationDeliveryError(

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Deliver plugin notices to sessions launched from OpenClaw WebChat (the Control UI and the native iOS/Android/macOS apps). Their `webchat|<sessionKey>` route was treated as an outbound channel, so every notice failed with "Outbound not configured for channel: webchat" and every wake told the orchestrator to send to a route the `message` tool rejects ("Unknown channel"). Notices on a WebChat route are now appended to the conversation with the Gateway's `chat.inject`, and wakes carry no origin-route block there, so the orchestrator's plain reply is the message.
+
 ## [5.0.1] - 2026-09-30
 
 ### Changed
