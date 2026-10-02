@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- While a goal is active, confirmation, restore, plan or input release, resume, continuation and verifier execution revalidate the current policy. A policy change, even one reverted before a verifier batch finishes, fails the affected goal instead of letting the old result succeed. Removing the setting keeps existing goals bound to their original suite; only new goals use the default again. `edit` changes goal text only.
+- While a goal is active, confirmation, restore, plan or input release, resume, continuation and verifier execution revalidate the current policy. A policy change, even one reverted before a verifier batch finishes, fails the affected goal instead of letting the old result succeed. Removing the setting keeps existing goals bound to their original suite; only new goals use the default again. `agent_goal` `edit` changes goal text only and now rejects `verifier_commands`, `goal_mode` and `completion_promise` instead of ignoring them; launch-resolution failures now return `isError: true`.
 - A nonfork resume of an active goal's session stays part of that goal; fork the session to work independently. Once a goal has succeeded, failed or stopped (or its record is gone), any later explicit action on its session (`agent_respond`, a plan decision, a question answer, compact/review, or resume) continues it as an ordinary session that can no longer restart the goal or mark it succeeded. Goal-loop work never continues past the end of its goal.
-- Unknown session references fail closed with structured errors in the respond, output, merge and escalation tools; exact IDs and legitimate names still resolve ([#515](https://github.com/goldmar/openclaw-code-agent/pull/515)). Queued merges bind the session generation they were admitted for and recheck worktree coordinates, decisions and repository policy before changing anything.
-- Vendored Codex App Server protocol types are regenerated from Codex CLI `0.160.0` (additive plan types and error codes only). The minimum Codex CLI stays `0.156.1`.
+- Unknown session references fail closed with structured errors in the respond, output, merge and escalation tools; exact IDs and legitimate names still resolve ([#515](https://github.com/goldmar/openclaw-code-agent/pull/515)). Queued merges and PR preparation bind the session generation they were admitted for and recheck worktree coordinates, decisions and repository policy before changing anything.
+- Vendored Codex App Server protocol types are regenerated from Codex CLI `0.160.0` (additive plan types and error codes; with Codex 0.160+ an interrupted turn's error message can appear as its result text). The minimum Codex CLI stays `0.156.1`.
 
 ### Fixed
 
@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes
 
 - No configuration change is needed; without `requiredGoalVerifierCommands`, goal verifier confirmation works as before.
-- A goal-task store with duplicate task IDs, or one that cannot be parsed, is archived and replaced on first start. If it cannot be archived, goal tasks become unavailable (they fail closed) rather than overwriting the saved evidence.
+- A goal-task store with duplicate task IDs is now treated as invalid and archived like a corrupt one. If archiving fails, goal tasks become unavailable (they fail closed) rather than overwriting the saved evidence.
 - Release tooling and development dependencies picked up security patches (brace-expansion [#511](https://github.com/goldmar/openclaw-code-agent/pull/511); undici in the ClawHub release tools [#512](https://github.com/goldmar/openclaw-code-agent/pull/512)). The shipped runtime dependencies are unchanged.
 
 ## [5.0.1] - 2026-10-01
@@ -1085,7 +1085,9 @@ Compatibility evidence must identify the OCA commit and published OpenClaw packa
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.1...v5.1.0
+[5.0.1]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.0...v5.0.1
 [5.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.20...v5.0.0
 [4.7.20]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.19...v4.7.20
 [4.7.19]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.18...v4.7.19
