@@ -216,7 +216,7 @@ class AcceptanceRun {
     const receipt = hostLogEvidence(text);
     if (receipt.completeStreamSafe) this.artifact(name, text);
     else {
-      this.artifact(name, { ...receipt, sourceIdentity: name, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
+      this.artifact(name, { ...receipt, sourceIdentity: name, guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha }, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
       (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: receipt.exclusionReason });
       for (const result of this.results) if (result.classification === "PASS") { result.classification = "BLOCKED"; result.unprovenReason = receipt.exclusionReason; }
       process.exitCode = 1;

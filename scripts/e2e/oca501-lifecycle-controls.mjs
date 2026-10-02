@@ -153,6 +153,36 @@ assertSafeHostLog('phaseDurationsMs={"prepare":0,"run":2015,"finalize":0}');
 refuse("multiline scalar profile excluded", () => assertSafeHostLog("agents:\n  defaults:\n    model: private-config"));
 refuse("phase duration payload cannot hide config", () => assertSafeHostLog('phaseDurationsMs={"prepare":{"bindings":[]}}'));
 assert.equal(nativeDiagnostics(safeLog)[0].error, "Owned native stream closed after the real review turn");
+// Closed failure diagnostics expose source constants and whole-stream hashes,
+// never the excluded payload, arbitrary keys, assertion strings or stacks.
+const diagnosticControls = [
+  [String.raw`error "{\"gateway\":{\"auth\":{\"token\":\"SYNTHETIC_PRIVATE\"}}}"`, "PROHIBITED_PROFILE_AUTH", "string-profile-auth"],
+  [JSON.stringify({ phaseDurationsMs: { credentials: 0 } }), "PROHIBITED_PROFILE_AUTH", "timing-map-key"],
+  ['phaseDurationsMs={"gateway.auth":0}', "PROHIBITED_PROFILE_AUTH", "timing-map-key"],
+  ['phaseDurationsMs={"prepare":-1}', "INVALID_PHASE_MAP", "timing-map-value"],
+  [JSON.stringify({ unknownPayload: { privateValue: "SYNTHETIC_PRIVATE" } }), "UNKNOWN_STRUCTURED_SHAPE", "metadata-object-shape"],
+  [JSON.stringify({ "0": "safe", _meta: { unknownPayload: "SYNTHETIC_PRIVATE" } }), "INVALID_CLOSED_METADATA", "logger-metadata-shape"],
+  [String.raw`error "{\"gateway\":`, "MALFORMED_EMBEDDED_CONTENT", "unclosed-quoted-structure"],
+  [JSON.stringify({ component: "CodexHarness", event: "turn.terminal", unknownPayload: "SYNTHETIC_PRIVATE" }), "UNKNOWN_STRUCTURED_SHAPE", "native-diagnostic-shape"],
+  ["safe multibyte é🙂\n" + JSON.stringify({ unknownPayload: "SYNTHETIC_PRIVATE" }), "UNKNOWN_STRUCTURED_SHAPE", "metadata-object-shape"],
+];
+// Nested objects provide the same existing recursive bound without huge strings.
+let deepObject = "safe"; for (let index = 0; index < 34; index++) deepObject = { reason: deepObject };
+diagnosticControls.push([JSON.stringify(deepObject), "INVALID_CLOSED_METADATA", "metadata-object-value"]);
+for (const [raw, code, guardSite] of diagnosticControls) {
+  const original = raw, receipt = hostLogEvidence(raw); assert.equal(receipt.completeStreamSafe, false); assert.equal(receipt.rawCompleteStreamExcluded, true);
+  assert.equal(receipt.failureDiagnostic.code, code); assert.equal(receipt.failureDiagnostic.guardSite, guardSite);
+  assert.deepEqual(receipt.failureDiagnostic.location, { scope: "whole-stream", available: false });
+  assert.equal(receipt.original.bytes, Buffer.byteLength(raw)); assert.equal(receipt.original.sha256, createHash("sha256").update(raw).digest("hex"));
+  assert.ok(!JSON.stringify(receipt).includes("SYNTHETIC_PRIVATE")); assert.ok(!JSON.stringify(receipt).includes("unknownPayload")); assert.ok(!JSON.stringify(receipt).includes("gateway.auth"));
+  assert.ok(!Object.hasOwn(receipt.failureDiagnostic, "stack") && !Object.hasOwn(receipt.failureDiagnostic, "message")); assert.equal(raw, original);
+  negatives.push("rejected unsafe log retains fixed site/category and whole-stream identity only");
+}
+let boundedDiagnostic = "safe"; for (let index = 0; index < 34; index++) boundedDiagnostic = { reason: boundedDiagnostic };
+const boundedReceipt = hostLogEvidence(JSON.stringify(boundedDiagnostic), { commandStream: true }); assert.equal(boundedReceipt.failureDiagnostic.code, "PARSER_BOUND"); assert.equal(boundedReceipt.failureDiagnostic.guardSite, "recursive-inspection-bound"); negatives.push("bounded parser failure retains no decoded unsafe payload");
+const unclassifiedReceipt = hostLogEvidence(JSON.stringify({ defaults: { modelProvider: "SYNTHETIC_PRIVATE", model: "foreign", contextTokens: 1 } }), { commandStream: true, rpcMethod: "sessions.list" });
+assert.equal(unclassifiedReceipt.failureDiagnostic.code, "UNKNOWN_GUARD_FAILURE"); assert.equal(unclassifiedReceipt.failureDiagnostic.guardSite, "unclassified-validation"); assert.equal(unclassifiedReceipt.failureDiagnostic.sourceClass, "command-response"); assert.ok(!JSON.stringify(unclassifiedReceipt).includes("SYNTHETIC_PRIVATE")); negatives.push("unclassified assertion error never exports message/actual/expected/stack");
+assert.equal(hostLogEvidence(safeLog).completeStreamSafe, true); assert.equal(hostLogEvidence(safeLog).failureDiagnostic, undefined);
 const visibleRun = "own-visible-run", responseId = "own-visible-response", visibleText = "OWN_VISIBLE_PROBE";
 const visibleTerminal = { runId: visibleRun, status: "ok", terminalReply: { disposition: "visible", text: visibleText } };
 const visibleCanonical = { role: "assistant", responseId, __openclaw: { runId: visibleRun }, content: visibleText };
@@ -454,4 +484,4 @@ if (argv.length === 4) {
   assert.deepEqual(originals, untouched);
   parentReplay = { classification: "OFFLINE_REAL_R1_REPLAY_ONLY_NOT_RUNTIME_PASS", goldenHashes: hashes, selectedRequestIndex: 3, excludedRequestIndices: [2, 4] };
 }
-console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 43 + (parentReplay ? 4 : 0), negativeControls: negatives.length, parentReplay, negatives }));
+console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 46 + (parentReplay ? 4 : 0), negativeControls: negatives.length, parentReplay, negatives }));
