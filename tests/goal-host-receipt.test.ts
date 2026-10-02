@@ -149,7 +149,8 @@ describe("bounded representative host receipts", () => {
       assert.ok(taskReads > 0); assert.equal(publicReads, 0); observedTasks = [{ ...goal }];
       assert.equal((await waiting).sessionId, live.id);
       const before = publicReads;
-      for (const tasks of [[{ ...goal }, { ...goal }], [{ ...goal, harnessSessionId: "foreign" }], [{ ...goal, status: "failed" }]]) {
+      const contradictions: Array<Array<typeof goal>> = [[{ ...goal }, { ...goal }], [{ ...goal, harnessSessionId: "foreign" }], [{ ...goal, status: "failed" }]];
+      for (const tasks of contradictions) {
         observedTasks = tasks; await assert.rejects(run.nativeOwner(nativeFixture, { threadId: "thread" })); assert.equal(publicReads, before);
       }
       const terminal = { ...row, status: "completed", goalTaskId: goal.id };
