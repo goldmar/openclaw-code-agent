@@ -94,7 +94,8 @@ export async function stopOwnedChild(child, { identity = childIdentities.get(chi
   childTargets.set(child, targets);
   const alive = previous => { const current = processIdentity(previous.pid); return sameProcess(previous, current) && current.state !== "Z"; };
   const pipesClosed = () => [child.stdout, child.stderr].every(stream => !stream || stream.closed);
-  const complete = () => targets.every(previous => !alive(previous)) && pipesClosed();
+  const terminal = () => child.exitCode !== null || child.signalCode !== null || child.pid === undefined && pipesClosed();
+  const complete = () => terminal() && targets.every(previous => !alive(previous)) && pipesClosed();
   const signal = sig => { for (const previous of targets) if (alive(previous)) { try { process.kill(previous.pid, sig); } catch {} } };
   if (identity && alive(identity)) { try { process.kill(identity.pid, "SIGTERM"); } catch {} }
   let graceful = true;
@@ -106,7 +107,7 @@ export async function stopOwnedChild(child, { identity = childIdentities.get(chi
   }
   const stdioComplete = pipesClosed();
   if (!stdioComplete) { child.stdout?.destroy(); child.stderr?.destroy(); }
-  return { complete: targets.every(previous => !alive(previous)) && stdioComplete, graceful, stdioComplete,
+  return { complete: terminal() && targets.every(previous => !alive(previous)) && stdioComplete, graceful, stdioComplete,
     exitCode: child.exitCode, signal: child.signalCode, targets };
 }
 export function currentOwner(rows, listing, fixture, threadId, goalId) {
