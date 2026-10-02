@@ -16,7 +16,8 @@ import { makeAgentGoalTool } from "../src/tools/agent-goal";
 import { registerGoalCommand } from "../src/commands/goal";
 import { executeRespond, requestPlanDecisionChanges, rejectPlanDecision } from "../src/actions/respond";
 import { registerHarness } from "../src/harness";
-import { setGoalController } from "../src/singletons";
+import { createCallbackHandler } from "../src/callback-handler";
+import { setGoalController, setSessionManager } from "../src/singletons";
 import { createFakeHarness, createStubSession, tick } from "./helpers";
 import type { GoalTaskState, GoalVerifierSpec } from "../src/types";
 
@@ -34,6 +35,7 @@ function fixture() {
     emitGoalTaskUpdate: () => {},
     sendGoalVerifierConfirmation: () => { confirmations += 1; },
     setGoalTaskAuthorizer: (callback: (id: string) => void) => { authorizer = callback; },
+    kill: () => {},
     resolve: (): undefined => undefined,
     resolveBackendConversationId: (ref: string) => ref,
     launchAndAwaitRunning: async () => { launches += 1; return Object.assign(new EventEmitter(), createStubSession({ id: "session", name: "session", status: "running" })); },
@@ -55,7 +57,7 @@ async function waitForFile(path: string) {
 }
 
 beforeEach(() => setPluginConfig({}));
-afterEach(() => { setPluginConfig({}); setGoalController(null); while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
+afterEach(() => { setPluginConfig({}); setGoalController(null); setSessionManager(null); while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
 describe("operator-required goal suite admission", () => {
   it("injects the full ordered suite for omission and explicit Ralph, preserving duplicate steps", () => {
@@ -773,4 +775,156 @@ describe("pending resume ownership before backend initialization (R7)", () => {
       assert.equal(d.harness.lastLaunchOptions, undefined);
     } finally { await d.cleanup(); }
   });
+});
+
+// Composed policy boundaries. Native handles are fake; controller, persistence,
+// Session authorization and opaque-token callback routing are production code.
+describe("relocated feature boundary coverage", () => {
+  for (const decision of ["run", "cancel"] as const) {
+    it(`routes an original opaque ${decision} callback under changed policy and makes replay inert`, async () => {
+      const f = fixture();
+      const sm = new SessionManager(2, 5, { store: { indexPath: join(f.dir, "sessions.json") } });
+      setSessionManager(sm); setGoalController(f.controller);
+      let buttons: any[][] = [];
+      (sm as any).dispatchSessionNotification = (_session: unknown, request: any) => { buttons = request.buttons; };
+      (f.manager as any).sendGoalVerifierConfirmation = sm.sendGoalVerifierConfirmation.bind(sm);
+      const current = await f.controller.launchTask({ goal: "Confirm", workdir: f.dir, verifierCommands: specs(["true"]),
+        requireVerifierConfirmation: true, route: { provider: "telegram", target: "12345" } });
+      assert.equal(current.status, "awaiting_verifier_confirmation");
+      const payload = buttons[0][decision === "run" ? 0 : 1].callbackData.replace(/^code-agent:/, "");
+      assert.match(payload, /^[0-9a-f-]{36}$/);
+      const replies: string[] = [];
+      const context = { channel: "telegram", accountId: "default", conversationId: "12345", senderId: "12345",
+        auth: { isAuthorizedSender: true }, callback: { payload, data: `code-agent:${payload}`, chatId: "12345", messageId: 1 },
+        respond: { acknowledge: async () => {}, clearButtons: async () => {}, editButtons: async () => {},
+          reply: async ({ text }: { text: string }) => { replies.push(text); } } };
+      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      await createCallbackHandler().handler(context as any);
+      assert.equal(current.status, decision === "run" ? "failed" : "stopped");
+      assert.match(replies.join("\n"), decision === "run" ? /policy changed|stored suite/i : /cancelled/i);
+      assert.equal(f.counters().launches, 0);
+      const terminal = JSON.parse(JSON.stringify(current));
+      await createCallbackHandler().handler(context as any);
+      assert.deepEqual(JSON.parse(JSON.stringify(current)), terminal);
+      assert.equal(f.counters().launches, 0);
+      assert.match(replies.at(-1)!, /expired|used|no longer|stale/i);
+    });
+  }
+
+  it("refuses an organically launched, saved A-bound goal in a fresh B controller before resume", async () => {
+    const f = fixture();
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    const launched = await f.controller.launchTask({ goal: "Organic", workdir: f.dir, loopMode: "ralph", maxIterations: 3 });
+    launched.harnessSessionId = "organic-native-thread";
+    f.controller.stop();
+    const original = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8"))[0];
+    assert.deepEqual(original.requiredVerifierCommands, ["true"]);
+    const fresh = fixture();
+    (fresh.controller as any).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(f.dir, "goals.json") });
+    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    fresh.controller.start(); await (fresh.controller as any).restorePromise;
+    const rejected = fresh.controller.getTask(launched.id)!;
+    assert.equal(rejected.status, "failed");
+    assert.match(rejected.failureReason!, /policy changed|stored suite/i);
+    assert.equal(rejected.iteration, original.iteration);
+    assert.equal(rejected.harnessSessionId, original.harnessSessionId);
+    assert.deepEqual(rejected.requiredVerifierCommands, original.requiredVerifierCommands);
+    assert.deepEqual(rejected.verifierCommands, original.verifierCommands);
+    assert.deepEqual(fresh.counters(), { launches: 0, confirmations: 0 });
+    fresh.controller.stop();
+  });
+
+  for (const outcome of ["succeeded", "failed", "stopped"] as const) {
+    it(`preserves a complete controller-produced ${outcome} row after awaited late events and later writes`, async () => {
+      const f = fixture();
+      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const current = await f.controller.launchTask({ goal: "Terminal", workdir: f.dir, maxIterations: 1 });
+      const session = Object.assign(new EventEmitter(), createStubSession({ id: current.sessionId, status: "completed" }));
+      (f.controller as any).attachSessionObservers(current, session);
+      if (outcome === "stopped") f.controller.stopTask(current.id);
+      else {
+        if (outcome === "failed") setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        await (f.controller as any).handleTerminalSession(current, session);
+      }
+      assert.equal(current.status, outcome);
+      f.store.save();
+      const before = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8")).find((row: any) => row.id === current.id);
+      f.controller.start(); await (f.controller as any).restorePromise;
+      session.emit("turnEnd", session); session.emit("statusChange", session, "completed");
+      await tick(30);
+      await (f.controller as any).reconcileTask(current, "late", current.sessionId);
+      f.store.upsert(task(["true"], { id: "unrelated", name: "unrelated" })); f.store.save();
+      const after = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8")).find((row: any) => row.id === current.id);
+      assert.deepEqual(after, before);
+      assert.equal(f.counters().launches, 1, "late events did not spawn repair or resume");
+      f.controller.stop();
+    });
+  }
+
+  for (const operation of ["compact", "review", "question-text", "question-option", "steer"] as const) {
+    for (const allowed of [true, false]) {
+      it(`${operation} independently ${allowed ? "admits current policy" : "denies changed policy before effects"}`, async () => {
+        const f = fixture(); setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+        const current = await f.controller.launchTask({ goal: operation, workdir: f.dir });
+        const harness = createFakeHarness(`fresh-${operation}-${allowed}`); harness.steerResult = true;
+        harness.capabilities.threadActions = ["compact", "review"];
+        harness.buildThreadActionMessage = (action) => ({ role: "user", content: `Action:${action.kind}` });
+        registerHarness(harness);
+        const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true,
+          goalTaskId: current.id, assertGoalTaskAuthorized: () => f.authorize(current.id) }, operation);
+        await session.start(); session.transition("running"); await tick(5);
+        let submissions = 0;
+        const handle = (session as any).harnessHandle;
+        handle.submitPendingInputText = handle.submitPendingInputOption = async () => { submissions++; return true; };
+        session.pendingInputState = { requestId: "question", kind: "question", promptText: "Continue?",
+          options: [{ label: "Yes", value: "yes" }], allowsFreeText: true } as any;
+        if (operation === "steer") (session as any).turnInProgress = true;
+        const before = harness.consumedPrompts.length;
+        const perform = async () => {
+          if (operation === "compact" || operation === "review") session.requestThreadAction({ kind: operation } as any);
+          else if (operation === "question-text") assert.equal(await session.submitPendingInputText("yes"), true);
+          else if (operation === "question-option") assert.equal(await session.submitPendingInputOption(0), true);
+          else await session.sendMessage("Additional work");
+        };
+        if (!allowed) setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        try {
+          if (allowed) await perform();
+          else await assert.rejects(perform(), /policy changed|stored suite/i);
+          await tick(5);
+          if (allowed) {
+            if (operation.startsWith("question")) assert.equal(submissions, 1);
+            else if (operation === "steer") assert.deepEqual(harness.steerCalls, ["Additional work"]);
+            else assert.equal(harness.consumedPrompts.length, before + 1);
+            assert.equal(current.status, "running");
+          } else {
+            assert.equal(submissions, 0); assert.deepEqual(harness.steerCalls, []);
+            assert.equal(harness.consumedPrompts.length, before); assert.equal(current.status, "failed");
+          }
+        } finally { session.kill("user"); harness.endMessages(); await session.waitForTeardown(); }
+      });
+    }
+  }
+
+  for (const option of [false, true]) {
+    it(`revalidates question ${option ? "option" : "text"} after its native submission await`, async () => {
+      const f = fixture(); setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const current = await f.controller.launchTask({ goal: "Pending", workdir: f.dir });
+      const harness = createFakeHarness(`question-await-${option}`); registerHarness(harness);
+      const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true,
+        goalTaskId: current.id, assertGoalTaskAuthorized: () => f.authorize(current.id) }, "pending");
+      await session.start(); session.transition("running");
+      session.pendingInputState = { requestId: "question", kind: "question", promptText: "Continue?", options: [], allowsFreeText: true };
+      const original = structuredClone(session.pendingInputState);
+      const entered = Promise.withResolvers<void>(), pending = Promise.withResolvers<boolean>();
+      const handle = (session as any).harnessHandle;
+      handle[option ? "submitPendingInputOption" : "submitPendingInputText"] = () => { entered.resolve(); return pending.promise; };
+      let answered = 0; session.on("pendingInputAnswered", () => { answered++; });
+      const submitting = option ? session.submitPendingInputOption(0) : session.submitPendingInputText("yes");
+      await entered.promise; setPluginConfig({ requiredGoalVerifierCommands: ["false"] }); pending.resolve(true);
+      await assert.rejects(submitting, /policy changed|stored suite/i);
+      assert.equal(answered, 0); assert.deepEqual(session.pendingInputState, original);
+      assert.equal(current.status, "failed");
+      session.kill("user"); harness.endMessages(); await session.waitForTeardown();
+    });
+  }
 });

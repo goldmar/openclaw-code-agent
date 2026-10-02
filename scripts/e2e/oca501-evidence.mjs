@@ -1,120 +1,96 @@
-// Bounded receipt transport for the issue-501 disposable-host acceptance job.
-// Decode on the coordinator host immediately after the owning remote job ends:
-// node scripts/e2e/oca501-evidence.mjs --decode /tmp/job.stdout --out /tmp/receipts \
-//   --expected-sha <reviewed SHA> --node-version 24.16.0 --phase matrix-h01-h05
+// Bounded structured feature receipts; raw config, logs and model bodies are excluded.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateL1Coverage, l1Assignment } from "./oca501-l1-cohort.mjs";
-
-const sha = (value) => createHash("sha256").update(value).digest("hex");
-const PREFIX = "OCA501_EVIDENCE ";
-const LIMITS = { files: 2000, fileBytes: 4 * 1024 * 1024, totalBytes: 64 * 1024 * 1024 };
-const safeName = (name) => typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
-const HOST_VERSION = "2026.9.7";
-const HOST_COMMIT = "c074824a27c96d3983043f9eeb33823cd1772d8c";
-const NATIVE_VERSION = "0.159.3";
-const PHASES = ["prerequisites", "matrix-h01-h05", "matrix-l1", "routed-negative"];
-
-function validateIdentity(manifest, expected) {
-  assert.ok(expected && typeof expected === "object", "External expected receipt identity is mandatory");
-  assert.match(expected.candidateSha ?? "", /^[a-f0-9]{40}$/); assert.match(manifest.candidateSha ?? "", /^[a-f0-9]{40}$/);
-  assert.ok(["24.16.0", "26.1.0"].includes(expected.nodeVersion));
-  assert.ok(PHASES.includes(expected.phase) || (expected.controlsOnly === true && expected.phase === "controls-only"));
-  for (const field of ["candidateSha", "nodeVersion", "phase"]) assert.equal(manifest[field], expected[field], `Expected ${field} mismatch`);
-  assert.ok(Number.isSafeInteger(manifest.scriptExitCode) && manifest.scriptExitCode >= 0);
-  validateL1Coverage(manifest, expected.selectedL1Cohort);
-  if (expected.controlsOnly === true) { assert.equal(manifest.phase, "controls-only"); return; }
-  assert.equal(manifest.expectedHostVersion, HOST_VERSION); assert.equal(manifest.expectedNativeVersion, NATIVE_VERSION);
-  for (const [field, pinned] of [["hostVersion", HOST_VERSION], ["upstreamTagCommit", HOST_COMMIT], ["nativeVersion", NATIVE_VERSION]]) {
-    if (manifest[field] !== undefined || manifest.scriptExitCode === 0) assert.equal(manifest[field], pinned, `Applicable pinned ${field} mismatch`);
+export const sha = value => createHash("sha256").update(value).digest("hex");
+export const FILE_LIMIT = 4 * 1024 * 1024;
+export const HOST_PIN = "c074824a27c96d3983043f9eeb33823cd1772d8c";
+export const assignments = Object.freeze({ smoke: [], admission: ["admission"], gates: ["whole-gate"], live: ["live-policy"], restore: ["organic-restore"], all: ["admission", "whole-gate", "live-policy", "organic-restore", "immutable-history", "end-to-end-cleanup"] });
+export function excluded(name, bytes, domain = "original captured bytes") {
+  assert.ok(/^[a-z][a-z0-9.-]*$/.test(name));
+  return { name, disposition: "EXCLUDED", bytes: bytes.length, sha256: sha(bytes), domain };
+}
+function privacy(value, secrets) {
+  if (Array.isArray(value)) return value.map(item => privacy(item, secrets));
+  if (value && typeof value === "object") {
+    for (const key of Object.keys(value)) assert.ok(!/^(?:auth|token|apiKey|botToken|environment|config|providers|defaults|bindings|transcript|raw)$/i.test(key), "Raw profile or transcript field refused");
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, privacy(item, secrets)]));
   }
-  // Failed setup can export complete failure receipts without claiming that
-  // installation/runtime stages were reached. Successful runtime needs pins.
-  if (manifest.scriptExitCode === 0) {
-    for (const field of ["sourceArchiveHash", "hostEntryHash", "hostPackageHash", "nativeExecutableHash", "packageHash", "installedEntryHash", "acceptanceScriptHash", "evidenceHelperHash", "commandReceiptHelperHash"]) assert.match(manifest[field] ?? "", /^[a-f0-9]{64}$/, `Required ${field} provenance missing`);
-    assert.equal(manifest.officialCli?.nodeVersion, `v${expected.nodeVersion}`);
-    assert.equal(manifest.officialCli?.entryHash, manifest.hostEntryHash);
-    assert.match(manifest.officialCli?.nodeHash ?? "", /^[a-f0-9]{64}$/);
-    assert.equal(manifest.parentModel, "oca501/gpt-6-luna");
-    assert.equal(manifest.cleanup?.classification, "PASS", "Zero-exit export requires completed owned cleanup");
-  } else {
-    assert.ok((typeof manifest.primaryFailure === "string" && manifest.primaryFailure) || manifest.cleanup?.classification === "BLOCKED" || manifest.independentErrors?.length, "Blocked transport must preserve its failure reason");
+  if (typeof value === "string") {
+    for (const secret of secrets) { assert.ok(secret.length >= 8);
+      value = value.replaceAll(secret, "[fixture credential]");
+      }
+    assert.ok(value.length <= 4096, "Unbounded text is not a structured proof");
   }
+  return value;
 }
-
-export function buildEvidence(root, entries, metadata, secrets) {
-  assert.ok(entries.length <= LIMITS.files);
-  const owned = realpathSync(root);
-  const names = new Set(); let totalBytes = 0;
-  const files = entries.toSorted((a, b) => a.name.localeCompare(b.name)).map((entry) => {
-    assert.ok(safeName(entry.name) && !names.has(entry.name), "Unique flat evidence identity"); names.add(entry.name);
-    const path = join(root, entry.name);
-    assert.ok(lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink(), "Only regular owned evidence");
-    assert.equal(relative(owned, realpathSync(path)), entry.name, "No outside-root evidence");
-    const original = readFileSync(path); assert.ok(original.length <= LIMITS.fileBytes, "Evidence file exceeds fixed bound");
-    let text = original.toString("utf8");
-    assert.deepEqual(Buffer.from(text), original, "Export only complete UTF-8 text receipts");
-    for (const secret of secrets) text = text.replaceAll(secret, "[fixture credential]");
-    const sanitized = Buffer.from(text); totalBytes += sanitized.length;
-    assert.ok(sanitized.length <= LIMITS.fileBytes && totalBytes <= LIMITS.totalBytes, "Evidence export exceeds fixed bound");
-    return { name: entry.name, originalBytes: original.length, originalSha256: sha(original), originalScope: entry.alreadyRedacted ? "artifact already redacted before hashing" : "owned raw receipt before export redaction", sanitizedBytes: sanitized.length, sanitizedSha256: sha(sanitized), content: gzipSync(sanitized).toString("base64") };
-  });
-  const manifest = { ...metadata, format: "oca501-evidence-v1", complete: true, redaction: "Exact known synthetic fixture tokens/API keys only; no raw config/auth/env export", compression: "gzip+base64", limits: LIMITS, fileCount: files.length, totalSanitizedBytes: totalBytes, files: files.map(({ content, ...entry }) => entry) };
-  return { manifest, files, digest: sha(JSON.stringify({ manifest, files })) };
+export function validateReceipt(receipt, expected) {
+  assert.equal(receipt.format, "oca501-slim-v1");
+  assert.equal(receipt.complete, true);
+  for (const field of ["candidateSha", "nodeVersion", "scenario"]) assert.equal(receipt[field], expected[field]);
+  assert.match(receipt.candidateSha, /^[a-f0-9]{40}$/);
+  assert.ok(["24.16.0", "26.1.0"].includes(receipt.nodeVersion));
+  assert.equal(receipt.hostVersion, "2026.9.7");
+  assert.equal(receipt.hostCommit, HOST_PIN);
+  assert.equal(receipt.nativeVersion, "0.159.3");
+  assert.ok(Object.hasOwn(assignments, receipt.scenario));
+  assert.deepEqual(receipt.assigned, assignments[receipt.scenario]);
+  assert.equal(new Set(receipt.completed).size, receipt.completed.length);
+  for (const id of receipt.completed) assert.ok(receipt.assigned.includes(id));
+  assert.ok(["PASS", "BLOCKED"].includes(receipt.disposition));
+  if (receipt.disposition === "PASS") { assert.deepEqual(receipt.completed, receipt.assigned);
+    assert.equal(receipt.cleanup.complete, true);
+    assert.equal(receipt.failure, null);
+    }
+  assert.ok(receipt.cleanup && Array.isArray(receipt.cleanup.failures));
+  assert.ok(Array.isArray(receipt.excluded));
+  for (const item of receipt.excluded) { assert.equal(item.disposition, "EXCLUDED");
+    assert.match(item.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(Number.isSafeInteger(item.bytes) && item.bytes >= 0);
+    }
+  privacy(receipt, []);
+  return receipt;
 }
-
-export function frameEvidence(bundle) {
-  return [JSON.stringify({ type: "begin", format: "oca501-evidence-v1" }), ...bundle.files.map((file) => JSON.stringify({ type: "file", file })), JSON.stringify({ type: "manifest", manifest: bundle.manifest }), JSON.stringify({ type: "end", digest: bundle.digest })].map((line) => `${PREFIX}${line}`).join("\n") + "\n";
+export function frameReceipt(receipt, secrets = []) {
+  let safe = privacy(receipt, secrets);
+  validateReceipt(safe, safe);
+  let bytes = Buffer.from(JSON.stringify(safe) + "\n");
+  if (bytes.length > FILE_LIMIT) {
+    safe = { ...safe, disposition: "BLOCKED", failure: safe.failure ?? { stage: "export", code: "STRUCTURED_PROOF_BOUND_EXCEEDED" },
+      proofs: [], excluded: [...safe.excluded, excluded("oversized-proof.json", bytes, "complete sanitized receipt before bounded exclusion")] };
+    receipt.disposition = "BLOCKED"; receipt.failure = safe.failure;
+    validateReceipt(safe, safe); bytes = Buffer.from(JSON.stringify(safe) + "\n");
+  }
+  assert.ok(bytes.length <= FILE_LIMIT);
+  return `OCA501_SLIM ${JSON.stringify({ sha256: sha(bytes), bytes: bytes.length, content: bytes.toString("base64") })}\n`;
 }
-
-export function decodeEvidence(stdout, expected) {
-  const lines = stdout.split("\n").filter((line) => line.startsWith(PREFIX)).map((line) => JSON.parse(line.slice(PREFIX.length)));
-  assert.equal(lines[0]?.type, "begin"); assert.equal(lines[0].format, "oca501-evidence-v1");
-  assert.equal(lines.at(-1)?.type, "end", "Missing final evidence marker");
-  assert.equal(lines.at(-2)?.type, "manifest");
-  const manifest = lines.at(-2).manifest;
-  validateIdentity(manifest, expected);
-  assert.equal(manifest.complete, true, "Incomplete export is blocked"); assert.equal(manifest.format, "oca501-evidence-v1");
-  assert.deepEqual(manifest.limits, LIMITS);
-  const files = lines.slice(1, -2).map((line) => { assert.equal(line.type, "file"); return line.file; });
-  assert.equal(files.length, manifest.fileCount); assert.ok(files.length <= LIMITS.files);
-  assert.deepEqual(files.map(({ content, ...entry }) => entry), manifest.files);
-  assert.equal(sha(JSON.stringify({ manifest, files })), lines.at(-1).digest, "Full bundle digest mismatch");
-  const names = new Set(); let bytes = 0;
-  const decoded = files.map((file) => {
-    assert.ok(safeName(file.name) && !names.has(file.name)); names.add(file.name);
-    for (const count of [file.sanitizedBytes, file.originalBytes]) assert.ok(Number.isSafeInteger(count) && count >= 0 && count <= LIMITS.fileBytes);
-    for (const digest of [file.sanitizedSha256, file.originalSha256]) assert.match(digest, /^[a-f0-9]{64}$/);
-    assert.ok(typeof file.content === "string" && file.content.length <= 2 * LIMITS.fileBytes, "Bound compressed transport before decode");
-    const content = gunzipSync(Buffer.from(file.content, "base64"), { maxOutputLength: LIMITS.fileBytes });
-    assert.equal(content.length, file.sanitizedBytes); assert.equal(sha(content), file.sanitizedSha256);
-    bytes += content.length; assert.ok(bytes <= LIMITS.totalBytes);
-    return { name: file.name, content };
-  });
-  assert.equal(bytes, manifest.totalSanitizedBytes);
-  return { manifest, files: decoded, digest: lines.at(-1).digest };
+export function decodeReceipt(stdout, expected) {
+  const frames = stdout.split("\n").filter(line => line.startsWith("OCA501_SLIM "));
+  assert.equal(frames.length, 1, "Exactly one complete owning-job receipt required");
+  const frame = JSON.parse(frames[0].slice(12));
+  assert.ok(Number.isInteger(frame.bytes) && frame.bytes > 0 && frame.bytes <= FILE_LIMIT);
+  assert.ok(typeof frame.content === "string" && frame.content.length <= 2 * FILE_LIMIT);
+  const bytes = Buffer.from(frame.content, "base64");
+  assert.equal(bytes.length, frame.bytes);
+  assert.equal(sha(bytes), frame.sha256);
+  assert.deepEqual(Buffer.from(bytes.toString("utf8")), bytes);
+  const receipt = validateReceipt(JSON.parse(bytes), expected);
+  return { receipt, bytes, sha256: frame.sha256 };
 }
-
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const options = {};
-  const args = process.argv.slice(2);
-  assert.ok([10, 12].includes(args.length), "Provide decode/out/expected-sha/node-version/phase and optional matrix-l1 cohort");
-  for (let index = 0; index < args.length; index += 2) {
-    const name = args[index];
-    assert.ok(["--decode", "--out", "--expected-sha", "--node-version", "--phase", "--l1-cohort"].includes(name) && !Object.hasOwn(options, name), "Unknown/duplicate decoder option");
-    assert.ok(args[index + 1]); options[name] = args[index + 1];
+  const options = {}, args = process.argv.slice(2);
+  assert.equal(args.length, 10);
+  for (let i = 0; i < args.length; i += 2) {
+    assert.ok(["--decode", "--out", "--expected-sha", "--node-version", "--scenario"].includes(args[i]) && !Object.hasOwn(options, args[i]));
+    assert.ok(args[i + 1]);
+    options[args[i]] = args[i + 1];
   }
-  const source = options["--decode"]; const output = options["--out"];
-  const l1 = l1Assignment(options["--phase"], options["--l1-cohort"]);
-  assert.ok(isAbsolute(source) && isAbsolute(output));
-  const decoded = decodeEvidence(readFileSync(source, "utf8"), { candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], phase: options["--phase"], ...(l1 ? { selectedL1Cohort: l1.selectedL1Cohort } : {}) });
-  // Exclusive writes prevent replacing another run's receipts.
-  mkdirSync(output, { mode: 0o700 });
-  for (const file of decoded.files) writeFileSync(join(output, file.name), file.content, { flag: "wx", mode: 0o600 });
-  writeFileSync(join(output, "export-manifest.json"), JSON.stringify({ ...decoded.manifest, digest: decoded.digest }, null, 2), { flag: "wx", mode: 0o600 });
-  console.log(JSON.stringify({ complete: true, acceptance: decoded.manifest.scriptExitCode === 0 ? l1 ? "SELECTED_L1_COHORT_MILESTONE_COMPLETE" : "MILESTONE_COMPLETE" : "BLOCKED", files: decoded.files.length, bytes: decoded.manifest.totalSanitizedBytes, candidateSha: decoded.manifest.candidateSha, nodeVersion: decoded.manifest.nodeVersion, phase: decoded.manifest.phase, ...(l1 ? { selectedL1Cohort: l1.selectedL1Cohort, assignedCaseIds: decoded.manifest.assignedCaseIds, completedCaseIds: decoded.manifest.completedCaseIds, remainingAssignedCaseIds: decoded.manifest.remainingAssignedCaseIds, unassignedCohorts: decoded.manifest.unassignedCohorts } : {}), digest: decoded.digest }));
+  assert.ok(isAbsolute(options["--decode"]) && isAbsolute(options["--out"]));
+  assert.equal(existsSync(options["--out"]), false, "Decode into a new directory only");
+  const decoded = decodeReceipt(readFileSync(options["--decode"], "utf8"), { candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], scenario: options["--scenario"] });
+  mkdirSync(options["--out"], { mode: 0o700 });
+  writeFileSync(resolve(options["--out"], "receipt.json"), decoded.bytes, { mode: 0o600 });
+  console.log(JSON.stringify({ disposition: decoded.receipt.disposition, scenario: decoded.receipt.scenario, completed: decoded.receipt.completed, sha256: decoded.sha256 }));
 }

@@ -1,6 +1,9 @@
 // Fixture protocol assertions only. These functions never execute native tools.
 import assert from "node:assert/strict";
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, join } from "node:path";
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 export const NATIVE_COMMAND = "printf 'NATIVE-EXEC\\n' | tee -a native-receipt.txt";
 const completedScript = /^Script completed\nWall time \d+\.\d+ seconds\nOutput:\n$/;
@@ -125,4 +128,55 @@ export function assertNativeExecutionResult(output, call, receipt) {
   assert.equal(typeof result.output, "string"); assert.equal(result.output, "NATIVE-EXEC\n", "Actual stdout is the exact native receipt marker");
   assert.equal(receipt, "NATIVE-EXEC\n", "Owned native shell receipt was written exactly once");
   return result;
+}
+
+// Only external model outputs are simulated. All advertised tools execute in Codex.
+export async function responsesFixture({ root, model, key, validate, observeNative }) {
+  const cases = new Map(), requests = [], failures = [];
+  const server = createServer(async (req, res) => {
+    try {
+      assert.equal(req.method, "POST"); assert.ok(["/v1/responses", "/host/v1/responses"].includes(req.url));
+      let bytes = Buffer.alloc(0);
+      for await (const chunk of req) { bytes = Buffer.concat([bytes, chunk]); assert.ok(bytes.length <= 4 * 1024 * 1024); }
+      const input = JSON.parse(bytes.toString("utf8")); assert.equal(input.model, model); assert.equal(input.stream, true);
+      const native = req.url === "/v1/responses", index = requests.length + 1;
+      if (!native) assert.equal(req.headers.authorization, `Bearer ${key}`);
+      const record = { index, native, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), responseId: `resp_${index}`, completed: false };
+      requests.push(record);
+      let text = `OCA501 parent receipt resp_${index}`, item;
+      if (native) {
+        const texts = input.input.filter(e => e.type === "message" && e.role === "user").flatMap(e => e.content ?? []).filter(e => e.type === "input_text").map(e => e.text);
+        const tags = new Set(texts.flatMap(t => t.match(/OCA501_CASE_[A-Za-z0-9_-]+:/g) ?? []));
+        assert.equal(tags.size, 1); const fixture = cases.get([...tags][0].slice(0, -1)); assert.ok(fixture);
+        const identity = input.client_metadata; assert.ok(identity?.thread_id && identity?.turn_id);
+        if (fixture.threadId) assert.equal(identity.thread_id, fixture.threadId); else fixture.threadId = identity.thread_id;
+        record.case = fixture.tag; record.threadId = identity.thread_id; record.turnId = identity.turn_id;
+        const cwd = texts.filter(t => t.startsWith("<environment_context>")).at(-1)?.match(/<cwd>([^<]+)<\/cwd>/)?.[1]; assert.equal(cwd, fixture.workdir);
+        record.owner = await observeNative(fixture, record);
+        if (fixture.hold && !fixture.held) {
+          fixture.held = record; await new Promise(done => res.once("close", done));
+          assert.equal(fixture.shutdownExpected, true); record.deliberatelyAborted = true; return;
+        }
+        text = fixture.ralph ? "<promise>DONE</promise>" : "OCA501 native execution complete";
+        if (!fixture.call) { fixture.call = nativeExecutionCall(input, { transport: "native-codex", caseTag: fixture.tag, workdir: fixture.workdir, ownedRoot: root, callId: `oca501_exec_${index}`, itemId: `msg_${index}`, validate }); item = fixture.call.item; record.call = { id: fixture.call.callId, type: item.type, name: item.name, advertisedSource: fixture.call.selected.source }; }
+        else { assertNativeExecutionResult(matchingNativeOutput(input, fixture.call), fixture.call, readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8")); fixture.executed = true; record.executionExit = 0; record.matchedCallId = fixture.call.callId; record.receiptSha256 = createHash("sha256").update(readFileSync(join(fixture.workdir, "native-receipt.txt"))).digest("hex"); }
+      }
+      item ??= { id: `msg_${index}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] };
+      const base = { id: record.responseId, object: "response", created_at: Math.floor(Date.now() / 1000), model, status: "in_progress", output: [], error: null, incomplete_details: null };
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" }); let sequence = 0;
+      const event = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...data })}\n\n`);
+      event("response.created", { response: base });
+      event("response.output_item.added", { output_index: 0, item: item.type === "message" ? { ...item, status: "in_progress", content: [] } : item });
+      if (item.type === "message") {
+        event("response.content_part.added", { item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [], logprobs: [] } });
+        event("response.output_text.delta", { item_id: item.id, output_index: 0, content_index: 0, delta: text, logprobs: [] });
+        event("response.output_text.done", { item_id: item.id, output_index: 0, content_index: 0, text, logprobs: [] });
+        event("response.content_part.done", { item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] }); record.text = text;
+      }
+      event("response.output_item.done", { output_index: 0, item });
+      event("response.completed", { response: { ...base, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }); res.end(); record.completed = true;
+    } catch { failures.push("FIXTURE_PROTOCOL_FAILURE"); res.destroy(); }
+  });
+  await new Promise(done => server.listen(0, "127.0.0.1", done));
+  return { url: `http://127.0.0.1:${server.address().port}`, cases, requests, failures, close: async () => { server.closeAllConnections(); await new Promise(done => server.close(done)); } };
 }
