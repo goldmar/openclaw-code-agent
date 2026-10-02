@@ -1,8 +1,10 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact } from "../scripts/e2e/oca501-evidence.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { spawn } from "node:child_process";
+import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
 const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
 describe("bounded representative host receipts", () => {
@@ -58,6 +60,79 @@ describe("bounded representative host receipts", () => {
       (_r: any, h: any) => { h.messages[0].content[0].text = "different"; },
     ]) { const r = structuredClone(result), h = structuredClone(history); mutate(r, h); assert.throws(() => visibleProof(r, h, requests, identity)); }
     assert.throws(() => visibleProof(result, history, [...requests, requests[0]], identity));
+  });
+
+  it("exports a closed required fact and refuses unknown nested proof fields even during decode", () => {
+    const extra = { required: true, producer: "goal", outcomeKey: "goal:owned", credentials: { password: "SYNTHETIC_PRIVATE_VALUE" }, unknownDetail: "SYNTHETIC_PRIVATE_VALUE" };
+    assert.deepEqual(requiredFact(extra), { required: true, producer: "goal", outcomeKey: "goal:owned" });
+    assert.doesNotThrow(() => frameReceipt({ ...receipt(), proofs: [{ requiredAdmissionFact: requiredFact(extra) }] }));
+    for (const proofs of [[{ requiredAdmissionFact: extra }], [{ unknownDetail: extra }], [{ gateway: { pid: 1, unknownDetail: extra } }]]) {
+      assert.throws(() => frameReceipt({ ...receipt(), proofs }));
+      const bytes = Buffer.from(JSON.stringify({ ...receipt(), proofs }) + "\n");
+      const frame = `OCA501_SLIM ${JSON.stringify({ content: bytes.toString("base64"), bytes: bytes.length, sha256: excluded("proof.json", bytes).sha256 })}\n`;
+      assert.throws(() => decodeReceipt(frame, expected));
+    }
+    assert.throws(() => frameReceipt({ ...receipt(), cleanup: { complete: true, failures: ["OWNED_CHILD_SHUTDOWN_FAILED"] } }));
+  });
+  it("requires the latest registered native intent and the exact current turn/call", () => {
+    const tag = "OCA501_CASE_control", prompt = `${tag}: Run the harmless receipt command.`;
+    const message = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+    const body = { tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }],
+      client_metadata: { thread_id: "own-thread", turn_id: "own-turn" }, input: [message("<environment_context><cwd>/tmp/own/case</cwd></environment_context>"), message(prompt)] };
+    const options = { transport: "native-codex", caseTag: tag, workdir: "/tmp/own/case", ownedRoot: "/tmp/own", callId: "oca501_exec_1", itemId: "item", validate: () => ({ ok: true }), intent: { kind: "ordinary", prompt }, expectedIdentity: body.client_metadata };
+    const call = nativeExecutionCall(body, options);
+    for (const latest of ["Unrelated current request", "<environment_context><cwd>/tmp/own/case</cwd></environment_context>", `Quoted: ${prompt}`, `\x60\x60\x60\n${prompt}\n\x60\x60\x60`]) assert.throws(() => nativeExecutionCall({ ...body, input: [...body.input, message(latest)] }, options));
+    assert.throws(() => nativeExecutionCall({ ...body, client_metadata: { ...body.client_metadata, turn_id: "foreign" } }, options));
+    const restart = { kind: "restore", goal: `${tag}: Finish.`, ralph: true };
+    assert.doesNotThrow(() => currentNativeIntent({ input: [message(`The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately.\n\nGoal:\n${restart.goal}\n\nInstructions:\n- Continue.`)] }, { caseTag: tag, intent: restart }));
+    const result = { type: "function_call_output", call_id: call.callId, output: "real result" };
+    assert.equal(matchingNativeOutput({ ...body, input: [...body.input, result] }, call), result);
+    for (const change of [{ turn_id: "foreign" }, { thread_id: "foreign" }]) assert.throws(() => matchingNativeOutput({ ...body, client_metadata: { ...body.client_metadata, ...change }, input: [result] }, call));
+    assert.throws(() => matchingNativeOutput({ ...body, input: [{ ...result, call_id: "foreign" }] }, call));
+  });
+  it("chooses a restored active public owner independently of persisted row order", () => {
+    const fixture = { name: "own", workdir: "/tmp/own", oldSessionId: "old" };
+    const old = { name: fixture.name, workdir: fixture.workdir, sessionId: "old", goalTaskId: "goal", backendRef: { conversationId: "thread" } };
+    const live = { ...old, sessionId: "new" }, listing = "🟢 own [new] — running · 1s\n   📁 /tmp/own";
+    for (const rows of [[old, live], [live, old]]) assert.equal(currentOwner(rows, listing, fixture, "thread", "goal"), live);
+    for (const text of ["🟢 other [new] — running · 1s", listing + "\n   ♻️ Recovered after a Gateway restart; no live process", "Persisted output own [new]", listing + "\n\n🟢 own [other] — running · 1s"]) {
+      assert.throws(() => currentOwner([old, live, { ...live, sessionId: "other" }], text, fixture, "thread", "goal"));
+    }
+    assert.throws(() => currentOwner([live], listing, fixture, "foreign", "goal"));
+    assert.throws(() => currentOwner([live], listing, fixture, "thread", "foreign"));
+  });
+  it("bounds stubborn child and inherited-pipe cleanup and preserves the primary failure", async () => {
+    const child = spawn(process.execPath, ["-e", `const {spawn}=require('node:child_process'); const writer=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{}); setInterval(()=>process.stdout.write('writer\\n'),20)"],{stdio:['ignore','inherit','inherit']}); process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); console.log(writer.pid);`], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    child.on("error", () => {});
+    const writerPid = await new Promise<number>(resolve => child.stdout.once("data", bytes => resolve(Number(bytes.toString().split("\n")[0]))));
+    const writer = processIdentity(writerPid), primary = new Error("PRIMARY_FEATURE_FAILURE");
+    let saved: Error | undefined;
+    try { throw primary; } catch (error) { saved = error as Error; }
+    const result = await stopOwnedChild(child, { graceMs: 100, killMs: 100 });
+    assert.equal(saved, primary); assert.equal(result.complete, true); assert.equal(result.graceful, false);
+    assert.equal(result.signal, "SIGKILL"); assert.equal(result.stdioComplete, true);
+    const remaining = processIdentity(writerPid); assert.ok(!remaining || remaining.startTicks !== writer.startTicks || remaining.state === "Z");
+    const r = receipt(); r.disposition = "BLOCKED"; r.failure = { stage: "native", code: "REQUIRED_FEATURE_PROOF_FAILED" };
+    r.cleanup = { complete: false, failures: ["OWNED_CHILD_SHUTDOWN_FAILED"] }; r.proofs = [{ exitCode: result.exitCode, signal: result.signal, timedOut: true, stdioComplete: result.stdioComplete }];
+    assert.equal(decodeReceipt(frameReceipt(r), expected).receipt.failure.code, "REQUIRED_FEATURE_PROOF_FAILED");
+  });
+  it("cleans an early Gateway start failure before its identity was recorded", async () => {
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); console.log('ready'); setInterval(()=>{},1000)"], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    await new Promise(resolve => child.stdout.once("data", resolve));
+    const run = Object.assign(Object.create(FeatureRun.prototype), { gateway: child, gatewayIdentity: undefined, children: new Set([child]), shutdownOptions: { graceMs: 100, killMs: 100 } });
+    const shutdown = run.shutdown();
+    await assert.rejects(shutdown, /GRACEFUL_SHUTDOWN_FAILED|OWNED_PROCESS_OR_STDIO_SHUTDOWN_FAILED/);
+    assert.equal(child.stdout.closed, true); assert.equal(child.stderr.closed, true);
+  });
+
+  it("captures failed spawn and timed-out command outcomes before cleanup", async () => {
+    const run = Object.assign(Object.create(FeatureRun.prototype), { env: process.env, children: new Set(), raw: [], proofs: [] });
+    await assert.rejects(run.command("/oca501-owned-absent-command", []), /COMMAND_SPAWN_FAILED/);
+    assert.equal(run.children.size, 0); assert.equal(run.raw.length, 2);
+    assert.equal(run.proofs[0].stdioComplete, true);
+    await assert.rejects(run.command(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); console.log('ready'); setInterval(()=>{},1000)"], { timeoutMs: 150, graceMs: 100, killMs: 100 }), /COMMAND_TIMEOUT/);
+    assert.equal(run.children.size, 0); assert.equal(run.raw.length, 4);
+    const last = run.proofs.at(-1); assert.equal(last.timedOut, true); assert.equal(last.signal, "SIGKILL"); assert.equal(last.stdioComplete, true);
   });
 
 });

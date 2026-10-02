@@ -12,6 +12,40 @@ export function excluded(name, bytes, domain = "original captured bytes") {
   assert.ok(/^[a-z][a-z0-9.-]*$/.test(name));
   return { name, disposition: "EXCLUDED", bytes: bytes.length, sha256: sha(bytes), domain };
 }
+function closed(value, fields) {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  for (const key of Object.keys(value)) assert.ok(fields.includes(key), "Unknown structured proof field");
+}
+export function requiredFact(fact) {
+  assert.equal(fact?.required, true);
+  assert.ok(["goal", "terminal"].includes(fact.producer));
+  assert.ok(typeof fact.outcomeKey === "string" && fact.outcomeKey);
+  return { required: true, producer: fact.producer, outcomeKey: fact.outcomeKey };
+}
+const scalarObject = (value, fields) => { closed(value, fields); for (const item of Object.values(value)) assert.ok(item === null || ["string", "number", "boolean"].includes(typeof item)); };
+const processFields = ["pid", "state", "parent", "group", "startTicks", "executable"];
+const proofScalars = new Set("commandId exitCode signal timedOut stdioComplete rpcMethod invokedTool httpStatus toolError sourceArchiveSha256 hostEntrySha256 nativeExecutableSha256 packedSha256 installedEntrySha256 appliedRevision configRevision beforeRevision afterRevision alreadySetReadbackOnly sourceSha256 unchangedRevision setupOnly nativeThreadId nativeReceiptSha256 parentProof ownRunId responseId canonicalSha256 visible sessionId outcomeKey issuedAt succeededAt deliveryState publicOwnerId publicOwnerStatus activePublicView failedNotificationKey delivered goalId terminalStatus terminalRowSha256 iteration case policyFailure sameGoalId sameNativeThreadId oldSessionId restoredSessionId ownedShutdown listenerClosed".split(" "));
+const proofArrays = { mutation: null, requiredVerifierCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
+function proof(value) {
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  for (const [key, item] of Object.entries(value)) {
+    if (proofScalars.has(key)) { assert.ok(item === null || ["string", "boolean", "number"].includes(typeof item)); continue; }
+    if (["gateway", "verifierProcess"].includes(key)) { scalarObject(item, processFields); continue; }
+    if (key === "requiredAdmissionFact") { closed(item, ["required", "producer", "outcomeKey"]); requiredFact(item); continue; }
+    if (Object.hasOwn(proofArrays, key)) {
+      assert.ok(Array.isArray(item));
+      for (const entry of item) if (proofArrays[key]) scalarObject(entry, proofArrays[key]); else assert.equal(typeof entry, "string");
+      continue;
+    }
+    assert.equal(key, "providerRequests", "Unknown feature proof field"); assert.ok(Array.isArray(item));
+    for (const request of item) {
+      closed(request, ["index", "native", "bytes", "sha256", "responseId", "completed", "case", "threadId", "turnId", "owner", "deliberatelyAborted", "call", "executionExit", "matchedCallId", "receiptSha256", "text"]);
+      if (request.owner) { closed(request.owner, ["sessionId", "nativeProcess"]); assert.equal(typeof request.owner.sessionId, "string"); scalarObject(request.owner.nativeProcess, processFields); }
+      if (request.call) scalarObject(request.call, ["id", "type", "name", "advertisedSource"]);
+      for (const [field, scalar] of Object.entries(request)) if (!["owner", "call"].includes(field)) assert.ok(["string", "number", "boolean"].includes(typeof scalar));
+    }
+  }
+}
 function privacy(value, secrets) {
   if (Array.isArray(value)) return value.map(item => privacy(item, secrets));
   if (value && typeof value === "object") {
@@ -27,6 +61,7 @@ function privacy(value, secrets) {
   return value;
 }
 export function validateReceipt(receipt, expected) {
+  closed(receipt, ["format", "complete", "candidateSha", "nodeVersion", "scenario", "hostVersion", "hostCommit", "nativeVersion", "assigned", "completed", "disposition", "failure", "cleanup", "excluded", "proofs", "retiredHostClaims"]);
   assert.equal(receipt.format, "oca501-slim-v1");
   assert.equal(receipt.complete, true);
   for (const field of ["candidateSha", "nodeVersion", "scenario"]) assert.equal(receipt[field], expected[field]);
@@ -42,11 +77,19 @@ export function validateReceipt(receipt, expected) {
   assert.ok(["PASS", "BLOCKED"].includes(receipt.disposition));
   if (receipt.disposition === "PASS") { assert.deepEqual(receipt.completed, receipt.assigned);
     assert.equal(receipt.cleanup.complete, true);
+    assert.deepEqual(receipt.cleanup.failures, []);
     assert.equal(receipt.failure, null);
     }
   assert.ok(receipt.cleanup && Array.isArray(receipt.cleanup.failures));
+  closed(receipt.cleanup, ["complete", "failures"]);
+  assert.equal(typeof receipt.cleanup.complete, "boolean");
+  for (const code of receipt.cleanup.failures) assert.ok(["OWNED_GATEWAY_SHUTDOWN_FAILED", "OWNED_CHILD_SHUTDOWN_FAILED", "FIXTURE_PROTOCOL_OR_SHUTDOWN_FAILED"].includes(code));
+  if (receipt.failure) { scalarObject(receipt.failure, ["stage", "code"]); assert.equal(typeof receipt.failure.stage, "string"); assert.equal(typeof receipt.failure.code, "string"); }
+  if (receipt.retiredHostClaims) { assert.ok(Array.isArray(receipt.retiredHostClaims)); receipt.retiredHostClaims.forEach(value => assert.equal(typeof value, "string")); }
+  assert.ok(Array.isArray(receipt.proofs)); receipt.proofs.forEach(proof);
   assert.ok(Array.isArray(receipt.excluded));
-  for (const item of receipt.excluded) { assert.equal(item.disposition, "EXCLUDED");
+  for (const item of receipt.excluded) { closed(item, ["name", "disposition", "bytes", "sha256", "domain"]); assert.equal(item.disposition, "EXCLUDED");
+    assert.match(item.name, /^[a-z][a-z0-9.-]*$/); assert.equal(typeof item.domain, "string");
     assert.match(item.sha256, /^[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(item.bytes) && item.bytes >= 0);
     }

@@ -814,11 +814,25 @@ describe("relocated feature boundary coverage", () => {
   it("refuses an organically launched, saved A-bound goal in a fresh B controller before resume", async () => {
     const f = fixture();
     setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    const harness = createFakeHarness("organic-save"); registerHarness(harness);
+    let live!: Session;
+    (f.manager as any).launchAndAwaitRunning = async (config: any) => {
+      live = new Session({ ...config, harness: harness.name, assertGoalTaskAuthorized: () => f.authorize(config.goalTaskId) }, "organic-session");
+      await live.start(); harness.pushMessage({ type: "init", session_id: "organic-native-thread" });
+      await tick(5); assert.equal(live.status, "running"); return live;
+    };
+    (f.manager as any).resolve = (id: string) => id === live?.id ? live : undefined;
     const launched = await f.controller.launchTask({ goal: "Organic", workdir: f.dir, loopMode: "ralph", maxIterations: 3 });
-    launched.harnessSessionId = "organic-native-thread";
+    assert.equal(launched.harnessSessionId, live.harnessSessionId);
     f.controller.stop();
     const original = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8"))[0];
+    assert.equal(original.status, "waiting_for_session");
+    assert.equal(original.sessionId, live.id);
+    assert.equal(original.harnessSessionId, "organic-native-thread");
+    assert.equal(original.iteration, launched.iteration);
+    assert.equal(original.iteration, 0);
     assert.deepEqual(original.requiredVerifierCommands, ["true"]);
+    live.kill("shutdown"); harness.endMessages(); await live.waitForTeardown();
     const fresh = fixture();
     (fresh.controller as any).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(f.dir, "goals.json") });
     setPluginConfig({ requiredGoalVerifierCommands: ["false"] });

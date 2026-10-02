@@ -9,7 +9,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createIsolatedOpenClawEnv, validatePackedPluginRuntime } from "../check-plugin-security.mjs";
 import { responsesFixture } from "./oca501-native-protocol.mjs";
-import { assignments, excluded, frameReceipt, HOST_PIN, sha } from "./oca501-evidence.mjs";
+import { assignments, excluded, frameReceipt, HOST_PIN, sha, requiredFact } from "./oca501-evidence.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const MODEL = "gpt-6-luna", A = ["bash ci.sh", "bash lint.sh", "bash ci.sh"], B = ["bash changed.sh"];
 const FIELD = "plugins.entries.openclaw-code-agent.config.requiredGoalVerifierCommands";
@@ -66,14 +66,57 @@ export function visibleProof(result, history, requests, { runId, sessionId, sess
   assert.equal(text, matches[0].text);
   return { text, responseId };
 }
-function processIdentity(pid) {
+export function processIdentity(pid) {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8"), fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return { pid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]), startTicks: fields[19], executable: readlinkSync(`/proc/${pid}/exe`) };
   } catch { return undefined;
     }
 }
+const childIdentities = new WeakMap(), childTargets = new WeakMap();
 const sameProcess = (a, b) => Boolean(a && b && a.pid === b.pid && a.startTicks === b.startTicks && a.executable === b.executable);
+export async function stopOwnedChild(child, { identity = childIdentities.get(child) ?? processIdentity(child.pid), graceMs = 30_000, killMs = 5000 } = {}) {
+  const descendants = [], pending = sameProcess(identity, processIdentity(child.pid)) ? [identity.pid] : [];
+  while (pending.length) {
+    const parent = pending.pop();
+    for (const name of readdirSync("/proc").filter(n => /^\d+$/.test(n))) {
+      const current = processIdentity(Number(name));
+      if (current?.parent === parent) { descendants.push(current); pending.push(current.pid); }
+    }
+  }
+  if (identity && identity.group === identity.pid && (!processIdentity(identity.pid) || sameProcess(identity, processIdentity(identity.pid)))) {
+    for (const name of readdirSync("/proc").filter(n => /^\d+$/.test(n))) {
+      const current = processIdentity(Number(name));
+      if (current?.group === identity.group && !descendants.some(p => p.pid === current.pid)) descendants.push(current);
+    }
+  }
+  const targets = [...new Map([identity, ...descendants, ...(childTargets.get(child) ?? [])].filter(Boolean).map(p => [`${p.pid}:${p.startTicks}`, p])).values()];
+  childTargets.set(child, targets);
+  const alive = previous => { const current = processIdentity(previous.pid); return sameProcess(previous, current) && current.state !== "Z"; };
+  const pipesClosed = () => [child.stdout, child.stderr].every(stream => !stream || stream.closed);
+  const complete = () => targets.every(previous => !alive(previous)) && pipesClosed();
+  const signal = sig => { for (const previous of targets) if (alive(previous)) { try { process.kill(previous.pid, sig); } catch {} } };
+  if (identity && alive(identity)) { try { process.kill(identity.pid, "SIGTERM"); } catch {} }
+  let graceful = true;
+  try { await until(complete, graceMs); }
+  catch {
+    graceful = false; signal("SIGTERM");
+    try { await until(complete, killMs); } catch { signal("SIGKILL"); }
+    try { await until(complete, killMs); } catch {}
+  }
+  const stdioComplete = pipesClosed();
+  if (!stdioComplete) { child.stdout?.destroy(); child.stderr?.destroy(); }
+  return { complete: targets.every(previous => !alive(previous)) && stdioComplete, graceful, stdioComplete,
+    exitCode: child.exitCode, signal: child.signalCode, targets };
+}
+export function currentOwner(rows, listing, fixture, threadId, goalId) {
+  const candidates = rows.filter(row => row.name === fixture.name && row.workdir === fixture.workdir && row.backendRef?.conversationId === threadId
+    && row.goalTaskId === goalId && row.sessionId !== fixture.oldSessionId);
+  const selected = candidates.filter(row => listing.split("\n\n").some(block => block.startsWith(`🟢 ${row.name} [${row.sessionId}] — running · `)
+    && !block.includes("♻️ Recovered after a Gateway restart; no live process")));
+  assert.equal(selected.length, 1, "Exactly one current public native owner required");
+  return selected[0];
+}
 function tree(root) {
   return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const path = join(root, entry.name); assert.ok(entry.isDirectory() || entry.isFile());
@@ -99,20 +142,29 @@ export class FeatureRun {
     this.keys = [randomBytes(24).toString("hex"), randomBytes(24).toString("hex")];
     this.receipt = { format: "oca501-slim-v1", candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", scenario: options["--scenario"], assigned: assignments[options["--scenario"]], completed: [], disposition: "BLOCKED", complete: true, failure: null, cleanup: { complete: false, failures: [] }, excluded: this.raw, proofs: this.proofs, retiredHostClaims: ["Telegram/slash/callback interoperability", "idle/fork/pending native windows", "custody drain fence", "unprivileged archive EACCES", "debug producer/schema attribution", "late ABA generation pairing"] };
   }
-  async command(program, args, { allowFailure = false } = {}) {
-    const child = spawn(program, args, { cwd: ROOT, env: this.env, stdio: ["ignore", "pipe", "pipe"] });
+  async command(program, args, { allowFailure = false, timeoutMs = 120_000, graceMs = 30_000, killMs = 5000 } = {}) {
+    const child = spawn(program, args, { cwd: ROOT, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.children.add(child);
+    childIdentities.set(child, processIdentity(child.pid));
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), timedOut = false;
     child.stdout.on("data", bytes => { stdout = Buffer.concat([stdout, bytes]); });
     child.stderr.on("data", bytes => { stderr = Buffer.concat([stderr, bytes]); });
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, 120_000);
-    const code = await new Promise((done, reject) => { child.once("error", reject); child.once("close", done); });
-    clearTimeout(timer);
-    this.children.delete(child);
+    let spawnError = false;
+    child.once("error", () => { spawnError = true; });
+    const identity = processIdentity(child.pid);
+    let code;
+    try {
+      await until(() => spawnError || child.stdout.closed && child.stderr.closed, timeoutMs);
+      code = child.exitCode;
+    } catch { timedOut = true; }
+    let cleanup;
+    if (timedOut || spawnError) cleanup = await stopOwnedChild(child, { identity, graceMs, killMs });
+    if (!cleanup || cleanup.complete) this.children.delete(child);
     const commandId = this.raw.length;
     this.raw.push(excluded(`command-${commandId}.stdout`, stdout), excluded(`command-${commandId}.stderr`, stderr));
-    this.proofs.push({ commandId, exitCode: code, timedOut });
-    assert.equal(timedOut, false);
+    this.proofs.push({ commandId, exitCode: child.exitCode, signal: child.signalCode, timedOut, stdioComplete: cleanup?.stdioComplete ?? true });
+    assert.equal(spawnError, false, "COMMAND_SPAWN_FAILED");
+    assert.equal(timedOut, false, "COMMAND_TIMEOUT");
     if (!allowFailure) assert.equal(code, 0);
     return { code, stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8") };
   }
@@ -230,7 +282,8 @@ export class FeatureRun {
     assert.deepEqual(this.effects(), parentEffects);
     this.stage = "ordinary-native-proof";
     const ordinary = this.newCase("setup");
-    await this.invoke("agent_launch", { name: ordinary.name, prompt: `${ordinary.tag}: Run the harmless receipt command.`, workdir: ordinary.workdir, harness: "codex", permission_mode: "bypassPermissions", worktree_strategy: "off" });
+    ordinary.intent = { kind: "ordinary", prompt: `${ordinary.tag}: Run the harmless receipt command.` };
+    await this.invoke("agent_launch", { name: ordinary.name, prompt: ordinary.intent.prompt, workdir: ordinary.workdir, harness: "codex", permission_mode: "bypassPermissions", worktree_strategy: "off" });
     await until(() => ordinary.executed);
     const admittedOwner = await until(() => this.sessions().find(s => s.name === ordinary.name));
     await this.publicOwner(admittedOwner.sessionId, "running");
@@ -242,8 +295,9 @@ export class FeatureRun {
     this.proofs.push({ setupOnly: true, nativeThreadId: ordinary.threadId, nativeReceiptSha256: sha(readFileSync(join(ordinary.workdir, "native-receipt.txt"))), parentProof: true });
   }
   async nativeOwner(fixture, record) {
-    const row = await until(() => this.sessions().find(s => s.name === fixture.name && s.backendRef?.conversationId === record.threadId));
-    assert.equal(row.workdir, fixture.workdir);
+    const goal = fixture.intent.kind === "ordinary" ? undefined : await until(() => this.goals().find(g => g.name === fixture.name && g.goal === fixture.intent.goal));
+    const listing = await this.invoke("agent_sessions", { status: "running", full: true });
+    const row = currentOwner(this.sessions(), listing.content.map(c => c.text ?? "").join("\n"), fixture, record.threadId, goal?.id);
     await this.publicOwner(row.sessionId, "running");
     const native = readdirSync("/proc").filter(n => /^\d+$/.test(n)).map(n => processIdentity(Number(n))).filter(p => p?.executable === this.native).filter(p => {
       try { return readlinkSync(`/proc/${p.pid}/cwd`) === fixture.workdir; } catch { return false; }
@@ -260,6 +314,7 @@ export class FeatureRun {
     const child = spawn(process.execPath, [this.hostEntry, "gateway", "run", "--bind", "loopback", "--port", String(this.port)], { cwd: this.workspace, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.gateway = child;
     this.children.add(child);
+    childIdentities.set(child, processIdentity(child.pid));
     const buffers = { stdout: [], stderr: [] };
     child.stdout.on("data", data => buffers.stdout.push(data));
     child.stderr.on("data", data => buffers.stderr.push(data));
@@ -322,7 +377,8 @@ export class FeatureRun {
     return fixture;
   }
   async launch(fixture, max = 1) {
-    await this.invoke("agent_goal", { action: "launch", name: fixture.name, goal: `${fixture.tag}: Run the harmless receipt command and finish.`, workdir: fixture.workdir, harness: "codex", permission_mode: "bypassPermissions", goal_mode: fixture.ralph ? "ralph" : "verifier", max_iterations: max, ...(fixture.ralph ? { completion_promise: "DONE" } : {}) });
+    fixture.intent = { kind: "launch", ralph: fixture.ralph, goal: `${fixture.tag}: Run the harmless receipt command and finish.` };
+    await this.invoke("agent_goal", { action: "launch", name: fixture.name, goal: fixture.intent.goal, workdir: fixture.workdir, harness: "codex", permission_mode: "bypassPermissions", goal_mode: fixture.ralph ? "ralph" : "verifier", max_iterations: max, ...(fixture.ralph ? { completion_promise: "DONE" } : {}) });
     return until(() => this.goals().find(g => g.name === fixture.name));
   }
   async visible(runId) {
@@ -348,7 +404,7 @@ export class FeatureRun {
     assert.equal(journal.completionWakeRoutedReply, false);
     await this.visible(journal.completionWakeRunId);
     this.proofs.push({ sessionId: row.sessionId, outcomeKey: journal.completionWakeOutcomeKey, ownRunId: journal.completionWakeRunId,
-      requiredAdmissionFact: journal.completionWakeSummaryFact, issuedAt: journal.completionWakeIssuedAt, succeededAt: journal.completionWakeSucceededAt,
+      requiredAdmissionFact: requiredFact(journal.completionWakeSummaryFact), issuedAt: journal.completionWakeIssuedAt, succeededAt: journal.completionWakeSucceededAt,
       notificationKeys: journal.notificationDedupe.filter(n => n.status === "delivered").map(n => ({ key: n.key, label: n.label })), deliveryState: journal.deliveryState });
   }
   async publicOwner(id, status) {
@@ -442,6 +498,7 @@ export class FeatureRun {
       const fixture = this.newCase("restore", { ralph: true, hold: true }), goal = await this.launch(fixture, 3);
       await until(() => fixture.held && fixture.threadId);
       const oldSession = goal.sessionId;
+      fixture.oldSessionId = oldSession;
       await this.publicOwner(oldSession, "running");
       fixture.shutdownExpected = true;
       await this.shutdown();
@@ -453,6 +510,8 @@ export class FeatureRun {
       await this.cli(["config", "validate"]);
       assert.equal(Object.hasOwn(json(this.env.OPENCLAW_CONFIG_PATH).plugins.entries["openclaw-code-agent"].config, "requiredGoalVerifierCommands"), false);
       fixture.hold = false;
+      fixture.intent = { ...fixture.intent, kind: "restore" };
+      fixture.oldTurns = [fixture.turnId]; fixture.turnId = undefined; fixture.call = undefined;
       await this.start();
       const resumed = await until(() => { const current = this.goals().find(g => g.id === goal.id); return current?.sessionId !== oldSession && current; });
       assert.equal(resumed.harnessSessionId, fixture.threadId);
@@ -468,37 +527,13 @@ export class FeatureRun {
   async shutdown() {
     const gateway = this.gateway;
     if (!gateway) return;
-    const descendants = [];
-    const pending = [gateway.pid];
-    while (pending.length) { const parent = pending.pop();
-      for (const name of readdirSync("/proc").filter(n => /^\d+$/.test(n))) { const instance = processIdentity(Number(name));
-        if (instance?.parent === parent) { descendants.push(instance);
-          pending.push(instance.pid);
-          } } }
-    const identity = this.gatewayIdentity;
-    assert.ok(sameProcess(identity, processIdentity(gateway.pid)));
-    const closed = new Promise(done => gateway.once("close", done));
-    process.kill(gateway.pid, "SIGTERM");
-    try { await until(() => gateway.exitCode !== null || gateway.signalCode !== null, 30_000);
-      }
-    catch {
-      if (sameProcess(identity, processIdentity(gateway.pid))) process.kill(gateway.pid, "SIGKILL");
-      await closed;
-      for (const previous of descendants) {
-        if (!sameProcess(previous, processIdentity(previous.pid))) continue;
-        try { process.kill(previous.pid, "SIGTERM"); } catch {}
-      }
-      for (const previous of descendants) {
-        try { await until(() => !sameProcess(previous, processIdentity(previous.pid)), 5000); }
-        catch { if (sameProcess(previous, processIdentity(previous.pid))) process.kill(previous.pid, "SIGKILL"); }
-      }
-      throw new Error("GRACEFUL_SHUTDOWN_FAILED");
-    }
-    await closed;
-    this.children.delete(gateway);
-    for (const previous of descendants) await until(() => { const current = processIdentity(previous.pid); return !sameProcess(previous, current) || current.state === "Z"; }, 30_000);
+    const stopped = await stopOwnedChild(gateway, { identity: this.gatewayIdentity, ...this.shutdownOptions });
+    if (stopped.complete) this.children.delete(gateway);
+    this.gateway = undefined;
+    assert.equal(stopped.complete, true, "OWNED_PROCESS_OR_STDIO_SHUTDOWN_FAILED");
+    assert.equal(stopped.graceful, true, "GRACEFUL_SHUTDOWN_FAILED");
     await until(() => new Promise(done => { const connection = createConnection({ host: "127.0.0.1", port: this.port }); connection.once("error", () => done(true)); connection.once("connect", () => { connection.destroy(); done(false); }); }));
-    this.proofs.push({ ownedShutdown: true, gateway: identity, descendants: descendants.map(p => ({ pid: p.pid, startTicks: p.startTicks, executable: p.executable })), listenerClosed: true });
+    this.proofs.push({ ownedShutdown: true, gateway: stopped.targets[0], descendants: stopped.targets.slice(1).map(p => ({ pid: p.pid, startTicks: p.startTicks, executable: p.executable })), listenerClosed: true });
     this.gateway = undefined;
   }
   async settleParentReplies() {
@@ -521,12 +556,9 @@ export class FeatureRun {
       } catch { failures.push("OWNED_GATEWAY_SHUTDOWN_FAILED");
       }
     for (const child of this.children) {
-      if (child.exitCode !== null || child.signalCode !== null) continue;
-      try { const closed = new Promise(done => child.once("close", done));
-        child.kill("SIGTERM");
-        await Promise.race([closed, delay(30_000).then(() => { throw new Error(); })]);
-        } catch { failures.push("OWNED_CHILD_SHUTDOWN_FAILED");
-        }
+      try { const stopped = await stopOwnedChild(child);
+        if (!stopped.complete || !stopped.graceful) failures.push("OWNED_CHILD_SHUTDOWN_FAILED");
+      } catch { failures.push("OWNED_CHILD_SHUTDOWN_FAILED"); }
     }
     try { if (this.fixture) { for (const fixture of this.fixture.cases.values()) fixture.shutdownExpected = true;
         await this.fixture.close();

@@ -55,19 +55,34 @@ export function selectNativeExecution(request) {
   return { ...selected, mode: "function", outputType: "function_call_output" };
 }
 
-export function nativeExecutionCall(request, { transport, caseTag, workdir, ownedRoot, callId, itemId, validate }) {
+export function currentNativeIntent(request, { caseTag, intent }) {
+  const texts = request.input.filter(e => e?.type === "message" && e.role === "user")
+    .flatMap(e => e.content ?? []).filter(e => e.type === "input_text").map(e => e.text);
+  const current = texts.at(-1);
+  assert.ok(intent && ["ordinary", "launch", "restore"].includes(intent.kind) && typeof current === "string");
+  if (intent.kind === "ordinary") assert.equal(current, intent.prompt);
+  else {
+    const prefix = intent.kind === "restore"
+      ? "The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately."
+      : intent.ralph ? "You are working inside a Ralph Wiggum-style autonomous loop." : "You are working on an autonomous goal-driven task.";
+    const heading = intent.kind === "restore" ? "Instructions:" : intent.ralph ? "Loop rules:" : "Working rules:";
+    assert.ok(current.startsWith(`${prefix}\n\nGoal:\n${intent.goal}\n\n${heading}\n`), "Current registered native goal intent required");
+  }
+  assert.ok(current.includes(`${caseTag}:`));
+  return texts;
+}
+
+export function nativeExecutionCall(request, { transport, caseTag, workdir, ownedRoot, callId, itemId, validate, intent, expectedIdentity }) {
   assert.equal(transport, "native-codex", "Parent model tools never authorize native execution");
   assert.match(caseTag, /^OCA501_CASE_[A-Za-z0-9_-]+$/);
-  const userTexts = request.input.filter((entry) => entry?.type === "message" && entry.role === "user").flatMap((entry) => entry.content ?? []).filter((entry) => entry.type === "input_text").map((entry) => entry.text);
-  assert.ok(userTexts.some((text) => text.includes(`${caseTag}:`)), "Actual native user goal belongs to the exact case");
-  const tags = new Set(userTexts.flatMap((text) => text.match(/OCA501_CASE_[A-Za-z0-9_-]+:/g) ?? []));
-  assert.deepEqual([...tags], [`${caseTag}:`], "Ambiguous native case history cannot authorize execution");
+  const userTexts = currentNativeIntent(request, { caseTag, intent });
   assert.ok(isAbsolute(workdir) && isAbsolute(ownedRoot));
   const rel = relative(ownedRoot, workdir); assert.ok(rel && !rel.startsWith("..") && !isAbsolute(rel), "Native action stays in this case's owned workdir");
   const environment = userTexts.filter((text) => text.startsWith("<environment_context>"));
   assert.ok(environment.length); assert.equal(environment.at(-1).match(/<cwd>([^<]+)<\/cwd>/)?.[1], workdir, "Current actual native cwd matches the case");
+  assert.ok(expectedIdentity?.thread_id && expectedIdentity?.turn_id);
   const identity = {};
-  for (const field of ["thread_id", "turn_id"]) { assert.equal(typeof request.client_metadata?.[field], "string"); assert.ok(request.client_metadata[field]); identity[field] = request.client_metadata[field]; }
+  for (const field of ["thread_id", "turn_id"]) { assert.equal(typeof request.client_metadata?.[field], "string"); assert.ok(request.client_metadata[field]); assert.equal(request.client_metadata[field], expectedIdentity[field]); identity[field] = request.client_metadata[field]; }
   assert.match(callId, /^oca501_exec_\d+$/); assert.equal(typeof itemId, "string");
   const selected = selectNativeExecution(request);
   const args = selected.tool.name === "shell_command" ? { command: NATIVE_COMMAND, workdir } : { cmd: NATIVE_COMMAND, login: false, workdir };
@@ -145,11 +160,15 @@ export async function responsesFixture({ root, model, key, validate, observeNati
       requests.push(record);
       let text = `OCA501 parent receipt resp_${index}`, item;
       if (native) {
-        const texts = input.input.filter(e => e.type === "message" && e.role === "user").flatMap(e => e.content ?? []).filter(e => e.type === "input_text").map(e => e.text);
-        const tags = new Set(texts.flatMap(t => t.match(/OCA501_CASE_[A-Za-z0-9_-]+:/g) ?? []));
-        assert.equal(tags.size, 1); const fixture = cases.get([...tags][0].slice(0, -1)); assert.ok(fixture);
+        const candidates = [...cases.values()].filter(fixture => {
+          try { currentNativeIntent(input, { caseTag: fixture.tag, intent: fixture.intent }); return true; } catch { return false; }
+        });
+        assert.equal(candidates.length, 1); const fixture = candidates[0];
+        const texts = currentNativeIntent(input, { caseTag: fixture.tag, intent: fixture.intent });
         const identity = input.client_metadata; assert.ok(identity?.thread_id && identity?.turn_id);
         if (fixture.threadId) assert.equal(identity.thread_id, fixture.threadId); else fixture.threadId = identity.thread_id;
+        if (fixture.turnId) assert.equal(identity.turn_id, fixture.turnId);
+        else { assert.ok(!fixture.oldTurns?.includes(identity.turn_id)); fixture.turnId = identity.turn_id; }
         record.case = fixture.tag; record.threadId = identity.thread_id; record.turnId = identity.turn_id;
         const cwd = texts.filter(t => t.startsWith("<environment_context>")).at(-1)?.match(/<cwd>([^<]+)<\/cwd>/)?.[1]; assert.equal(cwd, fixture.workdir);
         record.owner = await observeNative(fixture, record);
@@ -158,7 +177,7 @@ export async function responsesFixture({ root, model, key, validate, observeNati
           assert.equal(fixture.shutdownExpected, true); record.deliberatelyAborted = true; return;
         }
         text = fixture.ralph ? "<promise>DONE</promise>" : "OCA501 native execution complete";
-        if (!fixture.call) { fixture.call = nativeExecutionCall(input, { transport: "native-codex", caseTag: fixture.tag, workdir: fixture.workdir, ownedRoot: root, callId: `oca501_exec_${index}`, itemId: `msg_${index}`, validate }); item = fixture.call.item; record.call = { id: fixture.call.callId, type: item.type, name: item.name, advertisedSource: fixture.call.selected.source }; }
+        if (!fixture.call) { fixture.call = nativeExecutionCall(input, { transport: "native-codex", caseTag: fixture.tag, intent: fixture.intent, expectedIdentity: { thread_id: fixture.threadId, turn_id: fixture.turnId }, workdir: fixture.workdir, ownedRoot: root, callId: `oca501_exec_${index}`, itemId: `msg_${index}`, validate }); item = fixture.call.item; record.call = { id: fixture.call.callId, type: item.type, name: item.name, advertisedSource: fixture.call.selected.source }; }
         else { assertNativeExecutionResult(matchingNativeOutput(input, fixture.call), fixture.call, readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8")); fixture.executed = true; record.executionExit = 0; record.matchedCallId = fixture.call.callId; record.receiptSha256 = createHash("sha256").update(readFileSync(join(fixture.workdir, "native-receipt.txt"))).digest("hex"); }
       }
       item ??= { id: `msg_${index}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] };
