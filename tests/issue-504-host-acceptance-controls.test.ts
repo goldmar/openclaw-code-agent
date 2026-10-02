@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -45,6 +45,41 @@ function syntheticPackedInstall() {
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("uses the actual message subscription seam and refuses invalid acknowledgements before follow-ons", async () => {
+    const counts = { requests: 0, inspection: 0, tool: 0, chat: 0, native: 0 };
+    const ack = { subscribed: true, key: "agent:main:main", agentId: "main" };
+    const proceed = async (value: unknown, rejects = false) => {
+      const result = await subscribeFixtureMessages(async (method, params) => {
+        counts.requests++; assert.equal(method, "sessions.messages.subscribe"); assert.deepEqual(params, { key: "agent:main:main" });
+        if (rejects) throw new Error("Synthetic SDK subscription rejection"); return value;
+      }, "fixture-connection-a");
+      counts.inspection++; counts.tool++; counts.chat++; counts.native++; return result;
+    };
+    assert.equal((await proceed(ack)).localConnectionCorrelation, "fixture-connection-a");
+    for (const invalid of [null, [], {}, { ...ack, subscribed: false }, { ...ack, subscribed: "true" }, { ...ack, key: "other-session" }, { ...ack, agentId: "other-owner" }, { subscribed: true, key: ack.key }]) await assert.rejects(proceed(invalid));
+    await assert.rejects(proceed(ack, true), /Synthetic SDK subscription rejection/);
+    assert.deepEqual(counts, { requests: 10, inspection: 1, tool: 1, chat: 1, native: 1 });
+  });
+
+  it("matches only fresh actual projected terminal events from the acknowledged connection/session/run without raw routes", async () => {
+    const subscription = await subscribeFixtureMessages(async () => ({ subscribed: true, key: "agent:main:main", agentId: "main" }), "fixture-connection-a");
+    const project = (event: string, payload: Record<string, unknown>, connection = "fixture-connection-a") => projectFixtureHostEvent(event, payload, connection, subscription);
+    const terminal = { sessionKey: "agent:main:main", runId: "fresh-run", state: "final" };
+    const chat = project("chat", terminal), lifecycle = project("agent", { sessionKey: terminal.sessionKey, runId: terminal.runId, stream: "lifecycle", data: { phase: "end" } });
+    for (const event of [chat, lifecycle]) assert.equal(hasFreshSubscribedTerminal([event], 0, subscription, "fresh-run"), true);
+    assert.equal(hasFreshSubscribedTerminal([chat], 1, subscription, "fresh-run"), false);
+    for (const event of [project("chat", { ...terminal, sessionKey: "another-session" }), project("chat", { runId: "fresh-run", state: "final" }),
+      project("chat", terminal, "fixture-connection-b"), project("chat", { ...terminal, runId: "stale-run" }), project("sessions.changed", terminal),
+      project("chat", { ...terminal, state: "delta" }), project("chat", { ...terminal, state: "error" }), project("chat", { ...terminal, state: "aborted" }),
+      project("agent", { ...terminal, stream: "lifecycle", data: { phase: "error" } }),
+      project("agent", { ...terminal, state: "error", stream: "lifecycle", data: { phase: "end" } }),
+      project("agent", { ...terminal, stream: "lifecycle", data: { phase: "end", isError: true } })]) {
+      assert.equal(hasFreshSubscribedTerminal([event], 0, subscription, "fresh-run"), false);
+    }
+    assert.ok(!JSON.stringify(chat).includes("sessionKey")); assert.ok(!JSON.stringify(chat).includes("agent:main:main"));
+    assert.equal(hasFreshSubscribedTerminal([projectFixtureHostEvent("chat", terminal, "fixture-connection-a")], 0, subscription, "fresh-run"), false);
+  });
+
   it("admits unchanged reader proof then freshly refuses a later replaced archive before any installer or follow-on", async () => {
     const s = syntheticPackedInstall(); const original = readFileSync(s.tarball);
     const counts = { install: 0, enable: 0, inspect: 0, gateway: 0 };

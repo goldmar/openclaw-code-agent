@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, closeFailedProviderResponse, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean };
@@ -218,7 +218,8 @@ async function main(): Promise<void> {
     return dir;
   };
   let tarballSha256 = "", distSha256 = "";
-  const hostEvents: Json[] = [];
+  const hostEvents: Array<ReturnType<typeof projectFixtureHostEvent>> = [];
+  const subscriptions = new WeakMap<GatewayClient, FixtureSessionSubscription>();
   let currentClient: GatewayClient | undefined;
   let currentGateway: ChildProcess | undefined;
   let storePath = "";
@@ -282,9 +283,11 @@ async function main(): Promise<void> {
       child.stdout.on("data", (chunk) => { logs = (logs + chunk).slice(-65_536); evidence.append(`gateway-${gatewayNumber}-stdout.log`, chunk, "diagnostic"); });
       child.stderr.on("data", (chunk) => { logs = (logs + chunk).slice(-65_536); evidence.append(`gateway-${gatewayNumber}-stderr.log`, chunk, "diagnostic"); });
       let hello: Json | undefined;
+      const localConnectionCorrelation = randomUUID();
+      let subscription: FixtureSessionSubscription | undefined;
       const client = new GatewayClient({ url: `ws://127.0.0.1:${port}`, token, clientName: "gateway-client", mode: "backend", deviceIdentity: null, sharedStateMode: "read-only", scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"], caps: ["tool-events", "session-scoped-events"], env, onHelloOk: (value) => { hello = value; }, onEvent: (event) => {
         const payload = event.payload as Json | undefined;
-        const observed = { event: event.event, payload: { runId: payload?.runId, state: payload?.state, stream: payload?.stream, data: { phase: payload?.data?.phase, toolName: payload?.data?.toolName, toolCallId: payload?.data?.toolCallId, isError: payload?.data?.isError, status: payload?.data?.status } } };
+        const observed = projectFixtureHostEvent(event.event, payload, localConnectionCorrelation, subscription);
         if (hostEvents.length < 4_096) hostEvents.push(observed);
         else if (!evidence.errors.includes("host-event-count-overflow")) evidence.errors.push("host-event-count-overflow");
         evidence.record("host-events.jsonl", observed);
@@ -293,7 +296,11 @@ async function main(): Promise<void> {
       await until(() => { if (child.exitCode !== null) throw new Error(`BLOCKED: disposable Gateway exited; log hash ${sha256(logs)}`); return hello; }, "authenticated disposable Gateway hello", 60_000);
       assert.equal(hello!.server?.version, HOST, "Actual Gateway hello must agree with pinned package");
       assert.ok(hello!.auth?.scopes?.includes("operator.write") && hello!.auth?.scopes?.includes("operator.read"), "Actual native Gateway role grants are required");
-      await client.request("sessions.subscribe", { sessionKey: "agent:main:main" });
+      subscription = await subscribeFixtureMessages((method, params) => client.request(method, params), localConnectionCorrelation);
+      subscriptions.set(client, subscription);
+      evidence.record("host-events.jsonl", { phase: "message-subscription-acknowledgement", method: "sessions.messages.subscribe", subscribed: subscription.subscribed,
+        expectedKeyMatches: subscription.key === "agent:main:main", expectedOwnerMatches: subscription.agentId === "main", localConnectionCorrelation,
+        correlationKind: "fixture_local_label_not_host_issued_receipt" });
       const inspection = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"));
       const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true, evidence);
       assert.equal(runtimeInstalled.installedPath, installed.installedPath);
@@ -531,6 +538,7 @@ async function main(): Promise<void> {
 
     for (const mode of [false, { mode: "tools" }] as const) {
       const embedded = await gateway(mode);
+      const embeddedSubscription = subscriptions.get(embedded); assert.ok(embeddedSubscription);
       const target = await launch(embedded, `embedded-${mode === false ? "direct" : "deferred"}`);
       const name = mode === false ? "direct" : "deferred";
       const calls: FixtureCall[] = [
@@ -606,7 +614,7 @@ async function main(): Promise<void> {
       const history = await embedded.request<Json>("chat.history", { sessionKey: "agent:main:main", limit: 100 });
       assert.ok(strings(history).some((value) => value.includes(`OCA504_EMBED_DONE:${name}`)));
       const subscribed = hostEvents.slice(eventStart);
-      assert.ok(subscribed.some((event) => event.payload?.runId === run.runId && ((event.event === "chat" && event.payload.state === "final") || (event.event === "agent" && event.payload.stream === "lifecycle" && event.payload.data?.phase === "end"))), "Fresh matched subscribed host terminal evidence required");
+      assert.ok(hasFreshSubscribedTerminal(hostEvents, eventStart, embeddedSubscription, run.runId), "Fresh same-connection/session/run subscribed host terminal evidence required");
       outcomes.push({ lane: lanes.embedded, scenario: name, status: "PASS", providerFailureExposure: mode === false ? "readable content only; native metadata observed at actual public after-hook" : "outer failed bridge and native structured result", hostFailureEventObserved: subscribed.some((event) => event.payload?.data?.isError === true), classifierSourceContract: "pinned host source; no fabricated classifier receipt", realProviderObservedFailures: 4, actualHostResults: 6, subscribedEvents: subscribed.length });
     }
     const native = nativeEvents();

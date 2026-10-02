@@ -271,6 +271,31 @@ export function verifyPackedPluginInspection(report: unknown, fixture: string, s
   return { installedPath, source, version: proof.version, imported: plugin.imported === true };
 }
 
+export type FixtureSessionSubscription = { subscribed: true; key: "agent:main:main"; agentId: "main"; localConnectionCorrelation: string };
+
+/** This local correlation label is fixture metadata, not a host connection receipt. */
+export async function subscribeFixtureMessages(request: (method: string, params: { key: string }) => Promise<unknown>, localConnectionCorrelation: string): Promise<FixtureSessionSubscription> {
+  assert.match(localConnectionCorrelation, /^[A-Za-z0-9_-]{1,64}$/);
+  const ack = await request("sessions.messages.subscribe", { key: "agent:main:main" });
+  assert.ok(ack && typeof ack === "object" && !Array.isArray(ack), "Actual message subscription acknowledgement required");
+  const value = ack as Record<string, unknown>;
+  assert.equal(value.subscribed, true); assert.equal(value.key, "agent:main:main"); assert.equal(value.agentId, "main");
+  return { subscribed: true, key: "agent:main:main", agentId: "main", localConnectionCorrelation };
+}
+
+export function projectFixtureHostEvent(event: string, payload: Record<string, any> | undefined, localConnectionCorrelation: string, subscription?: FixtureSessionSubscription) {
+  return { event, localConnectionCorrelation,
+    matchesSubscribedSession: subscription?.localConnectionCorrelation === localConnectionCorrelation && payload?.sessionKey === subscription.key,
+    payload: { runId: payload?.runId, state: payload?.state, stream: payload?.stream,
+      data: { phase: payload?.data?.phase, toolName: payload?.data?.toolName, toolCallId: payload?.data?.toolCallId, isError: payload?.data?.isError, status: payload?.data?.status } } };
+}
+
+export function hasFreshSubscribedTerminal(events: Array<ReturnType<typeof projectFixtureHostEvent>>, eventStart: number, subscription: FixtureSessionSubscription, runId: unknown): boolean {
+  if (!Number.isInteger(eventStart) || eventStart < 0 || typeof runId !== "string" || !runId) return false;
+  return events.slice(eventStart).some((event) => event.localConnectionCorrelation === subscription.localConnectionCorrelation && event.matchesSubscribedSession === true && event.payload.runId === runId && !["error", "abort", "aborted"].includes(event.payload.state) && event.payload.data.isError !== true &&
+    ((event.event === "chat" && event.payload.state === "final") || (event.event === "agent" && event.payload.stream === "lifecycle" && event.payload.data.phase === "end")));
+}
+
 export function freshPluginBootstrap(logging: OpenClawConfig["logging"], port: number): OpenClawConfig {
   assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535);
   return { logging, gateway: { mode: "local", bind: "loopback", port } };
