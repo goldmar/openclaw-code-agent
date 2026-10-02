@@ -524,7 +524,7 @@ export class FeatureRun {
     const listing = await this.invoke("agent_sessions", { status: "all", full: true });
     const headers = listing.content.map(c => c.text ?? "").join("\n").split("\n").filter(line => line.includes(` ${row.name} [${row.sessionId}] — `));
     assert.equal(headers.length, 1);
-    this.proofs.push({ goalId: current.id, sessionId: row.sessionId, nativeThreadId: fixture.threadId, terminalStatus: current.status, terminalRowSha256: sha(JSON.stringify(current)), requiredVerifierCommands: current.requiredVerifierCommands, verifierCommands: current.verifierCommands, iteration: current.iteration });
+    this.proofs.push({ goalId: current.id, sessionId: row.sessionId, nativeThreadId: fixture.threadId, terminalStatus: current.status, terminalRowSha256: sha(JSON.stringify(current)), requiredVerifierCommands: current.requiredVerifierCommands, verifierCommands: current.verifierCommands.map(({ label, command }) => ({ label, command })), iteration: current.iteration });
     return current;
   }
   checks(fixture, expected) { const checks = readFileSync(join(fixture.workdir, "checks.jsonl"), "utf8").trim().split("\n").map(JSON.parse);

@@ -1,7 +1,7 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact } from "../scripts/e2e/oca501-evidence.mjs";
+import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
 import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
@@ -11,7 +11,8 @@ import type { Readable } from "node:stream";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
 import { Session } from "../src/session";
 import { SessionStore } from "../src/session-store";
-import { GoalController } from "../src/goal-controller";
+import { GoalController, normalizeVerifierCommands } from "../src/goal-controller";
+import { formatSessionListing } from "../src/format";
 import { GoalTaskStore } from "../src/goal-store";
 import { SessionRuntimeRegistry } from "../src/session-runtime-registry";
 import { SessionHarnessEventApplier } from "../src/session-harness-event-applier";
@@ -86,6 +87,24 @@ describe("bounded representative host receipts", () => {
       assert.throws(() => decodeReceipt(frame, expected));
     }
     assert.throws(() => frameReceipt({ ...receipt(), cleanup: { complete: true, failures: ["OWNED_CHILD_SHUTDOWN_FAILED"] } }));
+  });
+  it("exports actual normalized verifier specs through the terminal proof without unapproved metadata", async () => {
+    const commands = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
+    const verifierCommands = normalizeVerifierCommands(commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
+    assert.ok(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")));
+    assert.throws(() => frameReceipt({ ...receipt(), proofs: [{ verifierCommands }] }));
+    const goal = { id: "goal", status: "succeeded", sessionId: "session", sessionName: "own", requiredVerifierCommands: commands, verifierCommands, iteration: 0 };
+    const row = { sessionId: goal.sessionId, name: goal.sessionName, workdir: "/tmp/own", goalTaskId: goal.id, backendRef: { conversationId: "thread" } };
+    const listing = formatSessionListing({ id: row.sessionId, name: row.name, workdir: row.workdir, status: "completed", phase: "terminal", duration: 1, prompt: "Own", multiTurn: true, costUsd: 0 });
+    let settled = false;
+    const run = Object.assign(Object.create(FeatureRun.prototype), { proofs: [], goals: () => [goal], sessions: () => [row],
+      invoke: async () => ({ content: [{ text: listing }] }), completion: async (owner: typeof row, required: boolean) => { assert.equal(owner, row); assert.equal(required, true); settled = true; } });
+    await run.terminal(goal, { threadId: "thread", workdir: row.workdir, executed: true }, "succeeded");
+    assert.equal(settled, true);
+    const proof = decodeReceipt(frameReceipt({ ...receipt(), proofs: run.proofs }), expected).receipt.proofs[0];
+    assert.deepEqual(proof.verifierCommands, commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
+    assert.deepEqual(proof.requiredVerifierCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
+    assert.equal(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")), true, "Original full terminal specs remain untouched");
   });
   it("requires the latest registered native intent and the exact current turn/call", () => {
     const tag = "OCA501_CASE_control", prompt = `${tag}: Run the harmless receipt command.`;
