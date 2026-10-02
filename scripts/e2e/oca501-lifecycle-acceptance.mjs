@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { readNativeReview } from "./oca501-review-protocol.mjs";
 import { projectConfigResponse, readOwnedConfig } from "./oca501-config-receipt.mjs";
-import { assertNoNativeContinuation, messageText, nativeDiagnostics, assertVisibleCanonical, currentRevisionSegments, revisionInstruction, assertOrdinaryCompleted, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
+import { assertNoNativeContinuation, messageText, nativeDiagnostics, assertVisibleCanonical, selectCanonicalProbe, currentRevisionSegments, revisionInstruction, assertOrdinaryCompleted, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 async function observe(label, probe) {
@@ -111,19 +111,18 @@ async function pendingPlan(run, id) {
 }
 async function parentProbe(run, id, requestStart) {
   const marker = `OCA501_PARENT_PROBE_${id}`; run.parentProbes.set(id, { id, marker });
+  const created = (await run.rpc("sessions.list", { agentId: "main", limit: 200 })).sessions.filter((row) => row.key === run.sessionKey); assert.equal(created.length, 1);
+  const admissionBoundary = run.modelRequests.length;
   const admission = await run.rpc("chat.send", { sessionKey: run.sessionKey, agentId: "main", message: `Reply exactly ${marker}. Use no tools.`, thinking: "off", deliver: false, idempotencyKey: `oca501-probe-${randomBytes(12).toString("hex")}` });
   assert.ok(admission.runId);
   const terminal = await observe("same-origin parent probe terminal", async () => { const value = await run.rpc("agent.wait", { runId: admission.runId, timeoutMs: 1000 }); return ["pending", "timeout"].includes(value.status) ? false : value; });
   assert.equal(terminal.runId, admission.runId); assert.equal(terminal.status, "ok");
   const history = await run.rpc("chat.history", { sessionKey: run.sessionKey, limit: 200, maxBytes: 2_000_000, maxChars: 500_000 });
-  const canonical = history.messages.find((message) => message.role === "assistant" && message.__openclaw?.runId === admission.runId && messageText(message).trim() === marker);
-  assert.ok(canonical);
   const requests = run.modelRequests.slice(requestStart).filter((request) => request.transport === "host-parent");
-  const matchedProbes = requests.filter((request) => request.parentProbe === id && request.responseCompleted); assert.equal(matchedProbes.length, 1); const actualProbe = matchedProbes[0];
-  assertVisibleCanonical(terminal, admission.runId, actualProbe.responseId, canonical, marker);
-  assert.equal(actualProbe.emittedType, "message"); assert.equal(actualProbe.parentCall, undefined);
+  const attribution = selectCanonicalProbe(history, run.modelRequests.slice(admissionBoundary).filter((request) => request.transport === "host-parent"), terminal, { sessionKey: run.sessionKey, sessionId: created[0].sessionId, runId: admission.runId, marker, probeId: id });
+  const canonical = attribution.canonical, actualProbe = attribution.request;
   const inputs = requests.map((request) => JSON.parse(readFileSync(join(run.directory, `responses-request-${request.requestIndex}.json`), "utf8")).input);
-  const proof = { admission, terminal, history, canonical, actualProbe, requests, inputs };
+  const proof = { admission, terminal, history, canonical, actualProbe, attribution, admissionBoundary, requests, inputs };
   run.artifact(`parent-probe-${id}.json`, proof); return proof;
 }
 async function plans(run) {

@@ -7,6 +7,61 @@ export const messageText = (entry) => typeof entry.content === "string" ? entry.
 export function latestParentUser(input) {
   return input.input.findLast((entry) => entry.role === "user" && !messageText(entry).trim().startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"));
 }
+// Exact pinned session-activity-summaries.ts SYSTEM_PROMPT. Recap transcript
+// data is never current user intent, even when it quotes a registered probe.
+const ACTIVITY_RECAP_PROMPT_SHA256 = "db550562a488aaab5577cd5ad3bf1ff708120db7aa3ada109500ce257c4ef98f";
+export function classifyParentRequest(input, receipt) {
+  assert.equal(receipt.transport, "host-parent"); assert.equal(receipt.path, "/host/v1/responses");
+  assert.equal(receipt.httpMethod, "POST"); assert.equal(receipt.authorization, "validated synthetic fixture key");
+  assert.equal(input.model, "gpt-6-luna"); assert.equal(receipt.model, input.model); assert.equal(input.stream, true);
+  assert.ok(Array.isArray(input.input));
+  const system = input.input[0], systemText = system?.role === "system" ? messageText(system) : "";
+  const promptHash = createHash("sha256").update(systemText).digest("hex");
+  if (promptHash === ACTIVITY_RECAP_PROMPT_SHA256) {
+    assert.equal(input.input.length, 2); assert.ok(input.tools === undefined || (Array.isArray(input.tools) && input.tools.length === 0));
+    for (const [index, role] of [[0, "system"], [1, "user"]]) {
+      const entry = input.input[index]; assert.deepEqual(Object.keys(entry).sort(), ["content", "role", "type"]); assert.equal(entry.type, "message"); assert.equal(entry.role, role);
+      assert.ok(Array.isArray(entry.content)); assert.equal(entry.content.length, 1);
+      assert.deepEqual(Object.keys(entry.content[0]).sort(), ["text", "type"]); assert.equal(entry.content[0].type, "input_text"); assert.equal(typeof entry.content[0].text, "string");
+    }
+    let payload; try { payload = JSON.parse(messageText(input.input[1])); } catch { assert.fail("Malformed pinned Activity recap payload; raw content excluded from error"); }
+    assert.ok(payload && typeof payload === "object" && !Array.isArray(payload));
+    assert.deepEqual(Object.keys(payload).sort(), ["messages", "omittedContent", "previousRecap"]);
+    assert.equal(typeof payload.previousRecap, "string"); assert.equal(typeof payload.omittedContent, "boolean");
+    assert.ok(Array.isArray(payload.messages) && payload.messages.every((text) => typeof text === "string"));
+    return { kind: "activity-recap", systemPromptSha256: promptHash, attribution: "untrusted recap data; no probe, source-send or queued-context authority" };
+  }
+  assert.ok(Array.isArray(input.tools) && input.tools.length > 0, "Unknown auxiliary request is BLOCKED, never selected by missing tools");
+  assert.ok(systemText.startsWith("<!-- openclaw:attempt:STABLE -->"), "Current embedded parent request requires its actual system surface");
+  assert.ok(input.tools.some((tool) => tool.type === "function" && ["tool_search", "tool_describe", "tool_call", "message"].includes(tool.name ?? tool.function?.name)), "Genuine advertised parent tool surface required");
+  return { kind: "embedded-parent", systemPromptSha256: promptHash };
+}
+export function selectParentProbe(input, receipt, probes) {
+  const classification = classifyParentRequest(input, receipt);
+  if (classification.kind === "activity-recap") return { classification };
+  const latest = latestParentUser(input), text = latest ? messageText(latest) : "";
+  const normalized = text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\] /, "");
+  const matches = [...probes].filter((probe) => normalized === `Reply exactly ${probe.marker}. Use no tools.`);
+  assert.ok(matches.length <= 1, "One registered probe owns the exact current user intent");
+  return { classification, probe: matches[0] };
+}
+export function selectCanonicalProbe(history, requests, terminal, expected) {
+  assert.equal(history.sessionKey, expected.sessionKey); assert.equal(history.sessionId, expected.sessionId);
+  assert.ok(typeof expected.runId === "string" && expected.runId && typeof expected.probeId === "string" && expected.probeId);
+  assert.ok(Array.isArray(history.messages));
+  const own = history.messages.filter((message) => message.role === "assistant" && message.__openclaw?.runId === expected.runId);
+  assert.equal(own.length, 1, "Exactly one complete canonical own-run assistant, before provider selection");
+  const canonical = own[0]; assert.ok(typeof canonical.responseId === "string" && canonical.responseId);
+  const matched = requests.filter((request) => request.transport === "host-parent" && request.responseId === canonical.responseId);
+  assert.equal(matched.length, 1, "Canonical response ID joins exactly one actual provider request in the admission window");
+  const request = matched[0]; assert.equal(request.responseCompleted, true); assert.equal(request.parentProbe, expected.probeId);
+  assert.equal(request.parentRequestClassification?.kind, "embedded-parent");
+  const selected = selectParentProbe(request.actualProbeInput, request, [{ id: expected.probeId, marker: expected.marker }]); assert.equal(selected.probe?.id, expected.probeId);
+  assert.equal(request.emittedType, "message"); assert.equal(request.emittedText, expected.marker); assert.equal(request.parentCall, undefined);
+  assert.equal(messageText(canonical), expected.marker); assert.equal(terminal.terminalReply?.text, expected.marker);
+  assertVisibleCanonical(terminal, expected.runId, request.responseId, canonical, expected.marker);
+  return { canonical, request, selectedRequestIndex: request.requestIndex, excludedRequests: requests.filter((other) => other !== request).map((other) => ({ requestIndex: other.requestIndex, responseId: other.responseId, classification: other.parentRequestClassification, reason: "not the exact admitted canonical response" })) };
+}
 export function selectNativeCase(input, cases) {
   assert.ok(Array.isArray(input.input));
   const userText = input.input.filter((entry) => entry.type === "message" && entry.role === "user").map(messageText).join("\n");

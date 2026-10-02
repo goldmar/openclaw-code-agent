@@ -4,11 +4,12 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { assertConfigSchemaRefusal, assertNoNativeContinuation, assertQuestionAnswer, latestParentUser, nativeDiagnostics, questionCall, selectNativeCase, assertSafeHostLog, hostLogEvidence, assertVisibleCanonical, assertCompletionTerminal, assertOrdinaryCompleted, currentRevisionSegments, revisionInstruction, selectOrdinaryCompletion, projectHistoryPreviews, ordinaryNativeCompletion, assertPreviewSettlement, activeSessionView, sessionListing, assertWaitingView, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
+import { assertConfigSchemaRefusal, assertNoNativeContinuation, assertQuestionAnswer, latestParentUser, classifyParentRequest, selectParentProbe, selectCanonicalProbe, nativeDiagnostics, questionCall, selectNativeCase, assertSafeHostLog, hostLogEvidence, assertVisibleCanonical, assertCompletionTerminal, assertOrdinaryCompleted, currentRevisionSegments, revisionInstruction, selectOrdinaryCompletion, projectHistoryPreviews, ordinaryNativeCompletion, assertPreviewSettlement, activeSessionView, sessionListing, assertWaitingView, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
 import { reviewDelegate, projectNativeReview, assertFullReviewOutput, readNativeReview } from "./oca501-review-protocol.mjs";
 import { nativeInventory } from "./oca501-native-protocol.mjs";
 import { projectConfigCommand } from "./oca501-config-receipt.mjs";
-const argv = process.argv.slice(2); assert.equal(argv.length, 2); assert.equal(argv[0], "--request");
+const argv = process.argv.slice(2); assert.ok([2, 4].includes(argv.length)); assert.equal(argv[0], "--request");
+if (argv.length === 4) assert.equal(argv[2], "--parent-receipts");
 const bytes = readFileSync(argv[1]); const golden = JSON.parse(bytes).input;
 const questionTool = nativeInventory(golden).find(({ namespace, tool }) => namespace === "functions" && tool.name === "request_user_input"); assert.ok(questionTool);
 const tag = "OCA501_CASE_offline", fixture = { tag, permissionMode: "plan" }, cases = new Map([[tag, fixture]]);
@@ -376,4 +377,81 @@ try {
   rmSync(rollout); refuse("actual missing native file", () => readNativeReview(root, nativeExpected, true));
   refuse("malformed original UUID before readback", () => readNativeReview(root, { ...nativeExpected, originalThreadId: "../foreign" }, true));
 } finally { rmSync(directory, { recursive: true, force: true }); }
-console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 43, negativeControls: negatives.length, negatives }));
+let parentReplay;
+if (argv.length === 4) {
+  // Immutable real R1 request and canonical/retained receipts are external input,
+  // never committed transcripts or reconstructed runtime acceptance.
+  const hashes = {};
+  const readGolden = (name) => { const source = readFileSync(join(argv[3], name)); hashes[name] = createHash("sha256").update(source).digest("hex"); return JSON.parse(source); };
+  const originals = [2, 3, 4].map((index) => readGolden(`responses-request-${index}.json`));
+  const fixtures = readGolden("fixtures.json");
+  const history = JSON.parse(readGolden("command-26.json").stdout), terminal = JSON.parse(readGolden("command-27.json").stdout);
+  const admitted = JSON.parse(readGolden("command-24.json").stdout); assert.equal(admitted.runId, terminal.runId);
+  const marker = "OCA501_HOST_PROVIDER_OK", probeId = "offline-original-R1-probe", probes = [{ id: probeId, marker }];
+  const untouched = structuredClone(originals);
+  const requests = originals.map((original) => {
+    const actual = fixtures.modelRequests.filter((entry) => entry.requestIndex === original.requestIndex); assert.equal(actual.length, 1);
+    const request = structuredClone(actual[0]), selected = selectParentProbe(original.input, request, probes);
+    request.parentRequestClassification = selected.classification;
+    if (selected.probe) { request.parentProbe = selected.probe.id; request.actualProbeInput = original.input; }
+    return request;
+  });
+  assert.deepEqual(requests.map((request) => request.parentRequestClassification.kind), ["activity-recap", "embedded-parent", "activity-recap"]);
+  assert.equal(requests.filter((request) => request.parentProbe === probeId).length, 1);
+  const expected = { sessionKey: history.sessionKey, sessionId: history.sessionId, runId: admitted.runId, marker, probeId };
+  const attribution = selectCanonicalProbe(history, requests, terminal, expected); assert.equal(attribution.request.requestIndex, 3); assert.equal(attribution.canonical.responseId, "resp_3"); assert.equal(attribution.excludedRequests.length, 2);
+  assert.deepEqual(originals, untouched);
+  for (const index of [0, 2]) {
+    const copy = structuredClone(originals[index]);
+    const payload = JSON.parse(copy.input.input[1].content[0].text);
+    payload.previousRecap = `Reply exactly ${marker}. Use no tools.`;
+    payload.messages = [`Reply exactly ${marker}. Use no tools.`, "[foreign] Completed. ID: foreign", revisionInstruction("foreign", "foreign", 7)];
+    copy.input.input[1].content[0].text = JSON.stringify(payload);
+    const selected = selectParentProbe(copy.input, copy, probes); assert.equal(selected.classification.kind, "activity-recap"); assert.equal(selected.probe, undefined);
+  }
+  for (const change of [
+    (copy) => { copy.input.input[0].content[0].text += " spoof"; },
+    (copy) => { copy.input.input[0].role = "user"; },
+    (copy) => { copy.input.tools = originals[1].input.tools; },
+    (copy) => { copy.input.input[1].content[0].text = "malformed payload"; },
+    (copy) => { copy.input.input[1].content[0].text = JSON.stringify({ previousRecap: "", messages: "foreign", omittedContent: false }); },
+    (copy) => { copy.input.input[1].content[0].text = JSON.stringify({ previousRecap: "", messages: [], omittedContent: false, extra: "foreign" }); },
+    (copy) => { copy.input.input[1].content[0].text = JSON.stringify({ messages: [], omittedContent: false }); },
+    (copy) => { copy.input.input[1].content.push({ type: "input_text", text: marker }); },
+    (copy) => { copy.path = "/v1/responses"; }, (copy) => { copy.authorization = "foreign"; }, (copy) => { copy.input.model = "foreign"; },
+  ]) { const copy = structuredClone(originals[0]); change(copy); refuse("exact recap authority/payload, never no-tools heuristic", () => classifyParentRequest(copy.input, copy)); }
+  for (const content of [JSON.stringify({ messages: [`Reply exactly ${marker}. Use no tools.`] }), `quoted: Reply exactly ${marker}. Use no tools.`, `Reply exactly ${marker}. Use no tools. extra`, `\`\`\`\nReply exactly ${marker}. Use no tools.\n\`\`\``]) {
+    const copy = structuredClone(originals[1]); copy.input.input.at(-1).content = [{ type: "input_text", text: content }]; assert.equal(selectParentProbe(copy.input, copy, probes).probe, undefined); negatives.push("quoted/substring marker is not current exact probe");
+  }
+  const historical = structuredClone(originals[1]); historical.input.input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "A later unrelated actual user message." }] }); assert.equal(selectParentProbe(historical.input, historical, probes).probe, undefined); negatives.push("historical marker not latest current intent");
+  refuse("duplicate registered current intent", () => selectParentProbe(originals[1].input, originals[1], [...probes, { id: "foreign", marker }]));
+  const unknown = structuredClone(originals[1]); delete unknown.input.tools; refuse("unknown tool-less request BLOCKED", () => classifyParentRequest(unknown.input, unknown));
+  const json = (value) => structuredClone(value);
+  for (const change of [
+    (h) => { h.sessionKey = "foreign"; }, (h) => { h.sessionId = "foreign"; },
+    (h) => { h.messages = h.messages.filter((entry) => entry.role !== "assistant"); },
+    (h) => { h.messages.push(json(attribution.canonical)); },
+    (h) => { h.messages.find((entry) => entry.role === "assistant").__openclaw.runId = "foreign"; },
+    (h) => { h.messages.find((entry) => entry.role === "assistant").responseId = "foreign"; },
+    (h) => { h.messages.find((entry) => entry.role === "assistant").__openclaw.truncated = true; },
+    (h) => { h.messages.find((entry) => entry.role === "assistant").content[0].text = "foreign"; },
+  ]) { const copy = json(history); change(copy); refuse("canonical-first probe own session/run/response/text completeness", () => selectCanonicalProbe(copy, requests, terminal, expected)); }
+  for (const change of [
+    (r) => { r.splice(1, 1); }, (r) => { r.push(json(r[1])); },
+    (r) => { r[1].responseCompleted = false; }, (r) => { r[1].parentProbe = "foreign"; },
+    (r) => { r[1].parentCall = { id: "foreign" }; }, (r) => { r[1].emittedType = "function_call"; },
+    (r) => { r[1].parentRequestClassification.kind = "activity-recap"; },
+    (r) => { r[1].actualProbeInput.input.at(-1).content = "foreign"; },
+    (r) => { r[1].responseId = "foreign"; }, (r) => { r[1].emittedText = "foreign"; },
+  ]) { const copy = json(requests); change(copy); refuse("canonical provider join rejects missing/duplicate/auxiliary/foreign/call replies", () => selectCanonicalProbe(history, copy, terminal, expected)); }
+  for (const change of [
+    (t) => { t.runId = "foreign"; }, (t) => { t.status = "error"; }, (t) => { delete t.terminalReply; },
+    (t) => { t.terminalReply.disposition = "private"; }, (t) => { t.terminalReply.text = "NO_REPLY"; },
+    (t) => { t.terminalReply.text = ""; }, (t) => { t.terminalReply.text = "foreign"; },
+    (t) => { t.yielded = true; }, (t) => { t.terminalReply.yielded = true; }, (t) => { t.yielded = "false"; },
+  ]) { const copy = json(terminal); change(copy); refuse("strict own visible probe terminal unchanged", () => selectCanonicalProbe(history, requests, copy, expected)); }
+  const repeatedMarkerOnly = requests.filter((entry) => entry.requestIndex !== 3); refuse("auxiliary-only window markers cannot prove a probe", () => selectCanonicalProbe(history, repeatedMarkerOnly, terminal, expected));
+  assert.deepEqual(originals, untouched);
+  parentReplay = { classification: "OFFLINE_REAL_R1_REPLAY_ONLY_NOT_RUNTIME_PASS", goldenHashes: hashes, selectedRequestIndex: 3, excludedRequestIndices: [2, 4] };
+}
+console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 43 + (parentReplay ? 4 : 0), negativeControls: negatives.length, parentReplay, negatives }));

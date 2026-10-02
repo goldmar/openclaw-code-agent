@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
-import { messageText, latestParentUser, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
+import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
@@ -486,10 +486,14 @@ class AcceptanceRun {
     });
   }
   async parentResponse(input, attempt, itemId) {
+    attempt.parentRequestClassification = { kind: "unknown", attribution: "not admitted as recap, probe or routed completion" };
+    this.artifact(`responses-request-${attempt.requestIndex}.json`, { ...attempt, input });
+    const selection = selectParentProbe(input, attempt, this.parentProbes.values());
+    attempt.parentRequestClassification = selection.classification;
+    this.artifact(`responses-request-${attempt.requestIndex}.json`, { ...attempt, input });
+    if (selection.classification.kind === "activity-recap") return { text: PARENT_MARKER };
     const latest = latestParentUser(input); const text = latest ? messageText(latest) : "";
-    const probes = [...this.parentProbes.values()].filter((probe) => text.includes(`Reply exactly ${probe.marker}. Use no tools.`));
-    assert.ok(probes.length <= 1, "A current actual parent request cannot borrow multiple probe cases");
-    if (probes.length) { attempt.parentProbe = probes[0].id; attempt.actualProbeInput = input; return { text: probes[0].marker }; }
+    if (selection.probe) { attempt.parentProbe = selection.probe.id; attempt.actualProbeInput = input; return { text: selection.probe.marker }; }
     // Ignore only the host's explicitly delimited context attached to a user
     // request. A quoted completion in an older turn cannot select a case.
     const ordinaryOwners = [];
@@ -846,30 +850,28 @@ class AcceptanceRun {
     // Exercise the genuine embedded parent client, not only its configuration.
     const beforeParentProbe = this.modelRequests.length;
     const nativeRequestsBefore = this.modelRequests.filter((entry) => entry.transport === "native-codex").length;
+    const setupProbeId = "setup-parent-prerequisite";
+    this.parentProbes.set(setupProbeId, { id: setupProbeId, marker: PARENT_MARKER });
     const parentRun = await this.rpc("chat.send", { sessionKey: this.sessionKey, agentId: "main", message: `Reply exactly ${PARENT_MARKER}. Use no tools.`, thinking: "off", deliver: false, idempotencyKey: `oca501-parent-${randomBytes(12).toString("hex")}` });
     this.artifact("parent-probe-admission.json", parentRun);
     assert.ok(parentRun.runId, "Real host accepted a parent turn");
     const parentHistory = await waitFor("genuine parent loopback turn in canonical history", async () => {
       if (!this.modelRequests.slice(beforeParentProbe).some((entry) => entry.transport === "host-parent" && entry.responseCompleted)) return false;
       const history = await this.rpc("chat.history", { sessionKey: this.sessionKey, agentId: "main", limit: 10 });
-      return history.messages.some((entry) => entry.role === "assistant" && entry.content?.some((part) => part.type === "text" && part.text === PARENT_MARKER)) ? history : false;
+      return history.sessionKey === this.sessionKey && history.sessionId === created.sessionId && history.messages.some((entry) => entry.role === "assistant" && entry.__openclaw?.runId === parentRun.runId) ? history : false;
     });
     const parentRequests = this.modelRequests.slice(beforeParentProbe);
     assert.ok(parentRequests.length > 0); assert.ok(parentRequests.every((entry) => entry.transport === "host-parent" && entry.authorization === "validated synthetic fixture key"));
     assert.equal(this.modelRequests.filter((entry) => entry.transport === "native-codex").length, nativeRequestsBefore, "Parent probe starts no native Codex turn");
     assert.ok(!existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH), "Parent marker turn launches no goal");
     const parentTerminal = await this.rpc("agent.wait", { runId: parentRun.runId, timeoutMs: 5000 });
-    const actualParentRequests = parentRequests.filter((request) => request.responseCompleted && request.emittedType === "message" && request.emittedText === PARENT_MARKER);
-    assert.equal(actualParentRequests.length, 1, "One actual no-tool-call parent response belongs to the admitted probe");
-    const actualParent = actualParentRequests[0]; assert.equal(actualParent.parentCall, undefined);
-    const canonicalParent = parentHistory.messages.find((entry) => entry.role === "assistant" && entry.responseId === actualParent.responseId && entry.__openclaw?.runId === parentRun.runId);
-    assertVisibleCanonical(parentTerminal, parentRun.runId, actualParent.responseId, canonicalParent, actualParent.emittedText);
+    const attribution = selectCanonicalProbe(parentHistory, parentRequests, parentTerminal, { sessionKey: this.sessionKey, sessionId: created.sessionId, runId: parentRun.runId, marker: PARENT_MARKER, probeId: setupProbeId });
     const parentSessionAfter = await this.rpc("sessions.list", { agentId: "main", limit: 10 });
     const afterRow = parentSessionAfter.sessions.find((entry) => entry.key === this.sessionKey);
     assert.equal(afterRow?.sessionId, created.sessionId); assert.equal(afterRow.modelProvider, "oca501"); assert.equal(afterRow.model, MODEL);
     if (afterRow.activeModelProvider !== undefined) assert.equal(afterRow.activeModelProvider, "oca501");
     if (afterRow.activeModel !== undefined) assert.equal(afterRow.activeModel, MODEL);
-    this.artifact("parent-loopback-probe.json", { run: parentRun, terminal: parentTerminal, history: parentHistory, effectiveSession: afterRow, requests: parentRequests, model: PARENT_MODEL, fixtureBoundary: "Actual embedded host provider/client; only external Responses output is deterministic" });
+    this.artifact("parent-loopback-probe.json", { run: parentRun, terminal: parentTerminal, history: parentHistory, attribution, effectiveSession: afterRow, requests: parentRequests, model: PARENT_MODEL, fixtureBoundary: "Actual embedded host provider/client; only external Responses output is deterministic" });
     this.provenance.parentModel = PARENT_MODEL; this.provenance.parentProviderBaseUrl = `${this.providerUrl}/host/v1`;
     const beforeRequests = this.modelRequests.length;
     const admitted = await this.invoke("agent_goal", { action: "launch", goal: "Return the prerequisite marker; make no edits.", name: "host-prerequisite", workdir: this.workspace, harness: "codex", max_iterations: 1, permission_mode: "bypassPermissions" });
