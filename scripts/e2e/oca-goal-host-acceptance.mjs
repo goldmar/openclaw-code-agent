@@ -217,8 +217,8 @@ class AcceptanceRun {
   }
   releaseExternal(fixture) { assert.ok(fixture.heldRequest, "Release only an actually held external Responses request"); const release = this.externalReleases.get(fixture.heldRequest); assert.ok(release); release(); }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
-  serializeArtifact(value) {
-    return serializeHostLogArtifact(value, (text) => this.redact(text), (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item);
+  serializeArtifact(value, { compact = false } = {}) {
+    return serializeHostLogArtifact(value, (text) => this.redact(text), (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item, { compact });
   }
   artifact(name, value, { serialized = false } = {}) {
     assert.match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -271,7 +271,7 @@ class AcceptanceRun {
   }
   captureHostStream(name, text) {
     const plan = hostLogArtifactPlan(name, this.hostStreamEvidence(text), Buffer.isBuffer(text) ? text.toString("utf8") : text, {
-      serialize: (value) => this.serializeArtifact(value), redact: (value) => this.redact(value),
+      serialize: (value) => this.serializeArtifact(value), compactSerialize: (value) => this.serializeArtifact(value, { compact: true }), redact: (value) => this.redact(value),
       guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha },
       assertProjectedSafe: (value) => assert.ok(hostLogEvidence(value).completeStreamSafe),
     });

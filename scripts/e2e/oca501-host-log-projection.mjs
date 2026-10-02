@@ -339,21 +339,54 @@ export function projectHostLog(input, authority, assess) {
 
 
 export const HOST_LOG_RECORD_HASH_SCOPE = "Validated source projection before exact known synthetic fixture-token artifact redaction";
-export function serializeHostLogArtifact(value, redact = (text) => text, replacer) {
-  return redact(typeof value === "string" ? value : `${JSON.stringify(value, replacer, 2)}\n`);
+export function serializeHostLogArtifact(value, redact = (text) => text, replacer, { compact = false } = {}) {
+  return redact(typeof value === "string" ? value : `${JSON.stringify(value, replacer, compact ? undefined : 2)}\n`);
 }
 
 // Prepare ALL actual final consumer bytes before registration. A bounded
 // exclusion receipt replaces an entire oversize artifact; no record is split
 // or truncated and the affected acceptance remains BLOCKED.
-export function hostLogArtifactPlan(name, receipt, originalText, { serialize, redact, guardSource, assertProjectedSafe }) {
+// Private complete identities survive presentation bounds; never serialized by
+// JSON. Original scan completeness and bounded detail presentation are distinct.
+export const HOST_DIAGNOSTIC_IDENTITIES = Symbol("closed diagnostic identities");
+export function presentHostLogDiagnostic(d, serialize) {
+  const fits = (value) => Buffer.byteLength(serialize(value)) <= 64 * 1024;
+  if (fits(d)) return d;
+  const { failedLineDetails = [], lexicalDetails = [], projectedDiagnosticSha256: _hash, projectedDigestScope: _scope, ...base } = d;
+  const all = d[HOST_DIAGNOSTIC_IDENTITIES];
+  const blocked = new Set(all?.sourceBlockedIndices ?? []);
+  const identities = all?.identities;
+  const seal = (value) => ({ ...value, projectedDiagnosticSha256: digest(JSON.stringify(value)), projectedDigestScope: "Closed presentation-bounded diagnostic before digest fields; not original stream" });
+  const count = (value) => ({ ...value,
+    omittedFailedLineDetails: d.failedLines - value.failedLineDetails.filter((detail) => !detail.originalLineGuardSafe).length,
+    omittedProjectionOnlyDetails: (d.projectionBlockedGuardSafeLines ?? 0) - value.failedLineDetails.filter((detail) => detail.originalLineGuardSafe).length,
+    lexicalOmittedDetails: d.lexicalMatches - value.lexicalDetails.length,
+    presentationComplete: value.failedLineDetails.length === d.failedLines + (d.projectionBlockedGuardSafeLines ?? 0) && value.lexicalDetails.length === d.lexicalMatches });
+  let selected = { ...base, failedLineDetails: [], lexicalDetails: [], presentationOrder: "SOURCE_BLOCKED_FIRST; original record order within each class", presentationComplete: false,
+    ...(identities ? { rawFailureRecordIdentities: identities, sourceBlockedRecordIndices: [...blocked], identityScope: "Complete raw-rejected and projector-only failure spans; complete validated registry remains in the enclosing source projection receipt" } : {}) };
+  if (identities && fits(seal(count(selected)))) {
+    const details = failedLineDetails.toSorted((x, y) => Number(blocked.has(y.line)) - Number(blocked.has(x.line)) || x.line - y.line);
+    for (const detail of details) {
+      const next = { ...selected, failedLineDetails: [...selected.failedLineDetails, detail] };
+      if (!fits(seal(count(next)))) break;
+      selected = next;
+    }
+    for (const detail of lexicalDetails) {
+      const next = { ...selected, lexicalDetails: [...selected.lexicalDetails, detail] };
+      if (!fits(seal(count(next)))) break;
+      selected = next;
+    }
+    return seal(count(selected));
+  }
+  const fallback = { diagnosticStatus: "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED", original: d.original, inputIdentityDomain: d.inputIdentityDomain, sourceTableSha256: d.sourceTableSha256, rawContentExcluded: true, inspectionComplete: false, inspectedLines: d.inspectedLines, uninspectedLines: d.uninspectedLines ?? 0, capturedLines: d.capturedLines, failedLines: d.failedLines, safeLines: d.safeLines, projectionBlockedGuardSafeLines: d.projectionBlockedGuardSafeLines, omittedFailedLineDetails: d.failedLines, omittedProjectionOnlyDetails: d.projectionBlockedGuardSafeLines, failureHistogram: d.failureHistogram, lexicalMatches: d.lexicalMatches, lexicalScanCapped: d.lexicalScanCapped, lexicalCountScope: d.lexicalCountScope, lexicalOmittedDetails: d.lexicalMatches, detailContentExcluded: true, outputBoundScope: "Actual final serialized/redacted diagnostic including all source identity/guard wrappers" };
+  check(fits(fallback)); return fallback;
+}
+export function hostLogArtifactPlan(name, receipt, originalText, { serialize, compactSerialize = (value) => serializeHostLogArtifact(value, redact, undefined, { compact: true }), redact, guardSource, assertProjectedSafe }) {
   if (receipt.rejectedStreamDiagnostic) {
-    const wrappedDiagnostic = (diagnostic) => serialize({ rejectedStreamDiagnostic: diagnostic, sourceIdentity: name, guardSource });
-    if (Buffer.byteLength(wrappedDiagnostic(receipt.rejectedStreamDiagnostic)) > 64 * 1024) {
-      const d = receipt.rejectedStreamDiagnostic;
-      const bounded = { diagnosticStatus: "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED", original: d.original, inputIdentityDomain: d.inputIdentityDomain, sourceTableSha256: d.sourceTableSha256, rawContentExcluded: true, inspectionComplete: false, inspectedLines: d.inspectedLines, uninspectedLines: d.uninspectedLines ?? 0, capturedLines: d.capturedLines, failedLines: d.failedLines, safeLines: d.safeLines, projectionBlockedGuardSafeLines: d.projectionBlockedGuardSafeLines, omittedFailedLineDetails: d.failedLines, omittedProjectionOnlyDetails: d.projectionBlockedGuardSafeLines, failureHistogram: d.failureHistogram, lexicalMatches: d.lexicalMatches, lexicalScanCapped: d.lexicalScanCapped, lexicalCountScope: d.lexicalCountScope, lexicalOmittedDetails: d.lexicalMatches, detailContentExcluded: true, outputBoundScope: "Actual final serialized/redacted diagnostic with source identity/guard wrapper" };
-      check(Buffer.byteLength(wrappedDiagnostic(bounded)) <= 64 * 1024);
-      const { projectedPayloadSha256: _oldHash, projectedDigestScope: _oldScope, ...payload } = { ...receipt, rejectedStreamDiagnostic: bounded };
+    const wrappedDiagnostic = (diagnostic) => compactSerialize({ rejectedStreamDiagnostic: diagnostic, sourceIdentity: name, guardSource });
+    const diagnostic = presentHostLogDiagnostic(receipt.rejectedStreamDiagnostic, wrappedDiagnostic);
+    if (diagnostic !== receipt.rejectedStreamDiagnostic) {
+      const { projectedPayloadSha256: _oldHash, projectedDigestScope: _oldScope, ...payload } = { ...receipt, rejectedStreamDiagnostic: diagnostic };
       receipt = { ...payload, projectedPayloadSha256: digest(JSON.stringify(payload)), projectedDigestScope: "Closed receipt after final diagnostic boundary; before digest/artifact wrapper, not original stream" };
     }
   }
@@ -367,13 +400,13 @@ export function hostLogArtifactPlan(name, receipt, originalText, { serialize, re
       prepare(`${name}.source-projected.log`, sanitized);
       prepare(`${name}.source-audit.json`, { ...audit, projectedRecordHashScope: HOST_LOG_RECORD_HASH_SCOPE });
       prepare(name, { ...summary, sourceIdentity: name, projectedStream: `${name}.source-projected.log`, sourceAudit: `${name}.source-audit.json`, projectedHashScope: HOST_LOG_RECORD_HASH_SCOPE, exportedProjection: { bytes: Buffer.byteLength(sanitized), sha256: digest(sanitized), scope: "Actual sanitized projected stream artifact bytes" }, projectionScope: "Complete source-validated projection; original raw stream excluded; unchanged acceptance obligations" });
-    } else prepare(name, { ...receipt, sourceIdentity: name, guardSource, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
+    } else { const value = { ...receipt, sourceIdentity: name, guardSource, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" }; files.push({ name, text: compactSerialize(value) }); }
     if (files.every((file) => Buffer.byteLength(file.text) <= LIMIT)) return { receipt, files, blocked: !receipt.completeStreamSafe && !receipt.sourceProjectedComplete };
   } catch { reason = "HOST_LOG_FINAL_ARTIFACT_PREPARATION_FAILED"; }
   const observations = receipt.sourceProjectionAttempt?.observations, audit = receipt.audit;
   const counts = observations ? { recordCount: observations.recordCount, originalGuardSafeRecords: observations.originalGuardSafeRecords, safeRecords: observations.safeRecords, projectedRecords: observations.projectedRecords, blockedRecords: observations.blockedRecords, accountingComplete: observations.accountingComplete, sourceCaseCounts: observations.sourceCaseCounts } : audit ? { recordCount: audit.recordCount, originalGuardSafeRecords: audit.originalGuardSafeRecords, safeRecords: audit.recordCount - audit.transformedRecords, projectedRecords: audit.transformedRecords, blockedRecords: 0, accountingComplete: true, sourceCaseCounts: audit.sourceCaseCounts } : undefined;
   const fallback = { completeStreamSafe: false, sourceProjectedComplete: false, projection: true, original: receipt.original, rawCompleteStreamExcluded: true, failureDiagnostic: receipt.failureDiagnostic ?? receipt.rawGuardFailureDiagnostic, rejectedStreamDiagnostic: receipt.rejectedStreamDiagnostic, sourceProjectionAttempt: { outcome: "BLOCKED", reason, observations: counts, completeAuditExcluded: true }, finalArtifactBoundary: { reason, oversizedFiles: files.filter((file) => Buffer.byteLength(file.text) > LIMIT).map((file) => ({ bytes: Buffer.byteLength(file.text), sha256: digest(file.text), scope: "Actual final serialized/redacted artifact bytes excluded; not original stream" })) }, exclusionReason: "Host log final artifact exceeds fixed bound or cannot be prepared; full stream/audit excluded; required lifecycle/error facts UNPROVEN" };
-  const text = serialize({ ...fallback, sourceIdentity: name, guardSource, projectionScope: "Entire stream excluded at actual final artifact boundary; original identity/disposition and complete counts retained" });
+  const text = compactSerialize({ ...fallback, sourceIdentity: name, guardSource, projectionScope: "Entire stream excluded at actual final artifact boundary; original identity/disposition and complete counts retained" });
   check(Buffer.byteLength(text) <= LIMIT);
   return { receipt: fallback, files: [{ name, text }], blocked: true };
 }

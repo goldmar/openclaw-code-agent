@@ -62,7 +62,7 @@ const oversizedDetails = Array.from({ length: 64 }, (_, i) => logger(i % 2 ? "pl
 for (const payload of extraPayloads) for (const [id, severity] of ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"].entries()) oversizedDetails.push(logger(payload, id, severity));
 // The actual exported wrapper includes the newly retained source observations
 // and domain labels inside its unchanged cap/digest. The prior 79/80-record
-// specimens remain overflow negatives; 39/40 now bracket the larger receipt.
+// specimens require bounded explicit omissions; compact presentation may retain details.
 const boundaryInput = (count) => "x".repeat(100000) + "\n" + oversizedDetails.slice(0, count).join("\n");
 const below = hostLogEvidence(boundaryInput(39)); assert.equal(below.completeStreamSafe, false);
 const actualBelow = below.rejectedStreamDiagnostic; assert.equal(actualBelow.diagnosticStatus, "REJECTED_STREAM_OBSERVED");
@@ -71,12 +71,12 @@ const { projectedDiagnosticSha256, projectedDigestScope, ...digestedPayload } = 
 assert.equal(projectedDiagnosticSha256, hash(JSON.stringify(digestedPayload))); assert.match(digestedPayload.inputIdentityDomain, /undecoded byte validity unavailable/);
 for (const input of [boundaryInput(40), boundaryInput(79), boundaryInput(80), boundaryInput(81), Buffer.from(boundaryInput(84))]) {
   const receipt = hostLogEvidence(input); assert.equal(receipt.completeStreamSafe, false); assert.equal(receipt.rawCompleteStreamExcluded, true);
-  const actual = receipt.rejectedStreamDiagnostic; assert.equal(actual.diagnosticStatus, "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"); assert.equal(actual.inspectionComplete, false);
+  const actual = receipt.rejectedStreamDiagnostic; assert.ok(["DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED", "REJECTED_STREAM_OBSERVED"].includes(actual.diagnosticStatus)); if (actual.diagnosticStatus === "REJECTED_STREAM_OBSERVED") { assert.equal(actual.presentationComplete, false); assert.ok(actual.omittedFailedLineDetails + actual.lexicalOmittedDetails > 0); assert.equal(actual.rawFailureRecordIdentities.length, actual.failedLines); } else assert.equal(actual.inspectionComplete, false);
   assert.ok(Buffer.byteLength(JSON.stringify(actual)) <= 65536); assert.equal(actual.original.sha256, hash(input));
   assert.ok(!JSON.stringify(actual).includes("SYNTHETIC_PRIVATE_VALUE")); negativeControls++;
 }
 positiveGroups++;
-const overflow = check("x".repeat(1000000) + "\n" + oversizedDetails.join("\n")); assert.equal(overflow.diagnosticStatus, "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"); assert.equal(overflow.inspectionComplete, false); negativeControls++;
+const overflow = check("x".repeat(1000000) + "\n" + oversizedDetails.join("\n")); assert.ok(["DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED", "REJECTED_STREAM_OBSERVED"].includes(overflow.diagnosticStatus)); if (overflow.diagnosticStatus === "REJECTED_STREAM_OBSERVED") { assert.equal(overflow.presentationComplete, false); assert.ok(overflow.omittedFailedLineDetails + overflow.lexicalOmittedDetails > 0); } else assert.equal(overflow.inspectionComplete, false); negativeControls++;
 const otherPayload = check(JSON.stringify({ "0": 0, message: "token: SYNTHETIC_PRIVATE_VALUE", _meta: { logLevelId: 2, logLevelName: "DEBUG" } })); assert.equal(otherPayload.failedLineDetails[0].envelope, "PINNED_LOGGER_OTHER_PAYLOAD");
 const nestedMeta = check(logger("token: SYNTHETIC_PRIVATE_VALUE", 2, "DEBUG", { runtime: {} })); assert.equal(nestedMeta.failedLineDetails[0].header, "UNKNOWN_ENVELOPE"); negativeControls++;
 positiveGroups++;
