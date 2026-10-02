@@ -2,9 +2,9 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
@@ -105,6 +105,50 @@ describe("bounded representative host receipts", () => {
     assert.deepEqual(proof.verifierCommands, commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
     assert.deepEqual(proof.requiredVerifierCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
     assert.equal(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")), true, "Original full terminal specs remain untouched");
+  });
+  it("settles unchanged required tuples without historical process-local wait handles", async () => {
+    const row: any = { sessionId: "own", deliveryState: "idle", completionWakeRoutedReply: false,
+      completionWakeSummaryFact: { required: true, producer: "terminal", outcomeKey: "completed" }, completionWakeOutcomeKey: "completed",
+      completionWakeRunId: "old-run", completionWakeIssuedAt: 1, completionWakeSucceededAt: 2,
+      notificationDedupe: [{ key: "notice", label: "completed", status: "delivered" }] };
+    const proofs = [{ sessionId: "own", ownRunId: "old-run", outcomeKey: "completed", issuedAt: 1, succeededAt: 2,
+      requiredAdmissionFact: row.completionWakeSummaryFact, notificationKeys: [{ key: "notice", label: "completed" }] },
+      { ownRunId: "old-run", responseId: "response", canonicalSha256: sha("Own visible result"), visible: true }];
+    const history: any = { sessionId: "parent", sessionKey: "key", messages: [{ role: "assistant", responseId: "response", __openclaw: { runId: "old-run" }, content: [{ type: "text", text: "Own visible result" }] },
+      { role: "assistant", responseId: "historical", __openclaw: { runId: "historical-run" }, content: [{ type: "text", text: "Historical record without a current wait handle" }] }] };
+    const methods: string[] = [], run = Object.assign(Object.create(FeatureRun.prototype), { parentId: "parent", sessionKey: "key", proofs, sessions: () => [row],
+      rpc: async (method: string) => { methods.push(method); assert.equal(method, "chat.history", "No historical agent.wait allowed"); return history; } });
+    await run.settleParentReplies(); assert.deepEqual(methods, ["chat.history"]);
+    for (const change of [{ completionWakeRunId: "new-run" }, { completionWakeSummaryFact: undefined }, { completionWakeSummaryFact: { ...row.completionWakeSummaryFact, required: false } },
+      { completionWakeSucceededAt: 3 }, { completionWakeSkippedAt: 4 }, { deliveryState: "wake_pending" }, { notificationDedupe: [{ key: "notice", label: "completed", status: "in_flight" }] }]) {
+      const original = { ...row }; Object.assign(row, change); await assert.rejects(run.settleParentReplies());
+      for (const key of Object.keys(row)) delete row[key]; Object.assign(row, original);
+    }
+    const originalRows = run.sessions; run.sessions = () => [row, { ...row, sessionId: "new-owner" }]; await assert.rejects(run.settleParentReplies());
+    run.sessions = (): never[] => []; await assert.rejects(run.settleParentReplies()); run.sessions = originalRows;
+    history.messages[0].responseId = "foreign"; await assert.rejects(run.settleParentReplies());
+    history.messages[0].responseId = "response"; history.messages[0].content[0].text = "Changed result"; await assert.rejects(run.settleParentReplies());
+    assert.equal(methods.includes("agent.wait"), false);
+  });
+  it("releases only the registered original harmless barrier before graceful failure cleanup", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "oca501-held-cleanup-")), workspace = join(directory, "workspace"), workdir = join(workspace, "case");
+    mkdirSync(workdir, { recursive: true }); const script = join(workdir, "ci.sh");
+    writeFileSync(script, "echo ready; while [ ! -f release ]; do sleep 0.02; done; exit 0\n");
+    const child = spawn("bash", [script], { cwd: workdir, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let identity: ReturnType<typeof processIdentity>;
+    try {
+      await new Promise<void>((resolve, reject) => { child.stdout.once("data", () => resolve()); child.once("error", reject); }); identity = processIdentity(child.pid); assert.ok(identity);
+      const primary = { stage: "live-policy:original-task-check-held", code: "REQUIRED_FEATURE_PROOF_FAILED" }, r = receipt(); r.failure = primary; r.disposition = "BLOCKED";
+      const barrier = { barrier: true, workdir, barrierProcess: identity, barrierScriptSha256: sha(readFileSync(script)) };
+      const run = Object.assign(Object.create(FeatureRun.prototype), { directory, workspace, workdirs: [workdir], gateway: child, children: new Set(), receipt: r, raw: r.excluded, proofs: r.proofs,
+        fixture: { cases: new Map([["case", barrier]]), requests: [] as never[], failures: [] as never[], close: async (): Promise<void> => {} },
+        shutdown: async () => { await until(() => child.exitCode !== null, 2000); const stopped = await stopOwnedChild(child, { identity, graceMs: 100, killMs: 100 }); assert.equal(stopped.complete, true); assert.equal(stopped.graceful, true); assert.equal(child.exitCode, 0); } });
+      run.gateway = undefined; barrier.barrierScriptSha256 = "0".repeat(64);
+      assert.equal(await run.cleanup(), false); assert.equal(existsSync(join(workdir, "release")), false); assert.equal(processIdentity(child.pid)?.startTicks, identity.startTicks);
+      barrier.barrierScriptSha256 = sha(readFileSync(script)); run.gateway = child;
+      assert.equal(await run.cleanup(), true); assert.equal(r.failure, primary); assert.equal(r.cleanup.complete, true);
+      assert.deepEqual(decodeReceipt(frameReceipt(r), expected).receipt.failure, primary);
+    } finally { const stopped = await stopOwnedChild(child, { identity, graceMs: 100, killMs: 100 }); if (stopped.complete) rmSync(directory, { recursive: true, force: true }); }
   });
   it("requires the latest registered native intent and the exact current turn/call", () => {
     const tag = "OCA501_CASE_control", prompt = `${tag}: Run the harmless receipt command.`;

@@ -780,6 +780,15 @@ describe("pending resume ownership before backend initialization (R7)", () => {
 // Composed policy boundaries. Native handles are fake; controller, persistence,
 // Session authorization and opaque-token callback routing are production code.
 describe("relocated feature boundary coverage", () => {
+  it("rejects complete original A through the actual goal tool under B without launch effects", async () => {
+    const f = fixture(), original = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
+    setGoalController(f.controller); setPluginConfig({ requiredGoalVerifierCommands: ["bash changed.sh"] });
+    const before = JSON.stringify(f.store.list()), counters = f.counters();
+    const denied = await makeAgentGoalTool({ ...ctx, workspaceDir: f.dir }).execute("complete-A", { action: "launch", goal: "Complete A denial", workdir: f.dir, verifier_commands: original });
+    assert.equal(denied.isError, true); assert.match(denied.content[0].text, /complete ordered|operator-required/);
+    assert.equal(JSON.stringify(f.store.list()), before); assert.deepEqual(f.counters(), counters);
+    assert.deepEqual(counters, { launches: 0, confirmations: 0 });
+  });
   for (const decision of ["run", "cancel"] as const) {
     it(`routes an original opaque ${decision} callback under changed policy and makes replay inert`, async () => {
       const f = fixture();

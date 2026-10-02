@@ -449,7 +449,7 @@ export class FeatureRun {
     const tag = `OCA501_CASE_${name}`, workdir = join(this.workspace, name);
     mkdirSync(workdir);
     this.workdirs.push(workdir);
-    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold,
+    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold, barrier,
       nativeSnapshot: { gateway: this.gatewayIdentity, processes: this.nativeProcesses() } };
     this.fixture.cases.set(tag, fixture);
     const script = kind => `index=$(wc -l < checks.jsonl 2>/dev/null || printf 0)\nindex=$((index+1))\nprintf '{"ordinal":%s,"kind":"${kind}","pid":%s,"event":"start"}\\n' "$index" "$$" >> starts.jsonl\n` + (barrier && kind === "CI" ? `if [ "$index" = 1 ]; then echo "$$" > barrier.pid; while [ ! -f release ]; do sleep 0.05; done; fi\n` : "") + `printf '{"ordinal":%s,"kind":"${kind}","exit":${lintFailure && kind === "LINT" ? 3 : 0}}\\n' "$index" >> checks.jsonl\nexit ${lintFailure && kind === "LINT" ? 3 : 0}\n`;
@@ -519,7 +519,7 @@ export class FeatureRun {
     assert.equal(row.goalTaskId, current.id); assert.equal(row.name, current.sessionName); assert.equal(row.workdir, fixture.workdir);
     if (status === "succeeded") await this.completion(row, true);
     else { const dedupe = await until(() => (this.sessions().find(s => s.sessionId === row.sessionId)?.notificationDedupe ?? []).find(n => n.label === "goal-task-failed" && n.status === "delivered"));
-      this.proofs.push({ failedNotificationKey: dedupe.key, delivered: true });
+      this.proofs.push({ sessionId: row.sessionId, failedNotificationKey: dedupe.key, delivered: true });
       }
     const listing = await this.invoke("agent_sessions", { status: "all", full: true });
     const headers = listing.content.map(c => c.text ?? "").join("\n").split("\n").filter(line => line.includes(` ${row.name} [${row.sessionId}] — `));
@@ -568,21 +568,31 @@ export class FeatureRun {
       let ancestor = check;
       while (ancestor && ancestor.pid !== this.gateway.pid) ancestor = processIdentity(ancestor.parent);
       assert.ok(ancestor && sameProcess(ancestor, this.gatewayIdentity));
+      fixture.barrierProcess = check; fixture.barrierScriptSha256 = sha(readFileSync(join(fixture.workdir, "ci.sh")));
       const own = this.goals().find(g => g.id === goal.id);
       assert.equal(own.status, "running");
       await this.publicOwner(own.sessionId, "completed", fixture);
       await this.suite(B);
+      this.stage = "live-policy:original-task-check-held";
       assert.ok(sameProcess(check, processIdentity(pid)));
       const before = this.effects();
+      this.stage = "live-policy:complete-A-denial";
       const denied = await this.invoke("agent_goal", { action: "launch", goal: "Complete A denial", workdir: fixture.workdir, verifier_commands: A }, false);
       assert.match(denied.content[0].text, /complete ordered|operator-required/);
+      this.stage = "live-policy:zero-effects";
       assert.deepEqual(this.effects(), before);
-      assert.equal(this.goals().find(g => g.id === goal.id).status, "running");
+      this.stage = "live-policy:original-task-check-held";
+      const held = this.goals().find(g => g.id === goal.id);
+      assert.equal(held.status, "running"); assert.equal(held.iteration, own.iteration); assert.equal(held.sessionId, own.sessionId);
+      assert.deepEqual(held.requiredVerifierCommands, A);
       assert.ok(sameProcess(check, processIdentity(pid)));
+      this.stage = "live-policy:release";
       writeFileSync(join(fixture.workdir, "release"), "release\n");
+      this.stage = "live-policy:policy-terminal";
       const failed = await this.terminal(goal, fixture, "failed");
       assert.match(failed.failureReason, /policy changed|stored suite/i);
       assert.equal(failed.iteration, own.iteration);
+      this.stage = "live-policy:ordered-checks";
       this.checks(fixture, [["CI", 0]]);
       this.proofs.push({ verifierProcess: check, policyFailure: true });
       this.receipt.completed.push("live-policy");
@@ -644,20 +654,51 @@ export class FeatureRun {
   }
   async settleParentReplies() {
     const history = await this.rpc("chat.history", { sessionKey: this.sessionKey, limit: 100 });
-    assert.equal(history.sessionId, this.parentId);
-    const runs = new Set(history.messages.filter(m => m.role === "assistant" && m.__openclaw?.runId).map(m => m.__openclaw.runId));
-    for (const runId of runs) await this.visible(runId);
-    for (const row of this.sessions()) {
+    assert.equal(history.sessionId, this.parentId); assert.equal(history.sessionKey, this.sessionKey); assert.notEqual(history.truncated, true);
+    const rows = this.sessions();
+    for (const proof of this.proofs.filter(p => p.requiredAdmissionFact || p.failedNotificationKey)) {
+      const row = rows.find(r => r.sessionId === proof.sessionId); assert.ok(row);
+      if (proof.requiredAdmissionFact) assert.equal(row.completionWakeSummaryFact?.required, true);
+      if (proof.failedNotificationKey) assert.ok(row.notificationDedupe?.some(n => n.key === proof.failedNotificationKey && n.label === "goal-task-failed" && n.status === "delivered"));
+    }
+    for (const row of rows) {
       assert.ok(!["failed", "notifying", "wake_pending"].includes(row.deliveryState));
       assert.ok(!(row.notificationDedupe ?? []).some(n => n.status === "in_flight"));
-      if (row.completionWakeSummaryFact?.required) { assert.ok(row.completionWakeIssuedAt && row.completionWakeSucceededAt);
-        assert.ok(!row.completionWakeFailedAt && !row.completionWakeSkippedAt && !row.completionWakeSkipReason);
-        }
+      if (row.completionWakeSummaryRequired === true) assert.equal(row.completionWakeSummaryFact?.required, true);
+      if (!row.completionWakeSummaryFact?.required) continue;
+      assert.equal(row.deliveryState, "idle"); assert.equal(row.completionWakeSummaryRequired, undefined); assert.equal(row.completionWakeRoutedReply, false);
+      assert.ok(row.completionWakeIssuedAt && row.completionWakeSucceededAt);
+      assert.ok(!row.completionWakeFailedAt && !row.completionWakeSkippedAt && !row.completionWakeSkipReason);
+      const fact = requiredFact(row.completionWakeSummaryFact);
+      assert.equal(fact.producer, row.goalTaskId ? "goal" : "terminal"); assert.equal(fact.outcomeKey, row.completionWakeOutcomeKey);
+      const proved = this.proofs.filter(p => p.sessionId === row.sessionId && p.ownRunId === row.completionWakeRunId && p.outcomeKey === row.completionWakeOutcomeKey
+        && p.issuedAt === row.completionWakeIssuedAt && p.succeededAt === row.completionWakeSucceededAt && JSON.stringify(p.requiredAdmissionFact) === JSON.stringify(fact));
+      assert.equal(proved.length, 1, "A new or changed required obligation needs its own contemporaneous proof");
+      const label = row.goalTaskId ? "goal-task-succeeded" : "completed";
+      assert.ok(row.notificationDedupe?.some(n => n.label === label && n.status === "delivered" && proved[0].notificationKeys.some(p => p.key === n.key && p.label === n.label)));
+      const visible = this.proofs.filter(p => p.visible === true && p.ownRunId === row.completionWakeRunId);
+      assert.equal(visible.length, 1);
+      const canonical = history.messages.filter(m => m.role === "assistant" && m.__openclaw?.runId === row.completionWakeRunId);
+      assert.equal(canonical.length, 1); assert.notEqual(canonical[0].__openclaw.truncated, true); assert.equal(canonical[0].responseId, visible[0].responseId);
+      const text = (canonical[0].content ?? []).filter(c => c.type === "text" || c.type === "output_text").map(c => c.text).join("");
+      assert.equal(sha(text), visible[0].canonicalSha256);
     }
   }
   async cleanup() {
     const failures = [];
-    if (this.fixture) for (const fixture of this.fixture.cases.values()) fixture.shutdownExpected = true;
+    if (this.fixture) for (const fixture of this.fixture.cases.values()) {
+      fixture.shutdownExpected = true;
+      if (!fixture.barrier || !fixture.barrierProcess) continue;
+      try {
+        const current = processIdentity(fixture.barrierProcess.pid);
+        assert.ok(current || !existsSync(`/proc/${fixture.barrierProcess.pid}`), "OWNED_BARRIER_IDENTITY_UNAVAILABLE");
+        if (!sameProcess(current, fixture.barrierProcess) || current.state === "Z") continue;
+        assert.ok(this.workdirs.includes(fixture.workdir) && inside(this.workspace, fixture.workdir));
+        assert.equal(realpathSync(fixture.workdir), fixture.workdir); assert.equal(readlinkSync(`/proc/${current.pid}/cwd`), fixture.workdir);
+        assert.equal(sha(readFileSync(join(fixture.workdir, "ci.sh"))), fixture.barrierScriptSha256);
+        writeFileSync(join(fixture.workdir, "release"), "cleanup release\n");
+      } catch { failures.push("OWNED_CHILD_SHUTDOWN_FAILED"); }
+    }
     try { if (this.gateway) await this.shutdown();
       } catch { failures.push("OWNED_GATEWAY_SHUTDOWN_FAILED");
       }
