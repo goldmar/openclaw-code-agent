@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -347,6 +347,78 @@ describe("issue 504 real-host acceptance controls", () => {
       assert.equal(processIdentity(child.pid!), undefined);
       assert.ok(processIdentity(process.pid), "Unproved PID remains untouched");
     } finally { await stopOwnedChild(child); }
+  });
+
+  it("projects actual native plan metadata without raw plan, instructions, paths or synthesized absent posture", () => {
+    const frame = { method: "turn/start", params: { collaborationMode: { mode: "plan", settings: { model: "gpt-6.1-sol", developer_instructions: "PRIVATE-INSTRUCTIONS" } }, model: "gpt-6.1-sol", permissions: ":read-only", approvalPolicy: "never" } };
+    const projection = projectNativePlanFrame(frame, sha256);
+    assert.equal(projection.collaborationMode, "plan"); assert.equal(projection.executionProfile, ":read-only"); assert.equal(projection.approvalPolicy, "never"); assert.equal(projection.requestedModelMatches, true);
+    assert.equal(projectNativePlanFrame({}, sha256).collaborationMode, "absent");
+    assert.equal(projectNativePlanFrame({ params: { permissions: "PRIVATE-PATH", collaborationMode: { mode: "unexpected" } } }, sha256).executionProfile, "other");
+    const text = "<proposed_plan>PRIVATE-PLAN</proposed_plan>";
+    const item = projectNativePlanFrame({ method: "item/completed", params: { item: { type: "plan", text, phase: "final_answer" } } }, sha256);
+    assert.equal(item.genuineNativePlanItem, true); assert.equal(item.textNonempty, true); assert.equal(item.textBytes, Buffer.byteLength(text)); assert.equal(item.textSha256, sha256(text));
+    assert.equal(item.proposedPlanOpen, true); assert.equal(item.proposedPlanClose, true);
+    assert.doesNotMatch(JSON.stringify([projection, item]), /PRIVATE-|developer_instructions|"text":/);
+  });
+
+  it("requires a fresh exact native plan turn and actionable pending ask row rather than provider markup", () => {
+    const target = { sessionId: "plan-a", backendRef: { conversationId: "thread-a" } };
+    const row = { ...target, status: "running", lifecycle: "awaiting_plan_decision", runtimeState: "live", currentPermissionMode: "plan", planApproval: "ask", pendingPlanApproval: true, planModeApproved: false, approvalState: "pending", planDecisionVersion: 1, actionablePlanDecisionVersion: 1 };
+    const request = { direction: "request", method: "turn/start", id: 1, relayPid: 10, threadId: "thread-a", ...projectNativePlanFrame({ params: { collaborationMode: { mode: "plan", settings: { model: "gpt-6.1-sol" } }, model: "gpt-6.1-sol", permissions: ":read-only", approvalPolicy: "never" } }, sha256) };
+    const ack = { direction: "response", id: 1, relayPid: 10, turnId: "turn-a" };
+    const item = { direction: "response", method: "item/completed", threadId: "thread-a", turnId: "turn-a", ...projectNativePlanFrame({ params: { item: { type: "plan", text: "Actual synthetic native plan" } } }, sha256) };
+    const terminal = { direction: "response", method: "turn/completed", threadId: "thread-a", turnId: "turn-a", status: "completed" };
+    const events = [request, ack, item, terminal]; assert.equal(hasNativePlanBoundary(events, 0, row, target), true);
+    assert.equal(hasNativePlanBoundary(events, events.length, row, target), false);
+    for (const wrong of [{ ...request, collaborationMode: "absent" }, { ...request, collaborationMode: "default" }, { ...request, executionProfile: ":workspace" }, { ...request, approvalPolicy: "on-request" }, { ...request, requestedModelMatches: false }, { ...request, threadId: "other" }]) assert.equal(hasNativePlanBoundary([wrong, ack, item, terminal], 0, row, target), false);
+    for (const wrong of [{ ...item, itemType: "agentMessage" }, { ...item, textNonempty: false, textBytes: 0 }, { ...item, threadId: "other" }, { ...item, turnId: "old" }, { ...item, direction: "request" }]) assert.equal(hasNativePlanBoundary([request, ack, wrong, terminal], 0, row, target), false);
+    for (const wrong of [undefined, { ...row, sessionId: "other" }, { ...row, backendRef: { conversationId: "other" } }, { ...row, pendingPlanApproval: false }, { ...row, planModeApproved: true }, { ...row, currentPermissionMode: "default" }, { ...row, planApproval: "delegate" }, { ...row, approvalState: "approved" }, { ...row, planDecisionVersion: 0 }, { ...row, actionablePlanDecisionVersion: 0 }, { ...row, actionablePlanDecisionVersion: 2 }]) assert.equal(hasNativePlanBoundary(events, 0, wrong, target), false);
+    const facts = planRowObservation(row, target); assert.equal(facts.selectedIdMatches, true); assert.doesNotMatch(JSON.stringify(facts), /plan-a|thread-a/);
+    for (const state of ["not_required", "pending", "approved", "changes_requested", "rejected"]) {
+      const observed = { ...row, approvalState: state };
+      assert.equal(planRowObservation(observed, target).approvalState, state);
+      assert.equal(hasNativePlanBoundary(events, 0, observed, target), state === "pending");
+    }
+    for (const mode of ["default", "plan", "bypassPermissions"]) {
+      const observed = { ...row, currentPermissionMode: mode };
+      assert.equal(planRowObservation(observed, target).currentPermissionMode, mode);
+      assert.equal(hasNativePlanBoundary(events, 0, observed, target), mode === "plan");
+    }
+    for (const unknown of [{ ...row, approvalState: "none" }, { ...row, currentPermissionMode: "acceptEdits" }]) {
+      assert.equal(hasNativePlanBoundary(events, 0, unknown, target), false);
+    }
+    assert.equal(planRowObservation({ ...row, approvalState: "none" }, target).approvalState, "UNPROVEN");
+    assert.equal(planRowObservation({ ...row, currentPermissionMode: "acceptEdits" }, target).currentPermissionMode, "UNPROVEN");
+  });
+
+  it("records actual responseFrames events and hashes without changing model text or claiming native parser success", () => {
+    const text = "<proposed_plan>Disposable model plan</proposed_plan>";
+    const output = [messageItem(text)], sse = responseFrames(output, "fixture-model"), before = JSON.stringify(output);
+    const observed = providerSseObservation(sse, output);
+    assert.equal(observed.sseSha256, sha256(sse)); assert.equal(observed.sseBytes, Buffer.byteLength(sse)); assert.equal(observed.eventCount, 8);
+    assert.equal(observed.eventNames[0], "response.created"); assert.equal(observed.eventNames.at(-1), "response.completed"); assert.equal(observed.items[0].textSha256, sha256(text));
+    assert.equal(observed.items[0].proposedPlanOpen, true); assert.equal(observed.evidenceKind, "simulated-provider-output-not-native-plan");
+    assert.equal(JSON.stringify(output), before); assert.doesNotMatch(JSON.stringify(observed), /Disposable model plan/);
+  });
+
+  it("keeps ordinary raw stdio byte-identical through the transparent relay while capturing bounded synthetic metadata", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "oca504-plan-relay-control-"));
+    let child: ReturnType<typeof spawn> | undefined;
+    try {
+      writeFileSync(join(fixture, ".fixture-owner"), FIXTURE_MARKER);
+      const echo = join(fixture, "ordinary-echo.mjs"); writeFileSync(echo, "process.stdin.pipe(process.stdout);", { mode: 0o600 });
+      const relay = writeNativeRelay(fixture, process.execPath);
+      const raw = JSON.stringify({ method: "item/completed", params: { threadId: "synthetic-thread", turnId: "synthetic-turn", item: { type: "plan", text: "PRIVATE-SYNTHETIC-PLAN" } } }) + "\n";
+      child = spawn(process.execPath, [relay, echo], { detached: true, stdio: ["pipe", "pipe", "pipe"] }); trackOwnedChild(child);
+      let stdout = "", stderr = ""; child.stdout!.on("data", (bytes) => { stdout += bytes; }); child.stderr!.on("data", (bytes) => { stderr += bytes; });
+      const ended = new Promise<void>((done) => child!.once("close", () => done())); child.stdin!.end(raw); await ended;
+      assert.equal(child.exitCode, 0); assert.equal(stdout, raw); assert.equal(stderr, "");
+      const captured = readFileSync(join(fixture, "native-events.jsonl"), "utf8");
+      assert.doesNotMatch(captured, /PRIVATE-SYNTHETIC-PLAN/);
+      const incoming = captured.trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.direction === "response");
+      assert.equal(incoming.itemType, "plan"); assert.equal(incoming.textSha256, sha256("PRIVATE-SYNTHETIC-PLAN")); assert.equal(incoming.turnId, "synthetic-turn");
+    } finally { if (child) await stopOwnedChild(child); rmSync(fixture, { recursive: true, force: true }); }
   });
 
   it("requires exact stopped generations and fresh successful resume on completed and killed rows", () => {

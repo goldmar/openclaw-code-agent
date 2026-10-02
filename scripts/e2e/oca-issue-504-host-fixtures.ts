@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { closeSync, constants, fstatSync, openSync, readSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep, join } from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export const FIXTURE_MARKER = "oca-issue-504-host-acceptance-v1";
 export const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -304,6 +304,60 @@ export function freshResume(events: FixtureRecord[], threadId: string, required:
     assert.ok(events.some((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.threadId === threadId && !event.error), "Fresh native resume must succeed on original thread");
   }
 }
+/** Same allowlisted projector is embedded in the byte-transparent relay. */
+export function projectNativePlanFrame(frame: FixtureRecord, digest: (text: string) => string) {
+  const params = frame.params;
+  const mode = params?.collaborationMode?.mode;
+  const profile = params?.permissions;
+  const policy = params?.approvalPolicy;
+  const item = params?.item;
+  const type = item?.type;
+  const phase = item?.phase;
+  const observedText = typeof item?.text === "string" ? item.text : frame.method === "item/plan/delta" && typeof params?.delta === "string" ? params.delta : undefined;
+  return { collaborationMode: mode === undefined ? "absent" : ["plan", "default"].includes(mode) ? mode : "other",
+    executionProfile: profile === undefined ? "absent" : [":read-only", ":workspace", ":danger-full-access"].includes(profile) ? profile : "other",
+    approvalPolicy: policy === undefined ? "absent" : ["never", "on-request", "on-failure", "untrusted"].includes(policy) ? policy : "other",
+    requestedModelMatches: params?.model === "gpt-6.1-sol" && params?.collaborationMode?.settings?.model === "gpt-6.1-sol",
+    itemType: type === undefined ? "absent" : ["plan", "agentMessage", "reasoning", "commandExecution", "contextCompaction", "functionCall"].includes(type) ? type : "other",
+    itemPhase: phase === undefined ? "absent" : ["commentary", "final_answer"].includes(phase) ? phase : "other",
+    textPresent: observedText !== undefined, textNonempty: observedText !== undefined && Boolean(observedText.trim()),
+    textBytes: observedText === undefined ? null : Buffer.byteLength(observedText), textSha256: observedText === undefined ? null : digest(observedText),
+    proposedPlanOpen: observedText === undefined ? null : observedText.includes("<proposed_plan>"), proposedPlanClose: observedText === undefined ? null : observedText.includes("</proposed_plan>"),
+    genuineNativePlanItem: type === "plan" };
+}
+export function providerSseObservation(sse: string, output: FixtureRecord[]) {
+  assert.ok(Buffer.byteLength(sse) <= 1_048_576);
+  const events = sse.split("\n\n").filter(Boolean).map((frame) => frame.split("\n")[0].replace(/^event: /, ""));
+  assert.ok(events.length <= 128 && events.every((name) => /^response\.[a-z_.]{1,64}$/.test(name)));
+  const items = output.map((item) => {
+    const text = item.type === "message" && Array.isArray(item.content) ? item.content.filter((part: FixtureRecord) => part.type === "output_text" && typeof part.text === "string").map((part: FixtureRecord) => part.text).join("") : undefined;
+    return { itemType: ["message", "function_call"].includes(item.type) ? item.type : "other",
+      itemPhase: item.phase === undefined ? "absent" : ["commentary", "final_answer"].includes(item.phase) ? item.phase : "other",
+      textBytes: text === undefined ? null : Buffer.byteLength(text), textSha256: text === undefined ? null : sha256(text),
+      proposedPlanOpen: text === undefined ? null : text.includes("<proposed_plan>"), proposedPlanClose: text === undefined ? null : text.includes("</proposed_plan>") };
+  });
+  return { eventNames: events, eventCount: events.length, items, sseBytes: Buffer.byteLength(sse), sseSha256: sha256(sse), evidenceKind: "simulated-provider-output-not-native-plan" };
+}
+export function planRowObservation(row: FixtureRecord | undefined, target: FixtureRecord) {
+  const version = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 1_000_000_000 ? value : null;
+  return { ...generationObservation(row, target), currentPermissionMode: ["plan", "default", "bypassPermissions"].includes(row?.currentPermissionMode) ? row!.currentPermissionMode : "UNPROVEN",
+    planApproval: ["ask", "delegate"].includes(row?.planApproval) ? row!.planApproval : "UNPROVEN",
+    pendingPlanApproval: typeof row?.pendingPlanApproval === "boolean" ? row.pendingPlanApproval : "UNPROVEN",
+    planModeApproved: typeof row?.planModeApproved === "boolean" ? row.planModeApproved : "UNPROVEN",
+    approvalState: ["not_required", "pending", "approved", "changes_requested", "rejected"].includes(row?.approvalState) ? row!.approvalState : "UNPROVEN",
+    decisionVersion: version(row?.planDecisionVersion), actionableVersion: version(row?.actionablePlanDecisionVersion) };
+}
+export function hasNativePlanBoundary(events: FixtureRecord[], eventStart: number, row: FixtureRecord | undefined, target: FixtureRecord) {
+  const facts = planRowObservation(row, target);
+  if (!facts.exists || !facts.selectedIdMatches || !facts.selectedBackendMatches || facts.currentPermissionMode !== "plan" || facts.planApproval !== "ask" || facts.pendingPlanApproval !== true || facts.planModeApproved !== false || facts.approvalState !== "pending" || typeof facts.decisionVersion !== "number" || facts.decisionVersion <= 0 || facts.actionableVersion !== facts.decisionVersion) return false;
+  const fresh = events.slice(eventStart), thread = target.backendRef.conversationId;
+  return fresh.some((request) => {
+    if (request.direction !== "request" || request.method !== "turn/start" || request.threadId !== thread || request.collaborationMode !== "plan" || request.executionProfile !== ":read-only" || request.approvalPolicy !== "never" || request.requestedModelMatches !== true) return false;
+    const ack = fresh.find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && !event.error && typeof event.turnId === "string" && event.turnId);
+    return Boolean(ack && fresh.some((event) => event.direction === "response" && event.method === "item/completed" && event.threadId === thread && event.turnId === ack.turnId && event.itemType === "plan" && event.genuineNativePlanItem === true && event.textNonempty === true && typeof event.textBytes === "number" && event.textBytes > 0) && fresh.some((event) => event.direction === "response" && event.method === "turn/completed" && event.threadId === thread && event.turnId === ack.turnId && event.status === "completed"));
+  });
+}
+
 export function responseResumeBoundary(row: FixtureRecord | undefined, target: FixtureRecord, eventStart: number) {
   const facts = generationObservation(row, target);
   assert.ok(facts.exists && facts.selectedIdMatches && facts.selectedBackendMatches);
@@ -683,6 +737,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, realpathSync, existsSync, statSync, writeFileSync } from 'node:fs';
 const incomplete=${JSON.stringify(join(root, "capture-incomplete"))};
+const projectPlan=${projectNativePlanFrame.toString()};
 const append=record=>{const text=JSON.stringify(record)+'\\n';if((existsSync(${JSON.stringify(capture)})?statSync(${JSON.stringify(capture)}).size:0)+Buffer.byteLength(text)>1048576){writeFileSync(incomplete,'native-proof-overflow',{mode:0o600});return;}appendFileSync(${JSON.stringify(capture)},text,{mode:0o600});};
 const child = spawn(${JSON.stringify(nativeExecutable)}, process.argv.slice(2), { env: process.env, stdio: ['pipe','pipe','pipe'] });
 const identity=pid=>{const f=readFileSync('/proc/'+pid+'/stat','utf8').split(') ').at(-1).split(' ');return {pid,parentPid:Number(f[1]),group:Number(f[2]),startTicks:f[19],executable:realpathSync('/proc/'+pid+'/exe')};};
@@ -707,9 +762,10 @@ const observe = (stream, direction) => {
         const frame=JSON.parse(line);
         const nativeInput=(frame.params?.input??[]).filter(part=>part.type==='text'&&typeof part.text==='string').map(part=>({sha256:createHash('sha256').update(part.text).digest('hex'),sentinel:/^(1|REPEAT-[\\w-]+|INTENTIONAL_REPEAT)$/.test(part.text)?part.text:part.text.match(/OCA504_NATIVE[_:]?[\\w-]*/)?.[0]}));
         const mismatch=typeof frame.error?.message==='string'?/^expected active turn id \x60([^\x60]+)\x60 but found \x60([^\x60]+)\x60$/.exec(frame.error.message):null;
-        const record={relayPid:process.pid,direction, method:frame.method, id:frame.id, userAgent:frame.result?.userAgent,nativeInput,expectedTurnId:frame.params?.expectedTurnId,
+        const planMetadata=["turn/start","item/started","item/completed","item/plan/delta","turn/plan/updated","turn/completed"].includes(frame.method)?projectPlan(frame,text=>createHash("sha256").update(text).digest("hex")):{};
+        const record={...planMetadata,relayPid:process.pid,direction, method:frame.method, id:frame.id, userAgent:frame.result?.userAgent,nativeInput,expectedTurnId:frame.params?.expectedTurnId,
           threadId:frame.params?.threadId ?? frame.result?.thread?.id,
-          turnId:frame.params?.turn?.id ?? frame.result?.turn?.id ?? frame.result?.turnId, status:frame.params?.turn?.status, error:Boolean(frame.error),
+          turnId:frame.params?.turn?.id ?? frame.params?.turnId ?? frame.result?.turn?.id ?? frame.result?.turnId, status:frame.params?.turn?.status, error:Boolean(frame.error),
           errorCode:typeof frame.error?.code==='number'?frame.error.code:undefined,errorDataPresent:frame.error?.data!=null,
           noActiveTurn:frame.error?.message==='no active turn to steer',mismatchExact:Boolean(mismatch&&mismatch[0]===frame.error.message),mismatchExpected:mismatch?.[1],mismatchActual:mismatch?.[2]};
         append(record);
