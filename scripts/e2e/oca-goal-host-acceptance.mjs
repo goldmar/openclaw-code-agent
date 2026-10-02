@@ -223,7 +223,7 @@ class AcceptanceRun {
   }
   captureHostStream(name, text) {
     const receipt = hostLogEvidence(text);
-    if (receipt.completeStreamSafe) this.artifact(name, text);
+    if (receipt.completeStreamSafe) this.artifact(name, Buffer.isBuffer(text) ? text.toString("utf8") : text);
     else {
       this.artifact(name, { ...receipt, sourceIdentity: name, guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha }, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
       (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: receipt.exclusionReason });
@@ -1469,7 +1469,7 @@ class AcceptanceRun {
     this.captureHostStream("gateway.log", this.gatewayLog ?? "Gateway not started");
     this.captureHostStream("gateway.stdout.log", this.gatewayStdout ?? ""); this.captureHostStream("gateway.stderr.log", this.gatewayStderr ?? "");
     if (existsSync(join(this.directory, "openclaw-runtime.log"))) {
-      const runtimeText = readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8");
+      const runtimeText = readFileSync(join(this.directory, "openclaw-runtime.log"));
       if (!hostLogEvidence(runtimeText).completeStreamSafe) this.captureHostStream("runtime-log.projection.json", runtimeText);
     }
     this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, botMenus: [...this.botMenus.entries()], fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
@@ -1483,9 +1483,9 @@ class AcceptanceRun {
     // deliberately excluded, even though they live under the disposable root.
     let runtimeSafe = true;
     if (existsSync(join(this.directory, "openclaw-runtime.log"))) {
-      const receipt = hostLogEvidence(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8"));
+      const receipt = hostLogEvidence(readFileSync(join(this.directory, "openclaw-runtime.log")));
       runtimeSafe = receipt.completeStreamSafe;
-      if (!runtimeSafe) { this.captureHostStream("runtime-log.projection.json", readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8")); this.artifact("results.json", this.results); }
+      if (!runtimeSafe) { this.captureHostStream("runtime-log.projection.json", readFileSync(join(this.directory, "openclaw-runtime.log"))); this.artifact("results.json", this.results); }
     }
     const entries = [...this.artifactFiles].map((name) => ({ name, alreadyRedacted: true }));
     const unavailable = [];

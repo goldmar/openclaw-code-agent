@@ -282,11 +282,12 @@ const logGuard = (condition, code, guardSite, sourceClass = "unknown") => {
   error[LOG_GUARD_DIAGNOSTIC] = Object.freeze({ code, guardSite, sourceClass, location: { scope: "whole-stream", available: false } });
   throw error;
 };
+const LOG_PROFILE_KEYS = /(?:["'](?:gateway|auth|token|agents|defaults|bindings|channels|accounts|credentials|models|providers|plugins|entries|config|environment|env|profile|botToken|apiKey|tokenFile|authProfiles)["']\s*:|\b(?:gateway|agents|defaults|bindings|channels|accounts|models|providers|plugins|entries|config|environment|env|profile)\b\s*[:=]\s*[\[{]|\b(?:auth|token|credentials|botToken|apiKey|tokenFile|authProfiles)\b\s*[:=]|\b(?:gateway\.auth|agents\.defaults|models\.providers|plugins\.entries|process\.env)\b\s*[:=])/i;
+const LOG_MULTILINE_PROFILE = /(?:^|\n)\s*(?:gateway|auth|agents|defaults|bindings|channels|accounts|credentials|models|providers|plugins|entries|config|environment|env|profile|botToken|apiKey|tokenFile|authProfiles):(?:\s|$)/i;
 export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {}) {
   // Unknown content-bearing JSON blocks export rather than becoming arbitrary
   // data hidden inside a logger wrapper. Required omitted facts remain blocked.
-  const profileKeys = /(?:["'](?:gateway|auth|token|agents|defaults|bindings|channels|accounts|credentials|models|providers|plugins|entries|config|environment|env|profile|botToken|apiKey|tokenFile|authProfiles)["']\s*:|\b(?:gateway|agents|defaults|bindings|channels|accounts|models|providers|plugins|entries|config|environment|env|profile)\b\s*[:=]\s*[\[{]|\b(?:auth|token|credentials|botToken|apiKey|tokenFile|authProfiles)\b\s*[:=]|\b(?:gateway\.auth|agents\.defaults|models\.providers|plugins\.entries|process\.env)\b\s*[:=])/i;
-  const multilineProfile = /(?:^|\n)\s*(?:gateway|auth|agents|defaults|bindings|channels|accounts|credentials|models|providers|plugins|entries|config|environment|env|profile|botToken|apiKey|tokenFile|authProfiles):(?:\s|$)/i;
+  const profileKeys = LOG_PROFILE_KEYS, multilineProfile = LOG_MULTILINE_PROFILE;
   const diagnosticFields = new Set("component event at sessionId name status lifecycle runtimeState harness hasHarnessSessionId model reasoningEffort hasWorkdir hasResumeSessionId forkSessionRequested hasBackendRef hasStreamInput hasInterrupt hasClose hasPermissionModeSwitch backendRefKind hasBackendConversationId hasBackendRunId nextStatus reason currentStatus messageCount activeAtEnd activeCountBefore kind outcome hasThreadId hasTurnId error errorCode requestKind queued method hasCwd durationMs commandKind argsCount transport timeoutMs requestId pendingCount code signal hasStdin hasStdout hasStderr hasPid channel namespace payloadByteLength tokenHash isAuthorizedSender tokenFound actionKind planDecisionVersion consumptionId consumed version queuedCount runtimeOwner storeRevision instanceId buildId caller hasText textLength permissionMode messageLength pid pendingRequests appServerSubcommand configuredArgCount closing closed errorName exitCode argvCount requestMethod requestedEffort runtimeEffort hasPendingInput hasPlanArtifact revision expectedTurnId hasExpectedTurnId hasPayload stderrLength byteLength requestCount live requestVersion supportedVersion deliveryRef chars idleTimeoutMinutes backendModel requestTimeoutMs recentStderr id accountType runCounter effort rewindTurns what".split(" "));
   const harmlessFields = new Set("subsystem plugin module storeKey enabled kind label path action storePath jobId jobName schedulerNextWakeAtMs timerArmed cronEnabled nextRunAtMs pid threadId isMainThread diagnosticEpoch omittedObservations operationId operation operationTraceId operationSpanId elapsedMs completionDelayMs mutationQueueWaitMs lifecycleQueueWaitMs phaseDurationsMs signalAborted reclamationKind workerThreadId outcome reason opsServed ageMs platform arch node v8 uv openssl sqlite".split(" "));
   const scalar = (value) => value == null || ["string", "number", "boolean"].includes(typeof value);
@@ -417,12 +418,86 @@ export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {
   for (const line of text.split("\n")) inspect(line);
   return [];
 }
-export function hostLogEvidence(text, options) {
-  const original = { bytes: Buffer.byteLength(text), sha256: createHash("sha256").update(text).digest("hex") };
-  try { const commandMetadata = assertSafeHostLog(text, options); return { completeStreamSafe: true, original, ...(commandMetadata.length ? { commandMetadata } : {}) }; }
-  catch (error) {
-    const failureDiagnostic = error?.[LOG_GUARD_DIAGNOSTIC] ?? { code: "UNKNOWN_GUARD_FAILURE", guardSite: "unclassified-validation", sourceClass: options?.commandStream ? "command-response" : "unknown", location: { scope: "whole-stream", available: false } };
-    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic,
+function assessHostLog(text, options) {
+  try { return { safe: true, commandMetadata: assertSafeHostLog(text, options) }; }
+  catch (error) { return { safe: false, failureDiagnostic: error?.[LOG_GUARD_DIAGNOSTIC] ?? { code: "UNKNOWN_GUARD_FAILURE", guardSite: "unclassified-validation", sourceClass: options?.commandStream ? "command-response" : "unknown", location: { scope: "whole-stream", available: false } } }; }
+}
+const LOG_RULE_NAMES = "gateway auth token agents defaults bindings channels accounts credentials models providers plugins entries config environment env profile botToken apiKey tokenFile authProfiles gateway.auth agents.defaults models.providers plugins.entries process.env".split(" ");
+const LOG_SEVERITIES = ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"];
+function diagnosticEnvelope(text) {
+  const unknown = { envelope: "PLAIN_TEXT_OR_UNKNOWN", severity: "UNKNOWN_SEVERITY", header: "UNKNOWN_ENVELOPE" };
+  let record; try { record = JSON.parse(text); } catch { return unknown; }
+  if (!record || typeof record !== "object" || Array.isArray(record) || !record._meta) return unknown;
+  const outer = /^(?:\d+|_meta|time|hostname|message|traceId|spanId|parentSpanId|traceFlags)$/;
+  const scalar = (v) => v == null || typeof v === "string" || typeof v === "boolean" || typeof v === "number" && Number.isFinite(v);
+  const meta = record._meta, metaKeys = new Set("runtime runtimeVersion hostname date logLevelId logLevelName name parentNames path".split(" "));
+  if (!Object.keys(record).every((key) => outer.test(key)) || typeof meta !== "object" || Array.isArray(meta) || !Object.keys(meta).every((key) => metaKeys.has(key))) return unknown;
+  for (const [key, value] of Object.entries(meta)) {
+    if (key === "parentNames") { if (!Array.isArray(value) || !value.every(scalar)) return unknown; }
+    else if (key === "path" && value && typeof value === "object") {
+      if (Array.isArray(value) || !Object.keys(value).every((part) => ["fullFilePath", "fileName", "fileNameWithLine", "method", "fileLine", "fileColumn", "filePath", "filePathWithLine"].includes(part)) || !Object.values(value).every(scalar)) return unknown;
+    } else if (!scalar(value)) return unknown;
+  }
+  if (!Object.entries(record).every(([key, value]) => key === "_meta" || /^\d+$/.test(key) || scalar(value))) return unknown;
+  const payloads = Object.entries(record).filter(([key]) => /^\d+$/.test(key)).map(([, value]) => value);
+  const envelope = payloads.length && payloads.every((value) => typeof value === "string") ? "PINNED_LOGGER_STRING_PAYLOADS" : payloads.some((value) => value && typeof value === "object" && !Array.isArray(value)) ? "PINNED_LOGGER_OBJECT_PAYLOAD" : "PINNED_LOGGER_OTHER_PAYLOAD";
+  const severity = Number.isInteger(meta.logLevelId) && meta.logLevelId >= 0 && meta.logLevelId <= 6 && meta.logLevelName === LOG_SEVERITIES[meta.logLevelId] ? meta.logLevelName : "UNKNOWN_SEVERITY";
+  return { envelope, severity, header: "PINNED_OUTER_HEADER" };
+}
+// Rejection-only observation. This never supplies acceptance or exports text.
+export function rejectedHostLogDiagnostic(input, options) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input), original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  const fallback = (status) => ({ diagnosticStatus: status, original, rawContentExcluded: true, inspectionComplete: false, inspectedLines: 0, uninspectedLines: "NOT_COUNTED", lexicalCountScope: "NOT_COUNTED" });
+  if (bytes.length > 4 * 1024 * 1024) return fallback("DIAGNOSTIC_BOUND_EXCEEDED");
+  const text = bytes.toString("utf8"); if (!Buffer.from(text).equals(bytes)) return fallback("DIAGNOSTIC_INVALID_UTF8");
+  try {
+    const whole = assessHostLog(text, options); if (whole.safe) return { diagnosticStatus: "NOT_REJECTED", original };
+    const lines = []; let start = 0, capturedLines = 1;
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] === 10) { if (lines.length < 10000) lines.push({ start, end: i + 1, lf: true }); start = i + 1; capturedLines++; }
+    if (capturedLines > 10000) return { ...fallback("DIAGNOSTIC_BOUND_EXCEEDED"), capturedLines, uninspectedLines: capturedLines };
+    lines.push({ start, end: bytes.length, lf: false });
+    const digest = (buffer) => createHash("sha256").update(buffer).digest("hex");
+    const span = (begin, end) => ({ byteStart: begin, byteEndExclusive: end, bytes: end - begin, sha256: digest(bytes.subarray(begin, end)) });
+    const failedDetails = [], histogram = {}; let failed = 0;
+    for (const [index, line] of lines.entries()) {
+      const body = bytes.subarray(line.start, line.lf ? line.end - 1 : line.end).toString("utf8"), assessed = assessHostLog(body, options);
+      if (!assessed.safe) {
+        failed++; const envelope = diagnosticEnvelope(body), d = assessed.failureDiagnostic;
+        const key = `${d.code}/${d.guardSite}/${d.sourceClass}/${envelope.envelope}/${envelope.severity}`; histogram[key] = (histogram[key] ?? 0) + 1;
+        if (failedDetails.length < 64) failedDetails.push({ line: index, ...span(line.start, line.end), includesLF: line.lf, trailingEmpty: line.start === bytes.length, unterminated: !line.lf && line.start < bytes.length, ...d, ...envelope });
+      }
+    }
+    const lexicalDetails = []; let lexicalMatches = 0, lexicalCapped = false;
+    for (const [pattern, sourceRule] of [[LOG_PROFILE_KEYS, "profileKeys"], [LOG_MULTILINE_PROFILE, "multilineProfile"]]) {
+      const regex = new RegExp(pattern.source, "gi"); let match;
+      while ((match = regex.exec(text))) {
+        if (lexicalMatches === 10000) { lexicalCapped = true; break; } lexicalMatches++;
+        if (lexicalDetails.length >= 64) continue;
+        const raw = match[0], trimmed = raw.trim(); let name, context;
+        if (sourceRule === "multilineProfile") { name = trimmed.match(/^([A-Za-z]+):/)?.[1]; context = "line-property-like"; }
+        else if (/^["']/.test(trimmed)) { name = trimmed.match(/^["']([A-Za-z]+)["']/)?.[1]; context = "quoted-property-like"; }
+        else { name = trimmed.match(/^([A-Za-z]+(?:\.[A-Za-z]+)?)/)?.[1]; context = name?.includes(".") ? "dotted-assignment-like" : /[\[{]$/.test(trimmed) ? "assignment-object-like" : "auth-assignment-like"; }
+        const rule = LOG_RULE_NAMES.find((known) => known.toLowerCase() === name?.toLowerCase()) ?? "UNKNOWN_RULE";
+        const begin = Buffer.byteLength(text.slice(0, match.index)), end = begin + Buffer.byteLength(raw);
+        let lineIndex = lines.findIndex((line) => begin < line.end); if (lineIndex < 0) lineIndex = lines.length - 1;
+        const line = lines[lineIndex]; lexicalDetails.push({ rule, context, pattern: sourceRule, interpretation: "LEXICAL_SOURCE_GUARD_RULE; no actual field or producer inference", ...span(begin, end), crossesLineBoundary: end > line.end, containingLine: { line: lineIndex, scope: "match-start captured record", ...span(line.start, line.end) } });
+      }
+      if (lexicalCapped) break;
+    }
+    const payload = { diagnosticStatus: "REJECTED_STREAM_OBSERVED", original, rawContentExcluded: true, inspectionComplete: !lexicalCapped, capturedLines: lines.length, inspectedLines: lines.length, failedLines: failed, safeLines: lines.length - failed, omittedFailedLineDetails: failed - failedDetails.length, failureHistogram: histogram, failedLineDetails: failedDetails, wholeFailure: whole.failureDiagnostic, crossingLineUnresolved: failed === 0, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches - lexicalDetails.length, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", lexicalDetails, acceptanceEvidence: false };
+    if (Buffer.byteLength(JSON.stringify(payload)) > 64 * 1024) return fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
+    const result = { ...payload, projectedDiagnosticSha256: digest(Buffer.from(JSON.stringify(payload))), projectedDigestScope: "Closed diagnostic payload; not original stream" };
+    return Buffer.byteLength(JSON.stringify(result)) <= 64 * 1024 ? result : fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
+  } catch { return fallback("DIAGNOSTIC_UNKNOWN_FAILURE"); }
+}
+export function hostLogEvidence(input, options) {
+  const raw = Buffer.isBuffer(input), bytes = raw ? input : Buffer.from(input), text = raw ? bytes.toString("utf8") : input;
+  const original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), identityDomain: raw ? "original captured stream bytes" : "captured text UTF8 encoding; original undecoded byte validity unavailable" };
+  const assessment = assessHostLog(text, options);
+  if (assessment.safe) { const commandMetadata = assessment.commandMetadata; return { completeStreamSafe: true, original, ...(commandMetadata.length ? { commandMetadata } : {}) }; }
+  {
+    const failureDiagnostic = assessment.failureDiagnostic;
+    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: { ...rejectedHostLogDiagnostic(raw ? bytes : text, options), inputIdentityDomain: original.identityDomain },
       excludedRecordRange: { first: 0, last: text.split("\n").length - 1, numbering: "zero-based captured stream lines; entire stream excluded" },
       exclusionReason: "Unsafe or unknown structured profile/auth/content-bearing log; omitted lifecycle/error facts remain BLOCKED" };
     return { ...payload, projectedPayloadSha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"), projectedDigestScope: "Closed projection payload before digest/source wrapper; not the original stream" };
