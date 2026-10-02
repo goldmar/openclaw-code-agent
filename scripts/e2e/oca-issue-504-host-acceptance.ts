@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, closeFailedProviderResponse, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, packedCandidateProof, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, closeFailedProviderResponse, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean };
@@ -223,12 +223,20 @@ async function main(): Promise<void> {
   let currentGateway: ChildProcess | undefined;
   let storePath = "";
   const cli = (...args: string[]) => command(process.execPath, [join(hostPath, "openclaw.mjs"), ...args], { cwd: root, env, evidence });
+    const publication = validatePackSource(root);
+    evidence.record("host-events.jsonl", { phase: "source-publication-boundary", sourcePackageSha256: sha256(readFileSync(join(root, "package.json"))), expectedPublicationSha256: sha256(publication), publicationTransform: ["packageManager-removed", "packing-lifecycle-scripts-removed", "two-space-json-without-final-newline"] });
     const packDir = ownedPath(fixture, join(fixture, "pack")); mkdirSync(packDir);
     const packed = JSON.parse(await command("pnpm", ["pack", "--json", "--pack-destination", packDir], { cwd: root, env, evidence }));
     const filename = Array.isArray(packed) ? packed[0].filename : packed.filename;
     const tarball = ownedPath(fixture, resolve(packDir, filename));
     tarballSha256 = sha256(readFileSync(tarball)); distSha256 = sha256(readFileSync(join(root, "dist", "index.js")));
-    const candidateProof = packedCandidateProof(root, tarball);
+    const reader = join(root, "scripts", "e2e", "oca-issue-504-archive-proof.py");
+    const python = realpathSync("/usr/bin/python3");
+    evidence.record("host-events.jsonl", { phase: "archive-reader-provenance", readerSha256: sha256(readFileSync(reader)), readerExecutableSha256: sha256(readFileSync(python)), readerArguments: ["-I", "fixed-owned-archive"] });
+    const packedInstaller = await preparePackedInstaller(root, fixture, tarball,
+      () => command(python, ["-I", reader, tarball], { cwd: root, env, evidence, timeoutMs: 30_000 }),
+      async (admitted) => { await cli("plugins", "install", "--force", "--accept-capabilities", admitted); }, evidence);
+    const candidateProof = packedInstaller.proof;
 
     async function gateway(mode: false | { mode: "tools" }): Promise<GatewayClient> {
       if (currentClient) { await currentClient.stopAndWait({ timeoutMs: 5_000 }); clients.delete(currentClient); }
@@ -246,11 +254,11 @@ async function main(): Promise<void> {
       // Install records belong to this selected state, independently of prior profiles.
       delete env.OPENCLAW_GATEWAY_TOKEN;
       writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(freshPluginBootstrap(logging, port)), { mode: 0o600 });
-      await cli("plugins", "install", "--force", "--accept-capabilities", tarball);
+      await packedInstaller.install();
       await cli("plugins", "enable", "openclaw-code-agent");
       const installedConfig = parse(env.OPENCLAW_CONFIG_PATH!);
       const metadata = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
-      const installed = verifyPackedPluginInspection(metadata, fixture, state, tarball, candidateProof);
+      const installed = verifyPackedPluginInspection(metadata, fixture, state, tarball, candidateProof, false, evidence);
       evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-metadata", sourceKind: "archive", ...installed,
         tarballSha256: candidateProof.tarballSha256, distMapSha256: sha256(JSON.stringify(candidateProof.distHashes)), manifestHashes: candidateProof.manifestHashes });
       const config: OpenClawConfig = {
@@ -287,7 +295,7 @@ async function main(): Promise<void> {
       assert.ok(hello!.auth?.scopes?.includes("operator.write") && hello!.auth?.scopes?.includes("operator.read"), "Actual native Gateway role grants are required");
       await client.request("sessions.subscribe", { sessionKey: "agent:main:main" });
       const inspection = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"));
-      const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true);
+      const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true, evidence);
       assert.equal(runtimeInstalled.installedPath, installed.installedPath);
       assert.equal(runtimeInstalled.source, installed.source);
       evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-runtime-cli", ...runtimeInstalled,

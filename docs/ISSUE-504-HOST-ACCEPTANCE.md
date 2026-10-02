@@ -19,7 +19,10 @@ node --import tsx scripts/e2e/oca-issue-504-host-acceptance.ts \
 
 The candidate must be committed and clean. The runner builds, packs and installs
 that candidate in its disposable profile. It verifies every installed dist file
-and relevant manifest, the native ELF bytes before execution, initialization,
+and relevant manifest. A read-only isolated Python archive reader validates bounded
+gzip/tar content without extraction. Actual packed publication bytes must match
+the reviewed pnpm 11 transformation, and installed bytes must equal those
+observed archive members. The runner also verifies native ELF bytes before execution, initialization,
 thread/turn evidence, actual host tool call IDs, provider inputs, Git effects,
 and process/listener teardown. Kernel ownership uses PID and start time, so
 exec or process-group changes do not count as exit. Cleanup signals only captured

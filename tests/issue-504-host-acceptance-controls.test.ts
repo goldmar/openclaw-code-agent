@@ -1,14 +1,22 @@
 import "./test-env";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, truncateSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
+const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
+function readArchive(path: string) {
+  return JSON.parse(execFileSync("/usr/bin/python3", ["-I", archiveReader, path], { encoding: "utf8", timeout: 30_000, maxBuffer: 2_097_152, stdio: ["ignore", "pipe", "pipe"] }));
+}
+function writeArchive(path: string, members: Array<{ name: string; bytes?: string; kind?: string; size?: number }>) {
+  const script = "import base64,gzip,io,json,sys,tarfile\nwith open(sys.argv[1],'wb') as raw:\n with gzip.GzipFile(fileobj=raw,mode='wb',mtime=0) as gz:\n  with tarfile.open(fileobj=gz,mode='w',format=tarfile.PAX_FORMAT) as tf:\n   for item in json.loads(sys.stdin.read()):\n    member=tarfile.TarInfo(item['name']); data=base64.b64decode(item.get('bytes','')); member.size=item.get('size',len(data))\n    if item.get('kind')=='link': member.type=tarfile.SYMTYPE;member.linkname='../outside';member.size=0\n    tf.addfile(member,io.BytesIO(data) if member.isreg() else None)\n";
+  execFileSync("/usr/bin/python3", ["-I", "-c", script, path], { input: JSON.stringify(members), timeout: 30_000, stdio: ["pipe", "pipe", "pipe"] });
+}
 function syntheticPackedInstall() {
   const fixture = mkdtempSync(join(tmpdir(), "oca504-packed-control-"));
   writeFileSync(join(fixture, ".fixture-owner"), FIXTURE_MARKER);
@@ -16,26 +24,100 @@ function syntheticPackedInstall() {
   mkdirSync(join(candidate, "dist", "chunks"), { recursive: true });
   writeFileSync(join(candidate, "dist", "index.js"), "synthetic candidate bytes NEVER executed");
   writeFileSync(join(candidate, "dist", "chunks", "fixture.js"), "synthetic chunk NEVER executed");
-  writeFileSync(join(candidate, "package.json"), JSON.stringify({ name: "openclaw-code-agent", version: "5.0.1", openclaw: { extensions: ["./dist/index.js"] } }));
+  const source = { name: "openclaw-code-agent", version: "5.0.1", packageManager: "pnpm@11.15.1", scripts: { prepack: "pnpm build", test: "node inert-fixture-only" }, dependencies: { "inert-fixture": "1.2.3" }, openclaw: { extensions: ["./dist/index.js"], minHostVersion: "2026.9.7" }, publishConfig: { access: "public", provenance: true } };
+  writeFileSync(join(candidate, "package.json"), JSON.stringify(source));
   writeFileSync(join(candidate, "openclaw.plugin.json"), JSON.stringify({ id: "openclaw-code-agent", version: "5.0.1" }));
-  writeFileSync(join(candidate, "npm-shrinkwrap.json"), "{}"); writeFileSync(tarball, "synthetic archive proof ONLY");
-  const proof = packedCandidateProof(candidate, tarball);
+  writeFileSync(join(candidate, "npm-shrinkwrap.json"), "{}");
+  const published = expectedPublishedPackage(source);
+  const members = ["package.json", "openclaw.plugin.json", "npm-shrinkwrap.json", "dist/index.js", "dist/chunks/fixture.js"].map((name) => ({ name: "package/" + name, bytes: (name === "package.json" ? published : readFileSync(join(candidate, name))).toString("base64") }));
+  writeArchive(tarball, members);
+  const archive = readArchive(tarball), proof = packedCandidateProof(candidate, tarball, archive);
   const states = ["state-a", "state-b"].map((name) => join(fixture, name));
   const reports = states.map((state) => {
     const installed = join(state, "installed-candidate"); cpSync(candidate, installed, { recursive: true });
+    writeFileSync(join(installed, "package.json"), published);
     return { plugin: { id: proof.id, enabled: true, status: "loaded", imported: false, version: proof.version,
       rootDir: installed, source: join(installed, "dist", "index.js") },
       install: { source: "archive", sourcePath: tarball, installPath: installed, version: proof.version } };
   });
-  return { fixture, candidate, tarball, proof, states, reports };
+  return { fixture, candidate, tarball, proof, archive, members, source, states, reports };
 }
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("admits unchanged reader proof then freshly refuses a later replaced archive before any installer or follow-on", async () => {
+    const s = syntheticPackedInstall(); const original = readFileSync(s.tarball);
+    const counts = { install: 0, enable: 0, inspect: 0, gateway: 0 };
+    try {
+      const admission = await preparePackedInstaller(s.candidate, s.fixture, s.tarball,
+        () => command("/usr/bin/python3", ["-I", archiveReader, s.tarball], { cwd: s.fixture, env: fixtureEnv(s.fixture), timeoutMs: 30_000 }),
+        async (path) => { assert.equal(path, s.tarball); counts.install++; });
+      const startState = async () => { await admission.install(); counts.enable++; counts.inspect++; counts.gateway++; };
+      await startState(); assert.deepEqual(counts, { install: 1, enable: 1, inspect: 1, gateway: 1 });
+      writeFileSync(s.tarball, Buffer.concat([original, Buffer.from("altered")]));
+      await assert.rejects(startState(), /Archive admission hash differs/);
+      assert.deepEqual(counts, { install: 1, enable: 1, inspect: 1, gateway: 1 });
+      writeFileSync(s.tarball, original); await startState();
+      assert.deepEqual(counts, { install: 2, enable: 2, inspect: 2, gateway: 2 });
+      rmSync(s.tarball); symlinkSync(join(s.candidate, "package.json"), s.tarball);
+      await assert.rejects(startState(), /cannot redirect/); rmSync(s.tarball);
+      mkdirSync(s.tarball); await assert.rejects(startState(), /bounded owned regular/); rmSync(s.tarball, { recursive: true });
+      writeFileSync(s.tarball, original); truncateSync(s.tarball, 33_554_433);
+      await assert.rejects(startState(), /bounded owned regular/);
+      assert.deepEqual(counts, { install: 2, enable: 2, inspect: 2, gateway: 2 });
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("promptly refuses an actual no-writer FIFO in the same install seam; supervision timeout is failure", async () => {
+    const s = syntheticPackedInstall(); const original = readFileSync(s.tarball);
+    try {
+      const helper = join(process.cwd(), "scripts/e2e/oca-issue-504-host-fixtures.ts");
+      const script = `import { preparePackedInstaller, command, fixtureEnv } from ${JSON.stringify("file://" + helper)};
+        import { rmSync } from 'node:fs'; import { execFileSync } from 'node:child_process';
+        const [candidate, fixture, tarball, reader] = process.argv.slice(1);
+        const counts = { install: 0, enable: 0, inspect: 0, gateway: 0 };
+        const admitted = await preparePackedInstaller(candidate, fixture, tarball,
+          () => command('/usr/bin/python3', ['-I', reader, tarball], { cwd: fixture, env: fixtureEnv(fixture), timeoutMs: 30000 }),
+          async () => { counts.install++; });
+        rmSync(tarball); execFileSync('/usr/bin/mkfifo', [tarball]);
+        let refused = false;
+        try { await admitted.install(); counts.enable++; counts.inspect++; counts.gateway++; }
+        catch (error) { if (!/bounded owned regular file/.test(error.message)) throw error; refused = true; }
+        if (!refused) throw new Error('FIFO was incorrectly admitted');
+        console.log(JSON.stringify({ refused, counts }));`;
+      // A blocking open is a real supervised child timeout and fails this assertion.
+      const output = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script, s.candidate, s.fixture, s.tarball, archiveReader],
+        { cwd: process.cwd(), encoding: "utf8", timeout: 5_000, maxBuffer: 65_536, stdio: ["ignore", "pipe", "pipe"] });
+      assert.deepEqual(JSON.parse(output), { refused: true, counts: { install: 0, enable: 0, inspect: 0, gateway: 0 } });
+      rmSync(s.tarball); writeFileSync(s.tarball, original);
+      let restoredInstalls = 0;
+      const restored = await preparePackedInstaller(s.candidate, s.fixture, s.tarball, async () => JSON.stringify(readArchive(s.tarball)), async () => { restoredInstalls++; });
+      await restored.install(); assert.equal(restoredInstalls, 1);
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("refuses actual malformed-reader, child timeout and output overflow before installer and follow-on dispatch", async () => {
+    const s = syntheticPackedInstall();
+    const counts = { install: 0, enable: 0, inspect: 0, gateway: 0 };
+    const run = async (read: () => Promise<string>) => {
+      const admitted = await preparePackedInstaller(s.candidate, s.fixture, s.tarball, read, async () => { counts.install++; });
+      await admitted.install(); counts.enable++; counts.inspect++; counts.gateway++;
+    };
+    try {
+      writeFileSync(s.tarball, "not a gzip archive");
+      await assert.rejects(run(() => command("/usr/bin/python3", ["-I", archiveReader, s.tarball], { cwd: s.fixture, env: fixtureEnv(s.fixture), timeoutMs: 30_000 })), /failed/);
+      await assert.rejects(run(() => command(process.execPath, ["-e", "setTimeout(()=>{},10000)"], { cwd: s.fixture, env: fixtureEnv(s.fixture), timeoutMs: 100 })), /deadline/);
+      await assert.rejects(run(() => command(process.execPath, ["-e", "process.stdout.write('x'.repeat(1048577))"], { cwd: s.fixture, env: fixtureEnv(s.fixture), timeoutMs: 5_000 })), /output-cap/);
+      assert.deepEqual(counts, { install: 0, enable: 0, inspect: 0, gateway: 0 });
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
   it("accepts current public install metadata without config installs, while requiring import for runtime inspection", () => {
     const s = syntheticPackedInstall();
     try {
       assert.equal(freshPluginBootstrap({ file: join(s.fixture, "fixture.log") }, 12_345).plugins, undefined);
+      assert.notEqual(s.proof.sourcePackageSha256, s.proof.manifestHashes["package.json"]);
+      assert.equal(s.proof.expectedPublicationSha256, s.proof.manifestHashes["package.json"]);
       const result = verifyPackedPluginInspection(s.reports[0], s.fixture, s.states[0], s.tarball, s.proof);
       assert.equal(result.installedPath, s.reports[0].install.installPath); assert.equal(result.imported, false);
       assert.throws(() => verifyPackedPluginInspection(s.reports[0], s.fixture, s.states[0], s.tarball, s.proof, true));
@@ -109,6 +191,43 @@ describe("issue 504 real-host acceptance controls", () => {
     assert.equal(config.plugins, undefined); assert.equal(config.gateway!.auth, undefined);
     assert.throws(() => freshPluginBootstrap({ file: "/synthetic-owned/log" }, 0));
     assert.throws(() => freshPluginBootstrap({ file: "/synthetic-owned/log" }, 65_536));
+  });
+
+  it("rejects unreviewed packed identity, dependency, compatibility, entrypoint, scripts and bytes transforms", () => {
+    const s = syntheticPackedInstall();
+    try {
+      const original = JSON.parse(Buffer.from(s.members[0].bytes, "base64").toString());
+      const mutations = [{ ...original, name: "other" }, { ...original, version: "other" }, { ...original, dependencies: { "inert-fixture": "9.9.9" } }, { ...original, openclaw: { ...original.openclaw, minHostVersion: "other" } }, { ...original, openclaw: { ...original.openclaw, extensions: ["./dist/other.js"] } }, { ...original, scripts: { ...original.scripts, prepack: "unreviewed" } }];
+      for (const mutation of mutations) {
+        writeArchive(s.tarball, [{ ...s.members[0], bytes: Buffer.from(JSON.stringify(mutation, null, 2)).toString("base64") }, ...s.members.slice(1)]);
+        assert.throws(() => packedCandidateProof(s.candidate, s.tarball, readArchive(s.tarball)), /Actual packed package differs/);
+      }
+      writeArchive(s.tarball, [{ ...s.members[0], bytes: Buffer.concat([Buffer.from(s.members[0].bytes, "base64"), Buffer.from("\n")]).toString("base64") }, ...s.members.slice(1)]);
+      assert.throws(() => packedCandidateProof(s.candidate, s.tarball, readArchive(s.tarball)), /Actual packed package differs/);
+      for (const source of [{ ...s.source, publishConfig: { directory: "other" } }, { ...s.source, scripts: { ...s.source.scripts, beforePacking: "other" } }, { ...s.source, dependencies: { fixture: "workspace:*" } }]) assert.throws(() => expectedPublishedPackage(source));
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("rejects missing, changed and extra actual packed chunks or source manifests", () => {
+    const s = syntheticPackedInstall();
+    try {
+      for (const members of [s.members.slice(0, -1), [...s.members.slice(0, -1), { ...s.members.at(-1)!, bytes: Buffer.from("other").toString("base64") }], [...s.members, { name: "package/dist/extra.js", bytes: Buffer.from("other").toString("base64") }], s.members.map((member) => member.name.endsWith("npm-shrinkwrap.json") ? { ...member, bytes: Buffer.from("other").toString("base64") } : member)]) {
+        writeArchive(s.tarball, members); assert.throws(() => packedCandidateProof(s.candidate, s.tarball, readArchive(s.tarball)));
+      }
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("fails closed on missing, duplicate, traversing, linked, oversized, truncated and corrupt archive members", () => {
+    const s = syntheticPackedInstall();
+    try {
+      for (const members of [s.members.slice(1), [...s.members, s.members[0]], [...s.members, { name: "package/../escape", bytes: "" }], [...s.members, { name: "package/link", kind: "link" }], s.members.map((member) => member.name.endsWith("package.json") ? { ...member, bytes: Buffer.alloc(1_048_577).toString("base64") } : member)]) {
+        writeArchive(s.tarball, members); assert.throws(() => readArchive(s.tarball));
+      }
+      writeArchive(s.tarball, s.members); const valid = readFileSync(s.tarball);
+      writeFileSync(s.tarball, valid.subarray(0, valid.length - 6)); assert.throws(() => readArchive(s.tarball));
+      const corrupt = Buffer.from(valid); corrupt[corrupt.length - 8] ^= 255; writeFileSync(s.tarball, corrupt); assert.throws(() => readArchive(s.tarball));
+      writeFileSync(s.tarball, "not gzip"); assert.throws(() => readArchive(s.tarball));
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
   });
 
   it("requires exact candidate identity, clean tracked source and complete options", () => {

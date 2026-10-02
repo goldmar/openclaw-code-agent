@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep, join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
@@ -140,23 +140,104 @@ function candidateDistHashes(directory: string, prefix = ""): Record<string, str
   }));
 }
 
-export function packedCandidateProof(candidateRoot: string, tarball: string) {
-  const pkg = JSON.parse(readFileSync(join(candidateRoot, "package.json"), "utf8"));
-  const plugin = JSON.parse(readFileSync(join(candidateRoot, "openclaw.plugin.json"), "utf8"));
-  assert.equal(pkg.name, "openclaw-code-agent"); assert.equal(plugin.id, pkg.name); assert.equal(plugin.version, pkg.version);
+export type PackedArchiveProof = { tarballSha256: string; compressedBytes: number; decompressedBytes: number; physicalMembers: number; effectiveMembers: number;
+  manifests: Record<string, { bytes: number; sha256: string; base64: string }>; distHashes: Record<string, string> };
+
+/** Only the reviewed default pnpm 11 publication transformation is admitted. */
+export function expectedPublishedPackage(source: Record<string, any>): Buffer {
+  assert.equal(source.packageManager, "pnpm@11.15.1");
+  assert.ok(source.pnpm === undefined, "Unreviewed package packing configuration");
+  assert.ok(!source.scripts?.beforePacking && Object.keys(source.publishConfig ?? {}).every((key) => ["access", "provenance"].includes(key)), "Unreviewed publication override/hook");
+  assert.ok(source.scripts?.prepack === "pnpm build", "The reviewed prepack build must remain unchanged");
+  assert.ok(!source.scripts?.prepare && !source.scripts?.postpack && !source.scripts?.prepublishOnly, "Unreviewed publication lifecycle");
+  for (const key of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+    for (const version of Object.values(source[key] ?? {})) assert.ok(typeof version === "string" && !/^(?:workspace|catalog|jsr):/.test(version), "Unsupported publication dependency protocol");
+  }
+  const { scripts, packageManager: _packageManager, pnpm: _pnpm, ...published } = source;
+  published.scripts = Object.fromEntries(Object.entries(scripts ?? {}).filter(([key]) => !["prepublishOnly", "prepack", "prepare", "postpack", "publish", "postpublish"].includes(key)));
+  return Buffer.from(JSON.stringify(published, null, 2));
+}
+
+export function validatePackSource(candidateRoot: string): Buffer {
+  for (const name of ["package.yaml", "package.json5", ".pnpmfile.cjs", ".pnpmfile.mjs"]) assert.ok(!existsSync(join(candidateRoot, name)), "Unreviewed packing input");
+  const workspace = readFileSync(join(candidateRoot, "pnpm-workspace.yaml"), "utf8");
+  assert.ok(!/beforePacking|catalog(?:s)?:|publishConfig|executableFiles/.test(workspace), "Unreviewed workspace publication transform");
+  return expectedPublishedPackage(JSON.parse(readFileSync(join(candidateRoot, "package.json"), "utf8")));
+}
+
+export function packedCandidateProof(candidateRoot: string, tarball: string, archive: PackedArchiveProof, evidence?: HostEvidence) {
+  const sourceBytes = readFileSync(join(candidateRoot, "package.json")), source = JSON.parse(sourceBytes.toString());
+  const expectedPublication = expectedPublishedPackage(source);
+  const distHashes = candidateDistHashes(join(candidateRoot, "dist"));
+  const digestMap = (map: Record<string, string>) => sha256(JSON.stringify(Object.entries(map).sort()));
+  evidence?.record("host-events.jsonl", { phase: "source-packed-comparison", sourcePackageSha256: sha256(sourceBytes), expectedPublicationSha256: sha256(expectedPublication), actualPublicationSha256: archive.manifests["package.json"]?.sha256,
+    sourceManifestHashes: Object.fromEntries(["openclaw.plugin.json", "npm-shrinkwrap.json"].map((name) => [name, sha256(readFileSync(join(candidateRoot, name)))])),
+    builtDistMapSha256: digestMap(distHashes), actualDistMapSha256: digestMap(archive.distHashes), distMatches: digestMap(distHashes) === digestMap(archive.distHashes) });
+  assert.equal(archive.tarballSha256, sha256(readFileSync(tarball)));
+  const manifestBytes = Object.fromEntries(["package.json", "openclaw.plugin.json", "npm-shrinkwrap.json"].map((name) => {
+    const member = archive.manifests[name]; assert.ok(member && Number.isInteger(member.bytes) && member.bytes <= 1_048_576);
+    const bytes = Buffer.from(member.base64, "base64");
+    assert.equal(bytes.toString("base64"), member.base64); assert.equal(bytes.length, member.bytes); assert.equal(sha256(bytes), member.sha256);
+    return [name, bytes];
+  }));
+  assert.deepEqual(manifestBytes["package.json"], expectedPublication, "Actual packed package differs from reviewed pnpm publication bytes");
+  for (const name of ["openclaw.plugin.json", "npm-shrinkwrap.json"]) assert.deepEqual(manifestBytes[name], readFileSync(join(candidateRoot, name)), "Packed manifest differs from source bytes");
+  const pkg = JSON.parse(manifestBytes["package.json"].toString()), plugin = JSON.parse(manifestBytes["openclaw.plugin.json"].toString());
+  assert.equal(pkg.name, "openclaw-code-agent"); assert.equal(pkg.name, source.name); assert.equal(pkg.version, source.version);
+  assert.equal(plugin.id, pkg.name); assert.equal(plugin.version, pkg.version);
   assert.ok(Array.isArray(pkg.openclaw?.extensions) && pkg.openclaw.extensions.length === 1 && typeof pkg.openclaw.extensions[0] === "string");
   const entrypoint = relative(candidateRoot, resolve(candidateRoot, pkg.openclaw.extensions[0]));
   assert.ok(entrypoint && entrypoint !== ".." && !entrypoint.startsWith(`..${sep}`) && !isAbsolute(entrypoint));
-  const distHashes = candidateDistHashes(join(candidateRoot, "dist"));
+  assert.deepEqual(archive.distHashes, distHashes, "Actual packed dist map differs from built candidate");
   assert.ok(entrypoint.startsWith(`dist${sep}`) && distHashes[entrypoint.slice(5)], "Declared entrypoint must belong to the verified dist map");
   return { id: plugin.id as string, packageName: pkg.name as string, version: pkg.version as string, entrypoint,
-    tarballSha256: sha256(readFileSync(tarball)), distHashes,
-    manifestHashes: Object.fromEntries(["package.json", "openclaw.plugin.json", "npm-shrinkwrap.json"].map((name) => [name, sha256(readFileSync(join(candidateRoot, name)))])) };
+    tarballSha256: archive.tarballSha256, compressedBytes: archive.compressedBytes, distHashes, sourcePackageSha256: sha256(sourceBytes), expectedPublicationSha256: sha256(expectedPublication),
+    manifestHashes: Object.fromEntries(Object.entries(archive.manifests).map(([name, member]) => [name, member.sha256])),
+    manifestSizes: Object.fromEntries(Object.entries(archive.manifests).map(([name, member]) => [name, member.bytes])) };
+}
+
+/** Fresh synchronous archive admission before each supported installer dispatch. */
+export function admitPackedArchive(fixture: string, tarball: string, proof: { tarballSha256: string; compressedBytes: number }, evidence?: HostEvidence): string {
+  let actualSha256: string | undefined, bytes: number | undefined;
+  try {
+    const admitted = exactCandidatePath(fixture, tarball);
+    const fd = openSync(admitted, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    try {
+      const before = fstatSync(fd);
+      assert.ok(before.isFile() && before.uid === process.getuid!() && before.size <= 33_554_432, "Archive admission requires a bounded owned regular file");
+      const hash = createHash("sha256"), chunk = Buffer.alloc(65_536); let total = 0;
+      for (let count; (count = readSync(fd, chunk, 0, chunk.length, null)) > 0;) {
+        total += count; assert.ok(total <= 33_554_432, "Archive admission byte cap"); hash.update(chunk.subarray(0, count));
+      }
+      const after = fstatSync(fd);
+      assert.ok(before.dev === after.dev && before.ino === after.ino && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs && total === after.size, "Archive changed during admission");
+      actualSha256 = hash.digest("hex"); bytes = total;
+      evidence?.record("host-events.jsonl", { phase: "archive-install-admission", expectedSha256: proof.tarballSha256, actualSha256, bytes });
+      assert.equal(actualSha256, proof.tarballSha256, "Archive admission hash differs from observed packed bytes");
+      assert.equal(bytes, proof.compressedBytes, "Archive admission size differs from observed packed bytes");
+      return admitted;
+    } finally { closeSync(fd); }
+  } catch (error) {
+    evidence?.record("host-events.jsonl", { phase: "archive-install-admission-refused", expectedSha256: proof.tarballSha256, actualSha256, bytes, errorClass: error instanceof Error ? error.name : "Unknown" });
+    throw error;
+  }
+}
+
+/** The real runner supplies its fixed reader command; utility adapters never start a host. */
+export async function preparePackedInstaller(candidateRoot: string, fixture: string, tarball: string,
+  readArchive: () => Promise<string>, install: (admittedArchive: string) => Promise<void>, evidence?: HostEvidence) {
+  const output = await readArchive();
+  const archive = JSON.parse(output) as PackedArchiveProof;
+  evidence?.record("host-events.jsonl", { phase: "actual-packed-boundary", readerOutputSha256: sha256(output), tarballSha256: archive.tarballSha256,
+    compressedBytes: archive.compressedBytes, decompressedBytes: archive.decompressedBytes,
+    actualManifests: Object.fromEntries(Object.entries(archive.manifests).map(([name, member]) => [name, { sha256: member.sha256, bytes: member.bytes }])), distMapSha256: sha256(JSON.stringify(archive.distHashes)) });
+  const proof = packedCandidateProof(candidateRoot, tarball, archive, evidence);
+  return { proof, install: () => install(admitPackedArchive(fixture, tarball, archive, evidence)) };
 }
 
 /** Cold CLI metadata is provenance only; actual Gateway execution remains a separate gate. */
 export function verifyPackedPluginInspection(report: unknown, fixture: string, state: string, tarball: string,
-  proof: ReturnType<typeof packedCandidateProof>, runtime = false): { installedPath: string; source: string; version: string; imported: boolean } {
+  proof: ReturnType<typeof packedCandidateProof>, runtime = false, evidence?: HostEvidence): { installedPath: string; source: string; version: string; imported: boolean } {
   assert.ok(report && typeof report === "object" && !Array.isArray(report));
   const { plugin, install } = report as Record<string, any>;
   assert.ok(plugin && typeof plugin === "object" && !Array.isArray(plugin) && install && typeof install === "object" && !Array.isArray(install), "Unambiguous public plugin and install records are required");
@@ -168,15 +249,24 @@ export function verifyPackedPluginInspection(report: unknown, fixture: string, s
   if (install.resolvedName !== undefined) assert.equal(install.resolvedName, proof.packageName);
   if (install.resolvedVersion !== undefined) assert.equal(install.resolvedVersion, proof.version);
   const sourceArchive = exactCandidatePath(fixture, install.sourcePath);
-  assert.equal(sourceArchive, exactCandidatePath(fixture, tarball)); assert.equal(sha256(readFileSync(sourceArchive)), proof.tarballSha256);
+  assert.equal(sourceArchive, exactCandidatePath(fixture, tarball));
+  admitPackedArchive(fixture, sourceArchive, { tarballSha256: proof.tarballSha256, compressedBytes: proof.compressedBytes }, evidence);
   const installedPath = exactCandidatePath(fixture, install.installPath), selectedState = exactCandidatePath(fixture, state);
   const stateRelative = relative(selectedState, installedPath);
   assert.ok(stateRelative && !stateRelative.startsWith(`..${sep}`) && stateRelative !== ".." && !isAbsolute(stateRelative), "Another state's install cannot authorize this Gateway");
   assert.equal(exactCandidatePath(fixture, plugin.rootDir), installedPath);
   const source = exactCandidatePath(fixture, plugin.source);
   assert.equal(source, resolve(installedPath, proof.entrypoint), "Public plugin entrypoint must belong to the packed candidate");
-  assert.deepEqual(candidateDistHashes(join(installedPath, "dist")), proof.distHashes);
-  for (const [name, hash] of Object.entries(proof.manifestHashes)) assert.equal(sha256(readFileSync(exactCandidatePath(fixture, join(installedPath, name)))), hash, "Installed candidate manifest differs from packed source");
+  const installedDist = candidateDistHashes(join(installedPath, "dist"));
+  evidence?.record("host-events.jsonl", { phase: "installed-dist-boundary", expectedDistMapSha256: sha256(JSON.stringify(Object.entries(proof.distHashes).sort())), actualDistMapSha256: sha256(JSON.stringify(Object.entries(installedDist).sort())) });
+  const installedManifests: Array<{ expected: string; observed: string }> = [];
+  for (const [name, hash] of Object.entries(proof.manifestHashes)) {
+    const bytes = readFileSync(exactCandidatePath(fixture, join(installedPath, name))), observed = sha256(bytes);
+    evidence?.record("host-events.jsonl", { phase: "installed-manifest-boundary", name, expectedSha256: hash, actualSha256: observed, bytes: bytes.length, matches: observed === hash });
+    installedManifests.push({ expected: hash, observed });
+  }
+  assert.deepEqual(installedDist, proof.distHashes);
+  for (const member of installedManifests) assert.equal(member.observed, member.expected, "Installed candidate manifest differs from packed source");
   if (runtime) assert.equal(plugin.imported, true, "Runtime inspection must report an actual import");
   return { installedPath, source, version: proof.version, imported: plugin.imported === true };
 }
