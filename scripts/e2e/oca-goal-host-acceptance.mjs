@@ -12,6 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
+import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
 import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -205,7 +206,7 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")) };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")) };
   }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
   artifact(name, value) {
@@ -290,21 +291,21 @@ class AcceptanceRun {
         this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
       }
       if (fixture?.execute && !fixture.commandSent) {
-        const names = input.tools?.map((tool) => tool.name ?? tool.function?.name) ?? [];
-        const name = ["exec_command", "shell_command"].find((candidate) => names.includes(candidate));
-        assert.ok(name, `Genuine native executable must advertise a supported execution tool, got ${names.join(",")}`);
-        const command = "printf 'NATIVE-EXEC\\n' | tee -a native-receipt.txt";
-        const args = name === "exec_command" ? { cmd: command, login: false } : { command, workdir: fixture.workdir };
-        fixture.callId = `oca501_exec_${this.modelRequests.length}`; fixture.commandSent = true;
-        item = { id: itemId, type: "function_call", call_id: fixture.callId, name, arguments: JSON.stringify(args) };
-        attempt.executionTool = name;
+        fixture.nativeCall = nativeExecutionCall(input, { transport, caseTag: fixture.tag, workdir: fixture.workdir, ownedRoot: this.workspace, callId: `oca501_exec_${this.modelRequests.length}`, itemId, validate: this.validateHostSchema });
+        fixture.commandSent = true; item = fixture.nativeCall.item;
+        attempt.nativeExecutionCall = fixture.nativeCall;
+        this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, { case: fixture.tag, requestHash: attempt.bodyHash, actualCall: fixture.nativeCall });
       } else if (fixture?.execute) {
-        const output = input.input?.find((entry) => entry.type === "function_call_output" && entry.call_id === fixture.callId);
-        assert.ok(output, "Actual native command sent a matching function_call_output");
-        assert.ok(JSON.stringify(output.output).includes("NATIVE-EXEC"), "Actual native tool output includes the receipt marker");
-        assert.equal(readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+        const output = matchingNativeOutput(input, fixture.nativeCall);
+        const proof = { case: fixture.tag, requestHash: attempt.bodyHash, actualCall: fixture.nativeCall, actualOutput: output };
+        this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, proof); // Retain the actual union before interpreting it.
+        try {
+          proof.actualExecutorResult = assertNativeExecutionResult(output, fixture.nativeCall, existsSync(join(fixture.workdir, "native-receipt.txt")) ? readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8") : "");
+        } catch (error) { proof.error = String(error); this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, proof); throw error; }
         attempt.nativeExecutionOutput = output; fixture.executionProved = true;
+        this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, proof);
       }
+      this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
       const base = { id, object: "response", created_at: Math.floor(Date.now() / 1000), model: MODEL, status: "in_progress", output: [], error: null, incomplete_details: null };
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
@@ -805,7 +806,7 @@ class AcceptanceRun {
     assert.equal(task.status, status, JSON.stringify(task));
     assert.equal(existsSync(join(workdir, "receipt.txt")) ? readFileSync(join(workdir, "receipt.txt"), "utf8") : "", receipt);
     if (commands) { assert.deepEqual(task.verifierCommands.map((step) => step.command), commands); assert.deepEqual(task.requiredVerifierCommands, commands); }
-    if (execute) assert.equal(this.nativeFixture.executionProved, true, "Actual advertised native execution and function_call_output were observed");
+    if (execute) assert.equal(this.nativeFixture.executionProved, true, "Actual advertised native execution and matching terminal tool result were observed");
     await this.settleGoalDelivery(task);
     return task;
   }
