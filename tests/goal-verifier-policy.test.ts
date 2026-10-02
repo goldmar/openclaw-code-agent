@@ -247,6 +247,70 @@ describe("required suite execution and recovery", () => {
     } finally { writeFileSync(join(f.dir, "release"), "cleanup release\n"); await evaluation; }
   });
 
+  for (const loopMode of ["verifier", "ralph"] as const) {
+    it(`retires ${loopMode} held checks without later effects or recoverable-row writes`, async () => {
+      const f = fixture(), first = "printf A >> trace; touch started; while [ ! -f release ]; do sleep 0.01; done; exit 0";
+      const commands = [first, "printf B >> trace"];
+      setPluginConfig({ requiredGoalVerifierCommands: commands });
+      f.controller.start(); await (f.controller as any).restorePromise;
+      const current = task(commands, { workdir: f.dir, loopMode, maxIterations: 8, requiredVerifierCommands: commands, sessionId: "original", harnessSessionId: "thread" });
+      const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
+      (f.manager as any).resolve = () => session;
+      let notifications = 0; f.manager.emitGoalTaskUpdate = () => { notifications += 1; };
+      f.store.upsert(current);
+      const pending: Promise<void> = (f.controller as any).reconcileTask(current);
+      try {
+        await waitForFile(join(f.dir, "started")); f.controller.stop();
+        const path = join(f.dir, "goals.json"), saved = readFileSync(path, "utf8"), notices = notifications;
+        assert.equal(current.status, "waiting_for_session"); assert.equal(current.harnessSessionId, "thread");
+        f.controller.stop(); assert.equal(readFileSync(path, "utf8"), saved, "Repeated stop is a true no-op");
+        await assert.rejects(f.controller.launchTask({ goal: "Retired", workdir: f.dir }), /controller retired/);
+        writeFileSync(join(f.dir, "release"), "release\n"); await pending;
+        assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "A"); assert.equal(readFileSync(path, "utf8"), saved);
+        assert.equal(notifications, notices); assert.equal(f.counters().launches, 0);
+      } finally { writeFileSync(join(f.dir, "release"), "cleanup release\n"); await pending; f.controller.stop(); }
+    });
+  }
+
+  it("cannot overwrite a newer controller's whole terminal row after its old check drains", async () => {
+    const f = fixture(), first = "if [ ! -f new-owner ]; then touch started; while [ ! -f release ]; do sleep 0.01; done; fi; printf A >> trace";
+    const commands = [first, "printf B >> trace"]; setPluginConfig({ requiredGoalVerifierCommands: commands });
+    const current = task(commands, { workdir: f.dir, requiredVerifierCommands: commands, sessionId: "original", harnessSessionId: "thread" });
+    const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed" });
+    (f.manager as any).resolve = () => session; f.store.upsert(current);
+    const pending: Promise<void> = (f.controller as any).reconcileTask(current);
+    try {
+      await waitForFile(join(f.dir, "started")); f.controller.stop();
+      const path = join(f.dir, "goals.json"), fresh = fixture(); (fresh.controller as any).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: path });
+      const restored = fresh.controller.getTask(current.id)!; writeFileSync(join(f.dir, "new-owner"), "new owner\n");
+      await (fresh.controller as any).handleTerminalSession(restored, session); assert.equal(restored.status, "succeeded");
+      const terminal = readFileSync(path, "utf8"); writeFileSync(join(f.dir, "release"), "release\n"); await pending;
+      assert.equal(readFileSync(path, "utf8"), terminal); assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "ABA");
+    } finally { writeFileSync(join(f.dir, "release"), "cleanup release\n"); await pending; }
+  });
+
+  for (const loopMode of ["verifier", "ralph"] as const) {
+    for (const exit of ["true", "false"]) {
+    it(`discards ${loopMode} ${exit} proof retired in the final await across stop-start ABA`, async () => {
+      const f = fixture(), commands = [`printf A >> trace; ${exit}`];
+      setPluginConfig({ requiredGoalVerifierCommands: commands });
+      const current = task(commands, { workdir: f.dir, loopMode, requiredVerifierCommands: commands, sessionId: "original" }); f.store.upsert(current);
+      const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
+      (f.manager as any).resolve = () => session;
+      const run = (f.controller as any).runVerifiers.bind(f.controller); let captured = "";
+      (f.controller as any).restoreRecoverableTasks = async (): Promise<void> => {};
+      (f.controller as any).runVerifiers = async (...args: unknown[]) => {
+        const proof = await run(...args); f.controller.stop(); captured = readFileSync(join(f.dir, "goals.json"), "utf8"); f.controller.start();
+        (f.controller as any).inFlight.add(current.id); return proof;
+      };
+      await (f.controller as any).reconcileTask(current);
+      assert.equal(current.status, "waiting_for_session"); assert.equal(readFileSync(join(f.dir, "goals.json"), "utf8"), captured);
+      assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "A"); assert.equal((f.controller as any).inFlight.has(current.id), true, "Old finalizer cannot clear new-generation ownership");
+      f.controller.stop();
+    });
+    }
+  }
+
   it("blocks all controller continuation paths before launch or automatic reply", async () => {
     for (const phase of ["restore", "idle", "ralph", "repair", "reply", "edit"] as const) {
       const f = fixture();
