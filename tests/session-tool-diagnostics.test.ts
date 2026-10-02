@@ -1,7 +1,7 @@
 import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setSessionManager } from "../src/singletons";
@@ -10,8 +10,54 @@ import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { makeAgentEscalateTool } from "../src/tools/agent-escalate";
 import { makeAgentOutputTool } from "../src/tools/agent-output";
 import type { SessionManager } from "../src/session-manager";
+import { distFiles, processFields, targetFacts } from "../scripts/e2e/oca-issue-504-host-acceptance";
 
 afterEach(() => setSessionManager(null));
+
+describe("representative host acceptance boundaries", () => {
+  it("compares complete published dist membership and content, refusing symlink substitutes", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "oca504-dist-"));
+    try {
+      const built = join(fixture, "built"), published = join(fixture, "published");
+      for (const path of [built, published]) {
+        mkdirSync(join(path, "chunks"), { recursive: true });
+        writeFileSync(join(path, "index.js"), "entry");
+        writeFileSync(join(path, "chunks", "a.js"), "chunk");
+      }
+      assert.deepEqual(distFiles(built), distFiles(published));
+      writeFileSync(join(published, "chunks", "a.js"), "different");
+      assert.notDeepEqual(distFiles(built), distFiles(published));
+      writeFileSync(join(published, "chunks", "a.js"), "chunk");
+      writeFileSync(join(published, "extra.js"), "unexpected");
+      assert.notDeepEqual(distFiles(built), distFiles(published));
+      rmSync(join(published, "extra.js")); rmSync(join(published, "chunks", "a.js"));
+      assert.notDeepEqual(distFiles(built), distFiles(published));
+      symlinkSync(join(built, "chunks", "a.js"), join(published, "chunks", "a.js"));
+      assert.throws(() => distFiles(published), /ordinary files/);
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  });
+
+  it("keeps target/backend/lifecycle facts while excluding transcripts and unrelated private fields", () => {
+    const row = { sessionId: "old", name: "alias", status: "completed", backendRef: { conversationId: "thread-old" },
+      workdir: "/fixture", worktreePath: "/fixture/tree", worktreeBranch: "selected", worktreeLifecycle: { state: "kept" },
+      output: "private transcript", route: { sessionKey: "private-requester" } };
+    const facts = targetFacts(row);
+    assert.ok(!JSON.stringify(facts).includes("private"));
+    for (const changed of [{ sessionId: "new" }, { backendRef: { conversationId: "thread-new" } },
+      { worktreeBranch: "other" }, { worktreeLifecycle: { state: "merged" } }]) {
+      assert.notDeepEqual(targetFacts({ ...row, ...changed }), facts);
+    }
+  });
+
+  it("reads kernel start time independently of process name and treats zombies as exited", () => {
+    const fields = ["S", "12", "34", ...Array(16).fill("0"), "5678", "0"];
+    assert.deepEqual(processFields(90, `90 (native ) name) ${fields.join(" ")}`), { pid: 90, parent: 12, group: 34, start: "5678" });
+    fields[19] = "9999";
+    assert.equal(processFields(90, `90 (same name) ${fields.join(" ")}`)?.start, "9999");
+    fields[0] = "Z";
+    assert.equal(processFields(90, `90 (same name) ${fields.join(" ")}`), undefined);
+  });
+});
 
 const calls = () => [
   { tool: makeAgentRespondTool({ sessionKey: "requester-a" }), params: { message: "1" } },

@@ -1,866 +1,407 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { spawn, execFileSync } from "node:child_process";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { connect } from "node:net";
+import { closeSync, constants, createWriteStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { readGitTrace, gitQueueBoundary, gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { StringDecoder } from "node:string_decoder";
 
+// Opt-in acceptance: real host + native backend; only model text is simulated.
 type Json = Record<string, any>;
-type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const FOUR = ["agent_respond", "agent_merge", "agent_escalate", "agent_output"];
-const HOST = "2026.9.7";
-const lanes = { rpc: "REAL_HOST_RPC_NATIVE_CODEX", embedded: "REAL_HOST_SUBSCRIBED_EMBEDDED_SIMULATED_PROVIDER" };
-let failureReport: Json | undefined;
-const text = (value: Json) => value.content?.map((part: Json) => part.text ?? "").join("\n") ?? "";
-const parse = (path: string) => JSON.parse(readFileSync(path, "utf8"));
-const records = (path: string): Json[] => existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+type Identity = { pid: number; parent: number; group: number; start: string };
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const HOST = "2026.9.7", NATIVE = "0.159.3";
+const NATIVE_HASH = "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479";
+const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const readJson = (path: string): Json => JSON.parse(readFileSync(path, "utf8"));
+const text = (result: Json): string => (result.content ?? []).map((part: Json) => part.text ?? "").join("\n");
+const delay = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
-export function options(argv: string[]) {
+/** Comparisons use the actual npm consumer, including publication transforms. */
+export function distFiles(path: string, prefix = ""): Record<string, string> {
   const result: Record<string, string> = {};
-  for (let i = 0; i < argv.length; i += 2) {
-    assert.ok(["--expected-sha", "--codex-bin", "--codex-version", "--cohort"].includes(argv[i]) && argv[i + 1], "Usage: --expected-sha <40hex> --codex-bin <absolute native executable> --codex-version <exact version>");
-    assert.ok(!result[argv[i]], "Duplicate acceptance option");
-    result[argv[i]] = argv[i + 1];
+  for (const name of readdirSync(path).sort()) {
+    const child = join(path, name), stat = lstatSync(child);
+    assert.ok(!stat.isSymbolicLink(), "Dist must contain ordinary files/directories");
+    if (stat.isDirectory()) Object.assign(result, distFiles(child, `${prefix}${name}/`));
+    else { assert.ok(stat.isFile()); result[`${prefix}${name}`] = hash(readFileSync(child)); }
   }
-  assert.ok(result["--expected-sha"] && result["--codex-bin"] && result["--codex-version"], "All exact provenance options are required");
-  hostCohort(result["--cohort"]);
   return result;
 }
-/** Pinned Responses conversion carries both IDs into the actual tool hook. */
-export function compositeToolCallId(callId: string, itemId: string): string {
-  assert.ok(callId && itemId && callId.trim() === callId && itemId.trim() === itemId && !callId.includes("|") && !itemId.includes("|"), "Fixture call/item IDs must be exact, distinct components");
-  return `${callId}|${itemId}`;
+/** Only these recovery facts are read; state is never a new authority source. */
+export function targetFacts(row: Json): Json {
+  return { id: row.sessionId, name: row.name, status: row.status, backend: row.backendRef,
+    worktree: [row.workdir, row.worktreePath, row.worktreeBranch], lifecycle: row.worktreeLifecycle,
+    merged: row.worktreeMerged };
 }
-function strings(value: any): string[] {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(strings);
-  if (value && typeof value === "object") return Object.values(value).flatMap(strings);
-  return [];
+export function processFields(pid: number, value: string): Identity | undefined {
+  const fields = value.slice(value.lastIndexOf(") ") + 2).split(" ");
+  return fields[0] === "Z" ? undefined : { pid, parent: Number(fields[1]), group: Number(fields[2]), start: fields[19] };
 }
-function findCatalogId(value: any, name: string): string | undefined {
-  if (typeof value === "string") { try { return findCatalogId(JSON.parse(value), name); } catch { return undefined; } }
-  if (Array.isArray(value)) return value.map((item) => findCatalogId(item, name)).find(Boolean);
-  if (!value || typeof value !== "object") return undefined;
-  if (value.name === name && typeof value.id === "string") return value.id;
-  return Object.values(value).map((item) => findCatalogId(item, name)).find(Boolean);
+function identity(pid: number): Identity | undefined {
+  try { return processFields(pid, readFileSync(`/proc/${pid}/stat`, "utf8")); }
+  catch (error) { if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code!)) return undefined; throw error; }
 }
-function toolResults(body: Json): Json[] {
-  return (body.input ?? []).filter((item: Json) => item.type === "function_call_output").map((item: Json) => ({ callId: item.call_id, output: item.output }));
+function same(old: Identity): boolean { return identity(old.pid)?.start === old.start; }
+async function until<T>(read: () => Promise<T | undefined> | T | undefined, label: string, ms = 60_000): Promise<T> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { const value = await read(); if (value !== undefined) return value; await delay(100); }
+  throw new Error(`${label}: deadline`);
 }
-export function nativeResult(value: any): Json | undefined {
-  if (typeof value === "string") { try { return nativeResult(JSON.parse(value)); } catch { return undefined; } }
-  if (Array.isArray(value)) return value.map(nativeResult).find(Boolean);
-  if (!value || typeof value !== "object") return undefined;
-  if (value.details?.status === "error" && typeof value.details.code === "string") return value;
-  return Object.values(value).map(nativeResult).find(Boolean);
+function inside(root: string, path: string): string {
+  const rel = relative(root, resolve(path));
+  assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !rel.startsWith(sep), "Path escaped owned root");
+  return resolve(path);
+}
+function readOwned(path: string): Buffer {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try { const stat = fstatSync(fd); assert.ok(stat.isFile()); assert.equal(stat.uid, process.getuid!()); return readFileSync(fd); }
+  finally { closeSync(fd); }
+}
+async function listening(port: number): Promise<boolean> {
+  return await new Promise((done) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.setTimeout(500); socket.once("connect", () => { socket.destroy(); done(true); });
+    socket.once("error", () => { socket.destroy(); done(false); }); socket.once("timeout", () => { socket.destroy(); done(true); });
+  });
 }
 
 async function main(): Promise<void> {
-  const opts = options(process.argv.slice(2));
-  const expectedSha = opts["--expected-sha"];
-  const cohort = hostCohort(opts["--cohort"]);
-  const outcomes: Json[] = [];
-  let failingStage = "common-setup";
-  const begin = (stage: string) => { failingStage = stage; };
-  failureReport = { ...hostCohortCoverage(cohort, []), status: "BLOCKED", failingStage: "common-preflight", candidateSha: expectedSha, mandatoryLanes: Object.values(lanes) };
-  requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
-    execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
+  assert.equal(process.argv.slice(2).length, 6, "Expected exactly three option/value pairs");
+  const opts = Object.fromEntries(process.argv.slice(2).reduce<string[][]>((pairs, arg, i, all) => {
+    if (i % 2 === 0) pairs.push([arg, all[i + 1]]); return pairs;
+  }, []));
+  assert.deepEqual(Object.keys(opts).sort(), ["--expected-sha", "--mode", "--node-floor"]);
+  assert.ok(["host", "gates"].includes(opts["--mode"]));
+  assert.ok(["24.16.0", "26.1.0"].includes(opts["--node-floor"]));
+  assert.match(opts["--expected-sha"], /^[a-f0-9]{40}$/);
+  assert.equal(process.version, `v${opts["--node-floor"]}`);
+  assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(), opts["--expected-sha"]);
+  assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: ROOT, encoding: "utf8" }).trim(), "");
   assert.equal(process.platform, "linux"); assert.equal(process.arch, "x64");
-  assert.ok(["v24.16.0", "v26.1.0"].includes(process.version), "Native acceptance must run at a supported exact Node floor");
-  for (const file of ["scripts/e2e/oca-issue-504-host-acceptance.ts", "scripts/e2e/oca-issue-504-host-fixtures.ts"]) {
-    assert.equal(sha256(execFileSync("git", ["show", `HEAD:${file}`], { cwd: root })), sha256(readFileSync(join(root, file))), "Acceptance source must belong to exact committed candidate");
-  }
-  const hostPath = join(root, "node_modules", "openclaw");
-  const hostPackage = parse(join(hostPath, "package.json"));
-  assert.equal(hostPackage.version, HOST);
-  const hostBuildBytes = existsSync(join(hostPath, "dist", "build-info.json")) ? readFileSync(join(hostPath, "dist", "build-info.json")) : undefined;
-  const hostBuild = hostBuildBytes ? JSON.parse(hostBuildBytes.toString()) : undefined;
-  if (hostBuild) { assert.equal(hostBuild.version, HOST); if (hostBuild.commit != null) assert.match(hostBuild.commit, /^[a-f0-9]{40}$/); }
-  const hostLockSRI = readFileSync(join(root, "pnpm-lock.yaml"), "utf8").match(/\n  openclaw@2026\.9\.7:\n    resolution: \{integrity: (sha512-[A-Za-z0-9+/=]+)\}/)?.[1];
-  assert.ok(hostLockSRI, "Official pinned npm lock integrity is required");
-  const evidence = new HostEvidence(join(root, ".reports", "issue504"), process.version, expectedSha);
-  evidence.paths.push(root);
-  const fixture = mkdtempSync(join(tmpdir(), "oca-issue-504-host-"));
-  evidence.paths.push(fixture);
-  writeFileSync(join(fixture, ".fixture-owner"), FIXTURE_MARKER, { mode: 0o600 });
-  const ownedChildren = new Set<ChildProcess>();
-  const clients = new Set<GatewayClient>();
-  const listenerPorts: number[] = [];
-  let provider: ReturnType<typeof createServer> | undefined;
-  let summary: Json | undefined;
-  let originalFailure: unknown;
-  let cleanupFailure: unknown;
-  let evidenceReceipt: { path: string; manifestSha256: string } | undefined;
-  let nativeWatch: NodeJS.Timeout | undefined;
-  const nativeObservationErrors: string[] = [];
-  let providerTraffic = 0;
-  const providerRequests: Json[] = [];
-  const nativeProcesses = new Map<number, ProcessIdentity>();
-  const observeNative = () => {
-    try {
-    for (const event of records(join(fixture, "native-events.jsonl"))) {
-      for (const identity of [event.relayIdentity, event.nativeIdentity]) if (identity && !nativeProcesses.has(identity.pid)) nativeProcesses.set(identity.pid, identity);
+  const fixture = resolve(process.env.OCA504_OWNED_ROOT!);
+  assert.match(relative(join(ROOT, ".reports", "issue504"), fixture), /^slim\.[a-f0-9]{24}$/);
+  const binding = JSON.parse(readOwned(join(fixture, ".identity")).toString());
+  const verifyRoot = () => {
+    assert.equal(realpathSync(fixture), fixture);
+    for (const expected of [...binding.parents, { path: fixture, ...binding }]) {
+      const fd = openSync(expected.path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try {
+        const stat = fstatSync(fd); assert.ok(stat.isDirectory());
+        assert.equal(stat.dev, expected.dev); assert.equal(stat.ino, expected.ino); assert.equal(stat.uid, process.getuid!());
+      } finally { closeSync(fd); }
     }
-    for (const child of ownedChildren) {
-      if (!child.pid || nativeProcesses.has(child.pid) || child.exitCode !== null || child.signalCode !== null) continue;
-      const identity = processIdentity(child.pid);
-      if (identity) { assert.equal(identity.parentPid, process.pid); assert.equal(identity.group, child.pid); assert.equal(identity.executable, realpathSync(process.execPath)); nativeProcesses.set(child.pid, identity); }
+    assert.equal(lstatSync(fixture).mode & 0o777, 0o700);
+    assert.equal(readOwned(join(fixture, ".owner")).toString(), "oca504-slim-v1\n");
+  };
+  verifyRoot();
+  assert.equal(realpathSync(process.execPath), join(fixture, "node", "bin", "node"));
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const owned = new Map<number, Identity>(), groups = new Set<number>(), ports: number[] = [];
+  const commands: Json[] = [], outcomes: string[] = [], providerErrors: string[] = [];
+  let stage = "setup", failure: string | undefined, cleanupFailure: string | undefined;
+  let provider: ReturnType<typeof createServer> | undefined, watcher: NodeJS.Timeout | undefined;
+  const nativeSeen = new Set<number>();
+  const gatewayDescendants = new Set<string>();
+  const lifetime = (item: Identity) => `${item.pid}:${item.start}`;
+  let codex = "", nativeVersion = "", packageHash = "", hostBuild: Json | undefined, providerTurns = 0;
+  const capture = () => {
+    const snapshots = readdirSync("/proc").filter((name) => /^\d+$/.test(name)).flatMap((name) => {
+      try { const value = identity(Number(name)); return value ? [value] : []; }
+      catch (error) { if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code!) && !owned.has(Number(name))) return []; throw error; }
+    });
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const item of snapshots) {
+        const parent = owned.get(item.parent);
+        const current = parent && !owned.has(item.pid) ? identity(item.pid) : undefined;
+        if (parent && current?.start === item.start && current.parent === item.parent && same(parent)) {
+          owned.set(item.pid, item); changed = true;
+          if (gatewayDescendants.has(lifetime(parent))) gatewayDescendants.add(lifetime(item));
+        }
+      }
     }
-    captureDescendants(nativeProcesses);
-    } catch (error) { evidence.failure("native-observer", error); throw error; }
+    for (const item of snapshots) if (groups.has(item.group)) assert.ok(owned.get(item.pid)?.start === item.start, "Unproven process survived in owned group");
+    if (codex) for (const item of owned.values()) if (gatewayDescendants.has(lifetime(item)) && same(item)) {
+      try { if (realpathSync(`/proc/${item.pid}/exe`) === codex) nativeSeen.add(item.pid); }
+      catch (error) { if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code!)) throw error; }
+    }
+  };
+  let observationFailure = false;
+  const start = (bin: string, args: string[], cwd: string, label: string) => {
+    const stdoutPath = inside(fixture, join(fixture, `${commands.length}-stdout.log`));
+    const stderrPath = inside(fixture, join(fixture, `${commands.length}-stderr.log`));
+    const stdout = createWriteStream(stdoutPath, { flags: "wx", mode: 0o600 });
+    const stderr = createWriteStream(stderrPath, { flags: "wx", mode: 0o600 });
+    const began = Date.now();
+    const publicArg = (value: string) => value.replaceAll(fixture, "<owned>").replaceAll(ROOT, "<candidate>");
+    const record: Json = { label, command: [publicArg(bin), ...args.map(publicArg)], exit: null, counts: {}, skips: [] }; commands.push(record);
+    const child = spawn(bin, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    child.on("error", () => {});
+    const observed = identity(child.pid!); assert.ok(observed); assert.equal(observed.parent, process.pid);
+    owned.set(observed.pid, observed); groups.add(observed.group);
+    let bytes = 0, output = "", overflow = false, pending = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const testLine = (line: string) => {
+      const count = line.match(/^[#ℹ] (tests|pass|fail|cancelled|skipped|todo) (\d+)$/);
+      if (count) record.counts[count[1]] = (record.counts[count[1]] ?? 0) + Number(count[2]);
+      if (/^ok \d+ - .+ # SKIP|^\s*﹣ .+ # SKIP/.test(line)) {
+        if (record.skips.length < 64) record.skips.push(line.slice(0, 1000)); else overflow = true;
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      bytes += chunk.length; if (bytes <= 32 * 1024 * 1024) stdout.write(chunk); else overflow = true;
+      if (opts["--mode"] === "gates") process.stdout.write(chunk);
+      const decoded = stdoutDecoder.write(chunk); output = (output + decoded).slice(-1_048_576);
+      const lines = (pending + decoded).split("\n"); pending = lines.pop()!.slice(-65_536); lines.forEach(testLine);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      bytes += chunk.length; if (bytes <= 32 * 1024 * 1024) stderr.write(chunk); else overflow = true;
+      if (opts["--mode"] === "gates") process.stderr.write(chunk);
+    });
+    const finished = new Promise<string>((done, reject) => {
+      const timer = label === "gateway" ? undefined : setTimeout(() => { record.timeout = true; reject(new Error(`${label}: deadline`)); }, opts["--mode"] === "gates" ? 2_400_000 : 300_000);
+      child.once("error", () => { record.startupFailure = true; clearTimeout(timer); stdout.end(); stderr.end(); reject(new Error(`${label}: startup`)); });
+      child.once("close", (code, signal) => {
+        clearTimeout(timer); record.exit = code; record.signal = signal; record.outputOverflow = overflow; record.wallMs = Date.now() - began; testLine(pending + stdoutDecoder.end());
+        // Logs remain private; only commands/exits and allowlisted test counts leave this profile.
+        record.testSummary = output.split("\n").filter((line) => /^(?:[#ℹ] (?:tests|pass|fail|cancelled|skipped|todo|duration_ms) |Test files run:|Status:)/.test(line)).slice(-16);
+        Promise.all([new Promise<void>((end) => stdout.end(end)), new Promise<void>((end) => stderr.end(end))]).then(() => {
+          record.closed = true;
+          if (code || signal || overflow || record.timeout) reject(new Error(`${label}: command failed`)); else done(output.trim());
+        }, reject);
+      });
+    });
+    finished.catch(() => {}); return { child, finished, identity: observed };
+  };
+  const run = async (bin: string, args: string[], cwd = ROOT, label = args[0]) => await start(bin, args, cwd, label).finished;
+  const git = (cwd: string, ...args: string[]) => execFileSync("/usr/bin/git", ["-C", inside(fixture, cwd), ...args], { env, encoding: "utf8", timeout: 30_000 }).trim();
+  const repo = (name: string) => {
+    const path = inside(fixture, join(fixture, name)); mkdirSync(path);
+    git(path, "init", "-b", "main"); git(path, "config", "user.name", "OCA fixture"); git(path, "config", "user.email", "fixture@example.invalid");
+    writeFileSync(join(path, "base.txt"), "base\n"); git(path, "add", "base.txt"); git(path, "commit", "-m", "fixture base"); return path;
   };
   try {
-  const env = fixtureEnv(fixture);
-  for (const key of ["HOME", "OPENCLAW_STATE_DIR", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR", "GH_CONFIG_DIR", "NPM_CONFIG_CACHE"]) mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
-  for (const path of [env.GIT_CONFIG_GLOBAL!, env.NPM_CONFIG_USERCONFIG!, env.NPM_CONFIG_GLOBALCONFIG!]) writeFileSync(path, "", { mode: 0o600 });
-  const logging = { file: ownedPath(fixture, join(fixture, "openclaw.log")), level: "info" as const };
-  writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ logging, gateway: { mode: "local" } }), { mode: 0o600 });
-  // SDK globals must initialize under the same hermetic environment as children.
-  for (const key of Object.keys(process.env)) delete process.env[key];
-  Object.assign(process.env, env);
-  const { GatewayClient } = await import("openclaw/plugin-sdk/gateway-runtime");
-  const codex = realpathSync(opts["--codex-bin"]);
-  validateNativeExecutable(readFileSync(codex), opts["--codex-version"]);
-  evidence.paths.push(dirname(codex));
-  const codexVersion = await command(codex, ["--version"], { cwd: fixture, env, evidence });
-  assert.equal(codexVersion, `codex-cli ${opts["--codex-version"]}`, "Exact native Codex version mismatch");
-  assert.ok(Number(opts["--codex-version"].split(".")[1]) >= 156, "Native Codex is below OCA's supported minimum");
-  const codexExecutableSha256 = sha256(readFileSync(codex));
-  const nativeRelay = writeNativeRelay(fixture, codex);
-  mkdirSync(ownedPath(fixture, join(fixture, "host-observer")));
-  const observer = writeHostObserver(fixture);
-  nativeWatch = setInterval(() => { try { observeNative(); } catch { if (nativeObservationErrors.length < 128) nativeObservationErrors.push("native-observer-failure"); } }, 250);
-  const scenarios = new Map<string, Scenario>();
-  const generations = new Set<string>();
-  const providerErrors: string[] = [];
-  provider = createServer(async (request, response) => {
-    const requestSequence = ++providerTraffic;
-    let stage: "provider-json" | "provider-schema" | "provider-scenario" | "provider-stream" = "provider-schema";
-    try {
-      assert.equal(request.socket.remoteAddress, "127.0.0.1");
-      assert.ok(request.method === "POST" && request.url?.endsWith("/responses"), "Unexpected fixture provider route");
-      let raw = "";
-      for await (const chunk of request) { raw += chunk; assert.ok(Buffer.byteLength(raw) <= 1_048_576, "Fixture provider input exceeds bounded evidence contract"); }
-      stage = "provider-json";
-      const body = JSON.parse(raw);
-      stage = "provider-schema";
-      observeNative();
-      const userInput = strings((body.input ?? []).filter((item: Json) => item.role === "user"));
-      const marker = userInput.findLast((item) => /OCA504_EMBED:([\w-]+)/.test(item))?.match(/OCA504_EMBED:([\w-]+)/)?.[1];
-      const generationMarkers = [...new Set(userInput.flatMap((item) => [...item.matchAll(/OCA504_GENERATION:([a-f0-9-]+)/g)].map((match) => match[1])))];
-      assert.ok(generationMarkers.length <= 1, "Conflicting native generation markers");
-      const generation = generationMarkers[0];
-      const plan = userInput.some((item) => item.includes("OCA504_NATIVE_PLAN"));
-      const providerRecord: Json = { requestSequence, fixtureNativeHeaders: { session_id: request.headers.session_id, "x-codex-thread-id": request.headers["x-codex-thread-id"] }, latestInputHash: sha256(userInput.at(-1) ?? ""), inputHashes: userInput.map(sha256), fixtureGeneration: generation, requestClass: "unknown" };
-      if (providerRequests.length < 1_000) providerRequests.push(providerRecord);
-      else if (!evidence.errors.includes("provider-record-count-overflow")) evidence.errors.push("provider-record-count-overflow");
-      const schemaNames = (body.tools ?? []).map((tool: Json) => tool.name ?? tool.function?.name);
-      providerRecord.schemaNames = schemaNames;
-      evidence.record("provider.jsonl", { phase: "request-observed", ...providerRecord });
-      providerRecord.requestClass = classifyProvider(generation, marker, schemaNames, generations, new Set(scenarios.keys()));
-      evidence.record("provider.jsonl", { phase: "request-admission", ...providerRecord });
-      let output: Json[];
-      if (marker) {
-        stage = "provider-scenario";
-        const scenario = scenarios.get(marker);
-        assert.ok(scenario, "Unknown embedded scenario");
-        scenario.results = toolResults(body);
-        if (!scenario.schemas.length) scenario.schemas.push(body.tools ?? []);
-        const next = scenario.calls[scenario.cursor];
-        if (!next) { scenario.final = true; output = [messageItem(`OCA504_EMBED_DONE:${marker}`)]; }
-        else if ("deferred" in next) {
-          if (!scenario.searching) {
-            scenario.searching = next.deferred;
-            output = [functionItem({ name: "tool_search", args: { query: next.deferred.name } })];
-          } else {
-            const last = scenario.results.at(-1);
-            const id = findCatalogId(last?.output, next.deferred.name);
-            assert.ok(id, "Actual ToolSearch result did not contain the selected tool ID");
-            const emitted = functionItem({ name: "tool_call", args: { id, args: next.deferred.args } });
-            output = [emitted]; scenario.emitted.push({ id: emitted.call_id, itemId: emitted.id, hostCallId: compositeToolCallId(emitted.call_id, emitted.id), target: next.deferred, catalogId: id });
-            scenario.searching = undefined;
-            scenario.cursor++;
-          }
-        } else { const emitted = functionItem(next); output = [emitted]; scenario.emitted.push({ id: emitted.call_id, itemId: emitted.id, hostCallId: compositeToolCallId(emitted.call_id, emitted.id), target: next }); scenario.cursor++; }
-        const selectedCall = scenario.emitted.at(-1)?.target;
-        if (output.some((item) => item.type === "function_call") && selectedCall?.name === "agent_respond" && selectedCall.args.session === scenario.nativeTarget.sessionId && !scenario.searching) {
-          const target = scenario.nativeTarget;
-          const boundary = responseResumeBoundary(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target, nativeEvents().length);
-          scenario.resumeWindows.push(boundary);
-          evidence.record("host-events.jsonl", { phase: "embedded-positive-response-pre-row", ...boundary.facts, resumeRequired: boundary.required, observation: "immediately-before-emitted-tool-admission" });
-        }
-      } else if (providerRecord.requestClass === "host-background") {
-        output = [messageItem("Disposable host notification acknowledged.")];
-      } else {
-        // The provider simulates model output ONLY. Native Codex owns all RPC.
-        const latest = userInput.at(-1) ?? "";
-        output = [messageItem(plan ? `<proposed_plan>\n${FIXTURE_PLAN}\n</proposed_plan>` : `OCA504_BACKEND_OK:${generation}:${latest}`)];
-      }
-      const outputText = strings(output).join(" ");
-      providerRecord.fixtureOutputMarkers = outputText.match(/OCA504_(?:BACKEND_OK:[a-f0-9-]+:|EMBED_DONE:[\w-]+)/g) ?? [];
-      evidence.record("provider.jsonl", { ...providerRecord, outputHash: sha256(outputText), emittedCalls: output.filter((item) => item.type === "function_call").map((item) => ({ callId: item.call_id, itemId: item.id, hostCallId: compositeToolCallId(item.call_id, item.id), name: item.name })), schemaNames: (body.tools ?? []).map((tool: Json) => tool.name ?? tool.function?.name), toolResults: toolResults(body).map((result) => ({ callId: result.callId, outputHash: sha256(JSON.stringify(result.output)), nativeCode: nativeResult(result.output)?.details?.code, readableError: strings(result.output).some((value) => value.startsWith("Error:")) })) });
-      stage = "provider-stream";
-      const sse = responseFrames(output, body.model);
-      evidence.record("provider.jsonl", { phase: "emitted-sse", fixtureGeneration: generation, requestClass: providerRecord.requestClass, ...providerSseObservation(sse, output) });
-      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      response.end(sse);
-    } catch (error) {
-      if (providerErrors.length < 128) providerErrors.push("provider-protocol-failure");
-      evidence.failure(stage, error);
-      evidence.record("provider.jsonl", { phase: "request-error", requestSequence, stage, requestClass: "unknown" });
-      closeFailedProviderResponse(response, evidence);
-    }
-  });
-  await new Promise<void>((done) => provider.listen(0, "127.0.0.1", () => done()));
-  const providerPort = (provider.address() as { port: number }).port;
-  listenerPorts.push(providerPort);
-  const baseUrl = `http://127.0.0.1:${providerPort}/v1`;
-  writeFileSync(join(env.CODEX_HOME!, "config.toml"), [
-    'model = "gpt-6.1-sol"', 'model_provider = "oca504"', 'model_reasoning_effort = "low"',
-    'approval_policy = "never"', 'sandbox_mode = "workspace-write"', 'check_for_update_on_startup = false',
-    '[model_providers.oca504]', 'name = "OCA 504 isolated fixture"', `base_url = "${baseUrl}"`,
-    'env_key = "OCA504_FIXTURE_KEY"', 'wire_api = "responses"', 'requires_openai_auth = false',
-    'supports_websockets = false', 'request_max_retries = 0', 'stream_max_retries = 0',
-    '[otel]', 'exporter = "none"', 'trace_exporter = "none"',
-  ].join("\n"), { mode: 0o600 });
-  mkdirSync(join(env.HOME!, ".codex"), { mode: 0o700 });
-  writeFileSync(join(env.HOME!, ".codex", "config.toml"), readFileSync(join(env.CODEX_HOME!, "config.toml")), { mode: 0o600 });
-  env.OPENCLAW_CODEX_APP_SERVER_COMMAND = nativeRelay;
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  const gitCalls = join(fixture, "git-calls.jsonl");
-  writeFileSync(gitCalls, "", { mode: 0o600 });
-  env.GIT_TRACE2_EVENT = gitCalls;
-  const gitVersion = execFileSync(realGit, ["--version"], { env, encoding: "utf8" }).trim();
-  assert.match(gitVersion, /^git version \d+\.\d+/);
-  const versionTrace = readGitTrace(gitCalls);
-  assert.ok(versionTrace.events.some((event) => event.event === "start" && event.argv?.at(-1) === "--version"));
-  assert.ok(versionTrace.events.some((event) => event.event === "exit" && event.code === 0));
-  evidence.record("host-events.jsonl", { phase: "git-native-observer", version: gitVersion, executableHash: sha256(readFileSync(realGit)), traceBytes: versionTrace.bytes.length, traceSha256: versionTrace.sha256 });
-  const git = (cwd: string, ...args: string[]) => execFileSync(realGit, ["-C", ownedPath(fixture, cwd), ...args], { env, encoding: "utf8" }).trim();
-  const createRepo = (name: string) => {
-    const dir = ownedPath(fixture, join(fixture, name)); mkdirSync(dir);
-    git(dir, "init", "-b", "main"); git(dir, "config", "user.name", "OCA Fixture"); git(dir, "config", "user.email", "fixture@example.invalid");
-    writeFileSync(join(dir, "base.txt"), "base\n"); git(dir, "add", "base.txt"); git(dir, "commit", "-m", "fixture base");
-    return dir;
-  };
-  let tarballSha256 = "", distSha256 = "";
-  const hostEvents: Array<ReturnType<typeof projectFixtureHostEvent>> = [];
-  const subscriptions = new WeakMap<GatewayClient, FixtureSessionSubscription>();
-  let currentClient: GatewayClient | undefined;
-  let currentGateway: ChildProcess | undefined;
-  let storePath = "";
-  const cli = (...args: string[]) => command(process.execPath, [join(hostPath, "openclaw.mjs"), ...args], { cwd: root, env, evidence });
-    const publication = validatePackSource(root);
-    evidence.record("host-events.jsonl", { phase: "source-publication-boundary", sourcePackageSha256: sha256(readFileSync(join(root, "package.json"))), expectedPublicationSha256: sha256(publication), publicationTransform: ["packageManager-removed", "packing-lifecycle-scripts-removed", "two-space-json-without-final-newline"] });
-    const packDir = ownedPath(fixture, join(fixture, "pack")); mkdirSync(packDir);
-    const packed = JSON.parse(await command("pnpm", ["pack", "--json", "--pack-destination", packDir], { cwd: root, env, evidence }));
-    const filename = Array.isArray(packed) ? packed[0].filename : packed.filename;
-    const tarball = ownedPath(fixture, resolve(packDir, filename));
-    tarballSha256 = sha256(readFileSync(tarball)); distSha256 = sha256(readFileSync(join(root, "dist", "index.js")));
-    const reader = join(root, "scripts", "e2e", "oca-issue-504-archive-proof.py");
-    const python = realpathSync("/usr/bin/python3");
-    evidence.record("host-events.jsonl", { phase: "archive-reader-provenance", readerSha256: sha256(readFileSync(reader)), readerExecutableSha256: sha256(readFileSync(python)), readerArguments: ["-I", "fixed-owned-archive"] });
-    const packedInstaller = await preparePackedInstaller(root, fixture, tarball,
-      () => command(python, ["-I", reader, tarball], { cwd: root, env, evidence, timeoutMs: 30_000 }),
-      async (admitted) => { await cli("plugins", "install", "--force", "--accept-capabilities", admitted); }, evidence);
-    const candidateProof = packedInstaller.proof;
-
-    async function gateway(mode: false | { mode: "tools" }): Promise<GatewayClient> {
-      if (currentClient) { await currentClient.stopAndWait({ timeoutMs: 5_000 }); clients.delete(currentClient); }
-      observeNative();
-      await stopNativeProcesses(nativeProcesses);
-      if (currentGateway) { await stopOwnedChild(currentGateway); ownedChildren.delete(currentGateway); }
-      const profileName = mode === false ? `direct-${hostEvents.length}` : "deferred";
-      const state = ownedPath(fixture, join(fixture, `state-${profileName}`)); mkdirSync(state);
-      env.OPENCLAW_STATE_DIR = state; storePath = join(state, "code-agent-sessions.json");
-      const socket = createServer(); await new Promise<void>((done) => socket.listen(0, "127.0.0.1", done));
-      const port = (socket.address() as { port: number }).port; await new Promise<void>((done) => socket.close(() => done()));
-      listenerPorts.push(port);
-      const token = randomBytes(32).toString("hex");
-      evidence.secrets.push(token);
-      // Install records belong to this selected state, independently of prior profiles.
-      delete env.OPENCLAW_GATEWAY_TOKEN;
-      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(freshPluginBootstrap(logging, port)), { mode: 0o600 });
-      await packedInstaller.install();
-      await cli("plugins", "enable", "openclaw-code-agent");
-      // Existing isolated baseline grants precede the managed observer installer.
-      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(seedObserverAllow(parse(env.OPENCLAW_CONFIG_PATH!))), { mode: 0o600 });
-      const observerProof = await installObserver(fixture, observer, async (path) => {
-        evidence.record("host-events.jsonl", { phase: "observer-source-admission", sourceHashes: observer.hashes, startupActivation: true });
-        await cli("plugins", "install", "--force", "--accept-capabilities", path);
+    watcher = setInterval(() => { try { capture(); } catch { observationFailure = true; } }, 100);
+    const pm = inside(fixture, join(fixture, "pm", "node_modules", "pnpm", "bin", "pnpm.mjs"));
+    assert.equal(await run(process.execPath, [pm, "--version"], ROOT, "pnpm-version"), "11.15.1");
+    if (opts["--mode"] === "gates") {
+      outcomes.push("frozen-install");
+      const gates = [["verify"], ["check-plugin-security"], ["verify:npm-consumer"], ["audit:prod"], ["validate:release-metadata"]];
+      for (const args of gates) { stage = args[0]; await run(process.execPath, [pm, ...args], ROOT, stage); outcomes.push(stage); }
+      stage = "bundle-limit";
+      await run(process.execPath, ["--input-type=module", "-e", "import { createBundleSizeReport } from './scripts/check-bundle-size.mjs'; const report = createBundleSizeReport(); if (report.overLimit) process.exit(1); console.log(JSON.stringify(report));"], ROOT, stage);
+      outcomes.push(stage);
+      stage = "packed-dry-run"; await run("npm", ["pack", "--dry-run", "--json"], ROOT, stage); outcomes.push(stage);
+    } else {
+      const hostPath = join(ROOT, "node_modules", "openclaw"), host = readJson(join(hostPath, "package.json"));
+      assert.equal(host.version, HOST); hostBuild = readJson(join(hostPath, "dist", "build-info.json"));
+      assert.equal(hostBuild.version, HOST); assert.equal(hostBuild.commit, "c074824a27c96d3983043f9eeb33823cd1772d8c");
+      stage = "native-acquisition";
+      await run("npm", ["install", "--prefix", join(fixture, "native"), "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", "@openai/codex@0.159.3"], fixture, stage);
+      codex = realpathSync(join(fixture, "native", "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex"));
+      inside(fixture, codex); assert.equal(readFileSync(codex).subarray(0, 4).toString("hex"), "7f454c46"); assert.equal(hash(readFileSync(codex)), NATIVE_HASH);
+      nativeVersion = await run(codex, ["--version"], fixture, "codex-version"); assert.equal(nativeVersion, `codex-cli ${NATIVE}`);
+      let releaseCommit: (() => void) | undefined;
+      const commitBarrier = new Promise<void>((done) => { releaseCommit = done; });
+      let commitReleased = false;
+      provider = createServer(async (request, response) => {
+        try {
+          assert.equal(request.socket.remoteAddress, "127.0.0.1"); assert.equal(request.method, "POST"); assert.equal(request.url, "/v1/responses");
+          let body = ""; for await (const chunk of request) { body += chunk; assert.ok(Buffer.byteLength(body) <= 1_048_576); }
+          const input = JSON.parse(body); capture();
+          const tokens = JSON.stringify((input.input ?? []).filter((item: Json) => item.role === "user")).match(/OCA504_[A-Z0-9]+/g) ?? [];
+          const marker = tokens.at(-1) ?? "BACKGROUND";
+          if (marker === "OCA504_COMMIT" && !commitReleased) await commitBarrier;
+          const item: Json = { type: "message", id: `msg_${randomUUID()}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: `Fixture completed ${marker}`, annotations: [], logprobs: [] }] };
+          const value: Json = { id: `resp_${randomUUID()}`, object: "response", created_at: Math.floor(Date.now() / 1_000), status: "completed", model: input.model, output: [item], error: null, incomplete_details: null, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } };
+          const frames: Json[] = [
+            { type: "response.created", response: { ...value, status: "in_progress", output: [] } },
+            { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", content: [] } },
+            { type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+            { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: item.content[0].text },
+            { type: "response.output_text.done", item_id: item.id, output_index: 0, content_index: 0, text: item.content[0].text },
+            { type: "response.content_part.done", item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] },
+            { type: "response.output_item.done", output_index: 0, item }, { type: "response.completed", response: value },
+          ];
+          providerTurns++; response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(frames.map((frame, sequence_number) => `event: ${frame.type}\ndata: ${JSON.stringify({ ...frame, sequence_number })}\n\n`).join(""));
+        } catch { providerErrors.push("model-protocol"); if (!response.headersSent) response.writeHead(500); response.end(); }
       });
-      await cli("plugins", "enable", "oca504-observer");
-      const observerMetadata = JSON.parse(await cli("plugins", "inspect", "oca504-observer", "--json"));
-      evidence.record("host-events.jsonl", { phase: "observer-cold-inspection", inspectionSha256: sha256(JSON.stringify(observerMetadata)), sourceHashes: observerProof.hashes });
-      verifyObserverInspection(observerMetadata, fixture, state, observerProof, false, evidence);
-      const installedConfig = parse(env.OPENCLAW_CONFIG_PATH!);
-      const managedAllow = managedObserverAllow(installedConfig);
-      evidence.record("host-events.jsonl", { phase: "managed-observer-allowlist", actualAllow: managedAllow, manuallyGrantedObserver: false });
-      const metadata = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
-      const installed = verifyPackedPluginInspection(metadata, fixture, state, tarball, candidateProof, false, evidence);
-      evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-metadata", sourceKind: "archive", ...installed,
-        tarballSha256: candidateProof.tarballSha256, distMapSha256: sha256(JSON.stringify(candidateProof.distHashes)), manifestHashes: candidateProof.manifestHashes });
-      const config: OpenClawConfig = {
-        ...installedConfig,
-        logging,
+      await new Promise<void>((done) => provider!.listen(0, "127.0.0.1", done));
+      const providerPort = (provider.address() as { port: number }).port; ports.push(providerPort);
+      const socket = createServer(); await new Promise<void>((done) => socket.listen(0, "127.0.0.1", done));
+      const port = (socket.address() as { port: number }).port; await new Promise<void>((done) => socket.close(() => done())); ports.push(port);
+      const baseUrl = `http://127.0.0.1:${providerPort}/v1`, token = randomBytes(32).toString("hex");
+      env.OPENCLAW_CODEX_APP_SERVER_COMMAND = codex; env.OPENCLAW_WORKTREE_DIR = join(fixture, "worktrees");
+      writeFileSync(join(env.CODEX_HOME!, "config.toml"), [
+        'model = "gpt-6.1-sol"', 'model_provider = "fixture"', 'approval_policy = "never"', 'sandbox_mode = "workspace-write"',
+        'check_for_update_on_startup = false', '[model_providers.fixture]', 'name = "Disposable fixture"', `base_url = "${baseUrl}"`,
+        'env_key = "OCA504_FIXTURE_KEY"', 'wire_api = "responses"', 'requires_openai_auth = false', 'supports_websockets = false',
+        'request_max_retries = 0', 'stream_max_retries = 0', '[otel]', 'exporter = "none"', 'trace_exporter = "none"',
+      ].join("\n"), { mode: 0o600 });
+      mkdirSync(join(env.HOME!, ".codex")); writeFileSync(join(env.HOME!, ".codex", "config.toml"), readFileSync(join(env.CODEX_HOME!, "config.toml")), { mode: 0o600 });
+      const logging = { file: join(fixture, "openclaw.log"), level: "info" };
+      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ logging, gateway: { mode: "local", bind: "loopback", port } }), { mode: 0o600 });
+      const cli = (...args: string[]) => run(process.execPath, [join(hostPath, "openclaw.mjs"), ...args], fixture, `host-${args.slice(0, 2).join("-")}`);
+      stage = "pack-install";
+      const packedDir = join(fixture, "packed"); mkdirSync(packedDir);
+      const pack = JSON.parse(await run(process.execPath, [pm, "pack", "--json", "--pack-destination", packedDir], ROOT, "pack"));
+      const tarball = inside(fixture, resolve(packedDir, (Array.isArray(pack) ? pack[0] : pack).filename)); packageHash = hash(readFileSync(tarball));
+      const consumer = join(fixture, "consumer"); mkdirSync(consumer); writeFileSync(join(consumer, "package.json"), '{"name":"oca504-reference","private":true}');
+      await run("npm", ["install", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund", tarball], consumer, "reference-install");
+      const reference = join(consumer, "node_modules", "openclaw-code-agent");
+      assert.deepEqual(distFiles(join(reference, "dist")), distFiles(join(ROOT, "dist")));
+      const publication = readJson(join(reference, "package.json")), source = readJson(join(ROOT, "package.json"));
+      for (const key of ["name", "version", "main", "openclaw", "dependencies", "peerDependencies"]) assert.deepEqual(publication[key], source[key]);
+      await cli("plugins", "install", "--accept-capabilities", tarball); await cli("plugins", "enable", "openclaw-code-agent");
+      const installedConfig = readJson(env.OPENCLAW_CONFIG_PATH!);
+      const inspect = readJsonFrom(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
+      assert.equal(inspect.plugin.id, "openclaw-code-agent"); assert.equal(inspect.plugin.enabled, true); assert.equal(inspect.plugin.status, "loaded");
+      assert.equal(inspect.install.source, "archive"); assert.equal(realpathSync(inspect.install.sourcePath), tarball);
+      const installed = inside(env.OPENCLAW_STATE_DIR!, realpathSync(inspect.install.installPath));
+      assert.equal(realpathSync(inspect.plugin.rootDir), installed); assert.equal(realpathSync(inspect.plugin.source), join(installed, "dist", "index.js"));
+      assert.deepEqual(distFiles(join(installed, "dist")), distFiles(join(reference, "dist")));
+      for (const name of ["package.json", "openclaw.plugin.json", "npm-shrinkwrap.json"]) assert.equal(hash(readFileSync(join(installed, name))), hash(readFileSync(join(reference, name))));
+      assert.equal(hash(readFileSync(tarball)), packageHash); outcomes.push("same-packed-artifact-installed");
+      const config = {
+        ...installedConfig, logging,
         gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false } },
-        models: { mode: "replace", providers: { oca504: { baseUrl, apiKey: "synthetic-local-fixture-only", api: "openai-responses", request: { allowPrivateNetwork: true }, models: [{ id: "gpt-6.1-sol", name: "Fixture", reasoning: false, input: ["text"], contextWindow: 100_000, maxTokens: 4_096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } },
-        agents: { defaults: { workspace: ownedPath(fixture, join(fixture, "workspace")), model: { primary: "oca504/gpt-6.1-sol" } } },
-        tools: { profile: "minimal", alsoAllow: ["agent_*", "tool_search", "tool_describe", "tool_call"], toolSearch: mode, exec: { mode: "full" } },
-        plugins: { ...installedConfig.plugins, allow: managedAllow, slots: { memory: "none" }, entries: { ...installedConfig.plugins.entries, "oca504-observer": { enabled: true }, "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "default", planApproval: "delegate", harnesses: { codex: { defaultModel: "gpt-6.1-sol", permissionProfile: ":workspace", approvalPolicy: "never" } } } } } },
+        models: { mode: "replace", providers: { fixture: {
+          baseUrl, apiKey: "synthetic-local-fixture-only", api: "openai-responses",
+          request: { allowPrivateNetwork: true },
+          models: [{ id: "gpt-6.1-sol", name: "Fixture", reasoning: false, input: ["text"],
+            contextWindow: 100_000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+        } } },
+        agents: { defaults: { workspace: join(fixture, "workspace"), model: { primary: "fixture/gpt-6.1-sol" } } },
+        tools: { profile: "minimal", alsoAllow: ["agent_*"], toolSearch: false, exec: { mode: "full" } },
+        plugins: {
+          ...installedConfig.plugins, allow: ["openclaw-code-agent"], slots: { memory: "none" },
+          entries: { ...installedConfig.plugins.entries, "openclaw-code-agent": {
+            enabled: true, config: {
+              autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off",
+              permissionMode: "default", planApproval: "delegate",
+              harnesses: { codex: { defaultModel: "gpt-6.1-sol", permissionProfile: ":workspace", approvalPolicy: "never" } },
+            },
+          } },
+        },
         cron: { enabled: false }, browser: { enabled: false },
       };
-      mkdirSync(config.agents!.defaults!.workspace!, { recursive: true });
-      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config), { mode: 0o600 });
-      await cli("config", "validate");
-      env.OPENCLAW_GATEWAY_TOKEN = token;
-      const child = spawn(process.execPath, [join(hostPath, "openclaw.mjs"), "gateway", "run", "--port", String(port), "--bind", "loopback"], { cwd: fixture, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-      trackOwnedChild(child); ownedChildren.add(child); currentGateway = child;
-      let logs = "";
-      const gatewayNumber = mode === false && listenerPorts.length === 2 ? 1 : mode === false ? 2 : 3;
-      child.stdout.on("data", (chunk) => { logs = (logs + chunk).slice(-65_536); evidence.append(`gateway-${gatewayNumber}-stdout.log`, chunk, "diagnostic"); });
-      child.stderr.on("data", (chunk) => { logs = (logs + chunk).slice(-65_536); evidence.append(`gateway-${gatewayNumber}-stderr.log`, chunk, "diagnostic"); });
-      let hello: Json | undefined;
-      const localConnectionCorrelation = randomUUID();
-      let subscription: FixtureSessionSubscription | undefined;
-      const client = new GatewayClient({ url: `ws://127.0.0.1:${port}`, token, clientName: "gateway-client", mode: "backend", deviceIdentity: null, sharedStateMode: "read-only", scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"], caps: ["tool-events", "session-scoped-events"], env, onHelloOk: (value) => { hello = value; }, onEvent: (event) => {
-        const payload = event.payload as Json | undefined;
-        const observed = projectFixtureHostEvent(event.event, payload, localConnectionCorrelation, subscription);
-        if (hostEvents.length < 4_096) hostEvents.push(observed);
-        else if (!evidence.errors.includes("host-event-count-overflow")) evidence.errors.push("host-event-count-overflow");
-        evidence.record("host-events.jsonl", observed);
-      }, onConnectError: (error) => { evidence.record("host-events.jsonl", { connectError: error.name }); } });
-      clients.add(client); currentClient = client; client.start();
-      await until(() => { if (child.exitCode !== null) throw new Error(`BLOCKED: disposable Gateway exited; log hash ${sha256(logs)}`); return hello; }, "authenticated disposable Gateway hello", 60_000);
-      assert.equal(hello!.server?.version, HOST, "Actual Gateway hello must agree with pinned package");
-      assert.ok(hello!.auth?.scopes?.includes("operator.write") && hello!.auth?.scopes?.includes("operator.read"), "Actual native Gateway role grants are required");
-      subscription = await subscribeFixtureMessages((method, params) => client.request(method, params), localConnectionCorrelation);
-      subscriptions.set(client, subscription);
-      evidence.record("host-events.jsonl", { phase: "message-subscription-acknowledgement", method: "sessions.messages.subscribe", subscribed: subscription.subscribed,
-        expectedKeyMatches: subscription.key === "agent:main:main", expectedOwnerMatches: subscription.agentId === "main", localConnectionCorrelation,
-        correlationKind: "fixture_local_label_not_host_issued_receipt" });
-      const observerRuntime = JSON.parse(await cli("plugins", "inspect", "oca504-observer", "--runtime", "--json"));
-      evidence.record("host-events.jsonl", { phase: "observer-runtime-cli-inspection", inspectionSha256: sha256(JSON.stringify(observerRuntime)) });
-      const observerInstalled = verifyObserverInspection(observerRuntime, fixture, state, observerProof, true, evidence);
-      evidence.record("host-events.jsonl", { phase: "observer-installed-provenance", ...observerInstalled, sourceHashes: observerProof.hashes, gatewayActivationProof: "subsequent real before hooks and embedded after hooks required" });
-      const inspection = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"));
-      const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true, evidence);
-      assert.equal(runtimeInstalled.installedPath, installed.installedPath);
-      assert.equal(runtimeInstalled.source, installed.source);
-      evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-runtime-cli", ...runtimeInstalled,
-        gatewayExecutionProvenBy: "subsequent actual tool admission and native/subscribed outcomes" });
-      const tool = async (name: string, args: Json = {}, key = randomUUID(), requester = "agent:main:main") => {
-        const response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-          method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}`, "x-openclaw-message-channel": "webchat", "x-openclaw-message-to": requester },
-          body: JSON.stringify({ tool: name, name, args, sessionKey: requester, idempotencyKey: key }), signal: AbortSignal.timeout(125_000),
-        });
-        const result = await response.json() as Json;
-        assert.equal(response.status, 200, `Actual HTTP host admission failed: ${result.error?.code ?? result.error?.type}`);
-        assert.equal(result.ok, true, "Host transport must reach the admitted packed plugin");
-        assert.ok(result.result, "Actual host result required");
-        return result.result;
+      mkdirSync(config.agents.defaults.workspace); writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config), { mode: 0o600 });
+      await cli("config", "validate"); env.OPENCLAW_GATEWAY_TOKEN = token;
+      stage = "gateway-admission";
+      const gateway = start(process.execPath, [join(hostPath, "openclaw.mjs"), "gateway", "run", "--port", String(port), "--bind", "loopback"], fixture, "gateway");
+      gatewayDescendants.add(lifetime(gateway.identity));
+      await until(async () => { assert.equal(gateway.child.exitCode, null); return await listening(port) ? true : undefined; }, "Gateway listener");
+      const invoke = async (name: string, args: Json, auth = token): Promise<Json> => {
+        const response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${auth}`, "x-openclaw-message-channel": "webchat", "x-openclaw-message-to": "agent:main:main" }, body: JSON.stringify({ tool: name, args, sessionKey: "agent:main:main" }), signal: AbortSignal.timeout(125_000) });
+        const value = await response.json() as Json; return { status: response.status, ...value };
       };
-      (client as any).invokeOca = tool;
-      (client as any).httpOrigin = `http://127.0.0.1:${port}`;
-      (client as any).fixtureToken = token;
-      return client;
-    }
-    function store(): Json { assert.ok(storePath); return parse(ownedPath(fixture, storePath)); }
-    function mutate(change: (value: Json) => void): void {
-      const value = store(); change(value); value.revision = (value.revision ?? 0) + 1;
-      const temporary = ownedPath(fixture, `${storePath}.${randomUUID()}.tmp`);
-      writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 }); renameSync(temporary, ownedPath(fixture, storePath));
-    }
-    const nativeEvents = () => records(join(fixture, "native-events.jsonl"));
-    const hostTools = () => records(join(fixture, "host-tools.jsonl"));
-    const backendRequests = () => nativeEvents().filter((event) => event.direction === "request");
-    const snapshot = () => negativeSnapshot(readGitTrace(gitCalls).starts, backendRequests().length, providerTraffic, providerRequests);
-    const assertNoAction = (prior: ReturnType<typeof snapshot>) => {
-      const observation = assertNegativeWindow(prior, snapshot(), providerRequests);
-      evidence.record("host-events.jsonl", { phase: "negative-window-observation", ...observation });
-      return observation;
-    };
-
-    const invoke = (client: GatewayClient, name: string, args: Json, key?: string, requester?: string): Promise<Json> => (client as any).invokeOca(name, args, key, requester);
-    const knownTargets: Json[] = [];
-    async function launch(client: GatewayClient, name: string, extra: Json = {}, requester = "agent:main:main"): Promise<Json> {
-      const before = new Set(existsSync(storePath) ? store().sessions.map((row: Json) => row.sessionId) : []);
-      const workdir = createRepo(`native-${randomUUID()}`);
-      const generation = randomUUID(); generations.add(generation);
-      const result = await invoke(client, "agent_launch", { name, workdir, harness: "codex", worktree_strategy: "off", ...extra, prompt: `${extra.prompt ?? `OCA504_NATIVE:${name}`} OCA504_GENERATION:${generation}` }, undefined, requester);
-      assert.doesNotMatch(text(result), /Error:|failed to start/i);
-      const row = await until(() => store().sessions.find((item: Json) => !before.has(item.sessionId) && item.name === name && item.backendRef?.conversationId), "real native session receipt");
-      await until(() => nativeEvents().find((event) => event.method === "turn/completed" && event.threadId === row.backendRef.conversationId && event.status === "completed"), "real native terminal turn");
-      const target = { ...row, fixtureGeneration: generation, requestClass: "unknown" };
-      knownTargets.push(target); return target;
-    }
-    const client = await gateway(cohort === "embedded-deferred" ? { mode: "tools" } : false);
-    async function unchangedResponse(target: Json, ref: string, message = "1", key?: string): Promise<Json> {
-      const prior = nativeEvents().length, providerBefore = providerRequests.length, hooksBefore = hostTools().length;
-      const preRow = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
-      evidence.record("host-events.jsonl", { phase: "native-response-pre-row", ...generationObservation(preRow, target) });
-      const boundary = responseResumeBoundary(preRow, target, prior);
-      const wasStopped = boundary.required;
-      const result = await invoke(client, "agent_respond", { session: ref, message }, key);
-      assert.doesNotMatch(text(result), /^Error:/);
-      const request = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === target.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message))), "unchanged message in selected native thread");
-      assert.ok(nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method)).every((event) => event.threadId === target.backendRef.conversationId), "Response must not reach another native thread");
-      const response = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.turnId && !event.error), "selected native turn response");
-      await until(() => nativeEvents().slice(prior).find((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"), "fresh matched selected native turn terminal");
-      const model = providerRequests.slice(providerBefore);
-      const nativeModel = selectedProvider(model, target.fixtureGeneration, message);
-      requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
-      for (const body of nativeModel) for (const value of Object.values(body.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, target.backendRef.conversationId, "Native provider thread header mismatch");
-      const actualOutput = await invoke(client, "agent_output", { session: target.sessionId, full: true });
-      assert.ok(text(actualOutput).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
-      for (const other of knownTargets) if (other.sessionId !== target.sessionId) assert.ok(!text(actualOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`), "Other generation output must not be borrowed");
-      const hook = requireHttpBefore(hostTools().slice(hooksBefore), "agent_respond", ref, message);
-      return { method: request.method, threadId: request.threadId, turnId: response.turnId, actualToolCallId: hook.toolCallId, providerRequests: model.length, nativeProviderRequests: nativeModel.length, backgroundProviderRequests: model.length - nativeModel.length, resumedStoppedGeneration: wasStopped };
-    }
-    async function stopGeneration(target: Json) {
-      const before = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
-      evidence.record("host-events.jsonl", { phase: "native-kill-pre-row", ...generationObservation(before, target) });
-      const result = await invoke(client, "agent_kill", { session: target.sessionId });
-      const classification = killResultClass(result);
-      evidence.record("host-events.jsonl", { phase: "native-kill-result", classification, resultSha256: sha256(JSON.stringify(result)), ...generationObservation(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target) });
-      assert.ok(["terminated", "already-completed", "already-killed"].includes(classification), "Unexpected native kill outcome");
-      await until(() => {
-        const row = store().sessions.find((item: Json) => item.sessionId === target.sessionId);
-        evidence.record("host-events.jsonl", { phase: "native-kill-row-observation", ...generationObservation(row, target) });
-        return stoppedGeneration(row, target) ? true : undefined;
-      }, "captured native generation completed or killed and stopped");
-    }
-    let referenceB: Json | undefined;
-    if (cohort === "smoke") {
-      begin("setup-native-protocol-smoke");
-      const hooksBefore = hostTools().length, eventsBefore = nativeEvents().length, providerBefore = providerRequests.length;
-      const target = await launch(client, "smoke-native");
-      const events = nativeEvents().slice(eventsBefore);
-      const started = events.find((event) => event.direction === "request" && event.method === "turn/start" && event.threadId === target.backendRef.conversationId);
-      assert.ok(started, "Smoke requires actual selected native turn start");
-      const accepted = events.find((event) => event.direction === "response" && event.id === started.id && event.relayPid === started.relayPid && event.turnId && !event.error);
-      assert.ok(accepted && events.some((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === accepted.turnId && event.status === "completed"));
-      assert.ok(providerRequests.slice(providerBefore).some((request) => request.requestClass === "native-generation" && request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`)));
-      const output = await invoke(client, "agent_output", { session: target.sessionId, full: true });
-      assert.ok(publicOutputObservation(output, target).selectedReferenceMatches);
-      assert.ok(text(output).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
-      const outputHooks = hostTools().slice(hooksBefore).filter((event) => event.phase === "before" && event.toolName === "agent_output");
-      assert.equal(outputHooks.length, 1); assert.equal(outputHooks[0].session, target.sessionId);
-      assert.ok(typeof outputHooks[0].toolCallId === "string" && outputHooks[0].toolCallId.trim() === outputHooks[0].toolCallId && outputHooks[0].toolCallId);
-      outcomes.push({ lane: lanes.rpc, scenario: "setup-native-protocol-smoke", status: "PASS", subscribedModelTerminal: "NOT_RUN", planAuthority: "NOT_RUN" });
-    }
-    if (runsHostCohort(cohort, "plan")) {
-    begin("native-ask-approval-authority");
-    const planEventStart = nativeEvents().length;
-    const plan = await launch(client, "ask-plan", { prompt: "OCA504_NATIVE_PLAN", permission_mode: "plan", plan_approval: "ask" });
-    let previousPlanFacts = "";
-    const observePlanRow = (phase: string) => {
-      const row = store().sessions.find((item: Json) => item.sessionId === plan.sessionId);
-      const facts = { ...planRowObservation(row, plan), observation: "recovery-row-only-non-authoritative-for-live-approval" }, encoded = JSON.stringify(facts);
-      if (phase !== "plan-row-change" || encoded !== previousPlanFacts) evidence.record("host-events.jsonl", { phase, ...facts });
-      previousPlanFacts = encoded; return row;
-    };
-    observePlanRow("plan-row-before-wait");
-    try {
-      await until(async () => {
-        observePlanRow("plan-row-change");
-        const before = snapshot();
-        const output = await invoke(client, "agent_output", { session: plan.sessionId, full: true });
-        const listing = await invoke(client, "agent_sessions", { status: "waiting", full: true });
-        const passive = assertNoAction(before);
-        evidence.record("host-events.jsonl", { phase: "live-plan-public-observation", output: publicOutputObservation(output, plan), listing: waitingPlanObservation(listing, plan), native: nativePlanBoundary(nativeEvents(), planEventStart, plan), ...passive, liveDecisionVersion: "UNPROVEN-not-exposed-by-public-view", liveActionableVersion: "UNPROVEN-not-exposed-by-public-view" });
-        return hasLivePlanBoundary(nativeEvents(), planEventStart, output, listing, plan) ? true : undefined;
-      }, "native plan and supported live pending-user views");
-    } catch (error) { observePlanRow("plan-row-final-refusal"); throw error; }
-    const priorPlanRequests = snapshot();
-    const approval = await invoke(client, "agent_respond", { session: plan.sessionId, message: "approved", approve: true });
-    requireAskPlanRefusal(approval, plan); const planRefusalWindow = assertNoAction(priorPlanRequests);
-    outcomes.push({ lane: lanes.rpc, scenario: "native-ask-approval-authority", status: "PASS", observedNativePlanAndLivePendingAskAndUserOnlyRefusal: true, numericalLiveDecisionVersions: "UNPROVEN-public-view-not-exposed", ...planRefusalWindow });
-    }
-    if (runsHostCohort(cohort, "references")) {
-    begin("references-native-prerequisites");
-    const a = await launch(client, "lynx-mcp-mvp");
-    const b = await launch(client, "unrelated-session", {}, "agent:main:isolated-requester");
-    referenceB = b;
-    begin("four-tools-unknown-masked-blank");
-    const unknownWindows: ReturnType<typeof assertNoAction>[] = [];
-    for (const name of FOUR) for (const reference of ["unknown-504", "***", "   "]) {
-      const prior = snapshot();
-      const args = { session: reference, ...(name === "agent_respond" ? { message: "1" } : {}), ...(name === "agent_escalate" ? { kind: "plan", summary: "fixture" } : {}), ...(name === "agent_merge" ? { base_branch: "main" } : {}) };
-      const result = await invoke(client, name, args, undefined, "agent:main:isolated-requester");
-      assert.equal(result.isError, true); assert.equal(result.details.status, "error");
-      assert.equal(result.details.code, !reference.trim() || reference.includes("***") ? "session_reference_unusable" : "session_not_found");
-      assert.equal(result.details.targetSelected, false); assert.equal(result.details.operationStarted, false);
-      for (const row of [a, b]) { assert.ok(!JSON.stringify(result).includes(row.sessionId)); assert.ok(!JSON.stringify(result).includes(row.name)); }
-      unknownWindows.push(assertNoAction(prior));
-    }
-    outcomes.push({ lane: lanes.rpc, scenario: "four-tools-unknown-masked-blank", status: "PASS", assertions: 12, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: unknownWindows });
-    begin("real-host-auth-denied-unavailable");
-    const negativesBefore = snapshot();
-    const badAuth = await fetch(`${(client as any).httpOrigin}/tools/invoke`, { method: "POST", headers: { "content-type": "application/json", Authorization: "Bearer synthetic-invalid" }, body: JSON.stringify({ tool: "agent_respond", args: { session: a.sessionId, message: "AUTH_DENIED" } }), signal: AbortSignal.timeout(10_000) });
-    assert.equal(badAuth.status, 401); const authWindows = [assertNoAction(negativesBefore)];
-    for (const [name, args] of [["exec", { command: "false" }], ["unavailable-fixture-tool", {}]] as const) {
-      const prior = snapshot();
-      const refused = await client.request<Json>("tools.invoke", { name, args });
-      assert.equal(refused.ok, false); assert.equal(refused.error.code, "not_found");
-      authWindows.push(assertNoAction(prior));
-    }
-    outcomes.push({ lane: lanes.rpc, scenario: "real-host-auth-denied-unavailable", status: "PASS", transportAndToolFailureDistinct: true, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: authWindows });
-
-    begin("native-older-exact-newer-name-backend-literal-mask-output");
-    const literal = await launch(client, "***");
-    await stopGeneration(a);
-    const newer = await launch(client, a.name);
-    assert.equal(newer.name, a.name); assert.notEqual(newer.sessionId, a.sessionId); assert.notEqual(newer.backendRef.conversationId, a.backendRef.conversationId);
-    await unchangedResponse(newer, a.name);
-    const aliasOutput = await invoke(client, "agent_output", { session: newer.sessionId, full: true });
-    const aliasOwner = publicAliasOwner(aliasOutput, newer);
-    evidence.record("host-events.jsonl", { phase: "newer-alias-owner-before-old-resume", ...aliasOwner });
-    await unchangedResponse(a, a.sessionId);
-    const resumedAlias = store().sessions.find((row: Json) => row.sessionId === a.sessionId);
-    assert.ok(resumedAlias && resumedAlias.backendRef?.conversationId === a.backendRef.conversationId);
-    const aliasProtection = assertAliasProtection(aliasOwner, resumedAlias, newer.name);
-    evidence.record("host-events.jsonl", { phase: "active-alias-protection", coverage: aliasProtection });
-    await unchangedResponse(a, a.backendRef.conversationId);
-    await unchangedResponse(literal, literal.name);
-    const beforeNumeric = snapshot();
-    const numeric = await invoke(client, "agent_respond", { session: a.sessionId, message: 1 });
-    assert.equal(numeric.isError, true); assert.equal(numeric.details.code, "invalid_parameters"); assertNoAction(beforeNumeric);
-    const output = await invoke(client, "agent_output", { session: a.sessionId, full: true });
-    assert.ok(text(output).includes(`OCA504_BACKEND_OK:${a.fixtureGeneration}:`));
-    assert.ok(!text(output).includes(`OCA504_BACKEND_OK:${newer.fixtureGeneration}:`));
-    outcomes.push({ lane: lanes.rpc, scenario: "native-older-exact-newer-name-backend-literal-mask-output", status: "PASS", activeAliasCoverage: aliasProtection, numericBoundary: "plugin-invalid-parameters" });
-    begin("native-persisted-resume");
-    const originalThread = a.backendRef.conversationId;
-    await stopGeneration(a);
-    const resumeStart = nativeEvents().length, resumeProvider = providerRequests.length;
-    const resumed = await invoke(client, "agent_launch", { prompt: "OCA504_NATIVE:resume", resume_session_id: a.sessionId, harness: "codex", worktree_strategy: "off" });
-    assert.doesNotMatch(text(resumed), /Error:|failed to start/i);
-    const resumeRequest = await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "request" && event.method === "thread/resume" && event.threadId === originalThread), "fresh actual native thread resume");
-    await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "response" && event.id === resumeRequest.id && event.relayPid === resumeRequest.relayPid && event.threadId === originalThread && !event.error), "successful fresh native resume response");
-    const resumedTurn = await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "request" && event.method === "turn/start" && event.threadId === originalThread && event.nativeInput?.some((input: Json) => input.sha256 === sha256("OCA504_NATIVE:resume"))), "fresh resumed native turn input");
-    const resumedTurnResponse = await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "response" && event.id === resumedTurn.id && event.relayPid === resumedTurn.relayPid && event.turnId && !event.error), "resumed native turn acceptance");
-    await until(() => nativeEvents().slice(resumeStart).find((event) => event.method === "turn/completed" && event.threadId === originalThread && event.turnId === resumedTurnResponse.turnId && event.status === "completed"), "resumed native turn terminal");
-    freshResume(nativeEvents().slice(resumeStart), originalThread, true);
-    selectedProvider(providerRequests.slice(resumeProvider), a.fixtureGeneration, "OCA504_NATIVE:resume");
-    const resumedRow = store().sessions.find((row: Json) => row.sessionId === a.sessionId && row.backendRef?.conversationId === originalThread);
-    assert.ok(resumedRow);
-    const resumedOutput = await invoke(client, "agent_output", { session: resumedRow.sessionId, full: true });
-    assert.ok(text(resumedOutput).includes(`OCA504_BACKEND_OK:${a.fixtureGeneration}:`));
-    assert.ok(!text(resumedOutput).includes(`OCA504_BACKEND_OK:${newer.fixtureGeneration}:`));
-    outcomes.push({ lane: lanes.rpc, scenario: "native-persisted-resume", status: "PASS", freshResumeAndTurnTerminal: true });
-
-
-    }
-    if (runsHostCohort(cohort, "retries")) {
-    begin("retries-native-prerequisites");
-    const b = referenceB ?? await launch(client, "retry-selected");
-    if (!referenceB) await launch(client, "retry-competitor", {}, "agent:main:isolated-requester");
-    for (const concurrent of [false, true]) {
-      begin(concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential");
-      const prior = nativeEvents().length, hooksBefore = hostTools().length, providerBefore = providerRequests.length;
-      const key = `same-${randomUUID()}`, message = `REPEAT-${key}`;
-      const repeatWindows: Array<{ boundary: ReturnType<typeof responseResumeBoundary>; result?: Json }> = [];
-      const calls = async () => {
-        const boundary = responseResumeBoundary(store().sessions.find((row: Json) => row.sessionId === b.sessionId), b, nativeEvents().length);
-        evidence.record("host-events.jsonl", { phase: "concurrent-positive-response-pre-row", ...boundary.facts, resumeRequired: boundary.required, observation: "shared-overlap-runtime-window-not-per-call-receipt" });
-        const record: typeof repeatWindows[number] = { boundary }; repeatWindows.push(record);
-        record.result = await invoke(client, "agent_respond", { session: b.sessionId, message }, key); return record.result;
+      const tool = async (name: string, args: Json) => { const value = await invoke(name, args); assert.equal(value.status, 200); assert.equal(value.ok, true); assert.ok(value.result); return value.result as Json; };
+      const unauthorized = await invoke("agent_sessions", {}, "wrong-disposable-token"); assert.equal(unauthorized.status, 401);
+      const unavailable = await invoke("oca504_unavailable", {}); assert.equal(unavailable.status, 404);
+      const storePath = join(env.OPENCLAW_STATE_DIR!, "code-agent-sessions.json");
+      const store = () => existsSync(storePath) ? readJson(storePath) : { sessions: [], repoPolicies: [] };
+      const row = (id: string) => store().sessions.find((item: Json) => item.sessionId === id);
+      const output = async (id: string) => text(await tool("agent_output", { session: id, full: true }));
+      const launch = async (name: string, workdir: string, marker: string, strategy = "off") => {
+        const before = new Set(store().sessions.map((item: Json) => item.sessionId));
+        await tool("agent_launch", { name, workdir, harness: "codex", prompt: `Reply with the fixture marker ${marker}`, force_new_session: true, worktree_strategy: strategy });
+        return await until(() => store().sessions.find((item: Json) => !before.has(item.sessionId) && item.name === name && item.backendRef?.conversationId), "persisted native target");
       };
-      let counts = { successes: 2, unconfirmed: 0, guards: 0 };
-      if (concurrent) {
-        const settled = await settleRepeatCalls([calls, calls], b, (record) => evidence.record("host-events.jsonl", { ...record, sharedRuntimeWindow: true }));
-        const classes = settled.map((item) => item.classification);
-        evidence.record("host-events.jsonl", { phase: "concurrent-public-counts", successes: classes.filter((value) => value === "success").length, unconfirmed: classes.filter((value) => value === "unconfirmed").length, guards: classes.filter((value) => value === "guard").length, unknown: classes.filter((value) => value === "unknown").length });
-        counts = repeatOutcomeCounts(classes);
-      } else {
-        // A second explicit sequential call begins after the first turn settles.
-        await unchangedResponse(b, b.sessionId, message, key);
-        await unchangedResponse(b, b.sessionId, message, key);
-      }
-      const hooks = hostTools().slice(hooksBefore).filter((event) => event.phase === "before" && event.toolName === "agent_respond");
-      assert.equal(hooks.length, 2); assert.ok(hooks[0].toolCallId); assert.equal(hooks[0].toolCallId, hooks[1].toolCallId, "SAME actual admitted plugin call ID must be measured");
-      let latest: ReturnType<typeof repeatNativeObservation> | undefined;
-      const observations = await until(() => {
-        latest = repeatNativeObservation(nativeEvents().slice(prior), b, message, counts);
-        return latest.ready ? latest : undefined;
-      }, "matched repeat native terminal observations").finally(() => {
-        if (latest) evidence.record("host-events.jsonl", { phase: "repeat-native-counts", ...counts, ready: latest.ready, starts: latest.inputs.filter((input) => input.method === "turn/start").length, steers: latest.inputs.filter((input) => input.method === "turn/steer").length, observedInputAttempts: latest.inputs.length, acceptedAcknowledgements: latest.accepted.length, knownNotSubmittedRejections: latest.rejected.length, acceptanceUnknown: latest.uncertain.length, terminalTurns: latest.terminalTurns.length });
-      });
-      // Guard races also require the fresh successful shared original-thread resume.
-      if (counts.guards > 0) freshResume(nativeEvents().slice(prior), b.backendRef.conversationId, true);
-      for (const record of repeatWindows) requireResponseResume(nativeEvents(), record.boundary, b.backendRef.conversationId);
-      const actual = observations.inputs;
-      const provider = providerRequests.slice(providerBefore);
-      assert.ok(actual.every((input) => input.threadId === b.backendRef.conversationId));
-      const nativeProvider = selectedProvider(provider, b.fixtureGeneration, message);
-      for (const request of nativeProvider) {
-        assert.ok(request.fixtureOutputMarkers.every((marker: string) => marker === `OCA504_BACKEND_OK:${b.fixtureGeneration}:`), "Competing native generation output in repeat window");
-        for (const value of Object.values(request.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, b.backendRef.conversationId);
-      }
-      const repeatedOutput = await invoke(client, "agent_output", { session: b.sessionId, full: true });
-      assert.ok(text(repeatedOutput).includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`));
-      for (const other of knownTargets) if (other.sessionId !== b.sessionId) assert.ok(!text(repeatedOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`));
-      outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginSuccessOutcomes: observations.successes, pluginUnconfirmedOutcomes: observations.unconfirmed, exactResumeGuardOutcomes: observations.guards, observedInputAttempts: observations.inputs.length, terminalTurns: observations.terminalTurns.length, providerRequests: provider.length, sameActualCallId: true, resumeObservation: concurrent ? "shared-overlapping-runtime-window-not-per-call-receipt" : "distinct-sequential-fresh-windows", durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
-    }
-    begin("different-actual-call-id-identical-input");
-    const firstRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
-    const secondRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
-    assert.notEqual(firstRepeat.actualToolCallId, secondRepeat.actualToolCallId);
-    outcomes.push({ lane: lanes.rpc, scenario: "different-actual-call-id-identical-input", status: "PASS" });
-
-    }
-    if (runsHostCohort(cohort, "git")) {
-    begin("git-native-template-prerequisite");
-    const b = referenceB ?? await launch(client, "git-native-template");
-    // Real Git and packed plugin, with only marker-validated persisted fixture rows.
-    for (const variant of ["alias", "coordinates", "competing-decision", "policy", "merged-cleanup", "new-hooks"]) {
-      begin(`real-git-queue-${variant}`);
-      const repo = createRepo(`queue-${variant}`);
-      const paths: string[] = [], rows: Json[] = [];
-      for (let i = 0; i < 3; i++) {
-        const branch = `fixture-${variant}-${i}`, path = ownedPath(fixture, join(fixture, `worktree-${variant}-${i}`));
-        git(repo, "worktree", "add", "-b", branch, path, "main");
-        writeFileSync(join(path, `${i}.txt`), `fixture ${i}\n`); git(path, "add", `${i}.txt`); git(path, "commit", "-m", `fixture ${i}`);
-        rows.push(gitFixtureRow(fixture, { repo, path, branch, name: i === 1 ? `queue-alias-${variant}` : `queue-${variant}-${i}` }));
-        paths.push(path);
-      }
-      writeFileSync(join(repo, "advanced.txt"), "base advanced\n"); git(repo, "add", "advanced.txt"); git(repo, "commit", "-m", "advance base");
-      requireGitFixtureIdentities(rows as Parameters<typeof requireGitFixtureIdentities>[0], b);
-      const [row0, rowA, rowB] = rows;
-      evidence.record("host-events.jsonl", { phase: "git-fixture-identities", variant, classification: "SYNTHETIC_PERSISTED_GIT_ONLY", identities: rows.map((row) => ({ sessionId: row.sessionId, storageHash: sha256(row.harnessSessionId), backendHash: sha256(row.backendRef.conversationId), coordinatesHash: sha256(JSON.stringify([row.workdir, row.worktreePath, row.worktreeBranch, row.worktreeBaseBranch])) })) });
-      const policyResult = await invoke(client, "agent_repo_policy", { workdir: repo, policy: "never-pr" });
-      evidence.record("host-events.jsonl", { phase: "git-policy-result", variant, content: text(policyResult), isError: policyResult.isError });
-      assert.ok(!policyResult.isError && !text(policyResult).startsWith("Error:"));
-      const policyBefore = store().repoPolicies.filter((policy: Json) => policy.repoRoot === repo);
-      assert.equal(policyBefore.length, 1); assert.equal(policyBefore[0].policy, "never-pr");
-      mutate((value) => value.sessions.push(...rows));
-      const entered = ownedPath(fixture, join(fixture, `entered-${variant}`)), release = ownedPath(fixture, join(fixture, `release-${variant}`));
-      const hook = join(repo, ".git", "hooks", "pre-rebase");
-      writeFileSync(hook, gitBarrierHook(paths[0], entered, release), { mode: 0o700 });
-      chmodSync(hook, 0o700);
-      const recordGit = (value: Json) => evidence.record("host-events.jsonl", { variant, ...value });
-      const firstTraceAfter = readGitTrace(gitCalls).events.length;
-      const first = observeGitCall(invoke(client, "agent_merge", { session: row0.sessionId, base_branch: "main", delete_branch: false, push: false }), variant, "first", row0.sessionId, recordGit);
-      let second: ReturnType<typeof observeGitCall> | undefined, variantFailure: unknown;
-      try {
-      await requireGitBarrier(first, () => existsSync(entered), recordGit);
-      const secondTraceAfter = readGitTrace(gitCalls).events.length;
-      second = observeGitCall(invoke(client, "agent_merge", { session: rowA.name, base_branch: "main", delete_branch: false, push: false }), variant, "second", rowA.sessionId, recordGit);
-      const boundary = await until(() => gitQueueBoundary(readGitTrace(gitCalls), { firstAfter: firstTraceAfter, secondAfter: secondTraceAfter, firstPath: paths[0], repo, branch: rowA.worktreeBranch, gitExecutable: realGit, entered: existsSync(entered), released: existsSync(release), firstSettled: first.settled, secondSettled: second!.settled }), "second target initial safe Git inspection");
-      recordGit({ phase: "git-prequeue-boundary", ...boundary });
-      const bBefore = sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowB.sessionId)));
-      evidence.record("host-events.jsonl", { phase: "git-before-mutation", variant, selectedRowHash: sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId))), policyHash: sha256(JSON.stringify(policyBefore[0])) });
-      if (variant === "new-hooks") {
-        mkdirSync(join(paths[1], ".openclaw"), { recursive: true });
-        writeFileSync(join(paths[1], ".openclaw", "worktree-setup.sh"), "#!/bin/sh\nexit 0\n"); git(paths[1], "add", ".openclaw/worktree-setup.sh"); git(paths[1], "commit", "-m", "fixture hook change");
-      } else mutate((value) => {
-        const current = value.sessions.find((row: Json) => row.sessionId === rowA.sessionId);
-        if (variant === "alias") { current.name = `old-${variant}`; value.sessions.find((row: Json) => row.sessionId === rowB.sessionId).name = rowA.name; }
-        if (variant === "coordinates") current.worktreePath = paths[2];
-        if (variant === "competing-decision") { current.worktreeLifecycle.state = "released"; current.worktreeDisposition = "released"; }
-        if (variant === "policy") value.repoPolicies.find((policy: Json) => policy.repoRoot === repo).policy = "pr-required";
-        if (variant === "merged-cleanup") { current.worktreeMerged = true; current.worktreeLifecycle.state = "merged"; delete current.worktreePath; delete current.worktreeBranch; }
-      });
-      evidence.record("host-events.jsonl", { phase: "git-after-mutation", variant, selectedRowHash: sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId))), policyHash: sha256(JSON.stringify(store().repoPolicies.find((policy: Json) => policy.repoRoot === repo))) });
-      writeFileSync(release, "release", { mode: 0o600 });
-      await Promise.all([first.done, second.done]);
-      const firstResult = gitCallResult(first), secondResult = gitCallResult(second);
-      assert.match(text(firstResult), /Merged|merged/);
-      if (variant === "alias") {
-        assert.match(text(secondResult), /Merged|merged/); assert.ok(existsSync(join(repo, "1.txt"))); assert.ok(!existsSync(join(repo, "2.txt")));
-        assert.equal(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId).worktreeMerged, true);
-        // The deliberate fixture alias rename is the only B change.
-        assert.equal(store().sessions.find((row: Json) => row.sessionId === rowB.sessionId).worktreeMerged, false);
-      } else {
-        assert.ok(!existsSync(join(repo, "1.txt")), "Second branch must not merge");
-        assert.equal(sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowB.sessionId))), bBefore);
-        if (["coordinates", "competing-decision"].includes(variant)) assert.equal(secondResult.details?.code, "session_target_changed");
-        if (variant === "policy") assert.match(text(secondResult), /requires a pull request/);
-        if (variant === "merged-cleanup") assert.match(text(secondResult), /already merged/);
-        if (variant === "new-hooks") assert.match(text(secondResult), /hook|user|button/i);
-      }
-      outcomes.push({ lane: lanes.rpc, scenario: `real-git-queue-${variant}`, status: "PASS", externalWriterAtomicity: false });
-      } catch (error) { variantFailure = error; throw error; }
-      finally {
-        try {
-          writeFileSync(release, "release", { mode: 0o600 });
-          await until(() => first.settled && (!second || second.settled) ? true : undefined, "released Git calls settlement");
-          await Promise.all([first.done, second?.done]);
-        } catch (error) {
-          recordGit({ phase: "git-release-settlement-incomplete", first: first.settled ? "SETTLED" : "PENDING_UNPROVEN", second: second ? second.settled ? "SETTLED" : "PENDING_UNPROVEN" : "NOT_DISPATCHED" });
-          if (!variantFailure) throw error;
-          evidence.errors.push("git-release-settlement-incomplete");
-        }
-      }
-    }
-
-    }
-    for (const mode of [false, { mode: "tools" }] as const) {
-      const selected = mode === false ? "embedded-direct" : "embedded-deferred";
-      if (!runsHostCohort(cohort, selected)) continue;
-      begin(mode === false ? "direct" : "deferred");
-      const embedded = cohort === "all" ? await gateway(mode) : client;
-      const embeddedSubscription = subscriptions.get(embedded); assert.ok(embeddedSubscription);
-      const target = await launch(embedded, `embedded-${mode === false ? "direct" : "deferred"}`);
-      const name = mode === false ? "direct" : "deferred";
-      const calls: FixtureCall[] = [
-        { name: "agent_respond", args: { session: "unknown-504", message: "1" } },
-        { name: "agent_merge", args: { session: "***", base_branch: "main" } },
-        { name: "agent_escalate", args: { session: "unknown-504", kind: "plan", summary: "fixture" } },
-        { name: "agent_output", args: { session: "   " } },
-        { name: "agent_output", args: { session: target.sessionId, full: true } },
-        { name: "agent_respond", args: { session: target.sessionId, message: "1" } },
+      const completed = async (target: Json, marker: string) => {
+        await until(async () => (await output(target.sessionId)).includes(`Fixture completed ${marker}`) ? true : undefined, "selected native output");
+        await until(() => row(target.sessionId)?.status === "completed" ? true : undefined, "persisted native completion");
+        assert.equal(row(target.sessionId).backendRef.conversationId, target.backendRef.conversationId);
+      };
+      stage = "exact-target-and-alias";
+      const unrelatedRepo = repo("unrelated"), selectedRepo = repo("selected");
+      const unrelated = await launch("unrelated", unrelatedRepo, "OCA504_OTHER"); await completed(unrelated, "OCA504_OTHER");
+      const old = await launch("same-name", selectedRepo, "OCA504_OLD"); await completed(old, "OCA504_OLD");
+      const newer = await launch("same-name", selectedRepo, "OCA504_NEW"); await completed(newer, "OCA504_NEW");
+      assert.notEqual(old.sessionId, newer.sessionId); assert.notEqual(old.backendRef.conversationId, newer.backendRef.conversationId);
+      await tool("agent_respond", { session: "same-name", message: "OCA504_ALIAS" }); await completed(newer, "OCA504_ALIAS");
+      assert.ok(!(await output(old.sessionId)).includes("OCA504_ALIAS"));
+      await tool("agent_respond", { session: old.sessionId, message: "OCA504_EXACT" }); await completed(old, "OCA504_EXACT");
+      assert.ok(!(await output(newer.sessionId)).includes("OCA504_EXACT")); assert.ok(!(await output(old.sessionId)).includes("OCA504_NEW"));
+      assert.ok(nativeSeen.size > 0 && providerTurns > 0, "Actual owned native executable and model turn required"); outcomes.push("native-exact-old-and-new-alias-output-persistence");
+      const targets = [old, newer, unrelated];
+      const snapshot = async () => ({ facts: targets.map((target) => targetFacts(row(target.sessionId))), outputs: await Promise.all(targets.map(async (target) => (await output(target.sessionId)).split("\n").slice(1).join("\n"))), refs: [git(selectedRepo, "show-ref"), git(unrelatedRepo, "show-ref")], files: [readFileSync(join(selectedRepo, "base.txt"), "utf8"), readFileSync(join(unrelatedRepo, "base.txt"), "utf8")] });
+      stage = "structured-reference-refusals";
+      const before = await snapshot();
+      const refusedCalls: Array<{ name: string; args: Json }> = [
+        { name: "agent_respond", args: { message: "OCA504_REFUSED" } },
+        { name: "agent_merge", args: { base_branch: "main", push: false } },
+        { name: "agent_escalate", args: { kind: "plan", summary: "Fixture" } },
+        { name: "agent_output", args: { full: true } },
       ];
-      const scenario: Scenario = { calls: mode === false ? calls : calls.map((call) => ({ deferred: call })), cursor: 0, results: [], emitted: [], schemas: [], final: false, nativeTarget: target, resumeWindows: [] };
-      scenarios.set(name, scenario);
-      const eventStart = hostEvents.length, nativeStart = nativeEvents().length, hookStart = hostTools().length, providerStart = providerRequests.length;
-      const run = await embedded.request<Json>("chat.send", { sessionKey: "agent:main:main", message: `OCA504_EMBED:${name}`, deliver: false, idempotencyKey: randomUUID() });
-      assert.ok(run.runId);
-      const terminal = await embedded.request<Json>("agent.wait", { runId: run.runId, timeoutMs: 120_000 }, { timeoutMs: 125_000 });
-      assert.equal(terminal.status, "ok"); assert.equal(scenario.final, true);
-      assert.equal(scenario.cursor, 6);
-      assert.equal(scenario.emitted.length, calls.length);
-      assert.equal(scenario.resumeWindows.length, 1);
-      for (const boundary of scenario.resumeWindows) requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
-      assert.equal(new Set(scenario.emitted.map((item) => item.id)).size, calls.length);
-      assert.equal(new Set(scenario.emitted.map((item) => item.itemId)).size, calls.length);
-      assert.equal(new Set(scenario.emitted.map((item) => item.hostCallId)).size, calls.length);
-      const names = (tools: Json[]) => tools.map((tool) => tool.name ?? tool.function?.name);
-      if (mode === false) {
-        for (const toolName of FOUR) {
-          const schema = scenario.schemas[0].find((tool) => (tool.name ?? tool.function?.name) === toolName);
-          assert.ok(schema && (schema.parameters ?? schema.function?.parameters)?.properties?.session?.type === "string", "Direct real provider schema must expose exact session string contract");
-        }
-      } else {
-        assert.ok(names(scenario.schemas[0]).includes("tool_search") && names(scenario.schemas[0]).includes("tool_call"));
-        assert.ok(FOUR.every((toolName) => !names(scenario.schemas[0]).includes(toolName)), "Deferred OCA tools must be catalog entries");
-        assert.ok(scenario.emitted.every((item) => item.catalogId), "All deferred execution must use actual found catalog IDs");
+      for (const ref of ["unknown-fixture-target", "***", " "]) for (const call of refusedCalls) {
+        const result = await tool(call.name, { ...call.args, session: ref });
+        assert.equal(result.isError, true); assert.equal(result.details.code, ref === "unknown-fixture-target" ? "session_not_found" : "session_reference_unusable");
+        assert.equal(result.details.operationStarted, false); assert.equal(result.details.targetSelected, false);
+        if (ref.trim()) assert.ok(!JSON.stringify(result).includes(ref));
+        for (const target of targets) assert.ok(!JSON.stringify(result).includes(target.sessionId) && !JSON.stringify(result).includes(target.backendRef.conversationId));
       }
-      for (const [index, emitted] of scenario.emitted.entries()) {
-        const returned = scenario.results.find((result) => result.callId === emitted.id);
-        assert.ok(returned, "Actual provider must receive each exact emitted tool call result");
-        const hooks = hostTools().slice(hookStart).filter((event) => event.toolCallId === emitted.hostCallId);
-        const admitted = hooks.find((event) => event.phase === "before" && event.toolName === (mode === false ? emitted.target.name : "tool_call"));
-        assert.ok(admitted, "Exact emitted call must reach the actual host hook");
-        assert.equal(admitted.session, emitted.target.args.session);
-        if (emitted.target.name === "agent_respond") assert.equal(admitted.inputHash, sha256("1"));
-        if (index < 4) {
-          const code = ["session_not_found", "session_reference_unusable", "session_not_found", "session_reference_unusable"][index];
-          if (mode === false) {
-            // The official direct Responses converter exposes content only.
-            assert.ok(strings(returned.output).some((value) => value.startsWith("Error:")));
-            assert.match(strings(returned.output).join(" "), code === "session_not_found" ? /Session not found/ : /blank or masked-looking/);
-            const native = requireEmbeddedAfter(hooks, emitted.target.name, emitted.hostCallId);
-            assert.ok(native, "Exact direct call must expose actual native result metadata");
-            assert.equal(native.status, "error"); assert.equal(native.isError, true); assert.equal(native.code, code);
-            assert.equal(native.targetSelected, false); assert.equal(native.operationStarted, false); assert.equal(native.recoveryPresent, true);
-          } else {
-            const failure = nativeResult(returned.output);
-            assert.ok(failure); assert.equal(failure.isError, true); assert.equal(failure.details.code, code);
-            assert.equal(failure.details.targetSelected, false); assert.equal(failure.details.operationStarted, false);
-            // Keep the bridge failure separate from its contained native error.
-            const wrapper = typeof returned.output === "string" ? JSON.parse(returned.output) : returned.output;
-            assert.equal(wrapper.tool?.id, emitted.catalogId);
-            const outer = requireEmbeddedAfter(hooks, "tool_call", emitted.hostCallId);
-            assert.ok(outer); assert.equal(outer.outerStatus, "failed");
-          }
-          for (const secret of [target.sessionId, target.name, target.backendRef.conversationId]) assert.ok(!JSON.stringify(returned.output).includes(secret), "Failure must not disclose another reference");
-        } else {
-          assert.ok(!nativeResult(returned.output));
-          if (index === 4) assert.ok(strings(returned.output).some((value) => value.includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`)), "Selected real native output must survive host round trip");
-        }
-      }
-      const nativeResponse = await until(() => nativeEvents().slice(nativeStart).find((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === target.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256("1"))), "embedded positive respond selected native input");
-      assert.ok(nativeResponse);
-      const accepted = await until(() => nativeEvents().slice(nativeStart).find((event) => event.direction === "response" && event.id === nativeResponse.id && event.relayPid === nativeResponse.relayPid && typeof event.turnId === "string" && !event.error), "embedded positive native acknowledgement");
-      await until(() => nativeEvents().slice(nativeStart).find((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === accepted.turnId && event.status === "completed"), "embedded positive matched native terminal");
-      assert.ok(providerRequests.slice(providerStart).some((request) => request.latestInputHash === sha256("1") && request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`)));
-      const history = await embedded.request<Json>("chat.history", { sessionKey: "agent:main:main", limit: 100 });
-      assert.ok(strings(history).some((value) => value.includes(`OCA504_EMBED_DONE:${name}`)));
-      const subscribed = hostEvents.slice(eventStart);
-      assert.ok(hasFreshSubscribedTerminal(hostEvents, eventStart, embeddedSubscription, run.runId), "Fresh same-connection/session/run subscribed host terminal evidence required");
-      outcomes.push({ lane: lanes.embedded, scenario: name, status: "PASS", providerFailureExposure: mode === false ? "readable content only; native metadata observed at actual public after-hook" : "outer failed bridge and native structured result", hostFailureEventObserved: subscribed.some((event) => event.payload?.data?.isError === true), classifierSourceContract: "pinned host source; no fabricated classifier receipt", realProviderObservedFailures: 4, actualHostResults: 6, subscribedEvents: subscribed.length });
+      assert.deepEqual(await snapshot(), before); outcomes.push("four-tool-unknown-masked-blank-no-observed-effects");
+      stage = "managed-worktree-policy-and-merge";
+      const mergeRepo = repo("merge"); git(mergeRepo, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent");
+      const managed = await launch("managed", mergeRepo, "OCA504_COMMIT", "manual");
+      const worktree = inside(fixture, realpathSync(managed.worktreePath)); assert.ok(managed.worktreeBranch); assert.equal(managed.workdir, mergeRepo);
+      writeFileSync(join(worktree, "selected.txt"), "selected fixture change\n"); git(worktree, "add", "selected.txt"); git(worktree, "commit", "-m", "fixture selected change");
+      commitReleased = true; releaseCommit!(); await completed(managed, "OCA504_COMMIT");
+      const policy = store().repoPolicies.find((item: Json) => item.repoRoot === mergeRepo); assert.equal(policy?.policy, "pr-required");
+      const beforeMerge = { main: git(mergeRepo, "rev-parse", "main"), tip: git(mergeRepo, "rev-parse", managed.worktreeBranch), other: targetFacts(row(unrelated.sessionId)), otherRef: git(unrelatedRepo, "show-ref") };
+      await tool("agent_merge", { session: managed.sessionId, base_branch: "main", push: false, delete_branch: false });
+      assert.equal(git(mergeRepo, "rev-parse", "main"), beforeMerge.main); assert.equal(git(mergeRepo, "rev-parse", managed.worktreeBranch), beforeMerge.tip);
+      assert.equal(existsSync(join(mergeRepo, "selected.txt")), false); assert.ok(existsSync(worktree)); assert.ok(!row(managed.sessionId).worktreeMerged);
+      await tool("agent_repo_policy", { workdir: mergeRepo, policy: "never-pr" });
+      await until(() => store().repoPolicies.find((item: Json) => item.repoRoot === mergeRepo)?.policy === "never-pr" ? true : undefined, "fixture policy persisted");
+      await tool("agent_merge", { session: managed.sessionId, base_branch: "main", push: false, delete_branch: false });
+      const keptTip = git(mergeRepo, "rev-parse", managed.worktreeBranch); git(mergeRepo, "merge-base", "--is-ancestor", keptTip, "main");
+      assert.notEqual(git(mergeRepo, "rev-parse", "main"), beforeMerge.main); assert.equal(readFileSync(join(mergeRepo, "selected.txt"), "utf8"), "selected fixture change\n");
+      await until(() => row(managed.sessionId)?.worktreeLifecycle?.state === "merged" ? true : undefined, "selected merged lifecycle");
+      assert.equal(existsSync(worktree), false); assert.deepEqual(targetFacts(row(unrelated.sessionId)), beforeMerge.other); assert.equal(git(unrelatedRepo, "show-ref"), beforeMerge.otherRef);
+      outcomes.push("managed-policy-refusal-and-selected-merge-effects");
+      assert.deepEqual(providerErrors, []); assert.equal(observationFailure, false);
     }
-    begin("common-final-identity");
-    const coverage = hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>);
-    assert.equal(coverage.remainingRequiredScenarios.length, 0, "Selected cohort scenarios must complete");
-    const native = nativeEvents();
-    assert.equal(providerErrors.length, 0); assert.equal(nativeObservationErrors.length, 0);
-    assert.ok(!native.some((event) => event.observationError), "Native protocol observation must be complete");
-    const agents = native.filter((event) => typeof event.userAgent === "string");
-    assert.ok(agents.length > 0 && agents.every((event) => event.userAgent.includes(opts["--codex-version"])), "Native initialize version must agree with executable");
-    assert.ok(native.some((event) => event.method === "turn/completed" && event.status === "completed"));
-    const spawned = native.filter((event) => event.nativeIdentity);
-    assert.ok(spawned.length > 0);
-    for (const event of spawned) { assert.equal(event.executableHash, NATIVE_CODEX_SHA256); assert.equal(event.nativeIdentity.executable, codex); assert.ok(event.nativeIdentity.startTicks); assert.equal(event.nativeIdentity.group, event.relayIdentity.group); }
-
-    requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
-      execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
-    summary = { ...coverage, fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, observerFileHashes: observer.hashes, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
-      host: HOST, hostPublishedBuild: { bytesSha256: hostBuildBytes ? sha256(hostBuildBytes) : null, version: hostBuild?.version ?? null, commit: hostBuild?.commit ?? null, builtAt: hostBuild?.builtAt ?? null, buildId: hostBuild?.buildId ?? null }, hostLockSRI, hostEntrySha256: sha256(readFileSync(join(hostPath, "openclaw.mjs"))), hostPackageSha256: sha256(readFileSync(join(hostPath, "package.json"))), distHashes: candidateProof.distHashes, nativeCodex: { version: opts["--codex-version"], executableSha256: codexExecutableSha256, relaySha256: sha256(readFileSync(nativeRelay)), initialized: agents.length, completedTurns: native.filter((event) => event.method === "turn/completed" && event.status === "completed").length },
-      tarballSha256, distSha256, nativeProcessIdentities: spawned.map((event) => ({ executableSha256: event.executableHash, pid: event.nativeIdentity.pid, group: event.nativeIdentity.group, startTicks: event.nativeIdentity.startTicks })), providerThreadHeadersObserved: providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")), fixtureSha256: sha256(readFileSync(fileURLToPath(import.meta.url))), providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), outcomes,
-      unproven: ["external-provider-entitlement", "production-Telegram-delivery", "reporter-host-hooks", "upstream-redaction-repair", "restart-multiple-registry-exactly-once", "compiled-host-source-attestation", ...(!hostBuild?.commit ? ["published-host-build-commit"] : []), ...(!providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")) ? ["direct-provider-thread-header-mapping"] : [])],
-      pluginFixtureOnly: ["legacy-per-source-matrix", "callback-version-authority", "fine-grained-requester-report-custody", "ambiguous-backend-rejection"] };
-  } catch (error) { originalFailure = error; }
-  finally {
-    if (nativeWatch) clearInterval(nativeWatch);
-    const { createConnection } = await import("node:net");
-    try {
-      await cleanupAll([
-        () => { observeNative(); },
-        ...[...clients].map((client) => () => client.stopAndWait({ timeoutMs: 5_000 })),
-        () => stopNativeProcesses(nativeProcesses),
-        ...[...ownedChildren].map((child) => () => stopOwnedChild(child)),
-        () => { observeNative(); },
-        () => stopNativeProcesses(nativeProcesses),
-        async () => { if (provider) { provider.closeAllConnections(); await new Promise<void>((done, reject) => provider!.close((error) => error ? reject(error) : done())); } },
-        ...listenerPorts.map((port) => async () => {
-          const reachable = await new Promise<boolean>((done) => {
-            const socket = createConnection({ host: "127.0.0.1", port }); socket.setTimeout(1_000);
-            socket.once("connect", () => { socket.destroy(); done(true); });
-            socket.once("error", () => { socket.destroy(); done(false); });
-            socket.once("timeout", () => { socket.destroy(); done(true); });
-          });
-          assert.equal(reachable, false, "Owned loopback listener survived teardown");
-        }),
-        () => { assert.ok([...nativeProcesses.values()].every((identity) => !sameProcess(identity)), "Owned native process survived teardown"); },
-      ]);
-      assert.equal(readFileSync(join(fixture, ".fixture-owner"), "utf8"), FIXTURE_MARKER);
-    } catch (cleanupError) { cleanupFailure = cleanupError; }
-    const failures = (error: unknown): Json[] => error instanceof AggregateError
-      ? error.errors.flatMap(failures).slice(0, 20)
-      : error === undefined ? [] : [{ name: error instanceof Error ? error.name : "UnknownError", message: evidence.sanitize(error instanceof Error ? error.message : String(error)).slice(0, 1_000) }];
-    try {
-      await cleanupAll([
-        ...[["native-events.jsonl", "native-events.jsonl"], ["host-tools.jsonl", "host-tools.jsonl"]].map(([file, source]) => () => evidence.copyProof(file, join(fixture, source))),
-        () => { const trace = readGitTrace(join(fixture, "git-calls.jsonl"), true); evidence.append("git.jsonl", trace.bytes); evidence.record("host-events.jsonl", { phase: "git-native-final-proof", bytes: trace.bytes.length, sha256: trace.sha256, startEvents: trace.starts }); },
-        () => { const incomplete = existsSync(join(fixture, "capture-incomplete")); evidence.record("capture-status.json", { complete: !incomplete }); if (incomplete) evidence.errors.push("fixture-capture-incomplete"); },
-      ]);
-    } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
-    try {
-      evidence.record("run-summary.json", { ...summary, ...hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>), outcomes, failingStage: originalFailure ? failingStage : null, providerTraffic, providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), candidateSha: expectedSha, node: process.version, status: originalFailure || cleanupFailure || evidence.errors.length || evidence.failures.length ? "BLOCKED" : "PASS", originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, teardownVerified: !cleanupFailure });
-      evidenceReceipt = evidence.persist(process.version, originalFailure || cleanupFailure ? "BLOCKED" : "PASS", !cleanupFailure);
-    } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
-    failureReport = { ...hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>), outcomes, failingStage: originalFailure ? failingStage : null, status: "BLOCKED", providerTraffic, providerRequests: providerRequests.length, candidateSha: expectedSha, node: process.version, originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, evidenceErrors: evidence.errors, evidenceIncomplete: evidence.errors.length > 0 || !evidenceReceipt, teardownVerified: !cleanupFailure, evidence: evidenceReceipt ?? { path: evidence.path, manifestSha256: null }, mandatoryLanes: Object.values(lanes) };
-    // A verified teardown permits deleting only the marked disposable profile.
-    // Private receipts survive both success and failure; failed cleanup retains
-    // its owned scratch for diagnosis and still blocks the run.
-    if (!cleanupFailure && evidenceReceipt) rmSync(fixture, { recursive: true, force: true });
+  } catch (error) {
+    failure = stage;
+    writeFileSync(join(fixture, "failure.log"), error instanceof Error ? error.stack ?? error.name : "Unknown failure", { mode: 0o600 });
   }
-  if (originalFailure) throw originalFailure;
-  if (cleanupFailure) throw cleanupFailure;
-  assert.equal(evidence.errors.length, 0, "BLOCKED: required evidence incomplete");
-  assert.equal(evidence.failures.length, 0, "BLOCKED: recorded fixture protocol or observation failure");
-  assert.ok(evidenceReceipt, "BLOCKED: private receipt was not retained");
-  assert.ok(summary, "Acceptance did not complete");
-  console.log(JSON.stringify({ ...summary, teardownVerified: true, evidence: evidenceReceipt }));
+  finally {
+    const errors: string[] = [];
+    try { capture(); } catch { errors.push("ownership-observation"); }
+    const signal = (value: NodeJS.Signals) => { for (const item of [...owned.values()].reverse()) { try { if (same(item)) process.kill(item.pid, value); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") errors.push("owned-signal"); } } };
+    try { signal("SIGTERM"); await until(() => [...owned.values()].every((item) => !same(item)) ? true : undefined, "owned shutdown", 5000); }
+    catch { try { signal("SIGKILL"); await until(() => [...owned.values()].every((item) => !same(item)) ? true : undefined, "owned forced shutdown", 5000); } catch { errors.push("owned-survivor"); } }
+    if (provider) { try { provider.closeAllConnections(); await new Promise<void>((done, reject) => provider!.close((error) => error ? reject(error) : done())); } catch { errors.push("provider-close"); } }
+    if (watcher) clearInterval(watcher);
+    try { await until(() => commands.every((item) => item.closed || item.startupFailure) ? true : undefined, "command stream close", 5000); }
+    catch { errors.push("command-stream-close"); }
+    try { capture(); } catch { errors.push("ownership-final"); }
+    for (const port of ports) if (await listening(port)) errors.push("listener-survivor");
+    if (observationFailure) errors.push("ownership-watch");
+    if (errors.length) cleanupFailure = [...new Set(errors)].join(",");
+    // Failed profiles/logs remain private under the runner's lifetime; no storage-erasure claim.
+    if (!failure && !cleanupFailure) {
+      try { verifyRoot(); rmSync(fixture, { recursive: true }); assert.equal(existsSync(fixture), false); }
+      catch { cleanupFailure = "owned-root-removal"; }
+    }
+  }
+  console.log(JSON.stringify({
+    kind: "ISSUE504_REPRESENTATIVE_ACCEPTANCE", candidateSha: opts["--expected-sha"],
+    node: process.version, mode: opts["--mode"], status: failure || cleanupFailure ? "BLOCKED" : "PASS",
+    failure, cleanup: cleanupFailure ?? "PASS", finalAcceptance: false,
+    packageSha256: packageHash || undefined, host: hostBuild && { version: HOST, commit: hostBuild.commit },
+    native: nativeVersion && { version: NATIVE, executableSha256: NATIVE_HASH, ownedExecutionObserved: nativeSeen.size > 0 },
+    commands, outcomes, simulated: ["model-provider"],
+    unprovenRemote: ["queued-six-Git-races", "same-call-id-retries", "uncertain-native-ack", "live-plan-ask",
+      "embedded-direct-deferred", "external-providers", "restart-multi-registry", "zero-unobserved-invocations", "retained-storage-disposition"],
+  }));
+  process.exitCode = failure || cleanupFailure ? 1 : 0;
 }
-
-if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main().catch((error) => { console.error(JSON.stringify({ ...(failureReport ?? { status: "BLOCKED", mandatoryLanes: Object.values(lanes) }), error: error instanceof Error ? error.message.replace(/\/(?:tmp|home|work)\/[^\s"',]+/g, "[fixture-path]") : "Host acceptance failed" })); process.exitCode = 1; });
+function readJsonFrom(value: string): Json { return JSON.parse(value); }
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) void main().catch(() => { console.error("ISSUE504_PRECONDITION_BLOCKED"); process.exitCode = 1; });

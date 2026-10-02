@@ -1,83 +1,65 @@
-# Issue 504 isolated host acceptance
+# Issue 504 representative host acceptance
 
-The opt-in runner exercises the exact committed candidate through pinned OpenClaw
-2026.9.7 admission and execution, with a real Codex 0.159.3 native app-server.
-The isolated provider keys follow the [official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and native lifecycle evidence follows the [official app-server contract](https://learn.chatgpt.com/docs/app-server).
-Only the Responses model provider is simulated. It uses disposable profiles,
-loopback ports, synthetic credentials, and local Git repositories. It requires
-both actual HTTP tool execution and subscribed embedded direct/deferred tool
-execution; missing capabilities produce a blocking failure.
+The opt-in flow tests a packed candidate through actual OpenClaw 2026.9.7 and
+Codex 0.159.3. Only ordinary Responses model text is simulated, on loopback.
+It uses disposable profiles, synthetic credentials and local Git repositories.
+No production Gateway, provider account, Telegram or broker is used.
 
-Run through the supported Hetzner wrapper. Jobs may share available slots when each uses its allocated workspace/cgroup, separate profiles, ephemeral ports, logs and PID cleanup, and verified private Node/pnpm installations with separate HOME/config/cache/store. Cross-floor jobs must avoid `--toolchain node`, which changes shared toolchains. Respect available slots and exclusive jobs; never bypass runner locks.
+Run each mode at both supported floors on the exact final reviewed commit,
+through the canonical Hetzner runner with `--toolchain none --fallback none`:
 
 ```sh
-node --import tsx scripts/e2e/oca-issue-504-host-acceptance.ts \
-  --expected-sha "$(git rev-parse HEAD)" \
-  --codex-bin /owned-disposable-prefix/native/codex \
-  --codex-version 0.159.3
+sh scripts/e2e/run-oca-issue-504-host.sh \
+  --expected-sha "$(git rev-parse HEAD)" --node-floor 24.16.0 --mode host
+sh scripts/e2e/run-oca-issue-504-host.sh \
+  --expected-sha "$(git rev-parse HEAD)" --node-floor 24.16.0 --mode gates
 ```
 
-For targeted diagnosis, add `--cohort smoke`, `plan`, `references`, `retries`,
-`git`, `embedded-direct`, or `embedded-deferred`. The default `all` keeps the
-complete matrix. Start with genuine setup/native smoke, then the plan cohort;
-run affected cohorts after inspecting their evidence. Each invocation has its
-own profile and genuine prerequisites. Summaries identify required, completed
-and `not_run` scenarios and the failing stage. A selected cohort passes only its
-own scope and remains `PARTIAL`, with `finalAcceptance: false`. Final acceptance
-requires `all` at both supported Node floors on the same reviewed commit, plus
-the full security/build/packed gates; combining partial runs does not replace it.
+Repeat with `26.1.0`. The counted shell entry verifies fixed official Node and
+pnpm artifacts and installs frozen dependencies. All paths, HOME, configuration,
+cache and stores belong to that run, and PATH excludes shared `/usr/local`.
+Node26 requires the runner's supported system prerequisite `libatomic.so.1`;
+a missing prerequisite blocks instead of installing system packages here.
+Normal shared slots are compatible when profiles, ports and toolchains remain
+isolated; respect the canonical allocator's exclusive jobs and resource limits.
 
-The fixed local R7 receipt replay is labelled `OFFLINE_SOURCE_DERIVED_REPLAY`.
-It verifies the historical bundle, separate capture and parent terminal evidence.
-The original failed outcome and absent normalized fields remain unchanged;
-normalization of the controlled source fixture is a separate predicate check,
-not evidence that the newer projector ran in that historical host.
+The host flow verifies the same tarball in a normal reference npm consumer and
+the actual host installation. Publication-time manifest changes are compared
+against the actual reference package, not guessed from repository JSON. Complete
+dist membership/content, plugin manifest and shrinkwrap are compared. Host build
+metadata identifies the published version/commit, without claiming compiled-source
+attestation. The official native executable is checked before execution against
+SHA256 `8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479`.
 
-The candidate must be committed and clean. The runner builds, packs and installs
-that candidate in its disposable profile. It verifies every installed dist file
-and relevant manifest. A read-only isolated Python archive reader validates bounded
-gzip/tar content without extraction. Actual packed publication bytes must match
-the reviewed pnpm 11 transformation, and installed bytes must equal those
-observed archive members. The runner also verifies native ELF bytes before execution, initialization,
-thread/turn evidence, actual host tool call IDs, provider inputs, Git effects,
-and process/listener teardown. Kernel ownership uses PID and start time, so
-exec or process-group changes do not count as exit. Cleanup signals only captured
-processes and refuses unproven surviving group members. Package commands use
-owned npm configuration/cache and the official registry. Native acquisition must also have the coordinator's
-independently reviewed official npm artifact receipt. The reviewed Linux x64
-native member SHA256 is
-`8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479`.
-Run both Node 24.16.0 and 26.1.0 on the same final reviewed SHA, alongside the full,
-security, shared-contract, build and packed consumer gates.
+| Behavior | Representative real host | Detailed deterministic owner |
+| --- | --- | --- |
+| Admission and reference failures | HTTP auth/unavailable tool; four tools with unknown/masked/blank refs, structured codes, privacy and unchanged observed effects | session-tool-diagnostics, SDK/shared contracts |
+| Target selection and response/output | Older exact ID and newer name alias through native execution; allowlisted persisted target/backend/lifecycle facts | session-generation, session-reference-service, agent-respond-tool, session-advanced |
+| Git policy and integration | One genuine managed worktree; PR-required refusal, fixture policy change, selected kept-tip ancestry/file/merged lifecycle, unrelated target unchanged | agent-merge-tool, agent-pr-execute, worktree-tool-context, worktree-ref-validation |
+| Retry ambiguity and concurrent identities | Genuine follow-up only; no delivery guarantee | codex-harness and session-tool-diagnostics negative/retry matrix |
+| Plan authority | Not exercised remotely by this flow | plan-mode-e2e, decision/approval suites |
+| Embedded direct/deferred wrappers | Not exercised remotely by this flow | SDK structured-result/string-input/shared-contract tests |
 
-Results label the two real-host lanes separately. Published host build metadata
-and npm lock integrity are recorded; they do not attest the compiled host source. Utility and plugin-fixture
-regressions, packed-load checks, and synthetic host-module probes cannot fulfill
-these lanes. A provider thread-header mapping is reported unproven when absent;
-serialized native thread/turn and fresh provider input evidence remain distinct.
-Repeated call IDs report measured native start/steer and provider counts. They do
-not establish durable delivery receipts or exactly-once behavior. Backend rejection
-or a host result-recording failure does not justify blind replay.
+The owner approved this representative mapping instead of the former exhaustive
+ALL16 fixture matrix. Six queued Git schedules, same-call-ID concurrency,
+rejected/lost native acknowledgements, live plan/ask and embedded direct/deferred
+execution remain **unproven remotely** on the final candidate. Historical partial
+receipts retain their original heads/outcomes and are not final acceptance credit.
+Unchanged observed output/lifecycle/Git effects do not establish zero backend
+attempts or zero Git commands. The deterministic tests own those stronger claims.
 
-This acceptance does not prove external provider entitlement, production Telegram
-or broker delivery, the reporter's live host/hooks, restart or multi-registry
-replay guarantees, or repair OpenClaw upstream #120103/#155374. Detailed legacy,
-callback, requester-custody and ambiguous-backend controls remain explicitly
-labelled plugin fixtures unless separately exercised through the actual host.
+The gates mode retains frozen install plus complete verify, plugin security,
+npm consumer, production audit, release metadata, bundle limit and packed dry-run.
+Each host/gates invocation emits one allowlisted summary of identity, commands,
+exits, test counts, outcomes, original failure and cleanup. `finalAcceptance` stays
+false until the coordinator independently reviews both modes at both floors.
 
-Direct embedded Responses exposes readable tool content; the host's public
-after-hook separately observes native structured details. Deferred ToolSearch
-exposes its contained native result and records the outer failure separately.
-Bare provider call IDs and function-item IDs are retained and correlated with
-the exact composite host call ID. Rejected steering, accepted steering, queued
-turns, uncertain outcomes and model-provider requests have separate counts.
+Owned Gateway/native descendants are recorded by PID/start time, checked before
+signals, and stopped on success or failure. Unknown survivors and live listeners
+block. Raw logs/config/state stay private; no transcript archaeology or debug-log
+schema reconstruction is used. Failed scratch may be retained under the canonical
+runner lifecycle; retained storage disposition is unproven, not secure erasure.
+Auxiliary historical diagnostics block only claims dependent on those diagnostics.
 
-Success and failure retain private evidence under ignored
-`.reports/issue504/host-v<Node>-<SHA>-<UUID>` (directory 0700/files 0600). The final
-JSON publishes `evidence.path` and `evidence.manifestSha256`. Each stream/file is
-capped at 1 MiB and the bundle at 8 MiB; diagnostic tails record truncation,
-observed bytes and hashes. Mandatory proof overflow blocks acceptance. No
-config, credentials, state tree or full provider transcript is copied. The
-coordinator retrieves the allowlisted files and verifies their hashes through
-the supported remote wrapper before remote expiration. Cleanup failures retain
-owned scratch for diagnosis and always fail acceptance.
+External provider entitlement, production delivery, restart/multi-registry replay,
+exactly-once behavior and upstream OpenClaw #120103/#155374 repair are unproven.
