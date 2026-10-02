@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { Readable } from "node:stream";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
 import { Session } from "../src/session";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
@@ -44,8 +45,8 @@ describe("bounded representative host receipts", () => {
   });
   it("rejects unknown or repeated selectors before any host effects", () => {
     const args = ["--expected-sha", expected.candidateSha, "--node-version", expected.nodeVersion, "--artifacts", "/tmp/oca501-owned"];
-    assert.equal(optionsFor(args)["--scenario"], "all");
-    for (const scenario of Object.keys(assignments)) assert.equal(optionsFor([...args, "--scenario", scenario])["--scenario"], scenario);
+    assert.equal((optionsFor(args) as Record<string, string>)["--scenario"], "all");
+    for (const scenario of Object.keys(assignments)) assert.equal((optionsFor([...args, "--scenario", scenario]) as Record<string, string>)["--scenario"], scenario);
     for (const extra of [["--scenario", "foreign"], ["--scenario", "gates,live"], ["--scenario", ""], ["--scenario", "smoke", "--scenario", "all"], ["--command", "anything"]]) assert.throws(() => optionsFor([...args, ...extra]));
   });
   it("joins a visible own run to exactly one canonical response and actual provider result", () => {
@@ -109,18 +110,18 @@ describe("bounded representative host receipts", () => {
   it("observes natural completion through the real listing without claiming the outcome", async () => {
     const origin = "agent:main:main", fixture: any = { name: "natural", workdir: "/tmp/owned-case", threadId: "thread", intent: { kind: "ordinary" } };
     const session = new Session({ prompt: "Receipt", workdir: fixture.workdir, harness: "codex", permissionMode: "bypassPermissions", worktreeStrategy: "off",
-      originSessionKey: origin, backendRef: { kind: "codex", conversationId: fixture.threadId } }, fixture.name);
+      originSessionKey: origin, backendRef: { kind: "codex-app-server", conversationId: fixture.threadId } }, fixture.name);
     session.transition("running");
     (session as any).turnRuntime.finishSuccessfulTurn({ currentPermissionMode: "bypassPermissions", permissionMode: "bypassPermissions", pendingPlanApproval: false, planModeApproved: false, hasPendingMessages: false });
     assert.equal(session.status, "completed"); assert.equal(session.phase, "terminal");
-    const manager: any = { list: () => [session], listPersistedSessions: () => [], resolve: (id: string) => id === session.id ? session : undefined };
+    const manager: any = { list: () => [session], listPersistedSessions: (): never[] => [], resolve: (id: string) => id === session.id ? session : undefined };
     let row: any = { sessionId: session.id, name: session.name, status: session.status, workdir: session.workdir, backendRef: session.backendRef };
     let listing = () => getSessionsListingText(manager, "all", undefined, { full: true });
     const calls: string[] = [], run = Object.assign(Object.create(FeatureRun.prototype), { proofs: [], sessions: () => [row], goals: () => [{ id: "goal", sessionId: session.id, name: fixture.name, goal: "Finish" }],
       invoke: async (name: string) => { calls.push(name); return { content: [{ text: name === "agent_sessions" ? listing() : getSessionOutputText(manager, session.id, { readerSessionKey: origin }) }] }; } });
     await run.publicOwner(session.id, "completed", fixture);
     assert.deepEqual(calls, ["agent_sessions"]); assert.equal(session.outcomeSeenAt, undefined);
-    for (const change of [{ status: "running" }, { status: "failed" }, { status: "killed" }, { name: "foreign" }, { workdir: "/tmp/foreign" }, { backendRef: { kind: "codex", conversationId: "foreign" } }, { goalTaskId: "foreign" }]) {
+    for (const change of [{ status: "running" }, { status: "failed" }, { status: "killed" }, { name: "foreign" }, { workdir: "/tmp/foreign" }, { backendRef: { kind: "codex-app-server", conversationId: "foreign" } }, { goalTaskId: "foreign" }]) {
       const original = row; row = { ...row, ...change }; await assert.rejects(run.publicOwner(session.id, "completed", fixture)); row = original;
     }
     await assert.rejects(run.publicOwner("foreign", "completed", fixture));
@@ -144,7 +145,7 @@ describe("bounded representative host receipts", () => {
       sessions: () => [row], invoke: async () => ({ content: [{ text: "🟢 owned [owner] — running · 1s" }] }), publicOwner: async () => {} });
     const children: any[] = []; let primary: unknown, cleanupFailed = false;
     const start = async (cwd = workspace) => {
-      const child = spawn(executable, ["-e", "console.log('ready');setInterval(()=>{},1000)"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      const child = Object.assign(spawn(executable, ["-e", "console.log('ready');setInterval(()=>{},1000)"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] }), { ownedIdentity: undefined as ReturnType<typeof processIdentity> });
       children.push(child);
       await new Promise((resolve, reject) => { child.stdout.once("data", resolve); child.once("error", reject); });
       child.ownedIdentity = processIdentity(child.pid);
@@ -155,7 +156,7 @@ describe("bounded representative host receipts", () => {
       chmodSync(executable, 0o700);
       const earlier = await start();
       fixture.nativeSnapshot = { gateway, processes: run.nativeProcesses() };
-      assert.ok(fixture.nativeSnapshot.processes.some(p => p.pid === earlier.pid));
+      assert.ok(fixture.nativeSnapshot.processes.some((p: NonNullable<ReturnType<typeof processIdentity>>) => p.pid === earlier.pid));
       const current = await start(), request = { threadId: "thread" };
       assert.equal(run.nativeProcesses(null).length, 2);
       const first = await run.nativeOwner(fixture, request);
@@ -227,7 +228,7 @@ describe("bounded representative host receipts", () => {
     const outcome = run.command(process.execPath, ["-e", "console.log(process.pid);setTimeout(()=>{require('node:fs').closeSync(1);require('node:fs').closeSync(2)},50);setInterval(()=>{},1000)"], { allowFailure: true, timeoutMs: 500, graceMs: 100, killMs: 100 }).then(() => null, (error: Error) => error);
     const child: any = [...run.children][0], identity = processIdentity(child.pid);
     try {
-      await Promise.all([child.stdout, child.stderr].map(stream => stream.closed ? Promise.resolve() : new Promise(resolve => stream.once("close", resolve))));
+      await Promise.all([child.stdout, child.stderr].map((stream: Readable) => stream.closed ? Promise.resolve() : new Promise<void>(resolve => stream.once("close", resolve))));
       assert.equal(child.stderr.closed, true); assert.equal(child.exitCode, null); assert.equal(child.signalCode, null);
       assert.equal(run.children.has(child), true); assert.ok(processIdentity(child.pid));
       const error = await outcome; assert.match(error.message, /COMMAND_TIMEOUT/);
