@@ -1,5 +1,5 @@
 import type { DiffSummary } from "./worktree";
-import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
+import { completeRuntimeLlmText, getRuntimeLlmComplete, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-pr-metadata");
@@ -36,9 +36,69 @@ export interface PrMetadataProvider {
 
 export type PrMetadataFallbackReason = "no-provider" | "provider-failed" | "provider-invalid";
 
+const COMPLETION_FAILURE_REASONS = {
+  LLM_COMPLETION_NOT_AUTHORIZED: "authorization-denied",
+  LLM_RUNTIME_UNAVAILABLE: "runtime-unavailable",
+  LLM_COMPLETION_ABORTED: "completion-aborted",
+  LLM_COMPLETION_TIMEOUT: "timeout",
+  LLM_COMPLETION_OUTPUT_REJECTED: "output-rejected",
+  LLM_COMPLETION_FAILED: "completion-failed",
+  LLM_ISOLATED_INPUT_REJECTED: "completion-failed",
+  LLM_ISOLATED_UNSUPPORTED: "completion-failed",
+} as const;
+
+/** Fixed labels only: never includes provider messages, prompts, or rejected output. */
+export type PrMetadataDiagnostic =
+  | { stage: "availability"; reason: "no-provider" }
+  | {
+      stage: "completion";
+      reason: "work-scope-closed" | typeof COMPLETION_FAILURE_REASONS[keyof typeof COMPLETION_FAILURE_REASONS];
+      code?: keyof typeof COMPLETION_FAILURE_REASONS;
+    }
+  | { stage: "parsing"; reason: "empty-output" | "malformed-json" }
+  | { stage: "validation"; reason: "invalid-shape" | "sensitive-content" | "prompt-leak" | "unknown-file" };
+
 export type PrMetadataResult =
-  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence; fallbackReason?: PrMetadataFallbackReason }
+  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence; fallbackReason?: PrMetadataFallbackReason; diagnostic?: PrMetadataDiagnostic }
   | { ok: false; error: string; evidence: PrMetadataEvidence };
+
+const DIAGNOSTIC_ADVICE: Record<PrMetadataDiagnostic["reason"], string> = {
+  "no-provider": "Check that the plugin runtime is registered before requesting LLM metadata.",
+  "work-scope-closed": "Background completion requires supported host work ownership; do not detach or rebind requester authorization.",
+  "authorization-denied": "Review host completion policy and requester authorization; do not bypass the denial.",
+  "runtime-unavailable": "Check host completion runtime availability.",
+  "completion-aborted": "The completion was cancelled; check the requester lifetime.",
+  "timeout": "The completion exceeded its time budget; check host completion latency.",
+  "output-rejected": "The host rejected the completion output; check host output requirements.",
+  "completion-failed": "Check sanitized host completion diagnostics for the underlying cause.",
+  "empty-output": "The completion returned no metadata text; check the provider response format.",
+  "malformed-json": "The completion did not return parseable JSON; check the provider response format.",
+  "invalid-shape": "Metadata must contain a bounded title and nonempty arrays of bounded text bullets.",
+  "sensitive-content": "Metadata contained sensitive-looking text; keep credentials, links, and private paths out of metadata.",
+  "prompt-leak": "Metadata repeated private task details; use only the supplied sanitized evidence.",
+  "unknown-file": "Metadata referenced files outside the supplied change set; review the diff evidence.",
+};
+
+function logPrMetadataDiagnostic(diagnostic: PrMetadataDiagnostic): void {
+  const code = "code" in diagnostic && diagnostic.code ? ` code=${diagnostic.code}` : "";
+  log.warn(`[agent_pr] PR metadata fallback: stage=${diagnostic.stage} reason=${diagnostic.reason}${code}. ${DIAGNOSTIC_ADVICE[diagnostic.reason]} Using deterministic fallback metadata.`);
+}
+
+function completionFailureDiagnostic(err: unknown): PrMetadataDiagnostic {
+  try {
+    if (err instanceof Error && err.message === "Async work scope is closed") {
+      return { stage: "completion", reason: "work-scope-closed" };
+    }
+    const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+    if (typeof code === "string" && Object.hasOwn(COMPLETION_FAILURE_REASONS, code)) {
+      const knownCode = code as keyof typeof COMPLETION_FAILURE_REASONS;
+      return { stage: "completion", reason: COMPLETION_FAILURE_REASONS[knownCode], code: knownCode };
+    }
+  } catch {
+    // Arbitrary thrown values may have getters or proxies that reject inspection.
+  }
+  return { stage: "completion", reason: "completion-failed" };
+}
 
 const OPAQUE_TOKEN_MIN_LENGTH = 32;
 const GENERATED_FOOTER = "Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)";
@@ -274,18 +334,23 @@ function sanitizeMetadataText(value: string): string {
   return redactSensitiveText(value).replace(/\s+/g, " ").trim();
 }
 
+type PrMetadataPayloadResult =
+  | { ok: true; metadata: PrMetadata }
+  | { ok: false; diagnostic: PrMetadataDiagnostic };
+
 function validateGeneratedPrMetadata(
   value: unknown,
   evidence: PrMetadataEvidence,
   prompt: string | undefined,
-): PrMetadata | undefined {
-  if (!value || typeof value !== "object") return undefined;
+): PrMetadataPayloadResult {
+  const invalidShape = { ok: false, diagnostic: { stage: "validation", reason: "invalid-shape" } } as const;
+  if (!value || typeof value !== "object") return invalidShape;
   const raw = value as Record<string, unknown>;
-  if (typeof raw.title !== "string" || raw.title.trim().length === 0 || raw.title.length > 90) return undefined;
-  if (!isStringArray(raw.summary, 5, 180)) return undefined;
-  if (!isStringArray(raw.changes, 10, 160)) return undefined;
-  if (!isStringArray(raw.validation, 5, 160)) return undefined;
-  if (!isStringArray(raw.notes, 5, 180)) return undefined;
+  if (typeof raw.title !== "string" || raw.title.trim().length === 0 || raw.title.length > 90) return invalidShape;
+  if (!isStringArray(raw.summary, 5, 180)) return invalidShape;
+  if (!isStringArray(raw.changes, 10, 160)) return invalidShape;
+  if (!isStringArray(raw.validation, 5, 160)) return invalidShape;
+  if (!isStringArray(raw.notes, 5, 180)) return invalidShape;
 
   const rawText = [
     raw.title,
@@ -294,7 +359,8 @@ function validateGeneratedPrMetadata(
     ...raw.validation,
     ...raw.notes,
   ];
-  if (rawText.some((item) => containsSensitiveText(item) || includesPromptLeak(item, prompt, evidence))) return undefined;
+  if (rawText.some((item) => containsSensitiveText(item))) return { ok: false, diagnostic: { stage: "validation", reason: "sensitive-content" } };
+  if (rawText.some((item) => includesPromptLeak(item, prompt, evidence))) return { ok: false, diagnostic: { stage: "validation", reason: "prompt-leak" } };
 
   const metadata: PrMetadata = {
     title: sanitizeMetadataText(raw.title),
@@ -312,9 +378,11 @@ function validateGeneratedPrMetadata(
     ...metadata.notes,
   ];
 
-  if (allText.some((item) => !item || containsSensitiveText(item) || includesPromptLeak(item, prompt, evidence))) return undefined;
-  if (allText.some((item) => mentionsUnknownFile(item, evidence))) return undefined;
-  return metadata;
+  if (allText.some((item) => !item)) return invalidShape;
+  if (allText.some((item) => containsSensitiveText(item))) return { ok: false, diagnostic: { stage: "validation", reason: "sensitive-content" } };
+  if (allText.some((item) => includesPromptLeak(item, prompt, evidence))) return { ok: false, diagnostic: { stage: "validation", reason: "prompt-leak" } };
+  if (allText.some((item) => mentionsUnknownFile(item, evidence))) return { ok: false, diagnostic: { stage: "validation", reason: "unknown-file" } };
+  return { ok: true, metadata };
 }
 
 function buildFallbackPrMetadata(
@@ -478,7 +546,9 @@ export async function buildPrMetadata(args: {
   const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, outputPreview: args.outputPreview, diffSummary: args.diffSummary });
   if (!args.provider) {
     const metadata = buildFallbackPrMetadata(evidence, args.prompt, { reason: "no-provider" });
-    return { ok: true, metadata, evidence, fallbackReason: "no-provider" };
+    const diagnostic: PrMetadataDiagnostic = { stage: "availability", reason: "no-provider" };
+    logPrMetadataDiagnostic(diagnostic);
+    return { ok: true, metadata, evidence, fallbackReason: "no-provider", diagnostic };
   }
 
   try {
@@ -488,22 +558,29 @@ export async function buildPrMetadata(args: {
       args.timeoutMs ?? runtimeLlmTimeoutsMs.prMetadata,
       (signal) => provider.generatePrMetadata(evidence, signal),
     );
-    const metadata = validateGeneratedPrMetadata(normalizeGeneratedPrMetadataPayload(generated), evidence, args.prompt);
-    if (metadata) return { ok: true, metadata, evidence };
-    log.warn("[agent_pr] PR metadata provider returned invalid or unsafe metadata; using deterministic fallback metadata.");
+    const normalized = normalizeGeneratedPrMetadataPayload(generated);
+    const validated = normalized.ok === true
+      ? validateGeneratedPrMetadata(normalized.value, evidence, args.prompt)
+      : normalized;
+    if (validated.ok === true) return { ok: true, metadata: validated.metadata, evidence };
+    const diagnostic = validated.diagnostic;
+    logPrMetadataDiagnostic(diagnostic);
     return {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-invalid" }),
       evidence,
       fallbackReason: "provider-invalid",
+      diagnostic,
     };
   } catch (err) {
-    log.warn(`[agent_pr] PR metadata provider failed: ${describeRuntimeLlmError(err)}`);
+    const diagnostic = completionFailureDiagnostic(err);
+    logPrMetadataDiagnostic(diagnostic);
     return {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-failed" }),
       evidence,
       fallbackReason: "provider-failed",
+      diagnostic,
     };
   }
 }
@@ -541,18 +618,20 @@ function buildPrMetadataPrompt(evidence: PrMetadataEvidence): string {
   ].join("\n");
 }
 
-function normalizeGeneratedPrMetadataPayload(generated: unknown): unknown {
-  if (typeof generated !== "string") return generated;
+function normalizeGeneratedPrMetadataPayload(generated: unknown):
+  | { ok: true; value: unknown }
+  | { ok: false; diagnostic: PrMetadataDiagnostic } {
+  if (typeof generated !== "string") return { ok: true, value: generated };
   const text = generated.trim();
-  if (!text) return undefined;
+  if (!text) return { ok: false, diagnostic: { stage: "parsing", reason: "empty-output" } };
   const jsonText = text
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
   try {
-    return JSON.parse(jsonText);
+    return { ok: true, value: JSON.parse(jsonText) };
   } catch {
-    return undefined;
+    return { ok: false, diagnostic: { stage: "parsing", reason: "malformed-json" } };
   }
 }
 
