@@ -677,6 +677,7 @@ describe("CodexHarness launch settings", () => {
       permissions: ":read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
+      config: { "features.goals": false },
     });
     assert.deepEqual(client.requestsFor("turn/start")[0], {
       threadId: VALID_THREAD_ID,
@@ -973,6 +974,8 @@ describe("CodexHarness resume and fork", () => {
     assert.equal(resume.excludeTurns, true);
     assert.equal(resume.cwd, "/wt");
     assert.equal(resume.developerInstructions, "rules");
+    // A stored active native goal must not re-arm on resume.
+    assert.deepEqual(resume.config, { "features.goals": false });
     assert.equal("persistExtendedHistory" in resume, false);
     assert.equal(client.requestsFor("thread/start").length, 0);
     assert.equal((messages.find((message) => message.type === "backend_ref") as { ref: { conversationId: string } }).ref.conversationId, VALID_THREAD_ID);
@@ -1004,6 +1007,7 @@ describe("CodexHarness resume and fork", () => {
     assert.equal(fork[0].threadId, VALID_THREAD_ID);
     assert.equal(fork[0].cwd, "/fork");
     assert.equal(fork[0].serviceTier, "priority");
+    assert.deepEqual(fork[0].config, { "features.goals": false });
     assert.equal("beforeTurnId" in fork[0], false);
     assert.equal(client.requestsFor("thread/resume").length, 0);
     assert.deepEqual(client.requestsFor("turn/start").map((params) => params.threadId), [FORKED_THREAD_ID, FORKED_THREAD_ID]);

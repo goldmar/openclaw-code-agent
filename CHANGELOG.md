@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex sessions turn off Codex's native thread goals (`features.goals = false` on every `thread/start`, `thread/resume` and `thread/fork`). With them on, the model could create a goal, and Codex then started continuation turns by itself that OCA neither requested nor accounted for: they bypassed idle timeouts, cost tracking and `agent_goal` iteration and cost limits, and a stored active goal re-armed on resume. Claude Code sessions remove the `ProposeGoal` tool for the same reason.
+
 ## [5.1.0] - 2026-10-02
 
 ### Added

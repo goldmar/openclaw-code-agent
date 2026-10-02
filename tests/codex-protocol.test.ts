@@ -42,6 +42,7 @@ describe("codex protocol thread payloads", () => {
       permissions: ":danger-full-access",
       approvalPolicy: "never",
       approvalsReviewer: "user",
+      config: { "features.goals": false },
     });
     assert.equal("reasoningEffort" in params, false);
     assert.equal("service_tier" in params, false);
@@ -70,6 +71,17 @@ describe("codex protocol thread payloads", () => {
     assert.equal(params.excludeTurns, true);
   });
 
+  it("disables Codex native thread goals on every thread OCA starts, resumes, or forks", () => {
+    // Native goals start continuation turns on their own; OCA owns every turn.
+    for (const params of [
+      buildThreadStartParams({ cwd: "/repo", execution }),
+      buildThreadResumeParams({ threadId: "t-1", execution }),
+      buildThreadForkParams({ threadId: "t-1", beforeTurnId: "turn-9", execution }),
+    ]) {
+      assert.deepEqual(params.config, { "features.goals": false });
+    }
+  });
+
   it("applies configured execution settings and rejects unknown values", () => {
     assert.deepEqual(DEFAULT_CODEX_EXECUTION_SETTINGS, {
       permissionProfile: ":danger-full-access",
@@ -86,6 +98,7 @@ describe("codex protocol thread payloads", () => {
       permissions: ":workspace",
       approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
+      config: { "features.goals": false },
     });
     assert.deepEqual(
       resolveCodexExecutionSettings({ permissionProfile: "root", approvalPolicy: "sometimes", approvalsReviewer: "bob" }),
