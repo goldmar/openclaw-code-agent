@@ -17,6 +17,22 @@ node --import tsx scripts/e2e/oca-issue-504-host-acceptance.ts \
   --codex-version 0.159.3
 ```
 
+For targeted diagnosis, add `--cohort smoke`, `plan`, `references`, `retries`,
+`git`, `embedded-direct`, or `embedded-deferred`. The default `all` keeps the
+complete matrix. Start with genuine setup/native smoke, then the plan cohort;
+run affected cohorts after inspecting their evidence. Each invocation has its
+own profile and genuine prerequisites. Summaries identify required, completed
+and `not_run` scenarios and the failing stage. A selected cohort passes only its
+own scope and remains `PARTIAL`, with `finalAcceptance: false`. Final acceptance
+requires `all` at both supported Node floors on the same reviewed commit, plus
+the full security/build/packed gates; combining partial runs does not replace it.
+
+The fixed local R7 receipt replay is labelled `OFFLINE_SOURCE_DERIVED_REPLAY`.
+It verifies the historical bundle, separate capture and parent terminal evidence.
+The original failed outcome and absent normalized fields remain unchanged;
+normalization of the controlled source fixture is a separate predicate check,
+not evidence that the newer projector ran in that historical host.
+
 The candidate must be committed and clean. The runner builds, packs and installs
 that candidate in its disposable profile. It verifies every installed dist file
 and relevant manifest. A read-only isolated Python archive reader validates bounded

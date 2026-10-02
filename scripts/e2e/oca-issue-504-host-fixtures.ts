@@ -8,6 +8,38 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export const FIXTURE_MARKER = "oca-issue-504-host-acceptance-v1";
 export const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+export const HOST_COHORTS = ["smoke", "plan", "references", "retries", "git", "embedded-direct", "embedded-deferred", "all"] as const;
+export type HostCohort = typeof HOST_COHORTS[number];
+export function hostCohort(value: string | undefined): HostCohort {
+  assert.ok(value === undefined || HOST_COHORTS.includes(value as HostCohort), "Unknown host acceptance cohort");
+  return value === undefined ? "all" : value as HostCohort;
+}
+export function runsHostCohort(selected: HostCohort, block: Exclude<HostCohort, "smoke" | "all">): boolean {
+  return selected === "all" || selected === block;
+}
+export function requiredHostScenarios(cohort: HostCohort): string[] {
+  const references = ["four-tools-unknown-masked-blank", "real-host-auth-denied-unavailable", "native-older-exact-newer-name-backend-literal-mask-output", "native-persisted-resume"];
+  const retries = ["same-actual-call-id-sequential", "same-actual-call-id-concurrent", "different-actual-call-id-identical-input"];
+  const git = ["alias", "coordinates", "competing-decision", "policy", "merged-cleanup", "new-hooks"].map((name) => `real-git-queue-${name}`);
+  switch (cohort) {
+    case "smoke": return ["setup-native-protocol-smoke"];
+    case "plan": return ["native-ask-approval-authority"];
+    case "references": return references;
+    case "retries": return retries;
+    case "git": return git;
+    case "embedded-direct": return ["direct"];
+    case "embedded-deferred": return ["deferred"];
+    case "all": return ["native-ask-approval-authority", ...references, ...retries, ...git, "direct", "deferred"];
+  }
+}
+export function hostCohortCoverage(cohort: HostCohort, outcomes: Array<{ scenario: string; status: string }>) {
+  const requiredScenarios = requiredHostScenarios(cohort), completedScenarios = outcomes.filter((outcome) => outcome.status === "PASS").map((outcome) => outcome.scenario);
+  assert.equal(new Set(completedScenarios).size, completedScenarios.length, "Duplicate completed host scenario");
+  assert.ok(completedScenarios.every((name) => requiredScenarios.includes(name)), "Unselected host scenario credited");
+  return { selectedCohort: cohort, coverageScope: cohort === "all" ? "ONE_FLOOR_COMPLETE_HOST_MATRIX" : "PARTIAL", finalAcceptance: false,
+    requiredScenarios, completedScenarios, remainingRequiredScenarios: requiredScenarios.filter((name) => !completedScenarios.includes(name)),
+    not_run: [...new Set([...requiredHostScenarios("all"), ...requiredScenarios])].filter((name) => !completedScenarios.includes(name)) };
+}
 const EVIDENCE_FILE_LIMIT = 1_048_576;
 const EVIDENCE_BUNDLE_LIMIT = 8 * EVIDENCE_FILE_LIMIT;
 
@@ -395,8 +427,30 @@ export function waitingPlanObservation(result: FixtureRecord | undefined, target
 }
 export function hasLivePlanBoundary(events: FixtureRecord[], eventStart: number, output: FixtureRecord | undefined, listing: FixtureRecord | undefined, target: FixtureRecord) {
   const native = nativePlanBoundary(events, eventStart, target), view = publicOutputObservation(output, target), waiting = waitingPlanObservation(listing, target);
+  return hasPlanObservationBoundary(native, view, waiting);
+}
+/** Pure observed facts shared by live parsing and the labelled offline fixture replay. */
+export function hasPlanObservationBoundary(native: ReturnType<typeof nativePlanBoundary>, view: ReturnType<typeof publicOutputObservation>, waiting: ReturnType<typeof waitingPlanObservation>) {
   const rawMatches = [FIXTURE_PLAN, `${FIXTURE_PLAN}\n`].some((text) => native.planSha256 === sha256(text) && native.planBytes === Buffer.byteLength(text));
   return native.matched && rawMatches && native.trimPlanSha256 === sha256(FIXTURE_PLAN) && native.trimPlanBytes === Buffer.byteLength(FIXTURE_PLAN) && view.selectedReferenceMatches && view.live && view.status === "running" && view.phase === "awaiting_plan_decision" && view.exactPlanPresent && waiting.selectedEntries === 1 && waiting.selectedReferenceMatches && !waiting.recovered && waiting.userPlanNextStep;
+}
+/** Historical receipt facts stay immutable; normalization is explicitly a current source fixture. */
+export function replayObservedPlan(events: FixtureRecord[], observations: FixtureRecord[]) {
+  const requests = events.filter((event) => event.direction === "request" && event.method === "turn/start" && event.collaborationMode === "plan");
+  assert.equal(requests.length, 1, "Fixed replay requires one observed plan request");
+  const observedNative = nativePlanBoundary(events, 0, { backendRef: { conversationId: requests[0].threadId } });
+  assert.ok(observedNative.matched && observedNative.planBytes === Buffer.byteLength(`${FIXTURE_PLAN}\n`) && observedNative.planSha256 === sha256(`${FIXTURE_PLAN}\n`), "Historical native plan identity/hash/count mismatch");
+  assert.equal(observedNative.trimPlanBytes, null, "Historical derived normalization must remain absent");
+  assert.equal(observedNative.trimPlanSha256, null, "Historical derived normalization must remain absent");
+  assert.ok(observations.length > 0, "Historical public observations are required");
+  const projected = projectNativePlanFrame({ method: "item/completed", params: { item: { type: "plan", text: `${FIXTURE_PLAN}\n` } } }, sha256);
+  const sourceDerived = { ...observedNative, trimPlanBytes: projected.trimTextBytes, trimPlanSha256: projected.trimTextSha256 };
+  const matches = observations.map((record) => ({ historicalPredicate: hasPlanObservationBoundary(observedNative, record.output, record.listing), sourceDerivedPredicate: hasPlanObservationBoundary(sourceDerived, record.output, record.listing) }));
+  assert.ok(matches.every((match) => !match.historicalPredicate), "Historical missing normalization cannot be backfilled");
+  assert.ok(matches.some((match) => match.sourceDerivedPredicate), "Source-derived fixture must correlate with an actual public observation");
+  return { label: "OFFLINE_SOURCE_DERIVED_REPLAY", historicalStatus: "BLOCKED", historicalObservedNative: observedNative,
+    historicalRawText: "UNPROVEN-not-retained", historicalNormalization: "UNPROVEN-not-retained", sourceFixtureRawPlanSha256: sha256(`${FIXTURE_PLAN}\n`),
+    sourceFixtureTrimPlanSha256: projected.trimTextSha256, matches, finalAcceptance: false };
 }
 export function requireAskPlanRefusal(result: FixtureRecord, target: FixtureRecord) {
   const expected = `Plan approval for session ${target.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused. Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(session='${target.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`;

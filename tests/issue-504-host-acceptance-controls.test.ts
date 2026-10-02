@@ -12,7 +12,7 @@ import { Session } from "../src/session";
 import type { SessionManager } from "../src/session-manager";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -50,6 +50,51 @@ function syntheticPackedInstall() {
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("validates fixed cohorts before setup and distinguishes partial coverage from complete one-floor coverage", () => {
+    const provenance = ["--expected-sha", "a".repeat(40), "--codex-bin", "/fixture/native", "--codex-version", "0.159.3"];
+    assert.equal(hostCohort(options(provenance)["--cohort"]), "all");
+    for (const cohort of HOST_COHORTS) {
+      assert.equal(options([...provenance, "--cohort", cohort])["--cohort"], cohort);
+      assert.equal(runsHostCohort(cohort, "plan"), ["all", "plan"].includes(cohort));
+      const requirements = requiredHostScenarios(cohort);
+      const first = hostCohortCoverage(cohort, [{ scenario: requirements[0], status: "BLOCKED" }]);
+      assert.equal(first.completedScenarios.length, 0); assert.deepEqual(first.remainingRequiredScenarios, requirements);
+      for (const requirement of requirements) assert.ok(first.not_run.includes(requirement));
+      if (cohort === "smoke") assert.ok(hostCohortCoverage(cohort, []).not_run.includes("setup-native-protocol-smoke"));
+      const complete = hostCohortCoverage(cohort, requirements.map((scenario) => ({ scenario, status: "PASS" })));
+      assert.deepEqual(complete.remainingRequiredScenarios, []); assert.equal(complete.finalAcceptance, false);
+      assert.equal(complete.coverageScope, cohort === "all" ? "ONE_FLOOR_COMPLETE_HOST_MATRIX" : "PARTIAL");
+      if (cohort !== "all") assert.ok(complete.not_run.length > 0); else assert.deepEqual(complete.not_run, []);
+      for (const requirement of requirements) assert.ok(!complete.not_run.includes(requirement));
+      assert.throws(() => hostCohortCoverage(cohort, [{ scenario: "unselected-credit", status: "PASS" }]));
+      assert.throws(() => hostCohortCoverage(cohort, [{ scenario: requirements[0], status: "PASS" }, { scenario: requirements[0], status: "PASS" }]));
+    }
+    for (const invalid of ["", "ALL", "plan,git", "../plan", "undefined"]) assert.throws(() => options([...provenance, "--cohort", invalid]));
+    assert.throws(() => options([...provenance, "--cohort"]));
+    assert.throws(() => options([...provenance, "--cohort", "plan", "--cohort", "git"]));
+  });
+
+  it("replays immutable observed plan facts separately from source-derived normalization without historical backfill", () => {
+    const threadId = "offline-fixture-thread", turnId = "offline-fixture-turn", relayPid = 10;
+    const request = { direction: "request", method: "turn/start", id: 1, relayPid, threadId, collaborationMode: "plan", executionProfile: ":read-only", approvalPolicy: "never", requestedModelMatches: true };
+    const ack = { direction: "response", id: 1, relayPid, turnId, error: false };
+    const item = { direction: "response", method: "item/completed", relayPid, threadId, turnId, itemType: "plan", genuineNativePlanItem: true, textNonempty: true, textBytes: 65, textSha256: sha256(`${FIXTURE_PLAN}\n`) };
+    const terminal = { direction: "response", method: "turn/completed", relayPid, threadId, turnId, status: "completed", error: false };
+    const events = [request, ack, item, terminal];
+    const observations = [{ output: { selectedReferenceMatches: true, live: true, status: "running", phase: "awaiting_plan_decision", exactPlanPresent: true }, listing: { selectedEntries: 1, selectedReferenceMatches: true, recovered: false, userPlanNextStep: true } }];
+    const original = JSON.stringify({ events, observations });
+    const replay = replayObservedPlan(events, observations);
+    assert.equal(replay.label, "OFFLINE_SOURCE_DERIVED_REPLAY"); assert.equal(replay.historicalStatus, "BLOCKED");
+    assert.equal(replay.historicalObservedNative.trimPlanSha256, null);
+    assert.deepEqual(replay.matches, [{ historicalPredicate: false, sourceDerivedPredicate: true }]);
+    assert.equal(JSON.stringify({ events, observations }), original);
+    for (const changed of [{ ...item, textBytes: 64 }, { ...item, textSha256: sha256(FIXTURE_PLAN) }, { ...item, trimTextSha256: sha256(FIXTURE_PLAN), trimTextBytes: 64 }, { ...item, threadId: "other-thread" }, { ...item, turnId: "other-turn" }]) assert.throws(() => replayObservedPlan([request, ack, changed, terminal], observations));
+    assert.throws(() => replayObservedPlan([request, ack, terminal], observations));
+    assert.throws(() => replayObservedPlan(events, []));
+    for (const output of [{ ...observations[0].output, exactPlanPresent: false }, { ...observations[0].output, selectedReferenceMatches: false }, { ...observations[0].output, phase: "terminal" }]) assert.throws(() => replayObservedPlan(events, [{ ...observations[0], output }]));
+    assert.throws(() => replayObservedPlan(events, [{ ...observations[0], listing: { ...observations[0].listing, recovered: true } }]));
+  });
+
   it("uses the actual message subscription seam and refuses invalid acknowledgements before follow-ons", async () => {
     const counts = { requests: 0, inspection: 0, tool: 0, chat: 0, native: 0 };
     const ack = { subscribed: true, key: "agent:main:main", agentId: "main" };

@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
@@ -24,11 +24,12 @@ const records = (path: string): Json[] => existsSync(path) ? readFileSync(path, 
 export function options(argv: string[]) {
   const result: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
-    assert.ok(["--expected-sha", "--codex-bin", "--codex-version"].includes(argv[i]) && argv[i + 1], "Usage: --expected-sha <40hex> --codex-bin <absolute native executable> --codex-version <exact version>");
+    assert.ok(["--expected-sha", "--codex-bin", "--codex-version", "--cohort"].includes(argv[i]) && argv[i + 1], "Usage: --expected-sha <40hex> --codex-bin <absolute native executable> --codex-version <exact version>");
     assert.ok(!result[argv[i]], "Duplicate acceptance option");
     result[argv[i]] = argv[i + 1];
   }
   assert.ok(result["--expected-sha"] && result["--codex-bin"] && result["--codex-version"], "All exact provenance options are required");
+  hostCohort(result["--cohort"]);
   return result;
 }
 /** Pinned Responses conversion carries both IDs into the actual tool hook. */
@@ -63,6 +64,11 @@ export function nativeResult(value: any): Json | undefined {
 async function main(): Promise<void> {
   const opts = options(process.argv.slice(2));
   const expectedSha = opts["--expected-sha"];
+  const cohort = hostCohort(opts["--cohort"]);
+  const outcomes: Json[] = [];
+  let failingStage = "common-setup";
+  const begin = (stage: string) => { failingStage = stage; };
+  failureReport = { ...hostCohortCoverage(cohort, []), status: "BLOCKED", failingStage: "common-preflight", candidateSha: expectedSha, mandatoryLanes: Object.values(lanes) };
   requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
     execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
   assert.equal(process.platform, "linux"); assert.equal(process.arch, "x64");
@@ -130,7 +136,6 @@ async function main(): Promise<void> {
   mkdirSync(ownedPath(fixture, join(fixture, "host-observer")));
   const observer = writeHostObserver(fixture);
   nativeWatch = setInterval(() => { try { observeNative(); } catch { if (nativeObservationErrors.length < 128) nativeObservationErrors.push("native-observer-failure"); } }, 250);
-  const outcomes: Json[] = [];
   const scenarios = new Map<string, Scenario>();
   const generations = new Set<string>();
   const providerErrors: string[] = [];
@@ -378,6 +383,7 @@ async function main(): Promise<void> {
     };
 
     const invoke = (client: GatewayClient, name: string, args: Json, key?: string, requester?: string): Promise<Json> => (client as any).invokeOca(name, args, key, requester);
+    const knownTargets: Json[] = [];
     async function launch(client: GatewayClient, name: string, extra: Json = {}, requester = "agent:main:main"): Promise<Json> {
       const before = new Set(existsSync(storePath) ? store().sessions.map((row: Json) => row.sessionId) : []);
       const workdir = createRepo(`native-${randomUUID()}`);
@@ -386,9 +392,66 @@ async function main(): Promise<void> {
       assert.doesNotMatch(text(result), /Error:|failed to start/i);
       const row = await until(() => store().sessions.find((item: Json) => !before.has(item.sessionId) && item.name === name && item.backendRef?.conversationId), "real native session receipt");
       await until(() => nativeEvents().find((event) => event.method === "turn/completed" && event.threadId === row.backendRef.conversationId && event.status === "completed"), "real native terminal turn");
-      return { ...row, fixtureGeneration: generation, requestClass: "unknown" };
+      const target = { ...row, fixtureGeneration: generation, requestClass: "unknown" };
+      knownTargets.push(target); return target;
     }
-    const client = await gateway(false);
+    const client = await gateway(cohort === "embedded-deferred" ? { mode: "tools" } : false);
+    async function unchangedResponse(target: Json, ref: string, message = "1", key?: string): Promise<Json> {
+      const prior = nativeEvents().length, providerBefore = providerRequests.length, hooksBefore = hostTools().length;
+      const preRow = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
+      evidence.record("host-events.jsonl", { phase: "native-response-pre-row", ...generationObservation(preRow, target) });
+      const boundary = responseResumeBoundary(preRow, target, prior);
+      const wasStopped = boundary.required;
+      const result = await invoke(client, "agent_respond", { session: ref, message }, key);
+      assert.doesNotMatch(text(result), /^Error:/);
+      const request = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === target.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message))), "unchanged message in selected native thread");
+      assert.ok(nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method)).every((event) => event.threadId === target.backendRef.conversationId), "Response must not reach another native thread");
+      const response = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.turnId && !event.error), "selected native turn response");
+      await until(() => nativeEvents().slice(prior).find((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"), "fresh matched selected native turn terminal");
+      const model = providerRequests.slice(providerBefore);
+      const nativeModel = selectedProvider(model, target.fixtureGeneration, message);
+      requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
+      for (const body of nativeModel) for (const value of Object.values(body.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, target.backendRef.conversationId, "Native provider thread header mismatch");
+      const actualOutput = await invoke(client, "agent_output", { session: target.sessionId, full: true });
+      assert.ok(text(actualOutput).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
+      for (const other of knownTargets) if (other.sessionId !== target.sessionId) assert.ok(!text(actualOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`), "Other generation output must not be borrowed");
+      const hook = requireHttpBefore(hostTools().slice(hooksBefore), "agent_respond", ref, message);
+      return { method: request.method, threadId: request.threadId, turnId: response.turnId, actualToolCallId: hook.toolCallId, providerRequests: model.length, nativeProviderRequests: nativeModel.length, backgroundProviderRequests: model.length - nativeModel.length, resumedStoppedGeneration: wasStopped };
+    }
+    async function stopGeneration(target: Json) {
+      const before = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
+      evidence.record("host-events.jsonl", { phase: "native-kill-pre-row", ...generationObservation(before, target) });
+      const result = await invoke(client, "agent_kill", { session: target.sessionId });
+      const classification = killResultClass(result);
+      evidence.record("host-events.jsonl", { phase: "native-kill-result", classification, resultSha256: sha256(JSON.stringify(result)), ...generationObservation(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target) });
+      assert.ok(["terminated", "already-completed", "already-killed"].includes(classification), "Unexpected native kill outcome");
+      await until(() => {
+        const row = store().sessions.find((item: Json) => item.sessionId === target.sessionId);
+        evidence.record("host-events.jsonl", { phase: "native-kill-row-observation", ...generationObservation(row, target) });
+        return stoppedGeneration(row, target) ? true : undefined;
+      }, "captured native generation completed or killed and stopped");
+    }
+    let referenceB: Json | undefined;
+    if (cohort === "smoke") {
+      begin("setup-native-protocol-smoke");
+      const hooksBefore = hostTools().length, eventsBefore = nativeEvents().length, providerBefore = providerRequests.length;
+      const target = await launch(client, "smoke-native");
+      const events = nativeEvents().slice(eventsBefore);
+      const started = events.find((event) => event.direction === "request" && event.method === "turn/start" && event.threadId === target.backendRef.conversationId);
+      assert.ok(started, "Smoke requires actual selected native turn start");
+      const accepted = events.find((event) => event.direction === "response" && event.id === started.id && event.relayPid === started.relayPid && event.turnId && !event.error);
+      assert.ok(accepted && events.some((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === accepted.turnId && event.status === "completed"));
+      assert.ok(providerRequests.slice(providerBefore).some((request) => request.requestClass === "native-generation" && request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`)));
+      const output = await invoke(client, "agent_output", { session: target.sessionId, full: true });
+      assert.ok(publicOutputObservation(output, target).selectedReferenceMatches);
+      assert.ok(text(output).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
+      const outputHooks = hostTools().slice(hooksBefore).filter((event) => event.phase === "before" && event.toolName === "agent_output");
+      assert.equal(outputHooks.length, 1); assert.equal(outputHooks[0].session, target.sessionId);
+      assert.ok(typeof outputHooks[0].toolCallId === "string" && outputHooks[0].toolCallId.trim() === outputHooks[0].toolCallId && outputHooks[0].toolCallId);
+      outcomes.push({ lane: lanes.rpc, scenario: "setup-native-protocol-smoke", status: "PASS", subscribedModelTerminal: "NOT_RUN", planAuthority: "NOT_RUN" });
+    }
+    if (runsHostCohort(cohort, "plan")) {
+    begin("native-ask-approval-authority");
     const planEventStart = nativeEvents().length;
     const plan = await launch(client, "ask-plan", { prompt: "OCA504_NATIVE_PLAN", permission_mode: "plan", plan_approval: "ask" });
     let previousPlanFacts = "";
@@ -414,8 +477,13 @@ async function main(): Promise<void> {
     const approval = await invoke(client, "agent_respond", { session: plan.sessionId, message: "approved", approve: true });
     requireAskPlanRefusal(approval, plan); const planRefusalWindow = assertNoAction(priorPlanRequests);
     outcomes.push({ lane: lanes.rpc, scenario: "native-ask-approval-authority", status: "PASS", observedNativePlanAndLivePendingAskAndUserOnlyRefusal: true, numericalLiveDecisionVersions: "UNPROVEN-public-view-not-exposed", ...planRefusalWindow });
+    }
+    if (runsHostCohort(cohort, "references")) {
+    begin("references-native-prerequisites");
     const a = await launch(client, "lynx-mcp-mvp");
     const b = await launch(client, "unrelated-session", {}, "agent:main:isolated-requester");
+    referenceB = b;
+    begin("four-tools-unknown-masked-blank");
     const unknownWindows: ReturnType<typeof assertNoAction>[] = [];
     for (const name of FOUR) for (const reference of ["unknown-504", "***", "   "]) {
       const prior = snapshot();
@@ -428,6 +496,7 @@ async function main(): Promise<void> {
       unknownWindows.push(assertNoAction(prior));
     }
     outcomes.push({ lane: lanes.rpc, scenario: "four-tools-unknown-masked-blank", status: "PASS", assertions: 12, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: unknownWindows });
+    begin("real-host-auth-denied-unavailable");
     const negativesBefore = snapshot();
     const badAuth = await fetch(`${(client as any).httpOrigin}/tools/invoke`, { method: "POST", headers: { "content-type": "application/json", Authorization: "Bearer synthetic-invalid" }, body: JSON.stringify({ tool: "agent_respond", args: { session: a.sessionId, message: "AUTH_DENIED" } }), signal: AbortSignal.timeout(10_000) });
     assert.equal(badAuth.status, 401); const authWindows = [assertNoAction(negativesBefore)];
@@ -439,41 +508,7 @@ async function main(): Promise<void> {
     }
     outcomes.push({ lane: lanes.rpc, scenario: "real-host-auth-denied-unavailable", status: "PASS", transportAndToolFailureDistinct: true, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: authWindows });
 
-    async function unchangedResponse(target: Json, ref: string, message = "1", key?: string): Promise<Json> {
-      const prior = nativeEvents().length, providerBefore = providerRequests.length, hooksBefore = hostTools().length;
-      const preRow = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
-      evidence.record("host-events.jsonl", { phase: "native-response-pre-row", ...generationObservation(preRow, target) });
-      const boundary = responseResumeBoundary(preRow, target, prior);
-      const wasStopped = boundary.required;
-      const result = await invoke(client, "agent_respond", { session: ref, message }, key);
-      assert.doesNotMatch(text(result), /^Error:/);
-      const request = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === target.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message))), "unchanged message in selected native thread");
-      assert.ok(nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method)).every((event) => event.threadId === target.backendRef.conversationId), "Response must not reach another native thread");
-      const response = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.turnId && !event.error), "selected native turn response");
-      await until(() => nativeEvents().slice(prior).find((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"), "fresh matched selected native turn terminal");
-      const model = providerRequests.slice(providerBefore);
-      const nativeModel = selectedProvider(model, target.fixtureGeneration, message);
-      requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
-      for (const body of nativeModel) for (const value of Object.values(body.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, target.backendRef.conversationId, "Native provider thread header mismatch");
-      const actualOutput = await invoke(client, "agent_output", { session: target.sessionId, full: true });
-      assert.ok(text(actualOutput).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
-      for (const other of [a, b, newer, literal]) if (other.sessionId !== target.sessionId) assert.ok(!text(actualOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`), "Other generation output must not be borrowed");
-      const hook = requireHttpBefore(hostTools().slice(hooksBefore), "agent_respond", ref, message);
-      return { method: request.method, threadId: request.threadId, turnId: response.turnId, actualToolCallId: hook.toolCallId, providerRequests: model.length, nativeProviderRequests: nativeModel.length, backgroundProviderRequests: model.length - nativeModel.length, resumedStoppedGeneration: wasStopped };
-    }
-    async function stopGeneration(target: Json) {
-      const before = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
-      evidence.record("host-events.jsonl", { phase: "native-kill-pre-row", ...generationObservation(before, target) });
-      const result = await invoke(client, "agent_kill", { session: target.sessionId });
-      const classification = killResultClass(result);
-      evidence.record("host-events.jsonl", { phase: "native-kill-result", classification, resultSha256: sha256(JSON.stringify(result)), ...generationObservation(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target) });
-      assert.ok(["terminated", "already-completed", "already-killed"].includes(classification), "Unexpected native kill outcome");
-      await until(() => {
-        const row = store().sessions.find((item: Json) => item.sessionId === target.sessionId);
-        evidence.record("host-events.jsonl", { phase: "native-kill-row-observation", ...generationObservation(row, target) });
-        return stoppedGeneration(row, target) ? true : undefined;
-      }, "captured native generation completed or killed and stopped");
-    }
+    begin("native-older-exact-newer-name-backend-literal-mask-output");
     const literal = await launch(client, "***");
     await stopGeneration(a);
     const newer = await launch(client, a.name);
@@ -496,6 +531,7 @@ async function main(): Promise<void> {
     assert.ok(text(output).includes(`OCA504_BACKEND_OK:${a.fixtureGeneration}:`));
     assert.ok(!text(output).includes(`OCA504_BACKEND_OK:${newer.fixtureGeneration}:`));
     outcomes.push({ lane: lanes.rpc, scenario: "native-older-exact-newer-name-backend-literal-mask-output", status: "PASS", activeAliasCoverage: aliasProtection, numericBoundary: "plugin-invalid-parameters" });
+    begin("native-persisted-resume");
     const originalThread = a.backendRef.conversationId;
     await stopGeneration(a);
     const resumeStart = nativeEvents().length, resumeProvider = providerRequests.length;
@@ -516,7 +552,13 @@ async function main(): Promise<void> {
     outcomes.push({ lane: lanes.rpc, scenario: "native-persisted-resume", status: "PASS", freshResumeAndTurnTerminal: true });
 
 
+    }
+    if (runsHostCohort(cohort, "retries")) {
+    begin("retries-native-prerequisites");
+    const b = referenceB ?? await launch(client, "retry-selected");
+    if (!referenceB) await launch(client, "retry-competitor", {}, "agent:main:isolated-requester");
     for (const concurrent of [false, true]) {
+      begin(concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential");
       const prior = nativeEvents().length, hooksBefore = hostTools().length, providerBefore = providerRequests.length;
       const key = `same-${randomUUID()}`, message = `REPEAT-${key}`;
       const repeatWindows: Array<{ boundary: ReturnType<typeof responseResumeBoundary>; result?: Json }> = [];
@@ -563,13 +605,19 @@ async function main(): Promise<void> {
       assert.ok(text(repeatedOutput).includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`));
       outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginUnconfirmedOutcomes: observations.unconfirmed, terminalTurns: new Set(observations.accepted.map((item) => item.turnId)).size, providerRequests: provider.length, sameActualCallId: true, resumeObservation: concurrent ? "shared-overlapping-runtime-window-not-per-call-receipt" : "distinct-sequential-fresh-windows", durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
     }
+    begin("different-actual-call-id-identical-input");
     const firstRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
     const secondRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
     assert.notEqual(firstRepeat.actualToolCallId, secondRepeat.actualToolCallId);
     outcomes.push({ lane: lanes.rpc, scenario: "different-actual-call-id-identical-input", status: "PASS" });
 
+    }
+    if (runsHostCohort(cohort, "git")) {
+    begin("git-native-template-prerequisite");
+    const b = referenceB ?? await launch(client, "git-native-template");
     // Real Git and packed plugin, with only marker-validated persisted fixture rows.
     for (const variant of ["alias", "coordinates", "competing-decision", "policy", "merged-cleanup", "new-hooks"]) {
+      begin(`real-git-queue-${variant}`);
       const repo = createRepo(`queue-${variant}`), row0 = structuredClone(b), rowA = structuredClone(b), rowB = structuredClone(b);
       const paths: string[] = [];
       for (const [i, row] of [row0, rowA, rowB].entries()) {
@@ -622,8 +670,12 @@ async function main(): Promise<void> {
       outcomes.push({ lane: lanes.rpc, scenario: `real-git-queue-${variant}`, status: "PASS", externalWriterAtomicity: false });
     }
 
+    }
     for (const mode of [false, { mode: "tools" }] as const) {
-      const embedded = await gateway(mode);
+      const selected = mode === false ? "embedded-direct" : "embedded-deferred";
+      if (!runsHostCohort(cohort, selected)) continue;
+      begin(mode === false ? "direct" : "deferred");
+      const embedded = cohort === "all" ? await gateway(mode) : client;
       const embeddedSubscription = subscriptions.get(embedded); assert.ok(embeddedSubscription);
       const target = await launch(embedded, `embedded-${mode === false ? "direct" : "deferred"}`);
       const name = mode === false ? "direct" : "deferred";
@@ -705,6 +757,9 @@ async function main(): Promise<void> {
       assert.ok(hasFreshSubscribedTerminal(hostEvents, eventStart, embeddedSubscription, run.runId), "Fresh same-connection/session/run subscribed host terminal evidence required");
       outcomes.push({ lane: lanes.embedded, scenario: name, status: "PASS", providerFailureExposure: mode === false ? "readable content only; native metadata observed at actual public after-hook" : "outer failed bridge and native structured result", hostFailureEventObserved: subscribed.some((event) => event.payload?.data?.isError === true), classifierSourceContract: "pinned host source; no fabricated classifier receipt", realProviderObservedFailures: 4, actualHostResults: 6, subscribedEvents: subscribed.length });
     }
+    begin("common-final-identity");
+    const coverage = hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>);
+    assert.equal(coverage.remainingRequiredScenarios.length, 0, "Selected cohort scenarios must complete");
     const native = nativeEvents();
     assert.equal(providerErrors.length, 0); assert.equal(nativeObservationErrors.length, 0);
     assert.ok(!native.some((event) => event.observationError), "Native protocol observation must be complete");
@@ -717,7 +772,7 @@ async function main(): Promise<void> {
 
     requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
       execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
-    summary = { fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, observerFileHashes: observer.hashes, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
+    summary = { ...coverage, fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, observerFileHashes: observer.hashes, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
       host: HOST, hostPublishedBuild: { bytesSha256: hostBuildBytes ? sha256(hostBuildBytes) : null, version: hostBuild?.version ?? null, commit: hostBuild?.commit ?? null, builtAt: hostBuild?.builtAt ?? null, buildId: hostBuild?.buildId ?? null }, hostLockSRI, hostEntrySha256: sha256(readFileSync(join(hostPath, "openclaw.mjs"))), hostPackageSha256: sha256(readFileSync(join(hostPath, "package.json"))), distHashes: candidateProof.distHashes, nativeCodex: { version: opts["--codex-version"], executableSha256: codexExecutableSha256, relaySha256: sha256(readFileSync(nativeRelay)), initialized: agents.length, completedTurns: native.filter((event) => event.method === "turn/completed" && event.status === "completed").length },
       tarballSha256, distSha256, nativeProcessIdentities: spawned.map((event) => ({ executableSha256: event.executableHash, pid: event.nativeIdentity.pid, group: event.nativeIdentity.group, startTicks: event.nativeIdentity.startTicks })), providerThreadHeadersObserved: providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")), fixtureSha256: sha256(readFileSync(fileURLToPath(import.meta.url))), providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), outcomes,
       unproven: ["external-provider-entitlement", "production-Telegram-delivery", "reporter-host-hooks", "upstream-redaction-repair", "restart-multiple-registry-exactly-once", "compiled-host-source-attestation", ...(!hostBuild?.commit ? ["published-host-build-commit"] : []), ...(!providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")) ? ["direct-provider-thread-header-mapping"] : [])],
@@ -758,10 +813,10 @@ async function main(): Promise<void> {
       ]);
     } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
     try {
-      evidence.record("run-summary.json", { ...summary, providerTraffic, providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), candidateSha: expectedSha, node: process.version, status: originalFailure || cleanupFailure || evidence.errors.length || evidence.failures.length ? "BLOCKED" : "PASS", originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, teardownVerified: !cleanupFailure });
+      evidence.record("run-summary.json", { ...summary, ...hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>), outcomes, failingStage: originalFailure ? failingStage : null, providerTraffic, providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), candidateSha: expectedSha, node: process.version, status: originalFailure || cleanupFailure || evidence.errors.length || evidence.failures.length ? "BLOCKED" : "PASS", originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, teardownVerified: !cleanupFailure });
       evidenceReceipt = evidence.persist(process.version, originalFailure || cleanupFailure ? "BLOCKED" : "PASS", !cleanupFailure);
     } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
-    failureReport = { status: "BLOCKED", providerTraffic, providerRequests: providerRequests.length, candidateSha: expectedSha, node: process.version, originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, evidenceErrors: evidence.errors, evidenceIncomplete: evidence.errors.length > 0 || !evidenceReceipt, teardownVerified: !cleanupFailure, evidence: evidenceReceipt ?? { path: evidence.path, manifestSha256: null }, mandatoryLanes: Object.values(lanes) };
+    failureReport = { ...hostCohortCoverage(cohort, outcomes as Array<{ scenario: string; status: string }>), outcomes, failingStage: originalFailure ? failingStage : null, status: "BLOCKED", providerTraffic, providerRequests: providerRequests.length, candidateSha: expectedSha, node: process.version, originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, evidenceErrors: evidence.errors, evidenceIncomplete: evidence.errors.length > 0 || !evidenceReceipt, teardownVerified: !cleanupFailure, evidence: evidenceReceipt ?? { path: evidence.path, manifestSha256: null }, mandatoryLanes: Object.values(lanes) };
     // A verified teardown permits deleting only the marked disposable profile.
     // Private receipts survive both success and failure; failed cleanup retains
     // its owned scratch for diagnosis and still blocks the run.
@@ -776,4 +831,4 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ...summary, teardownVerified: true, evidence: evidenceReceipt }));
 }
 
-if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main().catch((error) => { console.error(JSON.stringify(failureReport ?? { status: "BLOCKED", error: error instanceof Error ? error.message.replace(/\/(?:tmp|home|work)\/[^\s"',]+/g, "[fixture-path]") : "Host acceptance failed", mandatoryLanes: Object.values(lanes) })); process.exitCode = 1; });
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main().catch((error) => { console.error(JSON.stringify({ ...(failureReport ?? { status: "BLOCKED", mandatoryLanes: Object.values(lanes) }), error: error instanceof Error ? error.message.replace(/\/(?:tmp|home|work)\/[^\s"',]+/g, "[fixture-path]") : "Host acceptance failed" })); process.exitCode = 1; });
