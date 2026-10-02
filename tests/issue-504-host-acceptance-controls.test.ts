@@ -2,15 +2,115 @@ import "./test-env";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { describe, it } from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+
+function syntheticPackedInstall() {
+  const fixture = mkdtempSync(join(tmpdir(), "oca504-packed-control-"));
+  writeFileSync(join(fixture, ".fixture-owner"), FIXTURE_MARKER);
+  const candidate = join(fixture, "candidate"), tarball = join(fixture, "candidate.tgz");
+  mkdirSync(join(candidate, "dist", "chunks"), { recursive: true });
+  writeFileSync(join(candidate, "dist", "index.js"), "synthetic candidate bytes NEVER executed");
+  writeFileSync(join(candidate, "dist", "chunks", "fixture.js"), "synthetic chunk NEVER executed");
+  writeFileSync(join(candidate, "package.json"), JSON.stringify({ name: "openclaw-code-agent", version: "5.0.1", openclaw: { extensions: ["./dist/index.js"] } }));
+  writeFileSync(join(candidate, "openclaw.plugin.json"), JSON.stringify({ id: "openclaw-code-agent", version: "5.0.1" }));
+  writeFileSync(join(candidate, "npm-shrinkwrap.json"), "{}"); writeFileSync(tarball, "synthetic archive proof ONLY");
+  const proof = packedCandidateProof(candidate, tarball);
+  const states = ["state-a", "state-b"].map((name) => join(fixture, name));
+  const reports = states.map((state) => {
+    const installed = join(state, "installed-candidate"); cpSync(candidate, installed, { recursive: true });
+    return { plugin: { id: proof.id, enabled: true, status: "loaded", imported: false, version: proof.version,
+      rootDir: installed, source: join(installed, "dist", "index.js") },
+      install: { source: "archive", sourcePath: tarball, installPath: installed, version: proof.version } };
+  });
+  return { fixture, candidate, tarball, proof, states, reports };
+}
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("accepts current public install metadata without config installs, while requiring import for runtime inspection", () => {
+    const s = syntheticPackedInstall();
+    try {
+      assert.equal(freshPluginBootstrap({ file: join(s.fixture, "fixture.log") }, 12_345).plugins, undefined);
+      const result = verifyPackedPluginInspection(s.reports[0], s.fixture, s.states[0], s.tarball, s.proof);
+      assert.equal(result.installedPath, s.reports[0].install.installPath); assert.equal(result.imported, false);
+      assert.throws(() => verifyPackedPluginInspection(s.reports[0], s.fixture, s.states[0], s.tarball, s.proof, true));
+      assert.equal(verifyPackedPluginInspection({ ...s.reports[0], plugin: { ...s.reports[0].plugin, imported: true } }, s.fixture, s.states[0], s.tarball, s.proof, true).imported, true);
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("refuses missing or ambiguous records and wrong public identity, enabled status, source and version", () => {
+    const s = syntheticPackedInstall();
+    try {
+      const valid = s.reports[0];
+      const bad: unknown[] = [null, [], {}, { plugin: valid.plugin }, { plugin: valid.plugin, install: [] }];
+      for (const patch of [{ id: "other" }, { enabled: false }, { status: "disabled" }, { status: "error" }, { error: "failure" }, { version: "wrong" }, { packageName: "other" }, { packageName: null }, { packageName: 1 }, { packageVersion: "wrong" }, { packageVersion: null }, { packageVersion: 1 }]) bad.push({ ...valid, plugin: { ...valid.plugin, ...patch } });
+      for (const patch of [{ source: "path" }, { version: "wrong" }, { sourcePath: "relative.tgz" }, { installPath: "relative-root" }, { resolvedName: "other" }, { resolvedVersion: "wrong" }]) bad.push({ ...valid, install: { ...valid.install, ...patch } });
+      for (const report of bad) assert.throws(() => verifyPackedPluginInspection(report, s.fixture, s.states[0], s.tarball, s.proof));
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("requires each selected state to supply its own successful packed install and inspect provenance", () => {
+    const s = syntheticPackedInstall();
+    try {
+      for (let i = 0; i < 2; i++) assert.equal(verifyPackedPluginInspection(s.reports[i], s.fixture, s.states[i], s.tarball, s.proof).installedPath, s.reports[i].install.installPath);
+      assert.throws(() => verifyPackedPluginInspection(s.reports[0], s.fixture, s.states[1], s.tarball, s.proof));
+      assert.throws(() => verifyPackedPluginInspection(s.reports[1], s.fixture, s.states[0], s.tarball, s.proof));
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("refuses another archive, workspace/root/entrypoint switches and redirected candidate code", () => {
+    const s = syntheticPackedInstall();
+    try {
+      const valid = s.reports[0], other = join(s.fixture, "other.tgz"); writeFileSync(other, "other archive");
+      for (const report of [
+        { ...valid, install: { ...valid.install, sourcePath: other } },
+        { ...valid, plugin: { ...valid.plugin, rootDir: s.reports[1].plugin.rootDir } },
+        { ...valid, plugin: { ...valid.plugin, source: join(s.candidate, "dist", "index.js") } },
+        { ...valid, plugin: { ...valid.plugin, source: join(valid.plugin.rootDir, "dist", "chunks", "fixture.js") } },
+      ]) assert.throws(() => verifyPackedPluginInspection(report, s.fixture, s.states[0], s.tarball, s.proof));
+      const entrypoint = valid.plugin.source; rmSync(entrypoint); symlinkSync(join(s.candidate, "dist", "index.js"), entrypoint);
+      assert.throws(() => verifyPackedPluginInspection(valid, s.fixture, s.states[0], s.tarball, s.proof));
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("rejects changed or missing/extra packed chunks, changed manifests and altered original tarball", () => {
+    const s = syntheticPackedInstall();
+    try {
+      const valid = s.reports[0], dist = join(valid.plugin.rootDir, "dist"), chunk = join(dist, "chunks", "fixture.js");
+      const check = () => verifyPackedPluginInspection(valid, s.fixture, s.states[0], s.tarball, s.proof);
+      const installedPackage = join(valid.plugin.rootDir, "package.json"), originalPackage = readFileSync(installedPackage);
+      const parsedPackage = JSON.parse(originalPackage.toString());
+      for (const mutation of [{ ...parsedPackage, name: "other-installed-package" }, { ...parsedPackage, version: "other-installed-version" }]) {
+        writeFileSync(installedPackage, JSON.stringify(mutation));
+        assert.throws(check, /Installed candidate manifest differs from packed source/);
+        writeFileSync(installedPackage, originalPackage); assert.doesNotThrow(check);
+      }
+      writeFileSync(installedPackage, Buffer.concat([originalPackage, Buffer.from("\n")]));
+      assert.deepEqual(JSON.parse(readFileSync(installedPackage, "utf8")), parsedPackage);
+      assert.throws(check, /Installed candidate manifest differs from packed source/);
+      writeFileSync(installedPackage, originalPackage); assert.doesNotThrow(check);
+      writeFileSync(chunk, "changed chunk"); assert.throws(check);
+      writeFileSync(chunk, "synthetic chunk NEVER executed"); writeFileSync(join(dist, "extra.js"), "unexpected"); assert.throws(check);
+      rmSync(join(dist, "extra.js")); rmSync(chunk); assert.throws(check);
+      writeFileSync(chunk, "synthetic chunk NEVER executed"); writeFileSync(join(valid.plugin.rootDir, "npm-shrinkwrap.json"), "changed manifest"); assert.throws(check);
+      writeFileSync(join(valid.plugin.rootDir, "npm-shrinkwrap.json"), "{}"); writeFileSync(s.tarball, "changed original archive"); assert.throws(check);
+    } finally { rmSync(s.fixture, { recursive: true, force: true }); }
+  });
+
+  it("starts each install state with fresh local logging and port, without previous plugin paths or auth", () => {
+    const config = freshPluginBootstrap({ file: "/synthetic-owned/log" }, 12_345);
+    assert.deepEqual(Object.keys(config).sort(), ["gateway", "logging"]);
+    assert.deepEqual(config.gateway, { mode: "local", bind: "loopback", port: 12_345 });
+    assert.equal(config.plugins, undefined); assert.equal(config.gateway!.auth, undefined);
+    assert.throws(() => freshPluginBootstrap({ file: "/synthetic-owned/log" }, 0));
+    assert.throws(() => freshPluginBootstrap({ file: "/synthetic-owned/log" }, 65_536));
+  });
+
   it("requires exact candidate identity, clean tracked source and complete options", () => {
     const head = "a".repeat(40);
     requireCandidate(`${head}\n`, head, "");

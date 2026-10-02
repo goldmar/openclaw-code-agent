@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep, join } from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export const FIXTURE_MARKER = "oca-issue-504-host-acceptance-v1";
 export const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -117,6 +118,72 @@ export function ownedPath(root: string, path: string): string {
   const actual = relative(realpathSync(root), realpathSync(ancestor));
   assert.ok(actual !== ".." && !actual.startsWith(`..${sep}`) && !isAbsolute(actual), "Existing ancestor must stay inside the fixture root");
   return candidate;
+}
+
+function exactCandidatePath(fixture: string, path: unknown): string {
+  assert.ok(typeof path === "string" && isAbsolute(path) && path === resolve(path), "Candidate provenance requires a canonical absolute path");
+  const candidate = ownedPath(fixture, path);
+  const parts = relative(fixture, candidate).split(sep);
+  let current = fixture;
+  for (const part of parts) { current = join(current, part); assert.ok(!lstatSync(current).isSymbolicLink(), "Candidate code cannot redirect through a symlink"); }
+  assert.equal(realpathSync(candidate), candidate);
+  return candidate;
+}
+
+function candidateDistHashes(directory: string, prefix = ""): Record<string, string> {
+  assert.ok(lstatSync(directory).isDirectory() && !lstatSync(directory).isSymbolicLink());
+  return Object.fromEntries(readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name), name = prefix + entry.name;
+    assert.ok(!entry.isSymbolicLink(), "Packed candidate chunks cannot redirect to other code");
+    assert.ok(entry.isDirectory() || entry.isFile(), "Packed candidate code must be regular files");
+    return entry.isDirectory() ? Object.entries(candidateDistHashes(path, `${name}/`)) : [[name, sha256(readFileSync(path))]];
+  }));
+}
+
+export function packedCandidateProof(candidateRoot: string, tarball: string) {
+  const pkg = JSON.parse(readFileSync(join(candidateRoot, "package.json"), "utf8"));
+  const plugin = JSON.parse(readFileSync(join(candidateRoot, "openclaw.plugin.json"), "utf8"));
+  assert.equal(pkg.name, "openclaw-code-agent"); assert.equal(plugin.id, pkg.name); assert.equal(plugin.version, pkg.version);
+  assert.ok(Array.isArray(pkg.openclaw?.extensions) && pkg.openclaw.extensions.length === 1 && typeof pkg.openclaw.extensions[0] === "string");
+  const entrypoint = relative(candidateRoot, resolve(candidateRoot, pkg.openclaw.extensions[0]));
+  assert.ok(entrypoint && entrypoint !== ".." && !entrypoint.startsWith(`..${sep}`) && !isAbsolute(entrypoint));
+  const distHashes = candidateDistHashes(join(candidateRoot, "dist"));
+  assert.ok(entrypoint.startsWith(`dist${sep}`) && distHashes[entrypoint.slice(5)], "Declared entrypoint must belong to the verified dist map");
+  return { id: plugin.id as string, packageName: pkg.name as string, version: pkg.version as string, entrypoint,
+    tarballSha256: sha256(readFileSync(tarball)), distHashes,
+    manifestHashes: Object.fromEntries(["package.json", "openclaw.plugin.json", "npm-shrinkwrap.json"].map((name) => [name, sha256(readFileSync(join(candidateRoot, name)))])) };
+}
+
+/** Cold CLI metadata is provenance only; actual Gateway execution remains a separate gate. */
+export function verifyPackedPluginInspection(report: unknown, fixture: string, state: string, tarball: string,
+  proof: ReturnType<typeof packedCandidateProof>, runtime = false): { installedPath: string; source: string; version: string; imported: boolean } {
+  assert.ok(report && typeof report === "object" && !Array.isArray(report));
+  const { plugin, install } = report as Record<string, any>;
+  assert.ok(plugin && typeof plugin === "object" && !Array.isArray(plugin) && install && typeof install === "object" && !Array.isArray(install), "Unambiguous public plugin and install records are required");
+  assert.equal(plugin.id, proof.id); assert.equal(plugin.enabled, true); assert.equal(plugin.status, "loaded");
+  assert.ok(!plugin.error); assert.equal(plugin.version, proof.version);
+  if (plugin.packageName !== undefined) assert.equal(plugin.packageName, proof.packageName);
+  if (plugin.packageVersion !== undefined) assert.equal(plugin.packageVersion, proof.version);
+  assert.equal(install.source, "archive"); assert.equal(install.version, proof.version);
+  if (install.resolvedName !== undefined) assert.equal(install.resolvedName, proof.packageName);
+  if (install.resolvedVersion !== undefined) assert.equal(install.resolvedVersion, proof.version);
+  const sourceArchive = exactCandidatePath(fixture, install.sourcePath);
+  assert.equal(sourceArchive, exactCandidatePath(fixture, tarball)); assert.equal(sha256(readFileSync(sourceArchive)), proof.tarballSha256);
+  const installedPath = exactCandidatePath(fixture, install.installPath), selectedState = exactCandidatePath(fixture, state);
+  const stateRelative = relative(selectedState, installedPath);
+  assert.ok(stateRelative && !stateRelative.startsWith(`..${sep}`) && stateRelative !== ".." && !isAbsolute(stateRelative), "Another state's install cannot authorize this Gateway");
+  assert.equal(exactCandidatePath(fixture, plugin.rootDir), installedPath);
+  const source = exactCandidatePath(fixture, plugin.source);
+  assert.equal(source, resolve(installedPath, proof.entrypoint), "Public plugin entrypoint must belong to the packed candidate");
+  assert.deepEqual(candidateDistHashes(join(installedPath, "dist")), proof.distHashes);
+  for (const [name, hash] of Object.entries(proof.manifestHashes)) assert.equal(sha256(readFileSync(exactCandidatePath(fixture, join(installedPath, name)))), hash, "Installed candidate manifest differs from packed source");
+  if (runtime) assert.equal(plugin.imported, true, "Runtime inspection must report an actual import");
+  return { installedPath, source, version: proof.version, imported: plugin.imported === true };
+}
+
+export function freshPluginBootstrap(logging: OpenClawConfig["logging"], port: number): OpenClawConfig {
+  assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535);
+  return { logging, gateway: { mode: "local", bind: "loopback", port } };
 }
 
 /** Deliberately do not inherit provider keys, brokers, auth stores or host controls. */

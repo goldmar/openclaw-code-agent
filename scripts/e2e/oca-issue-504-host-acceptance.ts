@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, closeFailedProviderResponse, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, closeFailedProviderResponse, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, packedCandidateProof, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean };
@@ -111,7 +111,7 @@ async function main(): Promise<void> {
   const env = fixtureEnv(fixture);
   for (const key of ["HOME", "OPENCLAW_STATE_DIR", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR", "GH_CONFIG_DIR", "NPM_CONFIG_CACHE"]) mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
   for (const path of [env.GIT_CONFIG_GLOBAL!, env.NPM_CONFIG_USERCONFIG!, env.NPM_CONFIG_GLOBALCONFIG!]) writeFileSync(path, "", { mode: 0o600 });
-  const logging = { file: ownedPath(fixture, join(fixture, "openclaw.log")), level: "info" };
+  const logging = { file: ownedPath(fixture, join(fixture, "openclaw.log")), level: "info" as const };
   writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ logging, gateway: { mode: "local" } }), { mode: 0o600 });
   // SDK globals must initialize under the same hermetic environment as children.
   for (const key of Object.keys(process.env)) delete process.env[key];
@@ -228,18 +228,7 @@ async function main(): Promise<void> {
     const filename = Array.isArray(packed) ? packed[0].filename : packed.filename;
     const tarball = ownedPath(fixture, resolve(packDir, filename));
     tarballSha256 = sha256(readFileSync(tarball)); distSha256 = sha256(readFileSync(join(root, "dist", "index.js")));
-    await cli("plugins", "install", "--force", "--accept-capabilities", tarball);
-    await cli("plugins", "enable", "openclaw-code-agent");
-    const installedConfig = parse(env.OPENCLAW_CONFIG_PATH!);
-    const installedPath = ownedPath(fixture, installedConfig.plugins.installs["openclaw-code-agent"].installPath);
-    const contentHashes = (directory: string, prefix = ""): Record<string, string> => Object.fromEntries(readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-      const name = prefix + entry.name, path = join(directory, entry.name);
-      assert.ok(!entry.isSymbolicLink(), "Packed candidate code must not redirect to workspace source");
-      return entry.isDirectory() ? Object.entries(contentHashes(path, `${name}/`)) : [[name, sha256(readFileSync(path))]];
-    }));
-    const distHashes = contentHashes(join(root, "dist"));
-    assert.deepEqual(contentHashes(join(installedPath, "dist")), distHashes, "Installed packed dist must equal all exact built candidate chunks");
-    for (const name of ["openclaw.plugin.json", "package.json", "npm-shrinkwrap.json"]) assert.equal(sha256(readFileSync(join(installedPath, name))), sha256(readFileSync(join(root, name))), "Installed candidate manifest mismatch");
+    const candidateProof = packedCandidateProof(root, tarball);
 
     async function gateway(mode: false | { mode: "tools" }): Promise<GatewayClient> {
       if (currentClient) { await currentClient.stopAndWait({ timeoutMs: 5_000 }); clients.delete(currentClient); }
@@ -254,6 +243,16 @@ async function main(): Promise<void> {
       listenerPorts.push(port);
       const token = randomBytes(32).toString("hex");
       evidence.secrets.push(token);
+      // Install records belong to this selected state, independently of prior profiles.
+      delete env.OPENCLAW_GATEWAY_TOKEN;
+      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(freshPluginBootstrap(logging, port)), { mode: 0o600 });
+      await cli("plugins", "install", "--force", "--accept-capabilities", tarball);
+      await cli("plugins", "enable", "openclaw-code-agent");
+      const installedConfig = parse(env.OPENCLAW_CONFIG_PATH!);
+      const metadata = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
+      const installed = verifyPackedPluginInspection(metadata, fixture, state, tarball, candidateProof);
+      evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-metadata", sourceKind: "archive", ...installed,
+        tarballSha256: candidateProof.tarballSha256, distMapSha256: sha256(JSON.stringify(candidateProof.distHashes)), manifestHashes: candidateProof.manifestHashes });
       const config: OpenClawConfig = {
         ...installedConfig,
         logging,
@@ -288,7 +287,11 @@ async function main(): Promise<void> {
       assert.ok(hello!.auth?.scopes?.includes("operator.write") && hello!.auth?.scopes?.includes("operator.read"), "Actual native Gateway role grants are required");
       await client.request("sessions.subscribe", { sessionKey: "agent:main:main" });
       const inspection = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"));
-      assert.equal(inspection.plugin?.status, "loaded");
+      const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true);
+      assert.equal(runtimeInstalled.installedPath, installed.installedPath);
+      assert.equal(runtimeInstalled.source, installed.source);
+      evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-runtime-cli", ...runtimeInstalled,
+        gatewayExecutionProvenBy: "subsequent actual tool admission and native/subscribed outcomes" });
       const tool = async (name: string, args: Json = {}, key = randomUUID(), requester = "agent:main:main") => {
         const response = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
           method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${token}`, "x-openclaw-message-channel": "webchat", "x-openclaw-message-to": requester },
@@ -611,7 +614,7 @@ async function main(): Promise<void> {
     requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
       execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
     summary = { fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
-      host: HOST, hostPublishedBuild: { bytesSha256: hostBuildBytes ? sha256(hostBuildBytes) : null, version: hostBuild?.version ?? null, commit: hostBuild?.commit ?? null, builtAt: hostBuild?.builtAt ?? null, buildId: hostBuild?.buildId ?? null }, hostLockSRI, hostEntrySha256: sha256(readFileSync(join(hostPath, "openclaw.mjs"))), hostPackageSha256: sha256(readFileSync(join(hostPath, "package.json"))), distHashes, nativeCodex: { version: opts["--codex-version"], executableSha256: codexExecutableSha256, relaySha256: sha256(readFileSync(nativeRelay)), initialized: agents.length, completedTurns: native.filter((event) => event.method === "turn/completed" && event.status === "completed").length },
+      host: HOST, hostPublishedBuild: { bytesSha256: hostBuildBytes ? sha256(hostBuildBytes) : null, version: hostBuild?.version ?? null, commit: hostBuild?.commit ?? null, builtAt: hostBuild?.builtAt ?? null, buildId: hostBuild?.buildId ?? null }, hostLockSRI, hostEntrySha256: sha256(readFileSync(join(hostPath, "openclaw.mjs"))), hostPackageSha256: sha256(readFileSync(join(hostPath, "package.json"))), distHashes: candidateProof.distHashes, nativeCodex: { version: opts["--codex-version"], executableSha256: codexExecutableSha256, relaySha256: sha256(readFileSync(nativeRelay)), initialized: agents.length, completedTurns: native.filter((event) => event.method === "turn/completed" && event.status === "completed").length },
       tarballSha256, distSha256, nativeProcessIdentities: spawned.map((event) => ({ executableSha256: event.executableHash, pid: event.nativeIdentity.pid, group: event.nativeIdentity.group, startTicks: event.nativeIdentity.startTicks })), providerThreadHeadersObserved: providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")), fixtureSha256: sha256(readFileSync(fileURLToPath(import.meta.url))), providerRequests: providerRequests.length, outcomes,
       unproven: ["external-provider-entitlement", "production-Telegram-delivery", "reporter-host-hooks", "upstream-redaction-repair", "restart-multiple-registry-exactly-once", "compiled-host-source-attestation", ...(!hostBuild?.commit ? ["published-host-build-commit"] : []), ...(!providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")) ? ["direct-provider-thread-header-mapping"] : [])],
       pluginFixtureOnly: ["legacy-per-source-matrix", "callback-version-authority", "fine-grained-requester-report-custody", "ambiguous-backend-rejection"] };
