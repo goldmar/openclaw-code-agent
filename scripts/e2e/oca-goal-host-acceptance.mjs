@@ -12,7 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
-import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority } from "./oca501-config-receipt.mjs";
+import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HOST_VERSION = "2026.9.7";
@@ -146,25 +146,6 @@ function verifyCompletionAssertionControls() {
   ];
   for (const [, result, mode] of negatives) assert.throws(() => assertCompletionTerminal(result, id, mode));
   return { scope: "Completion assertion controls only; no host run or delivery is simulated", positives: ["exact visible nonyielded internal run", "exact delivered routed source receipt"], negatives: negatives.map(([name]) => name) };
-}
-
-function messageText(entry) {
-  return typeof entry.content === "string" ? entry.content : (entry.content ?? []).map((part) => part.text ?? "").join("\n");
-}
-
-function actualToolPayload(entry) {
-  assert.equal(entry.type, "function_call_output");
-  let payload = entry.output;
-  for (let depth = 0; depth < 8; depth++) {
-    if (typeof payload === "string") { payload = JSON.parse(payload); continue; }
-    if (Array.isArray(payload)) {
-      if (!payload.every((part) => ["text", "input_text"].includes(part.type) && typeof part.text === "string")) return payload;
-      payload = payload.map((part) => part.text).join("\n"); continue;
-    }
-    if (payload?.content && Array.isArray(payload.content)) { assert.notEqual(payload.isError, true); payload = payload.content; continue; }
-    return payload;
-  }
-  throw new Error("Actual tool output has an unsupported payload format");
 }
 
 function matchesHostCallId(value, call) {
@@ -429,17 +410,27 @@ class AcceptanceRun {
       const outputs = tail.filter((entry) => entry.type === "function_call_output" && entry.call_id === call.id);
       assert.equal(outputs.length, 1, "Consume only the actual matching tool response");
       call.actualOutput = outputs[0]; attempt.consumedCallId = call.id;
-      return actualToolPayload(outputs[0]);
+      // Persist the genuine matched output BEFORE decoding/interpreting its
+      // union. Host error results are first-cause evidence, never success.
+      this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
+      this.artifact(`parent-tool-result-${call.id}.json`, { goalId: state.goalId, sessionId: state.sessionId, callId: call.id, stage: call.stage, actualOutput: outputs[0] });
+      try { return actualToolPayload(outputs[0]); } catch (error) {
+        state.toolError = { callId: call.id, error: String(error) };
+        this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
+        throw error;
+      }
     };
     const authority = await this.channelAuthority();
     attempt.channelAuthority = authority;
+    attempt.fixtureLimit = "Explicit documented replyToMode off; omitted-setting Telegram inference failed on pinned host in preserved R4, not fixed upstream";
     const args = sourceSendArgs(route, state.summary);
     const prior = state.calls.at(-1);
     if (prior?.stage === "send") {
       const output = consume(prior);
-      assert.ok(output && !output.isError && output.result?.isError !== true, "Actual message execution did not fail");
-      if (prior.name === "tool_call") {
-        assert.equal(output.tool?.id, state.tool.id); assert.equal(output.tool.name, "message"); assert.equal(output.tool.source, "openclaw");
+      try { assertActualSendResult(output, prior.name, state.tool, prior.id); } catch (error) {
+        state.toolError = { callId: prior.id, error: String(error) };
+        this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
+        throw error;
       }
       state.resultTransport = "actual Responses function_call_output"; state.actualSendResult = output;
       assert.ok(this.botRequests.some((request) => request.method === "sendMessage" && request.result?.text === state.summary && request.result.chat.id === 501002), "Actual source send precedes NO_REPLY");
@@ -589,7 +580,7 @@ class AcceptanceRun {
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
       tools: { profile: "full", allow: [...pluginToolNames, "message"] },
       plugins: { allow: ["openclaw-code-agent", "telegram"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", requiredGoalVerifierCommands: ["bash ci.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } },
-      channels: { telegram: { enabled: true, botToken: this.secrets[1], apiRoot: this.botUrl, dmPolicy: "allowlist", allowFrom: ["501002"], streaming: { mode: "off" } } },
+      channels: { telegram: { enabled: true, botToken: this.secrets[1], apiRoot: this.botUrl, dmPolicy: "allowlist", allowFrom: ["501002"], replyToMode: "off", streaming: { mode: "off" } } },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
     writeFileSync(this.env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
@@ -771,6 +762,7 @@ class AcceptanceRun {
     telegramAuthority(after, { apiRoot: this.botUrl, token: this.secrets[1], env: this.env, sourceConfig: sourceAfter.config });
     const ownerAfter = await this.hostIdentity();
     assertStableAuthority(before, after, sourceBefore, sourceAfter, ownerBefore, ownerAfter);
+    this.provenance.telegramReplyThreading = { replyToMode: authority.replyToMode, verified: true, scope: "Explicit documented off configuration in new disposable profile", limit: "Pinned-host omitted-account/omitted-replyToMode inference failed in preserved R4; no upstream fix claimed" };
     const receipt = { ...authority, ownedRegularSourceVerified: true, ownedSourceBytesStable: true, publicRevisionBracketStable: true, ownedProcessProfileStable: true };
     this.artifact(`telegram-authority-${this.commandCounter}.json`, receipt);
     return receipt;
@@ -921,7 +913,11 @@ class AcceptanceRun {
       assert.ok(record.content?.some((part) => typeof part.text === "string" && part.text.trim()), "Actual canonical message result has visible result content");
       assert.notEqual(record.isError, true);
     }
-    for (const wire of proof.wire) { assert.ok(Number.isSafeInteger(wire.result.message_id)); assert.ok(wire.respondedAt); }
+    for (const wire of proof.wire) {
+      assert.ok(Number.isSafeInteger(wire.result.message_id)); assert.ok(wire.respondedAt);
+      const params = JSON.parse(wire.params);
+      for (const key of ["reply_to_message_id", "reply_parameters", "message_thread_id", "direct_messages_topic_id"]) assert.equal(Object.hasOwn(params, key), false, "Explicit off source send has no fabricated reply/thread identifiers");
+    }
     const source = { retainedRunId: row.completionWakeRunId, terminalReceipt: terminal.terminalReceipt, protocol: proof.state, messageCallId: proof.call.id, wire: proof.wire, canonicalHistory: history, resultTransport: proof.state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool transcript and terminal source receipt (final hook ended before next Responses request)" };
     this.artifact(`source-delivery-${task.id}.json`, source);
     return source;

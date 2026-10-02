@@ -85,12 +85,13 @@ function accountView(config, { apiRoot, credential, publicReadback }) {
   assert.ok(!own(telegram, 'tokenFile') && !own(telegram, 'botTokenFile'), 'No external Telegram credential file');
   assert.ok(telegram.botToken === credential, publicReadback ? 'Pinned public credential is the official redaction sentinel' : 'Internal Telegram credential belongs to this fixture');
   assert.ok(telegram.apiRoot === apiRoot && new URL(apiRoot).hostname === '127.0.0.1', 'Telegram endpoint is the owned loopback fixture');
+  assert.ok(telegram.replyToMode === 'off', 'Explicit fixture no-implicit-reply mode is required');
   assert.ok(telegram.dmPolicy === 'allowlist' && Array.isArray(telegram.allowFrom) && telegram.allowFrom.length === 1 && telegram.allowFrom[0] === '501002', 'Telegram destination authority is exact');
   assert.ok(!own(telegram, 'accounts') && !own(telegram, 'defaultAccount') && !own(telegram, 'defaultAccountId'), 'No alternative/default account override');
   assert.ok(Array.isArray(config.bindings) && config.bindings.length === 1, 'One authoritative channel binding');
   const binding = config.bindings[0];
   assert.ok(binding.agentId === 'main' && Object.keys(binding).length === 2 && binding.match?.channel === 'telegram' && binding.match?.accountId === 'default' && Object.keys(binding.match).length === 2, 'Exact main/default Telegram binding');
-  return { provider: 'telegram', apiRoot, target: '501002', soleEffectiveAccount: 'default', binding: { agentId: 'main', channel: 'telegram', accountId: 'default' } };
+  return { provider: 'telegram', apiRoot, target: '501002', replyToMode: 'off', soleEffectiveAccount: 'default', binding: { agentId: 'main', channel: 'telegram', accountId: 'default' } };
 }
 export function telegramAuthority(response, { apiRoot, token, env, sourceConfig }) {
   assert.ok(env && !Object.keys(env).some((key) => /TELEGRAM/.test(key)), 'No inherited Telegram credential');
@@ -146,4 +147,45 @@ export function selectRoutedCompletion(input, goals) {
   exactFixtureRoute(storedRoute);
   assert.deepEqual(route, storedRoute, "Task/wake account value and presence remain unchanged");
   return { goal, route, wake, index };
+}
+
+function rejectActualToolError(payload, callId) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+  if (payload.status === "error" || payload.isError === true || (Object.hasOwn(payload, "error") && payload.error != null)) {
+    const cause = payload.error ?? payload.content ?? "host marked the result as an error";
+    throw new Error(`Actual host tool error for ${callId}: ${typeof cause === "string" ? cause : JSON.stringify(cause)}`);
+  }
+  if (payload.result) rejectActualToolError(payload.result, callId);
+  if (payload.details) {
+    rejectActualToolError(payload.details, callId);
+    if (payload.details.ok === false) throw new Error(`Actual host tool failure for ${callId}: ${JSON.stringify(payload.details)}`);
+  }
+}
+export function actualToolPayload(entry) {
+  assert.equal(entry.type, "function_call_output");
+  let payload = entry.output;
+  for (let depth = 0; depth < 8; depth++) {
+    if (typeof payload === "string") { payload = JSON.parse(payload); continue; }
+    rejectActualToolError(payload, entry.call_id);
+    if (Array.isArray(payload)) {
+      if (!payload.every((part) => ["text", "input_text"].includes(part.type) && typeof part.text === "string")) return payload;
+      payload = payload.map((part) => part.text).join("\n"); continue;
+    }
+    if (payload?.content && Array.isArray(payload.content)) { payload = payload.content; continue; }
+    return payload;
+  }
+  throw new Error("Actual tool output has an unsupported payload format");
+}
+export function assertActualSendResult(output, name, tool, callId) {
+  rejectActualToolError(output, callId);
+  assert.ok(output && typeof output === "object" && !Array.isArray(output), "Actual send has an object result");
+  assert.ok(output.status === undefined || output.status === "ok" || output.status === "success", "Unknown send result status is BLOCKED");
+  if (name === "tool_call") {
+    assert.ok(output.tool && typeof output.tool === "object" && output.result && typeof output.result === "object", "Unknown tool_call result union is BLOCKED");
+    assert.equal(output.tool.id, tool.id); assert.equal(output.tool.name, "message"); assert.equal(output.tool.source, "openclaw");
+    assert.equal(output.result.details?.ok, true, "Actual core message result succeeded");
+  } else {
+    assert.equal(name, "message");
+    assert.equal(output.ok, true, "Actual directly advertised message result succeeded");
+  }
 }

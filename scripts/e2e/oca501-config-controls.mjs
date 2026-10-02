@@ -4,12 +4,12 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority } from './oca501-config-receipt.mjs';
+import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from './oca501-config-receipt.mjs';
 import { buildEvidence, frameEvidence, decodeEvidence } from './oca501-evidence.mjs';
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const hidden = 'PRIVATE_UNKNOWN_PROFILE_SENTINEL';
 const h = `hmac-sha256:v1:${'a'.repeat(43)}`, apiRoot = 'http://127.0.0.1:51111', token = 'OWNED_SYNTHETIC_TOKEN';
-const config = { gateway: { secret: hidden }, unknown: hidden, agents: { private: hidden }, providers: { private: hidden }, channels: { telegram: { enabled: true, botToken: token, apiRoot, dmPolicy: 'allowlist', allowFrom: ['501002'] } }, bindings: [{ agentId: 'main', match: { channel: 'telegram', accountId: 'default' } }] };
+const config = { gateway: { secret: hidden }, unknown: hidden, agents: { private: hidden }, providers: { private: hidden }, channels: { telegram: { enabled: true, botToken: token, apiRoot, dmPolicy: 'allowlist', allowFrom: ['501002'], replyToMode: 'off' } }, bindings: [{ agentId: 'main', match: { channel: 'telegram', accountId: 'default' } }] };
 const publicConfig = structuredClone(config); publicConfig.channels.telegram.botToken = '__OPENCLAW_REDACTED__';
 const resolved = `hmac-sha256:v1:${'b'.repeat(43)}`;
 const response = { ok: true, hash: h, valid: true, configRevisionHash: resolved, appliedConfigHash: resolved, config: publicConfig, raw: hidden, errors: hidden, changedPaths: ['tools.deny', hidden], sentinel: { persisted: true, payload: { kind: 'config-patch', status: 'ok', ts: 1, message: hidden, doctorHint: hidden, stats: { mode: 'config.patch', root: hidden, requiresRestart: false, private: hidden } } } };
@@ -62,6 +62,13 @@ for (const [name, mutate] of [
   ['owned endpoint mismatch', (copy) => { copy.channels.telegram.apiRoot = 'http://127.0.0.1:52222'; }], ['owned target mismatch', (copy) => { copy.channels.telegram.allowFrom = ['other']; }],
   ['owned binding mismatch', (copy) => { copy.bindings[0].agentId = 'other'; }],
 ]) { const copy = structuredClone(config); mutate(copy); deny(name, () => telegramAuthority(response, { ...authorityOptions, sourceConfig: copy })); }
+for (const mode of [undefined, 'all', 'first', null, false, '', 'foreign']) {
+  for (const boundary of ['public', 'owned']) {
+    const copy = structuredClone(boundary === 'public' ? publicConfig : config);
+    if (mode === undefined) delete copy.channels.telegram.replyToMode; else copy.channels.telegram.replyToMode = mode;
+    deny(`${boundary} reply mode ${String(mode)}`, () => telegramAuthority(boundary === 'public' ? { ...response, config: copy } : response, boundary === 'owned' ? { ...authorityOptions, sourceConfig: copy } : authorityOptions));
+  }
+}
 const ownedRoot = mkdtempSync(join(tmpdir(), 'oca501-authority-controls-'));
 const sourcePath = join(ownedRoot, 'config.json'); writeFileSync(sourcePath, JSON.stringify(config));
 const source = readOwnedConfig(sourcePath, ownedRoot);
@@ -94,6 +101,27 @@ for (const prefix of ['Quoted recap:\n', '```\n', '> ']) deny('quoted/fenced wak
 deny('stored unobserved thread', () => selectRoutedCompletion(input, [goalFor({ ...routes[0], threadId: 2 })]));
 const timestamped = { ...input, input: [{ ...input.input[0], content: '[Fri 2026-10-02 00:35 UTC] ' + input.input[0].content }] };
 assert.equal(selectRoutedCompletion(timestamped, [goalFor(routes[0])]).goal.id, 'control-goal');
+// Captured genuine R4 union (safe fixture-only call/cause), not an E2E
+// simulation. Receipt persistence precedes interpretation; zero success paths.
+const originalCause = 'ToolInputError: replyTo must be a positive integer.';
+const actualError = { type: 'function_call_output', call_id: 'call_oca501_parent_23', output: JSON.stringify({ status: 'error', tool: 'tool_call', error: originalCause }) };
+const matchedReceipts = []; let sourceSuccesses = 0, silentSuccesses = 0;
+const interpret = (entry) => {
+  matchedReceipts.push(structuredClone(entry));
+  const payload = actualToolPayload(entry);
+  assertActualSendResult(payload, 'tool_call', { id: 'actual-message' }, entry.call_id);
+  sourceSuccesses++; silentSuccesses++;
+};
+assert.throws(() => interpret(actualError), (error) => error.message.includes(originalCause) && error.message.includes(actualError.call_id));
+assert.deepEqual(matchedReceipts[0], actualError); assert.equal(sourceSuccesses, 0); assert.equal(silentSuccesses, 0);
+negatives.push('captured R4 status-error retained before interpretation with no source/silent success');
+for (const wrapper of [{ isError: true, error: originalCause }, { tool: {}, result: { status: 'error', error: originalCause } }, { tool: {}, result: { isError: true, error: originalCause } }, { tool: {}, result: { details: { error: originalCause } } }]) {
+  deny('actual-shaped nested host error cause', () => actualToolPayload({ ...actualError, output: JSON.stringify(wrapper) }));
+}
+for (const payload of [null, [], { status: 'pending' }, { tool: 'tool_call' }, { tool: { id: 'actual-message', name: 'message', source: 'openclaw' }, result: {} }]) deny('unknown/malformed send union', () => assertActualSendResult(payload, 'tool_call', { id: 'actual-message' }, actualError.call_id));
+const success = { tool: { id: 'actual-message', name: 'message', source: 'openclaw' }, result: { content: [{ type: 'text', text: 'Actual-shape result' }], details: { ok: true } } };
+assertActualSendResult(actualToolPayload({ ...actualError, output: JSON.stringify(success) }), 'tool_call', { id: 'actual-message' }, actualError.call_id);
+assertActualSendResult({ ok: true, messageId: 'actual-shape' }, 'message', undefined, actualError.call_id);
 // Exercise registration + the actual evidence encoder/decoder boundary with
 // projected receipts. No raw config inputs are written to artifact files.
 const directory = mkdtempSync(join(tmpdir(), 'oca501-config-controls-'));
@@ -102,4 +130,4 @@ const metadata = { candidateSha: 'a'.repeat(40), nodeVersion: '24.16.0', phase: 
 const bundle = buildEvidence(directory, ['command.json', 'dedicated.json', 'failure.json', 'authority.json'].map((name) => ({ name, alreadyRedacted: true })), metadata, [token]);
 const decoded = decodeEvidence(frameEvidence(bundle), { candidateSha: metadata.candidateSha, nodeVersion: metadata.nodeVersion, phase: metadata.phase, controlsOnly: true });
 assert.ok(decoded.files.every((file) => !file.content.includes(hidden) && !file.content.includes(token)));
-console.log(JSON.stringify({ scope: 'Offline route/config projection enforcement controls only', positiveGroups: 6, negativeCount: negatives.length, negatives, scratch: directory }));
+console.log(JSON.stringify({ scope: 'Offline route/config projection enforcement controls only', positiveGroups: 8, negativeCount: negatives.length, negatives, scratch: directory }));
