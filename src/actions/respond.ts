@@ -675,8 +675,12 @@ export async function executeRespond(
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
-    // Goal-loop replies re-check after the awaits above; they never detach.
-    if (params.fromGoalController && session.goalTaskId) sm.continueGoalSession(session, session, { fromGoalController: true });
+    // A goal-loop reply never detaches: re-check right before delivery, and
+    // refuse a session that an explicit action detached in the meantime.
+    if (params.fromGoalController) {
+      if (session.goalDetached) throw new Error("The goal ended; this session now continues as an ordinary session.");
+      if (session.goalTaskId) sm.continueGoalSession(session, session, { fromGoalController: true });
+    }
     const delivery = await session.sendMessage(params.message);
     if (isPlanApproval) {
       persistPlanApprovalState(sm, session);

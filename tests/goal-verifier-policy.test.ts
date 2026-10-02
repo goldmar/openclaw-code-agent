@@ -500,6 +500,10 @@ describe("goal-owned session execution boundaries", () => {
     assert.equal(session.goalTaskId, undefined, "a detached session is an ordinary session");
     await tick(5);
     assert.equal(harness.consumedPrompts.length, before + 1);
+    const lateControllerReply = await executeRespond(manager, { session: session.id, message: "auto", userInitiated: false, fromGoalController: true });
+    assert.equal(lateControllerReply.isError, true, "goal-loop replies never reach a detached session");
+    await tick(5);
+    assert.equal(harness.consumedPrompts.length, before + 1);
     assert.equal(JSON.stringify(f.store.get("goal")), evidence, "a continued session cannot change the ended goal");
     assert.equal(f.counters().launches, 0);
     session.kill("user"); harness.endMessages();
@@ -541,10 +545,12 @@ describe("goal-owned session execution boundaries", () => {
     const attached = (manager as any).goalOwnedLaunch({ prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" });
     assert.equal(attached.goalOwnership, "attached");
     assert.equal(attached.goalTaskId, "goal");
+    assert.equal(attached.isGoalTaskEnded(), false, "the launch installs the live goal-end check");
     setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
     assert.throws(() => (manager as any).goalOwnedLaunch(attached), /policy changed/);
     assert.equal(current.status, "failed");
     assert.throws(() => (manager as any).goalOwnedLaunch(attached), /already failed/);
+    assert.equal(attached.isGoalTaskEnded(), true);
   });
 
   it("goal work that began attached stays strict even if a concurrent action detaches the session", async () => {
@@ -602,7 +608,8 @@ describe("goal-owned session execution boundaries", () => {
       assert.equal(kind === "text" ? await answered.submitPendingInputText("yes") : await answered.submitPendingInputOption(0), true);
       assert.equal(answered.goalTaskId, undefined);
     }
-    assert.equal(manager.continueGoalSession(sessions.ask!, sessions.ask), "detached");
+    // A question-button answer goes through the manager's resolve path.
+    manager.resolveAskUserQuestion(sessions.ask!.id, 0);
     assert.equal(sessions.ask!.goalTaskId, undefined);
     assert.equal(JSON.stringify(f.store.get("goal")), evidence, "continued sessions cannot change the ended goal");
     for (const session of Object.values(sessions)) session.kill("user");
