@@ -446,8 +446,9 @@ function diagnosticEnvelope(text) {
 }
 // Rejection-only observation. This never supplies acceptance or exports text.
 export function rejectedHostLogDiagnostic(input, options) {
-  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input), original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-  const fallback = (status) => ({ diagnosticStatus: status, original, rawContentExcluded: true, inspectionComplete: false, inspectedLines: 0, uninspectedLines: "NOT_COUNTED", lexicalCountScope: "NOT_COUNTED" });
+  const raw = Buffer.isBuffer(input), bytes = raw ? input : Buffer.from(input), original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  const inputIdentityDomain = raw ? "original captured stream bytes" : "captured text UTF8 encoding; original undecoded byte validity unavailable";
+  const fallback = (status) => ({ diagnosticStatus: status, original, inputIdentityDomain, rawContentExcluded: true, inspectionComplete: false, inspectedLines: 0, uninspectedLines: "NOT_COUNTED", lexicalCountScope: "NOT_COUNTED" });
   if (bytes.length > 4 * 1024 * 1024) return fallback("DIAGNOSTIC_BOUND_EXCEEDED");
   const text = bytes.toString("utf8"); if (!Buffer.from(text).equals(bytes)) return fallback("DIAGNOSTIC_INVALID_UTF8");
   try {
@@ -484,7 +485,7 @@ export function rejectedHostLogDiagnostic(input, options) {
       }
       if (lexicalCapped) break;
     }
-    const payload = { diagnosticStatus: "REJECTED_STREAM_OBSERVED", original, rawContentExcluded: true, inspectionComplete: !lexicalCapped, capturedLines: lines.length, inspectedLines: lines.length, failedLines: failed, safeLines: lines.length - failed, omittedFailedLineDetails: failed - failedDetails.length, failureHistogram: histogram, failedLineDetails: failedDetails, wholeFailure: whole.failureDiagnostic, crossingLineUnresolved: failed === 0, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches - lexicalDetails.length, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", lexicalDetails, acceptanceEvidence: false };
+    const payload = { diagnosticStatus: "REJECTED_STREAM_OBSERVED", original, inputIdentityDomain, rawContentExcluded: true, inspectionComplete: !lexicalCapped, capturedLines: lines.length, inspectedLines: lines.length, failedLines: failed, safeLines: lines.length - failed, omittedFailedLineDetails: failed - failedDetails.length, failureHistogram: histogram, failedLineDetails: failedDetails, wholeFailure: whole.failureDiagnostic, crossingLineUnresolved: failed === 0, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches - lexicalDetails.length, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", lexicalDetails, acceptanceEvidence: false };
     if (Buffer.byteLength(JSON.stringify(payload)) > 64 * 1024) return fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
     const result = { ...payload, projectedDiagnosticSha256: digest(Buffer.from(JSON.stringify(payload))), projectedDigestScope: "Closed diagnostic payload; not original stream" };
     return Buffer.byteLength(JSON.stringify(result)) <= 64 * 1024 ? result : fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
@@ -497,7 +498,7 @@ export function hostLogEvidence(input, options) {
   if (assessment.safe) { const commandMetadata = assessment.commandMetadata; return { completeStreamSafe: true, original, ...(commandMetadata.length ? { commandMetadata } : {}) }; }
   {
     const failureDiagnostic = assessment.failureDiagnostic;
-    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: { ...rejectedHostLogDiagnostic(raw ? bytes : text, options), inputIdentityDomain: original.identityDomain },
+    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: rejectedHostLogDiagnostic(raw ? bytes : text, options),
       excludedRecordRange: { first: 0, last: text.split("\n").length - 1, numbering: "zero-based captured stream lines; entire stream excluded" },
       exclusionReason: "Unsafe or unknown structured profile/auth/content-bearing log; omitted lifecycle/error facts remain BLOCKED" };
     return { ...payload, projectedPayloadSha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"), projectedDigestScope: "Closed projection payload before digest/source wrapper; not the original stream" };

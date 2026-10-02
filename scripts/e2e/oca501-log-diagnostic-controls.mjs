@@ -60,6 +60,20 @@ positiveGroups++;
 const extraPayloads = [{ unknown: { value: 1 } }, { phaseDurationsMs: { run: -1 } }, { phaseDurationsMs: { "1invalid": 0 } }, { reason: {} }, { component: "CodexHarness", event: "turn.terminal", foreign: 1 }, [{}], 'bad {"safe":', String.raw`bad "{\"safe\":`];
 const oversizedDetails = Array.from({ length: 64 }, (_, i) => logger(i % 2 ? "plugins.entries: value" : { gateway: {} }, i % 7, ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"][i % 7]));
 for (const payload of extraPayloads) for (const [id, severity] of ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"].entries()) oversizedDetails.push(logger(payload, id, severity));
+// The actual exported wrapper must include domain labels inside the cap/digest.
+const boundaryInput = (count) => "x".repeat(100000) + "\n" + oversizedDetails.slice(0, count).join("\n");
+const below = hostLogEvidence(boundaryInput(79)); assert.equal(below.completeStreamSafe, false);
+const actualBelow = below.rejectedStreamDiagnostic; assert.equal(actualBelow.diagnosticStatus, "REJECTED_STREAM_OBSERVED");
+assert.ok(Buffer.byteLength(JSON.stringify(actualBelow)) <= 65536 && Buffer.byteLength(JSON.stringify(actualBelow)) > 65000);
+const { projectedDiagnosticSha256, projectedDigestScope, ...digestedPayload } = actualBelow;
+assert.equal(projectedDiagnosticSha256, hash(JSON.stringify(digestedPayload))); assert.match(digestedPayload.inputIdentityDomain, /undecoded byte validity unavailable/);
+for (const input of [boundaryInput(80), boundaryInput(81), Buffer.from(boundaryInput(84))]) {
+  const receipt = hostLogEvidence(input); assert.equal(receipt.completeStreamSafe, false); assert.equal(receipt.rawCompleteStreamExcluded, true);
+  const actual = receipt.rejectedStreamDiagnostic; assert.equal(actual.diagnosticStatus, "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"); assert.equal(actual.inspectionComplete, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(actual)) <= 65536); assert.equal(actual.original.sha256, hash(input));
+  assert.ok(!JSON.stringify(actual).includes("SYNTHETIC_PRIVATE_VALUE")); negativeControls++;
+}
+positiveGroups++;
 const overflow = check("x".repeat(1000000) + "\n" + oversizedDetails.join("\n")); assert.equal(overflow.diagnosticStatus, "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"); assert.equal(overflow.inspectionComplete, false); negativeControls++;
 const otherPayload = check(JSON.stringify({ "0": 0, message: "token: SYNTHETIC_PRIVATE_VALUE", _meta: { logLevelId: 2, logLevelName: "DEBUG" } })); assert.equal(otherPayload.failedLineDetails[0].envelope, "PINNED_LOGGER_OTHER_PAYLOAD");
 const nestedMeta = check(logger("token: SYNTHETIC_PRIVATE_VALUE", 2, "DEBUG", { runtime: {} })); assert.equal(nestedMeta.failedLineDetails[0].header, "UNKNOWN_ENVELOPE"); negativeControls++;
