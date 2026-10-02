@@ -1,3 +1,5 @@
+import { unknownSessionError, type sessionToolError } from "../tools/session-tool-error";
+import { FollowUpDeliveryUnconfirmedError } from "../harness/follow-up-delivery-error";
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { truncateText } from "../format";
@@ -37,6 +39,9 @@ interface RespondParams {
 
 interface RespondResult {
   text: string;
+  details?: ReturnType<typeof sessionToolError>["details"] | {
+    status: "error"; code: "response_delivery_unconfirmed"; targetSelected: true; recovery: string;
+  };
   isError?: boolean;
 }
 
@@ -494,7 +499,8 @@ export async function executeRespond(
   const persisted = session ? undefined : sm.getPersistedSession(params.session);
 
   if (!session && !persisted) {
-    return { text: `Error: Session "${params.session}" not found.`, isError: true };
+    const failure = unknownSessionError(params.session);
+    return { text: failure.content[0].text, isError: true, details: failure.details };
   }
 
   const target = session ?? persisted!;
@@ -685,6 +691,15 @@ export async function executeRespond(
       ].filter(Boolean).join("\n"),
     };
   } catch (err: unknown) {
+    if (err instanceof FollowUpDeliveryUnconfirmedError) {
+      return {
+        text: `Error: ${err.message}`, isError: true,
+        details: {
+          status: "error", code: "response_delivery_unconfirmed", targetSelected: true,
+          recovery: "Check the originally selected exact session with authorized agent_output before explicitly deciding whether to send again.",
+        },
+      };
+    }
     return { text: `Error sending message to session ${session.name} [${session.id}]: ${errorMessage(err)}`, isError: true };
   }
 }

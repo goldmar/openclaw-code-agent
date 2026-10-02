@@ -55,13 +55,25 @@ describe("literal worktree ref boundary", () => {
     for (const value of invalid) {
       for (const [tool, params] of [
         [makeAgentLaunchTool({} as any), { prompt: "test", worktree_base_branch: value }],
-        [makeAgentMergeTool(), { session: "test", base_branch: value }],
         [makeAgentPrTool(), { session: "test", base_branch: value }],
         [makeAgentWorktreeCleanupTool(), { base_branch: value }],
       ] as const) {
         const result = await tool.execute("test", params);
         assert.match(result.content[0].text, /Error: Expected/);
       }
+    }
+  });
+
+  it("validates a known merge target before any worktree mutation", async () => {
+    setSessionManager({
+      resolve: () => ({ id: "known", name: "known" }),
+      getSessionGeneration: (): undefined => undefined,
+      listPersistedSessions: (): never[] => [],
+    } as any);
+    for (const value of invalid) {
+      const result = await makeAgentMergeTool().execute("test", { session: "known", base_branch: value });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Error: (Expected|Invalid parameters)/);
     }
   });
 

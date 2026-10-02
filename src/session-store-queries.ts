@@ -1,5 +1,6 @@
 import { getBackendConversationId } from "./session-backend-ref";
 import type { PersistedSessionInfo } from "./types";
+import { matchesGeneration, type SessionGeneration } from "./session-generation";
 
 type SessionStoreIndexes = {
   persisted: Map<string, PersistedSessionInfo>;
@@ -84,6 +85,12 @@ export class SessionStoreQueries {
     const byBackendId = this.indexes.backendIdIndex.get(ref);
     if (byBackendId) return this.indexes.persisted.get(byBackendId);
     return this.indexes.persisted.get(ref);
+  }
+
+  getSessionGeneration(generation: SessionGeneration): PersistedSessionInfo | undefined {
+    const key = generation.kind === "oca" ? this.indexes.idIndex.get(generation.sessionId) : generation.storageKey;
+    const row = key === undefined ? undefined : this.indexes.persisted.get(key);
+    return row && matchesGeneration(row, generation) ? row : undefined;
   }
 
   listPersistedSessions(): PersistedSessionInfo[] {

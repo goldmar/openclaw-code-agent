@@ -2,11 +2,12 @@ import type { Session } from "./session";
 import type { SessionControlPatch } from "./session-state";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import type { PersistedSessionInfo } from "./types";
+import type { SessionGeneration } from "./session-generation";
 
 type PersistedStore = Pick<
   import("./session-store").SessionStore,
   "getPersistedSession" | "assertPersistedEntry" | "saveIndex"
->;
+> & Partial<Pick<import("./session-store").SessionStore, "listPersistedSessions">>;
 
 type ControlFieldSetter = {
   setControlField?: <K extends keyof SessionControlPatch>(key: K, value: SessionControlPatch[K]) => void;
@@ -40,6 +41,34 @@ export class SessionStateSyncService {
     }
 
     if (!existing && !active) return false;
+    if (existing) this.deps.store.saveIndex();
+    return true;
+  }
+
+  /** Worktree actions must never sync a patch to another name/backend alias. */
+  applyGenerationPatch(
+    generation: SessionGeneration,
+    existing: PersistedSessionInfo | undefined,
+    patch: Partial<PersistedSessionInfo>,
+  ): boolean {
+    const normalized = this.normalizeCompletionWakePatch(patch);
+    let active: Session | undefined;
+    if (generation.kind === "oca") {
+      active = this.deps.sessions.get(generation.sessionId);
+    } else if (existing && generation.backendConversationId && generation.pinnedLiveSessionId) {
+      const candidates = [...this.deps.sessions.values()].filter((session) =>
+        getBackendConversationId(session) === generation.backendConversationId);
+      const rows = this.deps.store.listPersistedSessions?.();
+      const competing = rows?.some((row) => row.sessionId && getBackendConversationId(row) === generation.backendConversationId);
+      const pinned = this.deps.sessions.get(generation.pinnedLiveSessionId);
+      if (rows && !competing && candidates.length === 1 && candidates[0] === pinned) active = pinned;
+    }
+    if (!existing && !active) return false;
+    if (existing) {
+      Object.assign(existing, normalized);
+      this.deps.store.assertPersistedEntry(existing);
+    }
+    if (active) this.applyPatchToActiveSession(active, normalized);
     if (existing) this.deps.store.saveIndex();
     return true;
   }
