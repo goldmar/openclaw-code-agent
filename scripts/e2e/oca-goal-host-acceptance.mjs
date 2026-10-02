@@ -154,7 +154,7 @@ export class FeatureRun {
     const identity = processIdentity(child.pid);
     let code;
     try {
-      await until(() => spawnError || child.stdout.closed && child.stderr.closed, timeoutMs);
+      await until(() => spawnError || (child.exitCode !== null || child.signalCode !== null) && child.stdout.closed && child.stderr.closed, timeoutMs);
       code = child.exitCode;
     } catch { timedOut = true; }
     let cleanup;

@@ -135,4 +135,23 @@ describe("bounded representative host receipts", () => {
     const last = run.proofs.at(-1); assert.equal(last.timedOut, true); assert.equal(last.signal, "SIGKILL"); assert.equal(last.stdioComplete, true);
   });
 
+  it("retains a live command after both output pipes close until terminal cleanup", async () => {
+    const run = Object.assign(Object.create(FeatureRun.prototype), { env: process.env, children: new Set(), raw: [], proofs: [] });
+    const outcome = run.command(process.execPath, ["-e", "console.log(process.pid);setTimeout(()=>{require('node:fs').closeSync(1);require('node:fs').closeSync(2)},50);setInterval(()=>{},1000)"], { allowFailure: true, timeoutMs: 500, graceMs: 100, killMs: 100 }).then(() => null, (error: Error) => error);
+    const child: any = [...run.children][0], identity = processIdentity(child.pid);
+    try {
+      await Promise.all([child.stdout, child.stderr].map(stream => stream.closed ? Promise.resolve() : new Promise(resolve => stream.once("close", resolve))));
+      assert.equal(child.stderr.closed, true); assert.equal(child.exitCode, null); assert.equal(child.signalCode, null);
+      assert.equal(run.children.has(child), true); assert.ok(processIdentity(child.pid));
+      const error = await outcome; assert.match(error.message, /COMMAND_TIMEOUT/);
+      assert.equal(run.children.size, 0); assert.equal(child.signalCode, "SIGTERM");
+      assert.equal(run.proofs.at(-1).timedOut, true); assert.equal(run.proofs.at(-1).stdioComplete, true);
+      assert.equal(run.raw.length, 2);
+    } finally {
+      await stopOwnedChild(child, { identity, graceMs: 100, killMs: 100 });
+      for (const owned of run.children) if (owned !== child) await stopOwnedChild(owned, { graceMs: 100, killMs: 100 });
+      await outcome;
+    }
+  });
+
 });
