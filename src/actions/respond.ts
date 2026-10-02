@@ -35,6 +35,8 @@ interface RespondParams {
    * result instead of a next-turn note that would arrive after the revision.
    */
   fromOrchestratorTurn?: boolean;
+  /** Internal: the goal controller's own reply; it never detaches a goal session. */
+  fromGoalController?: boolean;
 }
 
 interface RespondResult {
@@ -120,6 +122,7 @@ async function spawnFreshRelaunch(
   sm: SessionManager,
   session: ResumableSession,
   _message: string,
+  goalOwnership?: SessionConfig["goalOwnership"],
 ): Promise<RespondResult> {
   try {
     const freshConfig: SessionConfig = {
@@ -143,6 +146,8 @@ async function spawnFreshRelaunch(
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
       planApproval: session.planApproval,
       harness: "harnessName" in session ? session.harnessName : session.harness,
+      goalTaskId: session.goalTaskId,
+      goalOwnership,
     };
     const relaunched = await sm.launchAndAwaitRunning(freshConfig, { notifyLaunch: false });
     sm.notifySession(
@@ -325,6 +330,9 @@ export function requestPlanDecisionChanges(
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
+  try { if (target?.goalTaskId) sm.continueGoalSession(target, active); } catch (err) {
+    return { text: `Error: ${errorMessage(err)}`, isError: true };
+  }
   const name = target?.name ?? sessionId;
 
   sm.clearPlanDecisionTokens?.(sessionId);
@@ -361,7 +369,7 @@ async function tryAutoResume(
   sm: SessionManager,
   session: ResumableSession,
   message: string,
-  options: { approve?: boolean; approvalRationale?: string } = {},
+  options: { approve?: boolean; approvalRationale?: string; goalOwnership?: SessionConfig["goalOwnership"] } = {},
 ): Promise<RespondResult | undefined> {
   const assessment = assessResumeCandidate(session);
   const resumable = assessment.kind === "resume" || canAutoResumeStoppedPlanDecision(session);
@@ -379,7 +387,7 @@ async function tryAutoResume(
   try {
     if (assessment.kind !== "resume") {
       return assessment.kind === "relaunch"
-        ? spawnFreshRelaunch(sm, session, message)
+        ? spawnFreshRelaunch(sm, session, message, options.goalOwnership)
         : formatResumeUnavailable(session, assessment.reason);
     }
 
@@ -438,8 +446,9 @@ async function tryAutoResume(
           }
         : {}),
       harness: "harnessName" in session ? session.harnessName : session.harness,
-      // A resumed goal session stays part of its goal loop.
+      // A resumed goal session stays part of its active goal loop.
       goalTaskId: session.goalTaskId,
+      goalOwnership: options.goalOwnership,
     };
     const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
@@ -519,6 +528,15 @@ export async function executeRespond(
   // as revision feedback would keep a rejected plan alive. Text approve/revise
   // shortcuts stay user-only (the orchestrator approves with approve=true).
   const textPlanDecision = replyDecision === "reject" || params.userInitiated ? replyDecision : undefined;
+  // Reject remains available even when policy denies additional goal work.
+  let goalOwnership: SessionConfig["goalOwnership"];
+  if (textPlanDecision !== "reject") {
+    try {
+      if (target.goalTaskId) goalOwnership = sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController });
+    } catch (err) {
+      return { text: `Error: ${errorMessage(err)}`, isError: true };
+    }
+  }
   if (textPlanDecision === "approve") {
     return executeRespond(sm, {
       ...params,
@@ -547,13 +565,14 @@ export async function executeRespond(
     const autoResumeResult = await tryAutoResume(sm, target, params.message, {
       approve: params.approve,
       approvalRationale: params.approvalRationale,
+      goalOwnership,
     });
     if (autoResumeResult) {
       return autoResumeResult;
     }
   } else {
     if (resumeAssessment.kind === "relaunch") {
-      return spawnFreshRelaunch(sm, target, params.message);
+      return spawnFreshRelaunch(sm, target, params.message, goalOwnership);
     }
     if (resumeAssessment.kind === "unavailable") {
       return formatResumeUnavailable(target, resumeAssessment.reason);
@@ -656,6 +675,12 @@ export async function executeRespond(
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
+    // A goal-loop reply never detaches: re-check right before delivery, and
+    // refuse a session that an explicit action detached in the meantime.
+    if (params.fromGoalController) {
+      if (session.goalDetached) throw new Error("The goal ended; this session now continues as an ordinary session.");
+      if (session.goalTaskId) sm.continueGoalSession(session, session, { fromGoalController: true });
+    }
     const delivery = await session.sendMessage(params.message);
     if (isPlanApproval) {
       persistPlanApprovalState(sm, session);

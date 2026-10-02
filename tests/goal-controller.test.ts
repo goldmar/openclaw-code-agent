@@ -2,7 +2,7 @@ import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1076,50 +1076,111 @@ describe("GoalController", () => {
     assert.equal(capturedConfig.worktreeStrategy, "off");
   });
 
-  it("kills sessions restored after stop() races with in-flight recovery", async () => {
+  it("kills late owned restore children without replacing the captured resumable row", async () => {
     const killed: Array<{ id: string; reason: string }> = [];
+    let resolveSpawn!: () => void;
+    const late = createStubSession({ id: "session-restored", name: "goal-task", harnessSessionId: "late-thread" });
     const controller = new GoalController({
-      resolve: (): undefined => undefined,
-      kill: (id: string, reason: string) => {
-        killed.push({ id, reason });
-      },
+      resolve: (id: string) => id === late.id ? late : undefined,
+      resolveBackendConversationId: (id: string) => id,
+      emitGoalTaskUpdate: () => {},
+      kill: (id: string, reason: string) => { killed.push({ id, reason }); },
+      launchAndAwaitRunning: async () => { await new Promise<void>((resolve) => { resolveSpawn = resolve; }); return late; },
     } as any);
-    const store = createStore();
-    (controller as any).store = store;
+    const store = createStore(); (controller as any).store = store;
+    const task = buildTask({ status: "waiting_for_session", harnessSessionId: "resume-thread-1", sessionId: undefined, sessionName: undefined,
+      verifierCommands: [{ label: "test", command: "true" }] }); store.upsert(task);
+    controller.start(); const restoration = (controller as any).restorePromise;
+    await tick(0); controller.stop(); const captured = structuredClone(store.get(task.id)); resolveSpawn(); await restoration;
+    assert.deepEqual(killed, [{ id: late.id, reason: "shutdown" }]); assert.deepEqual(store.get(task.id), captured);
+    assert.equal(task.harnessSessionId, "resume-thread-1"); assert.equal(task.sessionId, undefined);
+  });
 
-    const task = buildTask({
-      status: "waiting_for_session",
-      harnessSessionId: "resume-thread-1",
-      sessionId: undefined,
-      sessionName: undefined,
-      verifierCommands: [{ label: "test", command: "pnpm test" }],
+  for (const operation of ["launch", "confirmation", "idle", "repair", "ralph"] as const) {
+    for (const rejects of [false, true]) {
+    it(`discards retired ${operation} ${rejects ? "error" : "preparation"} without stale failure or foreign-child kill`, async () => {
+      const store = createStore(), killed: string[] = [], notifications: string[] = [];
+      const late = createStubSession({ id: "late", name: "late", harnessSessionId: "late-thread" });
+      let owner = late, release!: () => void;
+      const controller = new GoalController({ resolve: (id: string) => id === "late" ? owner : undefined,
+        resolveBackendConversationId: (id: string) => id,
+        emitGoalTaskUpdate: (_task: GoalTaskState, _text: string, label: string) => { notifications.push(label); },
+        sendGoalVerifierConfirmation: () => {}, kill: (id: string) => { killed.push(id); },
+        launchAndAwaitRunning: async () => { await new Promise<void>((resolve) => { release = resolve; }); if (rejects) throw new Error("late launch failure"); return late; },
+      } as any); (controller as any).store = store;
+      const task = buildTask({ sessionId: "original", harnessSessionId: "original-thread", verifierCommands: [{ label: "fail", command: "false" }],
+        ...(operation === "ralph" ? { loopMode: "ralph", completionPromise: "DONE" } : {}) }); store.upsert(task);
+      let pending: Promise<unknown>;
+      if (operation === "launch") pending = controller.launchTask({ goal: "New", workdir: "/tmp", verifierCommands: [{ label: "pass", command: "true" }] });
+      else if (operation === "confirmation") { task.status = "awaiting_verifier_confirmation"; pending = controller.confirmVerifierCommands(task.id); }
+      else { const session = createStubSession({ id: "original", harnessSessionId: "original-thread", status: "completed", getOutput: () => ["Keep working"] });
+        pending = operation === "idle" ? (controller as any).resumeAfterIdleTimeout(task, session, "Continue") : (controller as any).handleTerminalSession(task, session); }
+      const outcome = pending.then((): null => null, (error: Error): Error => error);
+      while (!release) await tick(1);
+      controller.stop(); const captured = JSON.stringify(store.list()), notices = [...notifications];
+      if (operation === "repair") owner = createStubSession({ id: "late", name: "replacement" });
+      release(); const result = await outcome;
+      if (operation === "launch" || operation === "confirmation") assert.match((result as Error).message, rejects ? /late launch failure/ : /controller retired/);
+      assert.equal(JSON.stringify(store.list()), captured); assert.deepEqual(notifications, notices);
+      assert.deepEqual(killed, rejects || operation === "repair" ? [] : ["late"]);
     });
-    store.upsert(task);
+    }
+  }
 
-    let resolveSpawn: (() => void) | null = null;
-    (controller as any).started = true;
-    (controller as any).spawnManagedTaskSession = async () => {
-      await new Promise<void>((resolve) => {
-        resolveSpawn = resolve;
+  for (const rejects of [false, true]) {
+    it(`discards retired automatic input ${rejects ? "error" : "completion"} without task writes`, async () => {
+      let release!: () => void;
+      const session = createStubSession({ id: "original", name: "goal-task", harnessSessionId: "thread", goalTaskId: "goal-1", status: "running",
+        pendingInputState: { kind: "question" }, getOutput: () => ["Should I continue?"],
+        sendMessage: async () => { await new Promise<void>(resolve => { release = resolve; }); if (rejects) throw new Error("late input failure"); return { disposition: "sent" }; },
       });
-      return createStubSession({
-        id: "session-restored",
-        name: "goal-task",
-        harnessSessionId: "resume-thread-2",
-        route: undefined,
-      });
-    };
+      const controller = new GoalController({ resolve: () => session, assertGoalTaskAuthorized: (id: string) => controller.assertTaskAuthorized(id),
+        continueGoalSession: (target: { goalTaskId?: string }) => { controller.assertTaskAuthorized(target.goalTaskId!); return "attached"; } } as any);
+      const store = createStore(); (controller as any).store = store;
+      const task = buildTask({ sessionId: session.id, harnessSessionId: "thread", verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
+      const pending: Promise<void> = (controller as any).reconcileTask(task);
+      for (let count = 0; !release && count < 20; count += 1) await tick(1);
+      assert.equal(typeof release, "function"); controller.stop(); const captured = JSON.stringify(store.list());
+      release(); await pending; assert.equal(JSON.stringify(store.list()), captured);
+    });
+  }
 
-    const restorePromise = (controller as any).restoreRecoverableTasks();
-    await tick(0);
-    controller.stop();
-    resolveSpawn?.();
-    await restorePromise;
+  for (const reassigned of ["goal", "current-session"] as const) {
+    it(`cannot kill a late returned Session reassigned to another ${reassigned}`, async () => {
+      const store = createStore(), killed: string[] = []; let release!: () => void;
+      const late = createStubSession({ id: "late", goalTaskId: "goal-1", harnessSessionId: "thread" });
+      const controller = new GoalController({ resolve: () => late, kill: (id: string) => { killed.push(id); },
+        launchAndAwaitRunning: async () => { await new Promise<void>(resolve => { release = resolve; }); return late; },
+      } as any); (controller as any).store = store;
+      const task = buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
+      const pending: Promise<unknown> = (controller as any).spawnManagedTaskSession(task, "Launch");
+      const outcome = pending.then((): null => null, (error: Error): Error => error);
+      controller.stop();
+      if (reassigned === "goal") late.goalTaskId = "foreign";
+      else { (controller as any).restoreRecoverableTasks = async (): Promise<void> => {}; controller.start(); task.sessionId = late.id; store.upsert(task); }
+      const captured = JSON.stringify(store.list()); release(); assert.match((await outcome as Error).message, /controller retired/);
+      assert.deepEqual(killed, []); assert.equal(JSON.stringify(store.list()), captured); controller.stop();
+    });
+  }
 
-    assert.deepEqual(killed, [{ id: "session-restored", reason: "shutdown" }]);
-    assert.equal(task.status, "waiting_for_session");
-    assert.equal(task.harnessSessionId, "resume-thread-2");
-    assert.equal(task.sessionId, "session-restored");
+  it("ignores evaluation waiting on a retired restore rather than touching a newer task", async () => {
+    const controller = new GoalController({ resolve: (): undefined => undefined } as any), store = createStore(); (controller as any).store = store;
+    let release!: () => void; (controller as any).restorePromise = new Promise<void>(resolve => { release = resolve; });
+    const pending: Promise<void> = (controller as any).evaluateTask("goal-1", "old-restore"); controller.stop();
+    (controller as any).restoreRecoverableTasks = async (): Promise<void> => {}; controller.start();
+    const current = buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(current);
+    const captured = JSON.stringify(store.list()); release(); await pending; assert.equal(JSON.stringify(store.list()), captured); controller.stop();
+  });
+
+  it("cannot clear a new restoration promise when an old generation settles", async () => {
+    const controller = new GoalController({ resolve: (): undefined => undefined } as any);
+    const store = createStore(); (controller as any).store = store;
+    const releases: Array<() => void> = [];
+    (controller as any).restoreRecoverableTasks = () => new Promise<void>(resolve => releases.push(resolve));
+    controller.start(); const old = (controller as any).restorePromise; controller.stop(); controller.start();
+    const current = (controller as any).restorePromise; assert.notEqual(current, old);
+    releases[0](); await old; assert.equal((controller as any).restorePromise, current);
+    releases[1](); await current; assert.equal((controller as any).restorePromise, null); controller.stop();
   });
 
   it("logs queued evaluation errors instead of dropping the rejection", async () => {

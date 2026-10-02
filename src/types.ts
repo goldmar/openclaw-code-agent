@@ -423,6 +423,16 @@ export interface SessionConfig {
   /** Codex only: drop the latest N turns of the resumed/forked thread before continuing. */
   rewindTurns?: number;
   multiTurn?: boolean;
+  /** Internal live authorization installed by SessionManager; never persisted or caller selectable. */
+  assertGoalTaskAuthorized?: () => void;
+  /**
+   * Internal, settled once per launch: "attached" keeps the goal owner and its
+   * live guard; "detached" continues a finished or missing goal's session as
+   * an ordinary session. Unset lets SessionManager decide from the owner state.
+   */
+  goalOwnership?: "attached" | "detached";
+  /** Internal, installed with the live guard: whether the owning goal has ended. */
+  isGoalTaskEnded?: () => boolean;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
@@ -487,6 +497,8 @@ export interface PluginConfig {
    * orchestrator with only these commands needs no user confirmation.
    */
   trustedVerifierCommands?: string[];
+  /** Complete ordered operator-required goal suite; absence preserves confirmation behavior. */
+  requiredGoalVerifierCommands?: string[];
   /** Register the opt-in `agent_send_plan_offer` tool (default false). */
   planOfferTool?: boolean;
 }
@@ -517,6 +529,8 @@ export interface RawPluginConfig {
   worktreeGitHooks?: WorktreeGitHooksMode;
   /** Operator-approved goal verifier commands (exact strings). */
   trustedVerifierCommands?: string[];
+  /** Complete ordered operator-required goal suite; absence preserves confirmation behavior. */
+  requiredGoalVerifierCommands?: string[];
   /** Register the opt-in `agent_send_plan_offer` tool; default false. */
   planOfferTool?: boolean;
 }
@@ -725,7 +739,7 @@ export interface GoalTaskConfig {
   permissionMode?: PermissionMode;
   loopMode?: GoalLoopMode;
   completionPromise?: string;
-  verifierCommands: GoalVerifierSpec[];
+  verifierCommands?: GoalVerifierSpec[];
   /** Optional spend limit: no further iteration starts once the task's sessions cost this much. */
   maxCostUsd?: number;
   /**
@@ -780,6 +794,8 @@ export interface GoalTaskState {
   loopMode: GoalLoopMode;
   completionPromise?: string;
   verifierCommands: GoalVerifierSpec[];
+  /** Controller-generated immutable command selection for this goal, independent of later removal of config. */
+  requiredVerifierCommands?: string[];
   lastVerifierSummary?: string;
   lastVerifierFingerprint?: string;
   repeatedFailureCount: number;

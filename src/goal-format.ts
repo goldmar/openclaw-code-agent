@@ -115,6 +115,13 @@ export function formatGoalTask(task: GoalTaskState, runtime?: GoalTaskRuntimeSna
     lines.push(`  Completion promise: ${task.completionPromise}`);
   }
 
+  if (task.requiredVerifierCommands !== undefined) {
+    lines.push(`  Operator-required verifiers:`);
+    if (Array.isArray(task.requiredVerifierCommands)) {
+      lines.push(...task.requiredVerifierCommands.map((command) => `  - ${String(command)}`));
+    } else lines.push("  (invalid stored binding; start a new goal)");
+  }
+
   if (task.sessionId) {
     lines.push(`  Session: ${task.sessionName ?? "(unknown)"} [${task.sessionId}]`);
   }

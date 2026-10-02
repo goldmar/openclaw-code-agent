@@ -240,9 +240,10 @@ export function register(api: OpenClawPluginApi): void {
         services,
         bindHost: bindLocalHost,
         stop: async () => {
-          createdGc.stop();
+          const errors: unknown[] = [];
           try {
-            await createdSm.shutdown();
+            try { createdGc.stop(); } catch (err) { errors.push(err); }
+            try { await createdSm.shutdown(); } catch (err) { errors.push(err); }
           } finally {
             if (servicesCreatedHere === services) {
               servicesCreatedHere = null;
@@ -251,6 +252,8 @@ export function register(api: OpenClawPluginApi): void {
               setAutoUpdateService(null);
             }
           }
+          if (errors.length === 1) throw errors[0];
+          if (errors.length > 1) throw new AggregateError(errors, "Failed to stop the code-agent runtime.");
         },
       };
     } catch (err) {

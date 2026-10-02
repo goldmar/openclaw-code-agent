@@ -577,6 +577,99 @@ export class SessionManager {
     this.maintenance.dispose();
   }
 
+  private goalTaskAuthorizer?: (id: string) => void;
+  private goalTaskIsActive?: (id: string) => boolean;
+
+  /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
+  setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
+    this.goalTaskAuthorizer = authorizer;
+    this.goalTaskIsActive = isActive;
+  }
+
+  /** A goal that finished or whose record is gone can no longer be driven or succeed. */
+  private goalTaskEnded(id: string): boolean {
+    return this.goalTaskIsActive ? !this.goalTaskIsActive(id) : false;
+  }
+
+  /**
+   * Entry-point decision for an explicit continuation (reply, plan decision) of
+   * a goal-owned session. An active goal keeps the strict live guard. A goal that
+   * had already ended continues as an ordinary session. Work already in flight
+   * keeps its strict guard and fails when it discovers a policy change; only a
+   * later explicit action detaches. Goal-controller work never detaches.
+   */
+  continueGoalSession(
+    target: { goalTaskId?: string },
+    session?: Session,
+    options: { fromGoalController?: boolean } = {},
+  ): SessionConfig["goalOwnership"] {
+    const id = target.goalTaskId;
+    if (!id) return undefined;
+    if (!options.fromGoalController && this.goalTaskEnded(id)) {
+      session?.detachGoal();
+      return "detached";
+    }
+    this.assertGoalTaskAuthorized(id);
+    return "attached";
+  }
+
+  assertGoalTaskAuthorized(id?: string): void {
+    if (!id) return;
+    if (!this.goalTaskAuthorizer) throw new Error("Goal controller unavailable; this goal session cannot continue.");
+    this.goalTaskAuthorizer(id);
+  }
+
+  private goalOwnedLaunch(config: SessionConfig): SessionConfig {
+    if (config.forkSession) {
+      if (config.sessionIdOverride && (this.sessions.has(config.sessionIdOverride)
+        || this.getPersistedSession(config.sessionIdOverride))) {
+        throw new Error("An independent fork cannot reuse an existing session identity. Omit sessionIdOverride to create a new session.");
+      }
+      if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
+      return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+    }
+    const owners = new Set<string>();
+    for (const [ref, identity] of [
+      [config.sessionIdOverride, "stable"],
+      [config.resumeSessionId, "backend"],
+      [config.resumeWorktreeFrom, "either"],
+    ] as const) {
+      if (!ref) continue;
+      // Refresh disk metadata, then prefer canonical identities across ALL rows.
+      // A human-facing name alias must never mask an actual goal backend owner.
+      const persistedAlias = this.getPersistedSession(ref);
+      const active = this.registry.list().filter((candidate) => (
+        (identity !== "backend" && candidate.id === ref)
+        // A registered deferred resume owns its requested backend before the
+        // harness publishes backendRef. Once published, that identity wins.
+        || (identity !== "stable" && (getBackendConversationId(candidate) || candidate.resumeSessionId) === ref)
+      ));
+      const persisted = this.listPersistedSessions().filter((candidate) => (
+        (identity !== "backend" && candidate.sessionId === ref)
+        || (identity !== "stable" && getBackendConversationId(candidate) === ref)
+      ));
+      const exact = [...active, ...persisted];
+      const candidates = exact.length ? exact : [this.resolve(ref), persistedAlias];
+      for (const candidate of candidates) {
+        if (candidate?.goalTaskId) owners.add(candidate.goalTaskId);
+      }
+    }
+    if (owners.size > 1) throw new Error("Conflicting canonical goal owners for this resume.");
+    const original = [...owners][0];
+    if (original && config.goalTaskId && config.goalTaskId !== original) throw new Error("A resumed session cannot change its goal owner.");
+    const goalTaskId = original ?? config.goalTaskId;
+    // Decided at the first check of a launch: once attached, a later goal end
+    // found during preparation fails the launch instead of detaching it.
+    if (goalTaskId && config.goalOwnership !== "attached" && this.goalTaskEnded(goalTaskId)) {
+      return { ...config, goalTaskId: undefined, goalOwnership: "detached", assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+    }
+    this.assertGoalTaskAuthorized(goalTaskId);
+    if (!goalTaskId) return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+    return { ...config, goalTaskId, goalOwnership: "attached",
+      assertGoalTaskAuthorized: () => this.assertGoalTaskAuthorized(goalTaskId),
+      isGoalTaskEnded: () => this.goalTaskEnded(goalTaskId) };
+  }
+
   /**
    * Spawn and start a new session, wiring lifecycle listeners and launch notification.
    *
@@ -585,6 +678,7 @@ export class SessionManager {
    * and session-id checks must see the previous launch already registered.
    */
   launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    try { config = this.goalOwnedLaunch(config); } catch (err) { return Promise.reject(err); }
     const persisted = config.resumeSessionId && config.sessionIdOverride
       ? this.getPersistedSession(config.sessionIdOverride) : undefined;
     const approval = persisted ? buildResumedPlanState(persisted, config.permissionMode ?? pluginConfig.permissionMode) : undefined;
@@ -605,6 +699,7 @@ export class SessionManager {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
+    config = this.goalOwnedLaunch(config);
     const activeCount = this.registry.activeSessionCount();
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
@@ -703,7 +798,9 @@ export class SessionManager {
     config.repoIntegrationPolicySource = launchPolicy.resolution.source === "none" ? undefined : launchPolicy.resolution.source;
     config.repoProvider = launchPolicy.resolution.provider;
 
+    config = this.goalOwnedLaunch(config);
     const preparedLaunch = await this.restore.prepareSpawn(config, name);
+    config = this.goalOwnedLaunch(config);
     // Repo-policy lookup and worktree preparation await git; shutdown may have
     // started meanwhile, and a session registered now would outlive it.
     if (this.shuttingDown) {
@@ -2302,7 +2399,10 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    return this.questions.handleAskUserQuestion(session, input, context);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
+    const answer = await this.questions.handleAskUserQuestion(session, input, context);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
+    return answer;
   }
 
   /**
@@ -2315,6 +2415,8 @@ export class SessionManager {
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
+      // The user's answer is an explicit action: an ended goal detaches the session.
+      this.continueGoalSession(session, session);
       assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
     }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);

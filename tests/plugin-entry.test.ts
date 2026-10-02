@@ -1,7 +1,7 @@
 import "./test-env";
 import { afterEach, describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -19,7 +19,10 @@ import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { ROUTED_REPLY_RULE } from "../src/session-route";
 import type { PersistedSessionInfo } from "../src/types";
 import { GoalController } from "../src/goal-controller";
-import { resetSharedRuntimeSlotForTests } from "../src/process-runtime";
+import { getSharedRuntime, resetSharedRuntimeSlotForTests } from "../src/process-runtime";
+import { goalStoreInternals } from "../src/goal-store";
+import { registerHarness } from "../src/harness";
+import { createFakeHarness } from "./helpers";
 import { createFakeHost, type FakeHost, type FakeHostOptions } from "./fake-host";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 
@@ -850,6 +853,78 @@ describe("plugin entry source", () => {
     assert.equal(autoUpdateService, null);
 
     await host.stopServices();
+  });
+
+  it("reports an unhealthy goal store while still shutting down ordinary sessions and clearing the service", async (t) => {
+    const host = createPluginHost({ autoUpdate: false });
+    const path = join(host.stateDir, "ambiguous-goals.json");
+    const previousPath = process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH;
+    const now = 1700000000000;
+    t.mock.method(Date, "now", () => now);
+    const row = { id: "duplicate", name: "history", goal: "Ship", workdir: rootDir, status: "succeeded" };
+    const raw = JSON.stringify([row, { ...row, status: "running" }], null, 3);
+    writeFileSync(path, raw, "utf8");
+    mkdirSync(`${path}.invalid-${now}.json`);
+    for (let suffix = 1; suffix <= goalStoreInternals.GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT; suffix += 1) {
+      mkdirSync(`${path}.invalid-${now}-${suffix}.json`);
+    }
+    process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH = path;
+    const harness = createFakeHarness("unhealthy-store-ordinary-session");
+    const backendId = "unhealthy-store-ordinary-thread";
+    const launch = harness.launch.bind(harness);
+    harness.launch = (options) => {
+      const handle = launch(options);
+      harness.pushMessage({ type: "init", session_id: backendId });
+      return { ...handle, interrupt: async () => { await handle.interrupt?.(); harness.endMessages(); } };
+    };
+    registerHarness(harness);
+    register(host.api);
+    try {
+      await host.startServices(GATEWAY_CONFIG);
+      const sm = sessionManager!;
+      const gc = goalController!;
+      assert.ok(sm);
+      assert.ok(gc);
+      assert.deepEqual(gc.listTasks(), []);
+      const shutdown = sm.shutdown.bind(sm);
+      const observedShutdown = t.mock.method(sm, "shutdown", shutdown);
+      const startup = sm.launchAndAwaitRunning({
+        name: "ordinary-active", prompt: "Wait", workdir: rootDir,
+        harness: harness.name, permissionMode: "bypassPermissions", worktreeStrategy: "off",
+        route: { provider: "system", target: "system" },
+      });
+      let startupTimer: ReturnType<typeof setTimeout> | undefined;
+      const session = await Promise.race([
+        startup,
+        new Promise<never>((_, reject) => {
+          startupTimer = setTimeout(() => reject(new Error("Ordinary fixture session did not initialize within 5 seconds.")), 5_000);
+        }),
+      ]).finally(() => clearTimeout(startupTimer));
+      assert.equal(session.status, "running");
+      assert.equal(session.harnessSessionId, backendId);
+      assert.equal(sm.resolveBackendConversationId(session.id), backendId);
+      assert.equal(session.goalTaskId, undefined);
+      assert.ok(harness.lastLaunchOptions);
+      await assert.rejects(host.stopServices(), /store is unavailable/);
+      assert.equal(observedShutdown.mock.callCount(), 1);
+      assert.equal(session.status, "killed");
+      assert.equal(session.killReason, "shutdown");
+      assert.equal(harness.interruptCalled, true);
+      await session.waitForTeardown();
+      assert.equal(sessionManager, null);
+      assert.equal(goalController, null);
+      assert.equal(autoUpdateService, null);
+      assert.equal(getSharedRuntime(), undefined);
+      assert.equal(readFileSync(path, "utf8"), raw);
+      await assert.rejects(sm.launchSession({ prompt: "Late work", workdir: rootDir }), /shutting down/);
+    } finally {
+      if (previousPath === undefined) delete process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH;
+      else process.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH = previousPath;
+      // If setup/assertion failed before the expected stop, still tear down the
+      // owned runtime without replacing that original failure with its known
+      // unhealthy-store rejection. A completed stop has already detached it.
+      if (getSharedRuntime()) await assert.rejects(host.stopServices(), /store is unavailable/);
+    }
   });
 
   it("shares concurrent startup and waits for drainage before a lazy restart", async () => {

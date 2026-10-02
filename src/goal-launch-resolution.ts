@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import { resolveRequiredGoalSelection } from "./goal-verifier-policy";
 
 import {
   getDefaultHarnessName,
@@ -97,7 +98,13 @@ export function resolveGoalLaunchRequest(
   if (request.maxCostUsd !== undefined && !(Number.isFinite(request.maxCostUsd) && request.maxCostUsd > 0)) {
     return { kind: "error", text: "Error: max_cost_usd must be a positive number." };
   }
-  const verifierCommands = normalizeGoalVerifiers(request.verifierCommands);
+  let selected: string[] | undefined;
+  try {
+    selected = resolveRequiredGoalSelection(request.verifierCommands);
+  } catch (err) {
+    return { kind: "error", text: `Error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const verifierCommands = normalizeGoalVerifiers(selected ?? request.verifierCommands);
   const loopMode = request.goalMode ?? (verifierCommands.length > 0 ? "verifier" : "ralph");
   if (loopMode === "verifier" && verifierCommands.length === 0) {
     return { kind: "error", text: "Error: verifier mode requires at least one non-empty verifier command." };
@@ -173,6 +180,7 @@ export function resolveGoalLaunchRequest(
  * from the orchestrator and are not all pre-approved in `trustedVerifierCommands`.
  */
 export function verifierCommandsNeedConfirmation(commands: readonly GoalVerifierSpec[]): boolean {
+  if (resolveRequiredGoalSelection(commands.map((command) => command.command))) return false;
   const trusted = new Set((pluginConfig.trustedVerifierCommands ?? [])
     .filter((command): command is string => typeof command === "string")
     .map((command) => command.trim())
@@ -209,12 +217,11 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Loop mode: ${task.loopMode}`,
     `  Max controller iterations: ${task.maxIterations}${resolution.maxIterations !== undefined && resolution.maxIterations > task.maxIterations ? ` (capped from ${resolution.maxIterations})` : ""}`,
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,
-    ...(task.loopMode === "ralph"
-      ? [`  Completion promise: ${task.completionPromise}`]
-      : [
-          `  Verifiers:`,
-          ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
-        ]),
+    ...(task.loopMode === "ralph" ? [`  Completion promise: ${task.completionPromise}`] : []),
+    ...(resolution.verifierCommands.length ? [
+      task.requiredVerifierCommands ? `  Operator-required verifiers:` : `  Verifiers:`,
+      ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
+    ] : []),
     ``,
     `Controller iteration progress advances only when the goal controller starts another agent turn; internal agent review passes are reported in the completion summary.`,
     ``,

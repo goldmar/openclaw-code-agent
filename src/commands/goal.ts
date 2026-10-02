@@ -10,6 +10,7 @@ import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "..
 import { consumeFirstCommandArg, tokenizeCommandArgs } from "./args";
 
 const GOAL_USAGE = [
+  "Operator-required verifiers apply in both modes. Omit --verify to use the complete configured suite.",
   "Usage:",
   "/agent_goal [launch] [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N (max 25)] [--max-cost-usd N] [--permission-mode <default|plan|bypassPermissions>] [--verify <cmd> ...] <goal>",
   "/agent_goal status [<task>]",
@@ -62,7 +63,9 @@ export function registerGoalCommand(api: CommandApi): void {
         const ref = target?.value.trim();
         const replacementGoal = target?.rest.trim();
         if (!ref || !replacementGoal) return { text: "Usage: /agent_goal edit <task> <new goal>" };
-        return { text: renderGoalEditResult(goalController.editTask(ref, replacementGoal), ref) };
+        try { return { text: renderGoalEditResult(goalController.editTask(ref, replacementGoal), ref) }; } catch (err) {
+          return { text: `Error editing goal task: ${err instanceof Error ? err.message : String(err)}` };
+        }
       }
       if (subcommand === "launch") {
         raw = first!.rest.trim();
@@ -135,7 +138,7 @@ export function registerGoalCommand(api: CommandApi): void {
 
       const resolution = resolveGoalLaunchRequest({
         goal,
-        verifierCommands,
+        verifierCommands: verifierCommands.length ? verifierCommands : undefined,
         name,
         workdir,
         model,

@@ -98,8 +98,26 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     autoUpdate: config.autoUpdate ?? true,
     worktreeGitHooks: config.worktreeGitHooks === "skip" ? "skip" : "run",
     trustedVerifierCommands: config.trustedVerifierCommands,
+    requiredGoalVerifierCommands: Array.isArray(config.requiredGoalVerifierCommands)
+      ? [...config.requiredGoalVerifierCommands] : config.requiredGoalVerifierCommands,
     planOfferTool: config.planOfferTool === true,
   };
+  getGoalVerifierPolicyRevision();
+}
+
+// A verifier proof is stale after any policy transition, including A -> B -> A.
+let goalVerifierPolicyKey = "absent";
+let goalVerifierPolicyRevision = 0;
+export function getGoalVerifierPolicyRevision(): number {
+  const raw: unknown = pluginConfig.requiredGoalVerifierCommands;
+  const key = raw === undefined ? "absent" : Array.isArray(raw) && raw.length > 0
+    && Array.from(raw).every((entry) => typeof entry === "string" && entry.trim())
+    ? JSON.stringify(raw.map((entry: string) => entry.trim())) : "invalid";
+  if (key !== goalVerifierPolicyKey) {
+    goalVerifierPolicyKey = key;
+    goalVerifierPolicyRevision += 1;
+  }
+  return goalVerifierPolicyRevision;
 }
 
 /**

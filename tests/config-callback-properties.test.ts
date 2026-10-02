@@ -30,6 +30,9 @@ type JsonSchema = {
   properties?: Record<string, JsonSchema>;
   additionalProperties?: boolean | JsonSchema;
   items?: JsonSchema;
+  minItems?: number;
+  minLength?: number;
+  pattern?: string;
 };
 
 const manifest = JSON.parse(
@@ -49,9 +52,9 @@ function arbitraryFor(node: JsonSchema, depth = 0): fc.Arbitrary<unknown> {
     case "boolean":
       return fc.boolean();
     case "string":
-      return fc.string({ maxLength: 16 });
+      return fc.string({ minLength: node.minLength ?? 0, maxLength: 16 }).filter((value) => !node.pattern || new RegExp(node.pattern).test(value));
     case "array":
-      return fc.array(node.items ? arbitraryFor(node.items, depth + 1) : fc.string({ maxLength: 8 }), { maxLength: 4 });
+      return fc.array(node.items ? arbitraryFor(node.items, depth + 1) : fc.string({ maxLength: 8 }), { minLength: node.minItems ?? 0, maxLength: 4 });
     case "object": {
       const known = node.properties
         ? fc.record(Object.fromEntries(Object.entries(node.properties).map(([key, child]) => [key, arbitraryFor(child, depth + 1)])), { requiredKeys: [] })
