@@ -10,6 +10,13 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
 import { Session } from "../src/session";
+import { SessionStore } from "../src/session-store";
+import { GoalController } from "../src/goal-controller";
+import { GoalTaskStore } from "../src/goal-store";
+import { SessionRuntimeRegistry } from "../src/session-runtime-registry";
+import { SessionHarnessEventApplier } from "../src/session-harness-event-applier";
+import type { SessionManager } from "../src/session-manager";
+import type { SessionConfig } from "../src/types";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
 const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
@@ -96,16 +103,61 @@ describe("bounded representative host receipts", () => {
     for (const change of [{ turn_id: "foreign" }, { thread_id: "foreign" }]) assert.throws(() => matchingNativeOutput({ ...body, client_metadata: { ...body.client_metadata, ...change }, input: [result] }, call));
     assert.throws(() => matchingNativeOutput({ ...body, input: [{ ...result, call_id: "foreign" }] }, call));
   });
-  it("chooses a restored active public owner independently of persisted row order", () => {
-    const fixture = { name: "own", workdir: "/tmp/own", oldSessionId: "old" };
-    const old = { name: fixture.name, workdir: fixture.workdir, sessionId: "old", goalTaskId: "goal", backendRef: { conversationId: "thread" } };
-    const live = { ...old, sessionId: "new" }, listing = "🟢 own [new] — running · 1s\n   📁 /tmp/own";
-    for (const rows of [[old, live], [live, old]]) assert.equal(currentOwner(rows, listing, fixture, "thread", "goal"), live);
-    for (const text of ["🟢 other [new] — running · 1s", listing + "\n   ♻️ Recovered after a Gateway restart; no live process", "Persisted output own [new]", listing + "\n\n🟢 own [other] — running · 1s"]) {
-      assert.throws(() => currentOwner([old, live, { ...live, sessionId: "other" }], text, fixture, "thread", "goal"));
+  it("joins actual running recovery rows through the controller's current task association", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "oca501-goal-owner-"));
+    const fixture = { name: "own", workdir: directory, intent: { kind: "launch", goal: "Own intent" }, ralph: false };
+    const store = new SessionStore({ indexPath: join(directory, "sessions.json"), env: {} });
+    const registry = new SessionRuntimeRegistry();
+    const earlier = new Session({ prompt: "Earlier", workdir: directory, harness: "codex" }, fixture.name);
+    earlier.transition("running"); registry.add(earlier);
+    let live!: Session;
+    const manager = { setGoalTaskAuthorizer: () => {}, emitGoalTaskUpdate: () => {}, resolve: (id: string) => registry.sessions.get(id),
+      launchAndAwaitRunning: async (config: SessionConfig) => {
+        live = new Session({ ...config, backendRef: { kind: "codex-app-server", conversationId: "thread" } }, registry.uniqueName(config.name!));
+        registry.add(live);
+        (live as unknown as { harnessEvents: SessionHarnessEventApplier }).harnessEvents.applyMessage({ type: "backend_ref", ref: { kind: "codex-app-server", conversationId: "thread" } },
+          { pendingPlanApproval: false, currentPermissionMode: "bypassPermissions", permissionMode: "bypassPermissions", planModeApproved: false });
+        store.markRunning(live); return live;
+      } };
+    const controller = new GoalController(manager as unknown as SessionManager);
+    (controller as unknown as { store: GoalTaskStore }).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(directory, "goals.json") });
+    try {
+      const goal = await controller.launchTask({ name: fixture.name, goal: fixture.intent.goal, workdir: directory, verifierCommands: [{ label: "check", command: "true" }],
+        loopMode: "verifier", permissionMode: "bypassPermissions", route: { provider: "webchat", target: "owned-parent" } });
+      assert.equal(goal.sessionId, live.id); assert.equal(goal.sessionName, live.name); assert.notEqual(live.name, fixture.name);
+      const row = store.getPersistedSession(live.id)!; assert.equal(Object.hasOwn(row, "goalTaskId"), false);
+      const listing = getSessionsListingText({ list: () => [live], listPersistedSessions: () => store.listPersistedSessions() } as unknown as SessionManager, "running", undefined, { full: true });
+      const bound = { ...fixture, goalId: goal.id, nativeSessionId: live.id };
+      assert.equal(currentOwner([row], listing, bound, "thread", goal), row);
+      assert.doesNotThrow(() => currentOwner([{ ...row, goalTaskId: goal.id }], listing, bound, "thread", goal));
+      for (const change of [{ goalTaskId: "foreign" }, { goalTaskId: null }, { goalTaskId: "" }, { name: fixture.name }, { workdir: "/tmp/foreign" }, { backendRef: { conversationId: "foreign" } }])
+        assert.throws(() => currentOwner([{ ...row, ...change }], listing, bound, "thread", goal));
+      for (const change of [{ id: "foreign" }, { name: "foreign" }, { goal: "foreign" }, { workdir: "/tmp/foreign" }, { loopMode: "ralph" }, { status: "failed" }, { sessionId: "foreign" }, { sessionName: fixture.name }, { harnessSessionId: "foreign" }])
+        assert.throws(() => currentOwner([row], listing, bound, "thread", { ...goal, ...change }));
+      assert.throws(() => currentOwner([row, row], listing, bound, "thread", goal));
+      for (const text of [listing + "\n\n" + listing, listing + "\n   ♻️ Recovered after a Gateway restart; no live process", listing.replace(`[${live.id}]`, "[foreign]")])
+        assert.throws(() => currentOwner([row], text, bound, "thread", goal));
+      assert.throws(() => currentOwner([row], listing, { ...bound, oldSessionId: live.id }, "thread", goal));
+      let observedTasks: Array<typeof goal> = [{ ...goal, sessionName: undefined }], publicReads = 0, taskReads = 0;
+      const identity = processIdentity(process.pid)!;
+      const nativeFixture = { ...bound, nativeSnapshot: { gateway: identity, processes: [] } };
+      const run = Object.assign(Object.create(FeatureRun.prototype), { gatewayReady: true, gatewayIdentity: identity, proofs: [],
+        goals: () => { taskReads++; return observedTasks; }, sessions: () => [row], nativeProcesses: () => [identity],
+        invoke: async (name: string) => { publicReads++; assert.ok(observedTasks[0].sessionName); return { content: [{ text: name === "agent_sessions" ? listing : getSessionOutputText(manager as unknown as SessionManager, live.id) }] }; } });
+      const waiting = run.nativeOwner(nativeFixture, { threadId: "thread" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.ok(taskReads > 0); assert.equal(publicReads, 0); observedTasks = [{ ...goal }];
+      assert.equal((await waiting).sessionId, live.id);
+      const before = publicReads;
+      for (const tasks of [[{ ...goal }, { ...goal }], [{ ...goal, harnessSessionId: "foreign" }], [{ ...goal, status: "failed" }]]) {
+        observedTasks = tasks; await assert.rejects(run.nativeOwner(nativeFixture, { threadId: "thread" })); assert.equal(publicReads, before);
+      }
+      const terminal = { ...row, status: "completed", goalTaskId: goal.id };
+      assert.throws(() => currentOwner([terminal], listing, { ...fixture, name: live.name }, "thread", undefined), "Ordinary cannot borrow a goal owner");
+    } finally {
+      controller.stop(); earlier.kill("shutdown"); if (live) live.kill("shutdown");
+      await Promise.all([earlier.waitForTeardown(), live?.waitForTeardown()]); rmSync(directory, { recursive: true, force: true });
     }
-    assert.throws(() => currentOwner([live], listing, fixture, "foreign", "goal"));
-    assert.throws(() => currentOwner([live], listing, fixture, "thread", "foreign"));
   });
   it("observes natural completion through the real listing without claiming the outcome", async () => {
     const origin = "agent:main:main", fixture: any = { name: "natural", workdir: "/tmp/owned-case", threadId: "thread", intent: { kind: "ordinary" } };
@@ -117,7 +169,7 @@ describe("bounded representative host receipts", () => {
     const manager: any = { list: () => [session], listPersistedSessions: (): never[] => [], resolve: (id: string) => id === session.id ? session : undefined };
     let row: any = { sessionId: session.id, name: session.name, status: session.status, workdir: session.workdir, backendRef: session.backendRef };
     let listing = () => getSessionsListingText(manager, "all", undefined, { full: true });
-    const calls: string[] = [], run = Object.assign(Object.create(FeatureRun.prototype), { proofs: [], sessions: () => [row], goals: () => [{ id: "goal", sessionId: session.id, name: fixture.name, goal: "Finish" }],
+    const calls: string[] = [], run = Object.assign(Object.create(FeatureRun.prototype), { proofs: [], sessions: () => [row], goals: () => [{ id: "goal", sessionId: session.id, sessionName: fixture.name, name: fixture.name, goal: "Finish" }],
       invoke: async (name: string) => { calls.push(name); return { content: [{ text: name === "agent_sessions" ? listing() : getSessionOutputText(manager, session.id, { readerSessionKey: origin }) }] }; } });
     await run.publicOwner(session.id, "completed", fixture);
     assert.deepEqual(calls, ["agent_sessions"]); assert.equal(session.outcomeSeenAt, undefined);

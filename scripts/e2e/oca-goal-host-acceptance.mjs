@@ -110,13 +110,26 @@ export async function stopOwnedChild(child, { identity = childIdentities.get(chi
   return { complete: terminal() && targets.every(previous => !alive(previous)) && stdioComplete, graceful, stdioComplete,
     exitCode: child.exitCode, signal: child.signalCode, targets };
 }
-export function currentOwner(rows, listing, fixture, threadId, goalId) {
-  const candidates = rows.filter(row => row.name === fixture.name && row.workdir === fixture.workdir && row.backendRef?.conversationId === threadId
-    && row.goalTaskId === goalId && row.sessionId !== fixture.oldSessionId);
-  const selected = candidates.filter(row => listing.split("\n\n").some(block => block.startsWith(`🟢 ${row.name} [${row.sessionId}] — running · `)
-    && !block.includes("♻️ Recovered after a Gateway restart; no live process")));
-  assert.equal(selected.length, 1, "Exactly one current public native owner required");
-  return selected[0];
+export function currentOwner(rows, listing, fixture, threadId, goal) {
+  if (goal) {
+    assert.equal(goal.name, fixture.name); assert.equal(goal.goal, fixture.intent.goal); assert.equal(goal.workdir, fixture.workdir);
+    assert.equal(goal.loopMode, fixture.ralph ? "ralph" : "verifier"); assert.equal(goal.status, "running");
+    assert.equal(goal.harnessSessionId, threadId); assert.ok(goal.sessionId && goal.sessionName);
+    assert.ok(typeof goal.id === "string" && goal.id);
+    if (fixture.goalId) assert.equal(goal.id, fixture.goalId);
+    if (fixture.nativeSessionId) assert.equal(goal.sessionId, fixture.nativeSessionId);
+  }
+  const candidates = rows.filter(row => row.name === (goal?.sessionName ?? fixture.name) && row.workdir === fixture.workdir
+    && row.backendRef?.conversationId === threadId && row.sessionId !== fixture.oldSessionId
+    && (!goal || row.sessionId === goal.sessionId));
+  assert.equal(candidates.length, 1, "Exactly one current native identity required");
+  const row = candidates[0];
+  if (goal && Object.hasOwn(row, "goalTaskId")) assert.equal(row.goalTaskId, goal.id);
+  if (!goal) assert.equal(row.goalTaskId, undefined);
+  const blocks = listing.split(/(?=^(?:🟡|🟢|✅|❌|⛔|📋|❓|🌿|⏸️) [^\n]* \[[^\]\n]+\] — )/m).filter(block => block.startsWith(`🟢 ${row.name} [${row.sessionId}] — running · `));
+  assert.equal(blocks.length, 1, "Exactly one current public native owner required");
+  assert.ok(!blocks[0].includes("♻️ Recovered after a Gateway restart; no live process"));
+  return row;
 }
 function tree(root) {
   return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
@@ -332,9 +345,29 @@ export class FeatureRun {
   }
   async nativeOwner(fixture, record) {
     await until(() => this.gatewayReady);
-    const goal = fixture.intent.kind === "ordinary" ? undefined : await until(() => this.goals().find(g => g.name === fixture.name && g.goal === fixture.intent.goal));
+    const goal = fixture.intent.kind === "ordinary" ? undefined : await until(() => {
+      const matches = this.goals().filter(g => g.name === fixture.name || fixture.goalId && g.id === fixture.goalId);
+      assert.ok(matches.length <= 1); if (!matches.length) return false;
+      const task = matches[0];
+      assert.equal(task.name, fixture.name); assert.equal(task.goal, fixture.intent.goal);
+      assert.equal(task.workdir, fixture.workdir); assert.equal(task.loopMode, fixture.ralph ? "ralph" : "verifier");
+      assert.ok(["waiting_for_session", "running"].includes(task.status));
+      if (fixture.goalId) assert.equal(task.id, fixture.goalId); else fixture.goalId = task.id;
+      if (task.harnessSessionId !== undefined) assert.equal(task.harnessSessionId, record.threadId);
+      if (task.sessionId === fixture.oldSessionId && fixture.intent.kind === "restore") {
+        if (task.sessionName !== undefined) assert.equal(task.sessionName, fixture.oldSessionName);
+        return false;
+      }
+      for (const field of ["sessionId", "sessionName", "harnessSessionId"]) {
+        if (task[field] === undefined) return false;
+        assert.ok(typeof task[field] === "string" && task[field]);
+      }
+      assert.equal(task.status, "running");
+      if (fixture.nativeSessionId) assert.equal(task.sessionId, fixture.nativeSessionId);
+      return task;
+    });
     const listing = await this.invoke("agent_sessions", { status: "running", full: true });
-    const row = currentOwner(this.sessions(), listing.content.map(c => c.text ?? "").join("\n"), fixture, record.threadId, goal?.id);
+    const row = currentOwner(this.sessions(), listing.content.map(c => c.text ?? "").join("\n"), fixture, record.threadId, goal);
     await this.publicOwner(row.sessionId, "running");
     assert.ok(sameProcess(fixture.nativeSnapshot?.gateway, this.gatewayIdentity));
     const census = this.nativeProcesses();
@@ -342,6 +375,7 @@ export class FeatureRun {
       : census.filter(p => !fixture.nativeSnapshot.processes.some(previous => sameProcess(p, previous)));
     assert.equal(native.length, 1);
     fixture.nativeProcess ??= native[0];
+    fixture.nativeSessionId ??= row.sessionId;
     return { sessionId: row.sessionId, nativeProcess: native[0] };
   }
   async start() {
@@ -458,10 +492,11 @@ export class FeatureRun {
     const row = this.sessions().find(s => s.sessionId === id);
     assert.ok(row);
     if (status === "completed") {
-      assert.equal(row.status, "completed"); assert.equal(row.name, fixture.name); assert.equal(row.workdir, fixture.workdir);
+      assert.equal(row.status, "completed"); assert.equal(row.workdir, fixture.workdir);
       assert.equal(row.backendRef?.conversationId, fixture.threadId);
       const goal = fixture.intent.kind === "ordinary" ? undefined : this.goals().find(g => g.name === fixture.name && g.goal === fixture.intent.goal);
       if (fixture.intent.kind !== "ordinary") assert.ok(goal && goal.sessionId === id);
+      assert.equal(row.name, goal?.sessionName ?? fixture.name);
       assert.equal(row.goalTaskId, goal?.id);
       const listing = await this.invoke("agent_sessions", { status: "all", full: true });
       const blocks = listing.content.map(c => c.text ?? "").join("\n").split("\n\n").filter(block => block.startsWith(`✅ ${row.name} [${id}] — completed · `));
@@ -480,6 +515,7 @@ export class FeatureRun {
     assert.deepEqual(current.requiredVerifierCommands, A);
     assert.equal(fixture.executed, true);
     const row = await until(() => this.sessions().find(s => s.sessionId === current.sessionId && s.backendRef?.conversationId === fixture.threadId));
+    assert.equal(row.goalTaskId, current.id); assert.equal(row.name, current.sessionName); assert.equal(row.workdir, fixture.workdir);
     if (status === "succeeded") await this.completion(row, true);
     else { const dedupe = await until(() => (this.sessions().find(s => s.sessionId === row.sessionId)?.notificationDedupe ?? []).find(n => n.label === "goal-task-failed" && n.status === "delivered"));
       this.proofs.push({ failedNotificationKey: dedupe.key, delivered: true });
@@ -557,7 +593,7 @@ export class FeatureRun {
       const fixture = this.newCase("restore", { ralph: true, hold: true }), goal = await this.launch(fixture, 3);
       await until(() => fixture.held && fixture.threadId);
       const oldSession = goal.sessionId;
-      fixture.oldSessionId = oldSession;
+      fixture.oldSessionId = oldSession; fixture.oldSessionName = goal.sessionName;
       await this.publicOwner(oldSession, "running");
       fixture.shutdownExpected = true;
       await this.shutdown();
@@ -576,7 +612,7 @@ export class FeatureRun {
         assert.ok(current || !existsSync(`/proc/${previous.nativeProcess.pid}`), "NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
         assert.ok(!sameProcess(previous.nativeProcess, current) || current.state === "Z");
       }
-      fixture.nativeProcess = undefined;
+      fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined;
       fixture.nativeSnapshot = { processes: this.nativeProcesses(null) };
       assert.equal(fixture.nativeSnapshot.processes.length, 0);
       await this.start();
