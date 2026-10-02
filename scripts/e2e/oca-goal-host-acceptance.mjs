@@ -18,7 +18,7 @@ import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe,
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
-import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
+import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, ensureSuiteFields, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HOST_VERSION = "2026.9.7";
@@ -936,9 +936,15 @@ class AcceptanceRun {
     return changed;
   }
   async suite(commands, trusted = []) {
-    const base = "plugins.entries.openclaw-code-agent.config";
-    const fields = { requiredGoalVerifierCommands: commands ?? null, trustedVerifierCommands: trusted };
-    await this.patch({ plugins: { entries: { "openclaw-code-agent": { config: fields } } } }, Object.keys(fields).map((key) => `${base}.${key}`));
+    const receipt = await ensureSuiteFields({ commands, trusted, patch: (raw, paths) => this.patch(raw, paths), observe: async (position) => {
+      const ownerBefore = position === "before" ? await this.hostIdentity() : undefined;
+      const publicConfig = await this.rpc("config.get");
+      const source = readOwnedConfig(this.env.OPENCLAW_CONFIG_PATH, this.directory);
+      telegramAuthority(publicConfig, { apiRoot: this.botUrl, token: this.secrets[1], env: this.env, sourceConfig: source.config });
+      const owner = ownerBefore ?? await this.hostIdentity();
+      return { public: publicConfig, source, owner };
+    } });
+    this.artifact(`suite-preparation-${this.commandCounter}.json`, receipt);
     this.activeSuite = commands;
   }
   ownedProcessIdentity(pid) {

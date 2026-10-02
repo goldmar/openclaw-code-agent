@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 const digest = (text) => ({ bytes: Buffer.byteLength(text), sha256: createHash('sha256').update(text).digest('hex') });
 const own = (value, key) => Object.hasOwn(value, key);
 const revision = (value) => typeof value === 'string' && /^hmac-sha256:v1:[A-Za-z0-9_-]{43}$/.test(value);
@@ -108,6 +109,55 @@ export function assertStableAuthority(before, after, sourceBefore, sourceAfter, 
   assert.ok(before.hash === after.hash && before.configRevisionHash === after.configRevisionHash && before.appliedConfigHash === after.appliedConfigHash, 'Actual same-domain revision brackets stay stable');
   assert.ok(sourceBefore.bytes.equals(sourceAfter.bytes) && sourceBefore.sha256 === sourceAfter.sha256 && sourceBefore.identity.dev === sourceAfter.identity.dev && sourceBefore.identity.ino === sourceAfter.identity.ino, 'Owned source bytes and identity stay stable');
   assert.deepEqual(ownerBefore, ownerAfter, 'Owned Gateway process/profile stay stable');
+}
+
+// Internal fixture preparation only. Readback equality cannot serve as an
+// accepted config mutation or an H08 policy-transition receipt.
+export async function ensureSuiteFields({ commands, trusted = [], observe, patch }) {
+  const array = (value, nonempty) => Array.isArray(value) && (!nonempty || value.length > 0) && value.every((entry) => typeof entry === 'string' && entry.trim());
+  assert.ok(commands === undefined || array(commands, true), 'Setup suite is absent or a complete nonempty string array');
+  assert.ok(array(trusted, false), 'Setup trusted checks are an explicit string array');
+  const wanted = { requiredGoalVerifierCommands: { present: commands !== undefined, ...(commands !== undefined ? { value: commands } : {}) }, trustedVerifierCommands: { present: true, value: trusted } };
+  const fields = { requiredGoalVerifierCommands: commands === undefined ? null : commands, trustedVerifierCommands: trusted };
+  const paths = Object.keys(fields).map((key) => `${POLICY}${key}`);
+  const state = (config) => {
+    const value = config?.plugins?.entries?.['openclaw-code-agent']?.config;
+    assert.ok(value && typeof value === 'object' && !Array.isArray(value), 'Actual plugin setup fields are available');
+    return Object.fromEntries(Object.keys(fields).map((key) => [key, { present: own(value, key), ...(own(value, key) ? { value: value[key] } : {}) }]));
+  };
+  const validate = (snapshot) => {
+    const response = snapshot.public;
+    assert.ok(response.valid === true && revision(response.hash) && revision(response.configRevisionHash) && revision(response.appliedConfigHash), 'Real setup readback is valid with opaque same-domain applied revisions');
+    assert.ok(response.configRevisionHash === response.appliedConfigHash, 'Real setup resolved revision is applied');
+    assert.ok(snapshot.source.bytes instanceof Buffer && snapshot.source.sha256 === digest(snapshot.source.bytes).sha256);
+  };
+  const before = await observe('before'); validate(before);
+  const alreadySet = isDeepStrictEqual(state(before.source.config), wanted);
+  let ack;
+  if (!alreadySet) {
+    ack = await patch({ plugins: { entries: { 'openclaw-code-agent': { config: fields } } } }, paths);
+    // The actual caller uses its original strict patch helper; never accept a
+    // host no-op if a source difference raced that real mutation request.
+    assert.ok(ack.ok === true && revision(ack.hash) && ack.hash !== before.public.hash, 'Real setup change requires a non-noop accepted mutation');
+    assert.ok(Array.isArray(ack.changedPaths) && ack.changedPaths.some((path) => paths.includes(path)));
+    assert.ok(ack.sentinel?.payload?.stats?.requiresRestart === false, 'Real setup change cannot request a restart');
+  }
+  const after = await observe('after'); validate(after);
+  assert.ok(isDeepStrictEqual(state(after.source.config), wanted), 'Exact authored requested fields after setup; raw fields excluded');
+  assert.ok(isDeepStrictEqual(state(after.public.config), wanted), 'Actual active public requested field states agree; raw fields excluded');
+  assert.ok(isDeepStrictEqual(before.owner, after.owner), 'Same actual Gateway/profile/package across setup');
+  if (alreadySet) {
+    assert.ok(isDeepStrictEqual(state(before.public.config), wanted), 'Actual public fields agree before readback-only setup; raw fields excluded');
+    assertStableAuthority(before.public, after.public, before.source, after.source, before.owner, after.owner);
+  } else assert.equal(after.public.hash, ack.hash, 'Actual setup readback matches the accepted mutation');
+  return { classification: alreadySet ? 'ALREADY_SET_READBACK_ONLY' : 'APPLIED_SOURCE_CHANGE', mutation: !alreadySet, policyTransitionEvidence: false, acceptedMutationAckEvidence: !alreadySet,
+    projection: true, rawFullConfigAndSourceExcluded: true,
+    requestedFieldPresence: Object.fromEntries(Object.entries(wanted).map(([key, value]) => [key, value.present])),
+    requestedRepresentation: 'Desired field states; no issued RPC or transition on readback-only branch',
+    requested: projectConfigRequest('config.patch', { raw: JSON.stringify({ plugins: { entries: { 'openclaw-code-agent': { config: fields } } } }), baseHash: before.public.hash, replacePaths: paths }),
+    before: projectConfigResponse('config.get', before.public), after: projectConfigResponse('config.get', after.public),
+    sourceBefore: { bytes: before.source.bytes.length, sha256: before.source.sha256 }, sourceAfter: { bytes: after.source.bytes.length, sha256: after.source.sha256 },
+    ownerBefore: before.owner, ownerAfter: after.owner, ...(ack ? { mutationAck: projectConfigResponse('config.patch', ack) } : {}) };
 }
 
 export function exactFixtureRoute(route) {
