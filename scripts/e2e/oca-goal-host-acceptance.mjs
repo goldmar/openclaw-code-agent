@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
-import { messageText, latestParentUser, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, assertSafeHostLog, selectOrdinaryCompletion, nativeDiagnostics } from "./oca501-lifecycle-protocol.mjs";
+import { messageText, latestParentUser, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
@@ -112,21 +112,6 @@ function verifyEffectAssertionControls() {
   return { scope: "Effect assertion controls only, not simulated host execution", positive: "identical snapshot", negatives: mutations.map((entry) => Object.keys(entry)[0]) };
 }
 
-function assertCompletionTerminal(result, retainedRunId, routedReply) {
-  assert.equal(typeof routedReply, "boolean", "Actual completion routing mode must be explicit");
-  assert.equal(result.runId, retainedRunId, "Actual terminal belongs to the exact retained completion run");
-  assert.equal(result.status, "ok", "Actual completion parent run succeeded");
-  if (routedReply) {
-    assert.equal(result.terminalReceipt?.runId, retainedRunId, "Actual source delivery receipt belongs to the retained run");
-    assert.equal(result.terminalReceipt.sourceReplyDelivered, true, "Actual routed completion reply reached its source");
-  } else {
-    assert.notEqual(result.yielded, true, "A yielded parent run is not a completed visible reply");
-    assert.equal(result.terminalReply?.disposition, "visible", "Actual internal completion reply is visible");
-    assert.equal(typeof result.terminalReply.text, "string");
-    assert.ok(result.terminalReply.text.trim(), "Actual internal completion reply is nonempty");
-    assert.doesNotMatch(result.terminalReply.text.trim(), /^NO_REPLY$/i, "A silent marker is not a visible completion summary");
-  }
-}
 
 function verifyCompletionAssertionControls() {
   const id = "control-retained-run";
@@ -197,7 +182,7 @@ class AcceptanceRun {
     this.children = new Set(); this.servers = new Set(); this.results = []; this.commandCounter = 0;
     this.fixtureErrors = []; this.modelRequests = []; this.botRequests = []; this.botMessages = []; this.botMenus = new Map();
     this.nativeExecutions = []; this.ownedProcesses = new Map();
-    this.artifactFiles = new Set(); this.parentDeliveries = []; this.negativeDeliveryGoal = undefined;
+    this.artifactFiles = new Set(); this.historyExportProjections = new WeakMap(); this.previewAssociations = []; this.parentDeliveries = []; this.negativeDeliveryGoal = undefined;
     this.botUpdates = []; this.updateId = 1000; this.receiptWorkdirs = new Set(); this.patchCounter = 0;
     this.nativeCases = new Map(); this.externalReleases = new Map(); this.parentProbes = new Map(); this.progressCapture = "";
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only", randomBytes(24).toString("hex")];
@@ -224,24 +209,63 @@ class AcceptanceRun {
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
   artifact(name, value) {
     assert.match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
-    writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`), { mode: 0o600 });
+    writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item, 2)}\n`), { mode: 0o600 });
     this.artifactFiles.add(name);
+  }
+  captureHostStream(name, text) {
+    const receipt = hostLogEvidence(text);
+    if (receipt.completeStreamSafe) this.artifact(name, text);
+    else {
+      this.artifact(name, { ...receipt, sourceIdentity: name, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
+      (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: receipt.exclusionReason });
+      for (const result of this.results) if (result.classification === "PASS") { result.classification = "BLOCKED"; result.unprovenReason = receipt.exclusionReason; }
+      process.exitCode = 1;
+    }
+    return receipt;
+  }
+  projectHistoryStream(stdout) {
+    const calls = this.parentDeliveries.flatMap((state) => state.calls.filter((call) => call.name === "tool_describe" && call.stage === "describe").map((call) => {
+      const row = this.sessions().find((row) => row.sessionId === state.sessionId);
+      const runId = state.ordinaryCycle?.endsWith("/turn-ended") ? undefined : row?.completionWakeRunId;
+      return { ...call, runId, ownerId: state.ownerId, sessionId: state.sessionId, ordinaryCycle: state.ordinaryCycle, operation: state.actualNativeCompletion?.operation, nativeThreadId: state.actualNativeCompletion?.threadId, nativeTurnId: state.actualNativeCompletion?.turnId, request: call.request };
+    }));
+    const projected = projectHistoryPreviews(stdout, { method: "chat.history", sessionKey: this.sessionKey, sessionId: this.parentSessionId, calls });
+    for (const exclusion of projected.receipt.exclusions) if (exclusion.provisionalOwner && !this.previewAssociations.some((record) => record.toolCallId === exclusion.toolCallId)) this.previewAssociations.push(exclusion);
+    return projected;
   }
   async command(command, args, { cwd = ROOT, env = this.env, timeoutMs = 180_000, expectedConfigSchemaError } = {}) {
     const receipt = await captureCommand(command, args, { cwd, env, timeoutMs, track: (child) => this.children.add(child), untrack: (child) => this.children.delete(child) });
     const sensitive = configMethod(args);
     const identity = `command-${++this.commandCounter}`;
+    const officialRpcMethod = command === process.execPath && args[0] === this.hostEntry && args[1] === "gateway" && args[2] === "call" ? args[3] : undefined;
+    const protectedStatus = officialRpcMethod === "status";
     if (sensitive) {
       // Full original streams remain internal and are used by RPC/CAS checks.
       // Only this closed projection is registered for the evidence exporter.
       this.artifact(`${identity}.json`, projectConfigCommand(sensitive, args, receipt));
+    } else if (protectedStatus) {
+      let value; try { value = JSON.parse(receipt.stdout.slice(receipt.stdout.indexOf("{"))); } catch { value = {}; }
+      this.artifact(`${identity}.json`, { projection: true, rawStatusProfileFieldsAndStreamsExcluded: true, exit: receipt.exit, streamsComplete: receipt.streamsComplete, timedOut: receipt.timedOut, originalStdout: { bytes: Buffer.byteLength(receipt.stdout), sha256: hash(receipt.stdout) }, originalStderr: { bytes: Buffer.byteLength(receipt.stderr), sha256: hash(receipt.stderr) }, actualOwnedStatus: { pid: Number.isSafeInteger(value.pid) ? value.pid : undefined }, dispositionErrors: receipt.errors.map((error) => ({ bytes: Buffer.byteLength(String(error)), sha256: hash(String(error)) })) });
     } else {
-      const stdout = this.redact(receipt.stdout); const stderr = this.redact(receipt.stderr);
+      const rpcMethod = officialRpcMethod;
+      let historyProjection;
+      try { historyProjection = rpcMethod === "chat.history" ? this.projectHistoryStream(receipt.stdout) : undefined; }
+      catch {
+        this.artifact(`${identity}.json`, { projection: true, method: rpcMethod, rawCommandArgumentsAndStreamsExcluded: true, exit: receipt.exit, streamsComplete: receipt.streamsComplete, timedOut: receipt.timedOut, originalStdout: { bytes: Buffer.byteLength(receipt.stdout), sha256: hash(receipt.stdout) }, originalStderr: { bytes: Buffer.byteLength(receipt.stderr), sha256: hash(receipt.stderr) }, dispositionErrors: receipt.errors.map((error) => ({ bytes: Buffer.byteLength(String(error)), sha256: hash(String(error)) })), exclusionReason: "Unverified official capped-preview provenance; required missing content remains BLOCKED" });
+        throw new Error(`History export provenance BLOCKED; original disposition/hashes preserved in ${identity}.json; raw streams excluded`);
+      }
+      const exportStdout = historyProjection?.stdout ?? receipt.stdout;
+      const stdoutEvidence = hostLogEvidence(exportStdout, { commandStream: true, rpcMethod }), stderrEvidence = hostLogEvidence(receipt.stderr, { commandStream: true });
+      if (!stdoutEvidence.completeStreamSafe || !stderrEvidence.completeStreamSafe) {
+        this.artifact(`${identity}.json`, { command, cwd, exit: receipt.exit, streamsComplete: receipt.streamsComplete, timedOut: receipt.timedOut, projection: true, rawCommandArgumentsAndStreamsExcluded: true, originalStdout: { bytes: Buffer.byteLength(receipt.stdout), sha256: hash(receipt.stdout) }, stdoutEvidence, stderrEvidence, ...(historyProjection ? { historyExportProjection: historyProjection.receipt } : {}), dispositionErrors: receipt.errors.map((error) => ({ bytes: Buffer.byteLength(String(error)), sha256: hash(String(error)) })) });
+        throw new Error(`Unsafe command log excluded; complete original stream hashes retained in ${identity}.json; acceptance BLOCKED`);
+      }
+      const stdout = this.redact(exportStdout); const stderr = this.redact(receipt.stderr);
       this.artifact(`${identity}.stdout.log`, stdout); this.artifact(`${identity}.stderr.log`, stderr);
-      this.artifact(`${identity}.json`, { command, args, cwd, ...receipt, stdout, stderr, stdoutFile: `${identity}.stdout.log`, stderrFile: `${identity}.stderr.log` });
+      this.artifact(`${identity}.json`, { command, args, cwd, ...receipt, stdout, stderr, stdoutEvidence, stderrEvidence, ...(historyProjection ? { historyExportProjection: historyProjection.receipt, stdoutScope: historyProjection.receipt.projection ? "Export projection; full original stdout remains internal; capped describe previews excluded" : "Complete original stdout" } : {}), stdoutFile: `${identity}.stdout.log`, stderrFile: `${identity}.stderr.log` });
     }
-    const failure = sensitive ? `${sensitive}: disposition/stream failure; original stream hashes are in ${identity}.json (raw config excluded)` : `${command} ${args.join(" ")} failed (${receipt.exit.signal ?? receipt.exit.code}): ${receipt.exit.spawnError ?? this.redact(receipt.stdout + receipt.stderr).slice(-6000)}`;
-    assert.equal(receipt.streamsComplete, true, sensitive ? failure : `Incomplete command streams are BLOCKED: ${receipt.errors.join("; ")}`);
+    const failure = sensitive || protectedStatus ? `${sensitive ?? "status"}: disposition/stream failure; original stream hashes are in ${identity}.json (raw config excluded)` : `${command} ${args.join(" ")} failed (${receipt.exit.signal ?? receipt.exit.code}): ${receipt.exit.spawnError ?? this.redact((args.includes("chat.history") ? "History command failed; original hashes/projection retained" : receipt.stdout) + receipt.stderr).slice(-6000)}`;
+    assert.equal(receipt.streamsComplete, true, (sensitive || protectedStatus) ? failure : `Incomplete command streams are BLOCKED: ${receipt.errors.join("; ")}`);
     assert.equal(receipt.timedOut, false, failure);
     if (expectedConfigSchemaError) {
       assert.ok(sensitive === "config.patch" || sensitive === "config.apply");
@@ -301,6 +325,18 @@ class AcceptanceRun {
       const fixture = transport === "native-codex" ? selectNativeCase(input, this.nativeCases) : undefined;
       if (fixture) { assert.ok(body.includes(fixture.tag), "Actual native request contains this case's unique goal tag"); attempt.case = fixture.tag; }
       attempt.nativeIdentity = transport === "native-codex" ? input.client_metadata : undefined;
+      if (fixture?.ordinary) {
+        const actualRow = this.sessions().find((row) => row.backendRef?.conversationId === input.client_metadata?.thread_id);
+        // Inline review inference has its distinct C9 child identity; the
+        // registered original owner is retained rather than aliased to it.
+        if (fixture.operation !== "review") {
+          assert.ok(actualRow && actualRow.goalTaskId === undefined && actualRow.workdir === fixture.workdir);
+          assert.ok(actualRow.prompt.includes(`${fixture.tag}:`)); assert.ok(requestIndex > fixture.admissionRequestBoundary);
+          if (fixture.sessionId) assert.equal(fixture.sessionId, actualRow.sessionId);
+          else fixture.sessionId = actualRow.sessionId; // Genuine admitted owner, before any completion wake races the launch response.
+          attempt.actualOrdinaryOwner = { sessionId: actualRow.sessionId, originalThreadId: actualRow.backendRef.conversationId, recoverySnapshot: true };
+        }
+      }
       if (fixture?.hold && !fixture.heldRequest) {
         fixture.heldRequest = requestIndex; attempt.externalHeld = true;
         this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
@@ -325,7 +361,8 @@ class AcceptanceRun {
       }
       if (fixture?.mode === "plan" && !fixture.planSent) {
         const row = this.sessions().find((entry) => entry.backendRef?.conversationId === input.client_metadata?.thread_id);
-        assert.equal(row?.currentPermissionMode, "plan", "Actual OCA-owned native conversation has Plan posture");
+        assert.equal(row?.requestedPermissionMode, "plan", "Actual persisted admission requested Plan posture");
+        attempt.actualPublicSession = await this.publicSession(row.sessionId); assert.equal(attempt.actualPublicSession.status, "running");
         fixture.planSent = true; marker = `<proposed_plan>\n${fixture.planMarkdown}\n</proposed_plan>`;
         item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
         attempt.nativePlanModelText = marker;
@@ -335,7 +372,8 @@ class AcceptanceRun {
       }
       if (fixture?.mode === "question" && !fixture.question) {
         const row = this.sessions().find((entry) => entry.backendRef?.conversationId === input.client_metadata?.thread_id);
-        assert.equal(row?.currentPermissionMode, "plan", "Question is emitted only for a real Plan conversation");
+        assert.equal(row?.requestedPermissionMode, "plan", "Question uses the genuinely requested Plan admission and actual advertised native schema");
+        attempt.actualPublicSession = await this.publicSession(row.sessionId); assert.equal(attempt.actualPublicSession.status, "running");
         fixture.question = questionCall(input, fixture, { callId: `oca501_question_${requestIndex}`, itemId, validate: this.validateHostSchema });
         fixture.questionNativeThread = input.client_metadata.thread_id; item = fixture.question.item; attempt.actualQuestionCall = fixture.question;
       } else if (fixture?.mode === "question") {
@@ -454,17 +492,35 @@ class AcceptanceRun {
     if (probes.length) { attempt.parentProbe = probes[0].id; attempt.actualProbeInput = input; return { text: probes[0].marker }; }
     // Ignore only the host's explicitly delimited context attached to a user
     // request. A quoted completion in an older turn cannot select a case.
-    const ordinaryOwners = [...this.nativeCases.values()].filter((fixture) => fixture.ordinary && fixture.sessionId).map((fixture) => {
-      const row = this.sessions().find((row) => row.sessionId === fixture.sessionId);
-      const actual = this.modelRequests.findLast((request) => request.transport === "native-codex" && request.case === fixture.tag && request.responseCompleted && request.emittedType === "message" && request.emittedText === fixture.text);
-      const events = existsSync(join(this.directory, "openclaw-runtime.log")) ? nativeDiagnostics(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8")) : [];
-      const terminal = actual && events.find((event) => event.event === "turn.terminal" && event.hasThreadId && event.hasTurnId && event.outcome === "completed" && event.kind === "user" && event.at >= actual.receivedAt);
-      return { row, fixture, completion: actual && terminal ? { nativeCompleted: true, caseTag: fixture.tag, threadId: actual.nativeIdentity.thread_id, turnId: actual.nativeIdentity.turn_id, request: actual.requestIndex, terminalDiagnostic: terminal } : undefined };
-    }).filter((owner) => owner.row);
+    const ordinaryOwners = [];
+    for (const fixture of [...this.nativeCases.values()].filter((fixture) => fixture.ordinary && fixture.sessionId)) {
+      const row = this.sessions().find((row) => row.sessionId === fixture.sessionId); if (!row) continue;
+      const first = text.split("\n")[0].replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\] /, "");
+      const currentOwner = first === `[${row.name}] Completed. ID: ${row.sessionId}` || first === "Coding agent session turn ended." && text.split("\n")[1] === `Name: ${row.name}` && text.split("\n")[2] === `ID: ${row.sessionId}`;
+      let completion, publicView;
+      if (currentOwner) {
+        publicView = await this.publicSession(row.sessionId);
+        const events = existsSync(join(this.directory, "openclaw-runtime.log")) ? nativeDiagnostics(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8")) : [];
+        try {
+          const reviewReadback = fixture.operation === "review" && fixture.reviewExpected ? readNativeReview(this.env.CODEX_HOME, fixture.reviewExpected, true) : undefined;
+          completion = ordinaryNativeCompletion({ row, fixture, requests: this.modelRequests, diagnostics: events, reviewReadback, publicView });
+        } catch { /* A pending/unknown operation cannot dispatch ordinary success. */ }
+      }
+      ordinaryOwners.push({ row, fixture, completion, publicView });
+    }
     const selected = selectOrdinaryCompletion(input, ordinaryOwners) ?? selectRoutedCompletion(input, this.goals());
     if (!selected) return;
     const { goal, ordinary, route, wake, index } = selected;
     const ownerId = goal?.id ?? ordinary.sessionId; const sessionId = goal?.sessionId ?? ordinary.sessionId;
+    // Existing file readback at actual provider admission may catch the pending
+    // flag. Missing this fast window is recorded, never manufactured.
+    const pendingSnapshot = ordinary?.completionWakeSummaryRequired === true ? Object.fromEntries(["sessionId", "completionWakeSummaryRequired", "completionWakeRunId", "completionWakeOutcomeKey", "completionWakeSummaryFact"].filter((key) => Object.hasOwn(ordinary, key)).map((key) => [key, structuredClone(ordinary[key])])) : undefined;
+    if (ordinary && route.provider === "webchat") {
+      attempt.case = ordinary.name; attempt.ordinarySessionId = ordinary.sessionId; attempt.wakeHash = hash(wake);
+      attempt.ordinaryCycle = selected.cycle; attempt.actualNativeCompletion = selected.completion;
+      attempt.actualOrdinaryAdmission = pendingSnapshot;
+      return { text: `OCA501 ordinary visible receipt ${selected.cycle}: ${ordinary.name} native turn completed.` };
+    }
     const entries = input.input;
     const tools = input.tools ?? [];
     if (!tools.length) return; // Tool-less auxiliary/compaction request is not source delivery.
@@ -475,7 +531,7 @@ class AcceptanceRun {
     const tail = entries.slice(index + 1);
     let state = this.parentDeliveries.findLast((delivery) => (goal ? delivery.goalId === goal.id : delivery.ordinarySessionId === ordinary.sessionId) && delivery.wakeHash === hash(wake) && delivery.calls.some((call) => tail.some((entry) => entry.call_id === call.id)));
     if (!state) {
-      state = { ownerId, goalId: goal?.id, ordinarySessionId: ordinary?.sessionId, sessionId, wakeHash: hash(wake), ordinaryCycle: selected.cycle, actualNativeCompletion: selected.completion, route, calls: [], summary: goal ? `OCA501 source receipt ${goal.id}: ${goal.name} ${goal.status}.` : `OCA501 ordinary source receipt ${selected.cycle}: ${ordinary.name} native turn completed.`, admittedAt: attempt.receivedAt };
+      state = { ownerId, goalId: goal?.id, ordinarySessionId: ordinary?.sessionId, sessionId, wakeHash: hash(wake), ordinaryCycle: selected.cycle, actualNativeCompletion: selected.completion, actualOrdinaryAdmission: pendingSnapshot, route, calls: [], summary: goal ? `OCA501 source receipt ${goal.id}: ${goal.name} ${goal.status}.` : `OCA501 ordinary source receipt ${selected.cycle}: ${ordinary.name} native turn completed.`, admittedAt: attempt.receivedAt };
       this.parentDeliveries.push(state);
     }
     attempt.parentDelivery = { goalId: state.goalId, ordinarySessionId: state.ordinarySessionId, sessionId: state.sessionId, wakeHash: state.wakeHash };
@@ -590,7 +646,14 @@ class AcceptanceRun {
   async rpc(method, params = {}, { timeoutMs } = {}) {
     // Use only the isolated config target/auth; URL overrides require explicit auth.
     const output = await this.command(process.execPath, [this.hostEntry, "gateway", "call", method, "--params", JSON.stringify(params), "--json", ...(timeoutMs ? ["--timeout", String(timeoutMs - 5000)] : [])], timeoutMs ? { timeoutMs } : {});
-    try { return JSON.parse(output.slice(output.indexOf("{"))); } catch (error) {
+    try {
+      const value = JSON.parse(output.slice(output.indexOf("{")));
+      if (method === "chat.history") {
+        const projection = this.projectHistoryStream(output);
+        if (projection.receipt.projection) this.historyExportProjections.set(value, { ...JSON.parse(projection.stdout), exportProjection: projection.receipt });
+      }
+      return value;
+    } catch (error) {
       if (method.startsWith("config.")) throw new Error(`Invalid internal ${method} response; bytes=${Buffer.byteLength(output)} sha256=${hash(output)} (raw response excluded)`);
       throw error;
     }
@@ -601,6 +664,30 @@ class AcceptanceRun {
     const response = await fetch(`${this.gatewayUrl}/tools/invoke`, { method: "POST", headers: { authorization: `Bearer ${this.secrets[0]}`, "content-type": "application/json", "x-openclaw-message-channel": channel, "x-openclaw-message-to": target, "x-openclaw-account-id": "default" }, body, signal: AbortSignal.timeout(90_000) });
     const output = await response.json(); this.artifact(`invoke-${hash(body).slice(0, 12)}.json`, { method: "POST /tools/invoke", request: { name, args }, requestHash: hash(body), status: response.status, output });
     return { status: response.status, output };
+  }
+  async publicSession(sessionId, { waitingKind } = {}) {
+    const row = this.sessions().find((entry) => entry.sessionId === sessionId); assert.ok(row?.name);
+    const owner = { sessionId, name: row.name }, observedAt = new Date().toISOString();
+    const listing = await this.invoke("agent_sessions", { status: "all", full: true });
+    const checked = (response) => { assert.equal(response.status, 200); assert.equal(response.output.ok, true); assert.notEqual(response.output.result?.isError, true); return messageText({ content: response.output.result?.content ?? [] }); };
+    let view, output, waiting, observationComplete = false;
+    try {
+      const item = sessionListing(checked(listing), owner);
+      if (["completed", "failed", "stopped"].includes(item.phaseLabel)) {
+        // Terminal output reads can claim early notification ownership. Observe
+        // the listing only; required journals and delivery remain unconditional.
+        assert.equal(waitingKind, undefined); view = { ...item, terminalListing: true };
+      } else {
+        output = await this.invoke("agent_output", { session: sessionId, full: true });
+        view = activeSessionView(checked(output), checked(listing), owner);
+        if (waitingKind) { waiting = await this.invoke("agent_sessions", { status: "waiting", full: true }); view = assertWaitingView(view, checked(waiting), waitingKind); }
+      }
+      observationComplete = true;
+    } finally {
+      this.publicObservationIndex = (this.publicObservationIndex ?? 0) + 1;
+      this.artifact(`public-session-${this.publicObservationIndex}.json`, { observedAt, owner, listing, output, waiting, view, observationComplete, authority: "Actual anchored public text views; raw row supplies identity only" });
+    }
+    return { ...view, observedAt };
   }
   async setup() {
     assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(), this.options["expected-sha"]);
@@ -712,7 +799,7 @@ class AcceptanceRun {
     this.gateway.stdout.once("end", () => { const text = stdoutDecoder.end(); this.gatewayStdout += text; this.gatewayLog += text; });
     this.gateway.stderr.once("end", () => { const text = stderrDecoder.end(); this.gatewayStderr += text; this.gatewayLog += text; });
     await waitFor("actual pinned Gateway readiness", async () => {
-      assert.equal(this.gateway.exitCode, null, this.gatewayLog);
+      assert.equal(this.gateway.exitCode, null, "Owned Gateway exited before readiness; original complete stdout/stderr retained behind safe export boundary");
       try { const response = await fetch(`${this.gatewayUrl}/readyz`, { signal: AbortSignal.timeout(2000) }); return response.ok; } catch { return false; }
     });
     this.provenance.gatewayPid = this.gateway.pid;
@@ -739,7 +826,7 @@ class AcceptanceRun {
     const created = await this.rpc("sessions.create", { key: "agent:main:main", agentId: "main" });
     this.artifact("host-session-created.json", created);
     assert.equal(created.ok, true); assert.equal(created.key, "agent:main:main");
-    assert.ok(created.sessionId); assert.ok(created.entry); assert.equal(created.runStarted, false);
+    assert.ok(created.sessionId); this.parentSessionId = created.sessionId; assert.ok(created.entry); assert.equal(created.runStarted, false);
     assert.equal(this.modelRequests.length, beforeCreationRequests, "Host session creation starts no model turn");
     this.sessionKey = created.key;
     assert.ok(this.gatewayLog.includes(`agent model: ${PARENT_MODEL}`), "Actual Gateway reports the isolated parent model");
@@ -772,7 +859,11 @@ class AcceptanceRun {
     assert.equal(this.modelRequests.filter((entry) => entry.transport === "native-codex").length, nativeRequestsBefore, "Parent probe starts no native Codex turn");
     assert.ok(!existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH), "Parent marker turn launches no goal");
     const parentTerminal = await this.rpc("agent.wait", { runId: parentRun.runId, timeoutMs: 5000 });
-    assert.equal(parentTerminal.status, "ok", "Genuine host parent run reached successful terminal state");
+    const actualParentRequests = parentRequests.filter((request) => request.responseCompleted && request.emittedType === "message" && request.emittedText === PARENT_MARKER);
+    assert.equal(actualParentRequests.length, 1, "One actual no-tool-call parent response belongs to the admitted probe");
+    const actualParent = actualParentRequests[0]; assert.equal(actualParent.parentCall, undefined);
+    const canonicalParent = parentHistory.messages.find((entry) => entry.role === "assistant" && entry.responseId === actualParent.responseId && entry.__openclaw?.runId === parentRun.runId);
+    assertVisibleCanonical(parentTerminal, parentRun.runId, actualParent.responseId, canonicalParent, actualParent.emittedText);
     const parentSessionAfter = await this.rpc("sessions.list", { agentId: "main", limit: 10 });
     const afterRow = parentSessionAfter.sessions.find((entry) => entry.key === this.sessionKey);
     assert.equal(afterRow?.sessionId, created.sessionId); assert.equal(afterRow.modelProvider, "oca501"); assert.equal(afterRow.model, MODEL);
@@ -940,7 +1031,7 @@ class AcceptanceRun {
           const terminal = await this.rpc("agent.wait", { runId: row.completionWakeRunId, timeoutMs: 1000 });
           if (terminal.status === "timeout" || terminal.status === "pending") return false;
           assertCompletionTerminal(terminal, row.completionWakeRunId, row.completionWakeRoutedReply);
-          const source = row.completionWakeRoutedReply ? await this.sourceDeliveryEvidence(task, row, terminal) : undefined;
+          const source = row.completionWakeRoutedReply ? await this.sourceDeliveryEvidence(task, row, terminal) : await this.visibleDeliveryEvidence(task, row, terminal);
           this.artifact(`delivery-${task.id}.json`, { session: row, terminal, source });
         }
         if (task.route?.provider === "telegram") {
@@ -974,6 +1065,18 @@ class AcceptanceRun {
       throw error;
     }
     this.artifact(`session-${task.id}.json`, session);
+  }
+  async visibleDeliveryEvidence(task, row, terminal) {
+    const origin = row.originSessionKey ?? task.originSessionKey ?? task.route?.sessionKey; assert.ok(origin);
+    const history = await this.rpc("chat.history", { sessionKey: origin, agentId: "main", limit: 200, maxBytes: 2_000_000, maxChars: 500_000 });
+    const matching = history.messages.flatMap((entry) => {
+      if (entry.role !== "assistant" || entry.__openclaw?.runId !== row.completionWakeRunId) return [];
+      return this.modelRequests.filter((request) => request.transport === "host-parent" && request.responseId === entry.responseId && request.responseCompleted && request.emittedType === "message").map((request) => ({ entry, request }));
+    });
+    assert.equal(matching.length, 1, "Exact retained nonrouted completion has one actual canonical/provider reply");
+    const { entry, request } = matching[0];
+    assertVisibleCanonical(terminal, row.completionWakeRunId, request.responseId, entry, request.emittedText);
+    return { retainedRunId: row.completionWakeRunId, canonical: entry, actualParentRequest: request, history, terminal, route: row.route };
   }
   async sourceDeliveryEvidence(task, row, terminal) {
     assertCompletionTerminal(terminal, row.completionWakeRunId, true);
@@ -1028,6 +1131,9 @@ class AcceptanceRun {
     const runIds = [...new Set(history.entries.map((entry) => entry.__openclaw.runId))]; assert.equal(runIds.length, 1);
     const runId = runIds[0]; const terminal = await waitFor("actual ordinary source own-run terminal", async () => { const value = await this.rpc("agent.wait", { runId, timeoutMs: 1000 }); return ["pending", "timeout"].includes(value.status) ? false : value; });
     assertCompletionTerminal(terminal, runId, true);
+    for (const association of this.previewAssociations.filter((record) => record.provisionalOwner?.ordinaryCycle === state.ordinaryCycle)) {
+      association.corroboratedOwnRun = assertPreviewSettlement(association, { sessionId, cycle: state.ordinaryCycle, operation: state.actualNativeCompletion.operation, runId });
+    }
     for (const entry of history.entries) assert.notEqual(entry.__openclaw.truncated, true, "Complete canonical actual tool execution receipt required");
     const wire = this.botRequests.filter((request) => request.method === "sendMessage" && request.result?.text === state.summary && request.result.chat.id === 501002);
     assert.equal(wire.length, 1); assert.ok(wire[0].respondedAt);
@@ -1036,9 +1142,12 @@ class AcceptanceRun {
     const row = this.sessions().find((row) => row.sessionId === sessionId);
     const projected = { provider: row.route.provider, target: row.route.target, ...(Object.hasOwn(row.route, "accountId") ? { accountId: row.route.accountId } : {}) }; assert.deepEqual(state.route, exactFixtureRoute(projected));
     assert.ok(state.actualNativeCompletion.nativeCompleted); assert.equal(state.actualNativeCompletion.threadId, row.backendRef.conversationId);
-    if (kind === "completed" && row.completionWakeRunId) {
-      const settled = await waitFor("ordinary actual required completion journal settled", () => { const value = this.sessions().find((row) => row.sessionId === sessionId); if (value.completionWakeFailedAt) throw new Error("Actual ordinary completion wake failed"); return value.completionWakeSucceededAt && value.completionWakeOutcomeKey && value.completionWakeRunId === runId && value.completionWakeRoutedReply === true ? value : false; });
-      assert.ok(settled.completionWakeOutcomeKey.startsWith(`terminal:${sessionId}:`));
+    if (kind === "completed") {
+      await waitFor("ordinary actual required completion journal settled", () => {
+        const current = this.sessions().find((row) => row.sessionId === sessionId);
+        try { state.actualCompletedProof = assertOrdinaryCompleted(current, { sessionId, threadId: state.actualNativeCompletion.threadId, turnId: state.actualNativeCompletion.turnId, runId, routedReply: true, pendingSnapshot: state.actualOrdinaryAdmission }); return current; } catch { return false; }
+      });
+      assert.ok(this.botRequests.some((request) => request.method === "sendMessage" && request.respondedAt && request.result?.chat.id === 501002 && request.result.text?.startsWith(`✅ [${row.name}] Completed`)), "Original canonical terminal status notification has actual wire delivery");
     }
     await waitFor("ordinary direct delivery drained", () => { const value = this.sessions().find((row) => row.sessionId === sessionId); return !["notifying", "wake_pending"].includes(value.deliveryState) && !value.notificationDedupe?.some((entry) => entry.status === "in_flight"); });
     const evidence = { sessionId, kind, ordinaryCycle: state.ordinaryCycle, wakeHash: state.wakeHash, actualNativeCompletion: state.actualNativeCompletion, state, canonicalHistory: history.value, runId, terminal, wire, row: this.sessions().find((row) => row.sessionId === sessionId), resultTransport: state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool result + terminal source receipt after final hook" };
@@ -1227,6 +1336,8 @@ class AcceptanceRun {
     await this.finalDrain();
   }
   async finalDrain() {
+    for (const association of this.previewAssociations) assert.equal(association.corroboratedOwnRun, association.actualRunId, "Every provisional preview owner received exact genuine source settlement before fencing");
+    this.artifact("preview-owner-settlement.json", this.previewAssociations);
     this.currentScenario = "final-settlement";
     const evidence = { mutation: "Own disposable Gateway suspend.prepare(preserve, drain) after all scenario outcomes; no handoff/auth changes", observations: [] };
     let lease; let requestId;
@@ -1338,9 +1449,12 @@ class AcceptanceRun {
     }
     this.artifact("cleanup.json", { ownedProcesses: [...this.ownedProcesses.values()], checkedPorts: ports, classification: failures.length ? "BLOCKED" : "PASS", failures });
     if (this.gateway) await waitFor("actual owned Gateway stdout/stderr complete", () => this.gateway.stdout.readableEnded && this.gateway.stderr.readableEnded, 5000);
-    assertSafeHostLog(this.gatewayLog ?? ""); assertSafeHostLog(this.gatewayStdout ?? ""); assertSafeHostLog(this.gatewayStderr ?? "");
-    this.artifact("gateway.log", this.gatewayLog ?? "Gateway not started");
-    this.artifact("gateway.stdout.log", this.gatewayStdout ?? ""); this.artifact("gateway.stderr.log", this.gatewayStderr ?? "");
+    this.captureHostStream("gateway.log", this.gatewayLog ?? "Gateway not started");
+    this.captureHostStream("gateway.stdout.log", this.gatewayStdout ?? ""); this.captureHostStream("gateway.stderr.log", this.gatewayStderr ?? "");
+    if (existsSync(join(this.directory, "openclaw-runtime.log"))) {
+      const runtimeText = readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8");
+      if (!hostLogEvidence(runtimeText).completeStreamSafe) this.captureHostStream("runtime-log.projection.json", runtimeText);
+    }
     this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, botMenus: [...this.botMenus.entries()], fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
     this.artifact("provenance.json", this.provenance);
     this.artifact("results.json", this.results);
@@ -1350,11 +1464,17 @@ class AcceptanceRun {
     // artifact(), plus three explicitly identified owned runtime/store files.
     // Config/auth/env, caches, native rollout/binary and package archives are
     // deliberately excluded, even though they live under the disposable root.
-    if (existsSync(join(this.directory, "openclaw-runtime.log"))) assertSafeHostLog(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8"));
+    let runtimeSafe = true;
+    if (existsSync(join(this.directory, "openclaw-runtime.log"))) {
+      const receipt = hostLogEvidence(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8"));
+      runtimeSafe = receipt.completeStreamSafe;
+      if (!runtimeSafe) { this.captureHostStream("runtime-log.projection.json", readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8")); this.artifact("results.json", this.results); }
+    }
     const entries = [...this.artifactFiles].map((name) => ({ name, alreadyRedacted: true }));
     const unavailable = [];
     for (const name of ["goals.json", "sessions.json", "openclaw-runtime.log"]) {
-      if (existsSync(join(this.directory, name))) entries.push({ name, alreadyRedacted: false });
+      if (name === "openclaw-runtime.log" && !runtimeSafe) unavailable.push({ name, reason: "Unsafe complete stream excluded with original byte/hash projection; acceptance BLOCKED" });
+      else if (existsSync(join(this.directory, name))) entries.push({ name, alreadyRedacted: false });
       else {
         assert.ok(!this.hostGoalAdmitted, `Required ${name} evidence missing after real admission`);
         unavailable.push({ name, reason: "Not generated before setup failed; no runtime acceptance claimed" });

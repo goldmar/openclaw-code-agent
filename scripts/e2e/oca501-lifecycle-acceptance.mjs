@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { readNativeReview } from "./oca501-review-protocol.mjs";
 import { projectConfigResponse, readOwnedConfig } from "./oca501-config-receipt.mjs";
-import { assertNoNativeContinuation, messageText, nativeDiagnostics } from "./oca501-lifecycle-protocol.mjs";
+import { assertNoNativeContinuation, messageText, nativeDiagnostics, assertVisibleCanonical, currentRevisionSegments, revisionInstruction, assertOrdinaryCompleted, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 async function observe(label, probe) {
@@ -31,7 +31,7 @@ async function callback(run, message, label, expected) {
 }
 async function stop(run, sessionId, completed = false) {
   const result = await run.invoke("agent_kill", { session: sessionId, ...(completed ? { reason: "completed" } : {}) }, { channel: "telegram", target: "501002" }); admitted(result);
-  await observe("owned session stopped", () => rowFor(run, sessionId)?.lifecycle === "terminal");
+  await observe("owned session stopped", async () => { const view = await run.publicSession(sessionId); return view.terminalListing && rowFor(run, sessionId)?.lifecycle === "terminal" ? view : false; });
   return result;
 }
 async function settleParentReplies(run, requestStart) {
@@ -49,7 +49,7 @@ async function settleParentReplies(run, requestStart) {
     const terminal = await observe("actual parent own-run terminal", async () => {
       const value = await run.rpc("agent.wait", { runId, timeoutMs: 1000 }); return ["pending", "timeout"].includes(value.status) ? false : value;
     });
-    assert.equal(terminal.runId, runId); assert.equal(terminal.status, "ok");
+    assertVisibleCanonical(terminal, runId, request.responseId, history.message, request.emittedText);
     receipts.push({ request: request.requestIndex, responseId: request.responseId, runId, terminal, canonicalMessage: history.message });
   }
   run.artifact(`lifecycle-parent-settlement-${requestStart}.json`, receipts);
@@ -88,19 +88,26 @@ async function confirmations(run) {
   const terminal = await run.terminal(compatible.id, compatible.workdir, { commands: ["bash ci.sh"] });
   run.recordCase(compatible.id, { ...compatible, accepted, terminal, assertions: ["legacy selected full suite binds only after validation", "actual original Run callback", "genuine native/check/source completion"] });
 }
+async function publicPlan(run, session, fixture, messageStart = 0) {
+  const actualNative = await observe("own genuine native proposed Plan", () => run.modelRequests.findLast((request) => request.case === fixture.tag && request.nativePlanModelText));
+  assert.equal(actualNative.nativeIdentity.thread_id, session.backendRef.conversationId);
+  const message = await observe("original canonical versioned Plan prompt/buttons", () => run.botMessages.slice(messageStart).findLast((entry) => entry.text.startsWith(`📋 [${session.name}] Plan v`) && entry.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Approve")));
+  const view = await observe("own active public pending Plan", async () => {
+    try { return await run.publicSession(session.sessionId, { waitingKind: "plan" }); } catch { return false; }
+  });
+  const originalTokens = tokensFor(run, session.sessionId);
+  const authority = planPromptAuthority({ message, tokens: originalTokens, view, markdown: fixture.planMarkdown, route: session.route, nativeRequest: actualNative, threadId: session.backendRef.conversationId, caseTag: fixture.tag });
+  return { actualNative, publicView: view, planAuthority: authority, planVersion: authority.version, capturedMessage: structuredClone(message), originalTokens: authority.originalTokens };
+}
 async function pendingPlan(run, id) {
   begin(run, id); const workdir = await run.workdir(id); const messages = run.botMessages.length;
   const fixture = { tag: `OCA501_CASE_${id}`, workdir, mode: "plan", permissionMode: "plan", text: `${id}_NATIVE_OK`, planMarkdown: `# ${id} actual plan\n- Complete the harmless required CI gate after user approval.` };
   run.nativeFixture = fixture;
   const admission = await run.invoke("agent_goal", run.goalArgs(id, workdir, { permission_mode: "plan", max_iterations: 3 }), { channel: "telegram", target: "501002" }); admitted(admission);
   const task = await observe("real goal waiting for native plan", () => { const value = taskFor(run, id); return value?.status === "waiting_for_plan_approval" ? value : false; });
-  const session = rowFor(run, task.sessionId); assert.ok(session.pendingPlanApproval); assert.equal(session.approvalState, "pending"); assert.equal(session.currentPermissionMode, "plan"); assert.ok(session.planDecisionVersion > 0);
-  const message = await observe("real finalized plan buttons", () => run.botMessages.slice(messages).find((entry) => entry.text.includes(id.toLowerCase()) && entry.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Approve")));
-  const output = await run.invoke("agent_output", { session: task.sessionId }); admitted(output);
-  assert.ok(text(output).includes(fixture.planMarkdown), "Actual public pending-plan readback includes the native finalized artifact");
-  assert.ok(fixture.planSent); const actualNative = run.modelRequests.find((request) => request.case === fixture.tag && request.nativePlanModelText);
-  assert.equal(actualNative.nativeIdentity.thread_id, session.backendRef.conversationId);
-  return { id, workdir, fixture, task, session, admission, actualNative, output, capturedMessage: structuredClone(message), originalTokens: tokensFor(run, task.sessionId) };
+  const session = rowFor(run, task.sessionId); assert.equal(session.requestedPermissionMode, "plan");
+  const plan = await publicPlan(run, session, fixture, messages); assert.ok(fixture.planSent);
+  return { id, workdir, fixture, task, session, admission, ...plan };
 }
 async function parentProbe(run, id, requestStart) {
   const marker = `OCA501_PARENT_PROBE_${id}`; run.parentProbes.set(id, { id, marker });
@@ -110,9 +117,10 @@ async function parentProbe(run, id, requestStart) {
   assert.equal(terminal.runId, admission.runId); assert.equal(terminal.status, "ok");
   const history = await run.rpc("chat.history", { sessionKey: run.sessionKey, limit: 200, maxBytes: 2_000_000, maxChars: 500_000 });
   const canonical = history.messages.find((message) => message.role === "assistant" && message.__openclaw?.runId === admission.runId && messageText(message).trim() === marker);
-  assert.ok(canonical); assert.equal(canonical.__openclaw.truncated, undefined);
+  assert.ok(canonical);
   const requests = run.modelRequests.slice(requestStart).filter((request) => request.transport === "host-parent");
-  const actualProbe = requests.find((request) => request.parentProbe === id && request.responseCompleted); assert.ok(actualProbe);
+  const matchedProbes = requests.filter((request) => request.parentProbe === id && request.responseCompleted); assert.equal(matchedProbes.length, 1); const actualProbe = matchedProbes[0];
+  assertVisibleCanonical(terminal, admission.runId, actualProbe.responseId, canonical, marker);
   assert.equal(actualProbe.emittedType, "message"); assert.equal(actualProbe.parentCall, undefined);
   const inputs = requests.map((request) => JSON.parse(readFileSync(join(run.directory, `responses-request-${request.requestIndex}.json`), "utf8")).input);
   const proof = { admission, terminal, history, canonical, actualProbe, requests, inputs };
@@ -130,33 +138,37 @@ async function plans(run) {
 
   const revise = await pendingPlan(run, "H07-revise-positive"); const reviseStart = run.modelRequests.length; const reviseBefore = run.effects();
   const changed = await callback(run, revise.capturedMessage, "Revise", /changes.*want|revision|revise/i);
-  assert.equal(rowFor(run, revise.task.sessionId).approvalState, "changes_requested"); assertNoNativeContinuation(reviseBefore, run.effects());
+  const revisedPublic = await run.publicSession(revise.task.sessionId, { waitingKind: "revise" }); assertNoNativeContinuation(reviseBefore, run.effects());
   const probe = await parentProbe(run, "H07-revise-positive", reviseStart);
-  const instruction = `The user asked to revise plan v${revise.session.planDecisionVersion}`;
-  assert.ok(JSON.stringify(probe.actualProbe.actualProbeInput).includes(instruction)); assert.ok(JSON.stringify(probe.actualProbe.actualProbeInput).includes(`session='${revise.task.sessionId}'`));
-  assert.ok(!probe.requests.filter((request) => request.requestIndex < probe.actualProbe.requestIndex).some((request) => JSON.stringify(JSON.parse(readFileSync(join(run.directory, `responses-request-${request.requestIndex}.json`), "utf8")).input).includes(instruction)), "Fresh no-tool-call probe must be the next turn consuming this positive revision context");
+  const instruction = revisionInstruction(revise.task.name, revise.task.sessionId, revise.planVersion);
+  assert.equal(currentRevisionSegments(probe.actualProbe.actualProbeInput, instruction).length, 1, "Whole exact queued instruction belongs to one current context segment");
+  assert.ok(!probe.requests.filter((request) => request.requestIndex < probe.actualProbe.requestIndex).some((request) => currentRevisionSegments(JSON.parse(readFileSync(join(run.directory, `responses-request-${request.requestIndex}.json`), "utf8")).input, instruction).length), "Fresh no-tool-call probe must be the next turn consuming this positive revision context");
   await stop(run, revise.task.sessionId); await run.settleGoalDelivery(taskFor(run, revise.id));
-  run.recordCase(revise.id, { ...revise, changed, probe, assertions: ["actual valid Revise callback", "same-origin next assembled no-tool-call probe contains exact session/version instruction", "real own-run/canonical terminal receipt", "no native work merely from requesting revision"] });
+  run.recordCase(revise.id, { ...revise, changed, revisedPublic, probe, assertions: ["actual valid Revise callback", "same-origin next assembled no-tool-call probe contains exact session/version instruction", "real own-run/canonical terminal receipt", "no native work merely from requesting revision"] });
 
   const staleApprove = await pendingPlan(run, "H07-stale-approve"); const staleRevise = await pendingPlan(run, "H07-stale-revise"); const reject = await pendingPlan(run, "H07-reject");
   await run.suite(["bash lint.sh"]);
   for (const [pending, label] of [[staleApprove, "Approve"], [staleRevise, "Revise"]]) {
     const before = run.effects(); const requestStart = run.modelRequests.length;
+    const beforePublic = await run.publicSession(pending.task.sessionId, { waitingKind: "plan" });
     const denied = await callback(run, pending.capturedMessage, label, /Goal verifier policy changed|operator-required suite/);
     const failed = taskFor(run, pending.id); assert.equal(failed.status, "failed"); assert.match(failed.failureReason, /policy changed|operator-required suite/);
     const after = rowFor(run, pending.task.sessionId);
-    for (const key of ["approvalState", "pendingPlanApproval", "planDecisionVersion", "planModeApproved"]) assert.deepEqual(after[key], pending.session[key], "Policy refusal must not close or approve plan");
+    const afterPublic = await run.publicSession(pending.task.sessionId, { waitingKind: "plan" });
+    assert.equal(afterPublic.phase, beforePublic.phase); assert.equal(afterPublic.waitingKind, beforePublic.waitingKind);
+    assert.ok(afterPublic.outputText.includes(pending.fixture.planMarkdown));
+    const appended = afterPublic.outputText.match(/^Pending plan \(v([1-9][0-9]*)\):$/m); if (appended) assert.equal(Number(appended[1]), pending.planVersion);
     assertNoNativeContinuation(before, run.effects());
-    const artifact = await run.invoke("agent_output", { session: pending.task.sessionId }); assert.ok(text(artifact).includes(pending.fixture.planMarkdown));
+    const artifact = afterPublic;
     let probe;
-    if (label === "Revise") { probe = await parentProbe(run, pending.id, requestStart); assert.ok(probe.inputs.every((input) => !JSON.stringify(input).includes(`session='${pending.task.sessionId}'`) || !JSON.stringify(input).includes(`The user asked to revise plan v${pending.session.planDecisionVersion}`)), "No actual parent input queued denied targeted revision"); }
+    if (label === "Revise") { probe = await parentProbe(run, pending.id, requestStart); const instruction = revisionInstruction(pending.task.name, pending.task.sessionId, pending.planVersion); assert.ok(probe.inputs.every((input) => currentRevisionSegments(input, instruction).length === 0), "Every actual current parent carrier lacks the whole denied targeted instruction"); }
     await run.settleGoalDelivery(failed); await run.click(pending.capturedMessage, "Reject");
-    await observe("rejected failed owner's native session stopped", () => rowFor(run, pending.task.sessionId)?.lifecycle === "terminal");
+    await observe("rejected failed owner's native session stopped", async () => { const view = await run.publicSession(pending.task.sessionId); return view.terminalListing && rowFor(run, pending.task.sessionId)?.lifecycle === "terminal" ? view : false; });
     assert.equal(taskFor(run, pending.id).status, "failed");
-    run.recordCase(pending.id, { ...pending, denied, failed, after, artifact, probe, assertions: ["policy-specific stale continuation refusal", "native plan/version/state preserved", "zero native/check/repair", ...(probe ? ["all actual same-origin parent inputs lack targeted queued revision; positive probe control exists"] : [])] });
+    run.recordCase(pending.id, { ...pending, denied, failed, after, beforePublic, afterPublic, artifact, probe, assertions: ["policy-specific stale continuation refusal", "native plan/version/state preserved", "zero native/check/repair", ...(probe ? ["all actual same-origin parent inputs lack targeted queued revision; positive probe control exists"] : [])] });
   }
   const beforeReject = run.effects(); const rejected = await callback(run, reject.capturedMessage, "Reject", /rejected|stopped/i);
-  await observe("genuine plan rejection stopped native owner", () => rowFor(run, reject.task.sessionId)?.lifecycle === "terminal");
+  await observe("genuine plan rejection stopped native owner", async () => { const view = await run.publicSession(reject.task.sessionId); return view.terminalListing && rowFor(run, reject.task.sessionId)?.lifecycle === "terminal" ? view : false; });
   assert.equal(rowFor(run, reject.task.sessionId).approvalState, "rejected"); assertNoNativeContinuation(beforeReject, run.effects());
   const repeat = await callback(run, reject.capturedMessage, "Reject", /already|expired|stale|no longer/i); assertNoNativeContinuation(beforeReject, run.effects());
   await run.settleGoalDelivery(taskFor(run, reject.id));
@@ -165,12 +177,13 @@ async function plans(run) {
 
 async function ordinary(run, id, options = {}) {
   begin(run, id); const workdir = await run.workdir(id); const requestStart = run.modelRequests.length;
-  const fixture = { tag: `OCA501_CASE_${id}`, workdir, text: `${id}_NATIVE_OK`, ordinary: true, ...options }; run.nativeFixture = fixture;
+  const fixture = { tag: `OCA501_CASE_${id}`, workdir, text: `${id}_NATIVE_OK`, ordinary: true, originSessionKey: run.sessionKey, admissionRequestBoundary: requestStart, ...options }; run.nativeFixture = fixture;
   const admission = await run.invoke("agent_launch", { name: id.toLowerCase(), prompt: `${fixture.tag}: Perform only the harmless fixture task.`, workdir, harness: "codex", permission_mode: options.permissionMode ?? "bypassPermissions", force_new_session: true, worktree_strategy: "off" }, options.mode === "question" ? { channel: "telegram", target: "501002" } : {}); admitted(admission);
   const session = await observe("real ordinary native conversation", () => run.sessions().find((row) => row.name === id.toLowerCase() && row.backendRef?.conversationId));
   fixture.sessionId = session.sessionId;
   assert.equal(session.route.provider, options.mode === "question" ? "telegram" : "webchat");
-  return { id, workdir, fixture, admission, session, requestStart };
+  const publicView = await run.publicSession(session.sessionId); assert.equal(publicView.status, "running");
+  return { id, workdir, fixture, admission, session, publicView, requestStart };
 }
 // Native diagnostics deliberately redact IDs. Identity is proved separately by
 // the actual provider conversation, owning row and serialized public action.
@@ -179,12 +192,12 @@ async function nativeTerminal(run, session, after, kind = "user") {
   return observe(`native ${kind} completed on owning conversation`, () => diagnostics(run).find((event) => event.event === "turn.terminal" && event.hasThreadId === true && event.hasTurnId === true && event.kind === kind && event.outcome === "completed" && event.at >= after));
 }
 async function outputContains(run, sessionId, marker) {
-  return observe("actual native public output", async () => { const output = await run.invoke("agent_output", { session: sessionId }); admitted(output); return text(output).includes(marker) ? output : false; });
+  return observe("actual native public output", async () => { const view = await run.publicSession(sessionId); return view.outputText?.includes(marker) ? view : false; });
 }
 async function ordinaryWebchatSettlement(run, pending, kind, requestStart) {
   const row = rowFor(run, pending.session.sessionId); assert.equal(row.route.provider, "webchat");
   const request = await observe("actual ordinary WebChat parent follow-through", () => run.modelRequests.slice(requestStart).find((request) => {
-    if (request.transport !== "host-parent" || !request.hasParentTools || !request.responseCompleted || request.emittedType !== "message") return false;
+    if (request.transport !== "host-parent" || !request.hasParentTools || !request.responseCompleted || request.emittedType !== "message" || request.ordinarySessionId !== row.sessionId || !request.ordinaryCycle?.endsWith(`/${kind}`) || !request.actualNativeCompletion) return false;
     const input = JSON.parse(readFileSync(join(run.directory, `responses-request-${request.requestIndex}.json`), "utf8")).input;
     const user = input.input.findLast((entry) => entry.role === "user" && !messageText(entry).trim().startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"));
     const wake = user ? messageText(user) : "", first = wake.split("\n")[0].replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\] /, "");
@@ -197,17 +210,27 @@ async function ordinaryWebchatSettlement(run, pending, kind, requestStart) {
   });
   const runId = history.message.__openclaw.runId;
   const terminal = await observe("ordinary WebChat own-run terminal", async () => { const value = await run.rpc("agent.wait", { runId, timeoutMs: 1000 }); return ["pending", "timeout"].includes(value.status) ? false : value; });
-  assert.equal(terminal.runId, runId); assert.equal(terminal.status, "ok"); assert.equal(terminal.terminalReply?.yielded, false); assert.ok(terminal.terminalReply?.text?.trim()); assert.notEqual(terminal.terminalReply.text.trim(), "NO_REPLY");
-  assert.notEqual(history.message.__openclaw.truncated, true); assert.equal(messageText(history.message).trim(), terminal.terminalReply.text.trim());
-  if (kind === "completed") await observe("ordinary WebChat required completion persisted", () => { const value = rowFor(run, row.sessionId); if (value.completionWakeFailedAt) throw new Error("Actual ordinary completion failed"); return value.completionWakeRunId === runId && value.completionWakeRoutedReply === false && value.completionWakeSucceededAt && value.completionWakeOutcomeKey?.startsWith(`terminal:${row.sessionId}:`) ? value : false; });
-  const proof = { sessionId: row.sessionId, kind, sourceRoute: row.route, actualParentRequest: request, runId, terminal, canonicalMessage: history.message }; run.artifact(`ordinary-webchat-${row.sessionId}-${kind}-${request.requestIndex}.json`, proof); return proof;
+  assertVisibleCanonical(terminal, runId, request.responseId, history.message, request.emittedText);
+  let completedProof;
+  if (kind === "completed") await observe("ordinary WebChat required completion persisted", () => {
+    const current = rowFor(run, row.sessionId);
+    try { completedProof = assertOrdinaryCompleted(current, { sessionId: row.sessionId, threadId: request.actualNativeCompletion.threadId, turnId: request.actualNativeCompletion.turnId, runId, routedReply: false, pendingSnapshot: request.actualOrdinaryAdmission }); return current; } catch { return false; }
+  });
+  const proof = { sessionId: row.sessionId, kind, sourceRoute: row.route, actualParentRequest: request, completedProof, runId, terminal, canonicalMessage: history.message }; run.artifact(`ordinary-webchat-${row.sessionId}-${kind}-${request.requestIndex}.json`, proof); return proof;
 }
 async function questionPending(run, pending) {
   const message = await observe("native question wire buttons", () => run.botMessages.findLast((entry) => entry.text.includes(pending.fixture.tag) && entry.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Choice A")));
   const row = rowFor(run, pending.session.sessionId); const tokens = tokensFor(run, pending.session.sessionId).filter((token) => token.kind === "question-answer");
   assert.ok(tokens.length >= 2); assert.ok(tokens.every((token) => token.pendingInputRequestId && token.pendingInputQuestionId === "fixture_choice"));
   assert.ok(pending.fixture.question); assert.equal(pending.fixture.questionNativeThread, pending.session.backendRef.conversationId);
-  return { capturedMessage: structuredClone(message), row, tokens };
+  const questionTokens = ["Choice A", "Choice B"].map((label, optionIndex) => {
+    const buttons = message.reply_markup.inline_keyboard.flat().filter((button) => button.text === label); assert.equal(buttons.length, 1);
+    const matched = tokens.filter((token) => buttons[0].callback_data === `code-agent:${token.id}`); assert.equal(matched.length, 1);
+    assert.equal(matched[0].optionIndex, optionIndex); assert.equal(matched[0].route?.provider, "telegram"); assert.equal(matched[0].route?.target, "501002"); return matched[0];
+  });
+  assert.equal(questionTokens[0].pendingInputRequestId, questionTokens[1].pendingInputRequestId);
+  const publicView = await run.publicSession(pending.session.sessionId, { waitingKind: "question" });
+  return { capturedMessage: structuredClone(message), row, tokens, questionTokens, publicView };
 }
 async function heldGoal(run, id, { question = false } = {}) {
   begin(run, id); const workdir = await run.workdir(id);
@@ -216,7 +239,8 @@ async function heldGoal(run, id, { question = false } = {}) {
   const task = await observe("held real goal running", () => { const task = taskFor(run, id); return task?.status === "running" && fixture.heldRequest ? task : false; });
   const session = rowFor(run, task.sessionId); assert.ok(session.backendRef?.conversationId); assert.deepEqual(task.requiredVerifierCommands, ["bash ci.sh"]);
   const actual = run.modelRequests.find((request) => request.requestIndex === fixture.heldRequest); assert.ok(actual.externalHeld); assert.equal(actual.nativeIdentity.thread_id, session.backendRef.conversationId);
-  return { id, workdir, fixture, task, session, admission, heldRequest: actual };
+  const publicView = await run.publicSession(task.sessionId); assert.equal(publicView.status, "running"); assert.ok(["active", "running"].includes(publicView.phase));
+  return { id, workdir, fixture, task, session, admission, heldRequest: actual, publicView };
 }
 async function pendingInputAndControls(run) {
   await run.suite(["bash ci.sh"]);
@@ -227,9 +251,8 @@ async function pendingInputAndControls(run) {
     if (suffix === "text") admitted(response);
     await observe("actual question function output on same native thread", () => pending.fixture.answerObserved);
     const planOutput = await outputContains(run, pending.session.sessionId, pending.fixture.planMarkdown);
-    const plan = await observe("ordinary answered question's finalized native Plan", () => { const row = rowFor(run, pending.session.sessionId); return row.pendingPlanApproval && row.planDecisionVersion > 0 ? row : false; });
-    const approvalMessage = await observe("ordinary actual Plan approval buttons", () => run.botMessages.findLast((message) => message.text.includes(pending.id.toLowerCase()) && message.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Approve")));
-    const approval = await run.click(structuredClone(approvalMessage), "Approve");
+    const plan = await publicPlan(run, pending.session, pending.fixture);
+    const approval = await run.click(plan.capturedMessage, "Approve");
     const output = await outputContains(run, pending.session.sessionId, pending.fixture.text); const terminal = await nativeTerminal(run, pending.session, started);
     assert.equal(pending.fixture.approvalObserved, true);
     const sourceTurn = await run.ordinarySourceSettlement(pending.session.sessionId, "turn-ended");
@@ -252,13 +275,13 @@ async function pendingInputAndControls(run) {
     const pending = await ordinary(run, `H09-${action}-positive`); await outputContains(run, pending.session.sessionId, pending.fixture.text);
     await nativeTerminal(run, pending.session, "", "user");
     const initialParent = await ordinaryWebchatSettlement(run, pending, "turn-ended", pending.requestStart); const requestStart = run.modelRequests.length;
-    const started = new Date().toISOString(); pending.fixture.operation = action;
+    const started = new Date().toISOString(); pending.fixture.operation = action; pending.fixture.operationStartedAt = started; pending.fixture.operationRequestBoundary = requestStart;
     if (action === "review") {
       const nonce = randomBytes(12).toString("hex"); pending.fixture.reviewStartedAt = started;
       pending.fixture.reviewInstructions = `${pending.fixture.tag}: Harmless review action ${nonce}.`;
       pending.fixture.reviewOutput = { findings: [], overall_correctness: "patch is correct", overall_explanation: `${pending.fixture.text}: completed harmless review action ${nonce}`, overall_confidence_score: 1 };
     }
-    const response = await run.invoke("agent_session_action", { session: pending.session.sessionId, action, ...(action === "review" ? { review_target: "custom", instructions: pending.fixture.reviewInstructions } : {}) }); admitted(response);
+    const response = await run.invoke("agent_session_action", { session: pending.session.sessionId, action, ...(action === "review" ? { review_target: "custom", instructions: pending.fixture.reviewInstructions } : {}) }); admitted(response); pending.fixture.operationAdmission = response;
     const terminal = await nativeTerminal(run, pending.session, started, action);
     const output = await outputContains(run, pending.session.sessionId, action === "compact" ? "Conversation context compacted" : pending.fixture.text);
     const actual = run.modelRequests.filter((request) => request.case === pending.fixture.tag && request.responseCompleted && request.receivedAt >= started);
@@ -281,14 +304,18 @@ async function pendingInputAndControls(run) {
   await run.suite(["bash lint.sh"]);
   for (const { action, pending } of controls) {
     assert.equal(taskFor(run, pending.id).status, "running", "First guarded action must exercise active policy, not a prior terminal owner");
+    const activeBefore = await run.publicSession(pending.task.sessionId); assert.equal(activeBefore.status, "running"); assert.ok(["active", "running"].includes(activeBefore.phase));
+    assert.ok(!pending.heldRequest.externalAbortedAt && !pending.heldRequest.externalReleasedAt && !pending.heldRequest.responseCompleted, "Original real native stream is still held before the guard");
     const before = run.effects();
     const response = action === "text" ? await run.invoke("agent_respond", { session: pending.task.sessionId, message: "Continue the harmless fixture", userInitiated: true }) : await run.invoke("agent_session_action", { session: pending.task.sessionId, action, ...(action === "review" ? { review_target: "custom", instructions: "Harmless fixture review" } : {}) });
     policyFailure(response); assertNoNativeContinuation(before, run.effects());
     const failed = taskFor(run, pending.id); assert.equal(failed.status, "failed"); assert.match(failed.failureReason, /policy changed|operator-required suite/);
     await stop(run, pending.task.sessionId); await run.settleGoalDelivery(failed);
-    run.recordCase(pending.id, { ...pending, response, failed, assertions: ["independent active bound goal", "policy-specific refusal before native input/action", "zero execution/check/repair", "ordinary actual support control exists"] });
+    run.recordCase(pending.id, { ...pending, activeBefore, response, failed, assertions: ["independent active bound goal", "policy-specific refusal before native input/action", "zero execution/check/repair", "ordinary actual support control exists"] });
   }
-  assert.equal(taskFor(run, questionGoal.id).status, "running"); run.releaseExternal(questionGoal.fixture);
+  assert.equal(taskFor(run, questionGoal.id).status, "running");
+  const questionActiveBefore = await run.publicSession(questionGoal.task.sessionId); assert.equal(questionActiveBefore.status, "running"); assert.ok(["active", "running"].includes(questionActiveBefore.phase));
+  assert.ok(!questionGoal.heldRequest.externalAbortedAt && !questionGoal.heldRequest.responseCompleted); run.releaseExternal(questionGoal.fixture);
   const question = await questionPending(run, { ...questionGoal, session: questionGoal.session });
   const failed = await observe("policy-specific owning goal failure from real input turn", () => { const task = taskFor(run, questionGoal.id); return task.status === "failed" ? task : false; });
   assert.match(failed.failureReason, /policy changed|operator-required suite/);
@@ -296,7 +323,7 @@ async function pendingInputAndControls(run) {
   const deniedText = await run.invoke("agent_respond", { session: questionGoal.task.sessionId, message: "Choice A", userInitiated: true }); assert.match(text(deniedText), /policy|goal.*failed|already failed/i);
   assertNoNativeContinuation(before, run.effects()); assert.equal(questionGoal.fixture.answerObserved, undefined);
   await stop(run, questionGoal.task.sessionId); await run.settleGoalDelivery(failed);
-  run.recordCase(questionGoal.id, { ...questionGoal, question, failed, deniedButton, deniedText, assertions: ["held real Plan request while goal active", "accepted mandatory policy change before genuine question frame", "initial goal failure specifically policy, not generic manual-question failure", "subsequent terminal-owner public answer refusal; no native answer", "ordinary button/text answer positives exist"] });
+  run.recordCase(questionGoal.id, { ...questionGoal, questionActiveBefore, question, failed, deniedButton, deniedText, assertions: ["held real Plan request while goal active", "accepted mandatory policy change before genuine question frame", "initial goal failure specifically policy, not generic manual-question failure", "subsequent terminal-owner public answer refusal; no native answer", "ordinary button/text answer positives exist"] });
 }
 async function operatorSchema(run) {
   await run.suite(["bash ci.sh"]); const path = "plugins.entries.openclaw-code-agent.config.requiredGoalVerifierCommands";
