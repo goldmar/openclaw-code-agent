@@ -140,7 +140,7 @@ describe("bounded representative host receipts", () => {
       assert.throws(() => currentOwner([row], listing, { ...bound, oldSessionId: live.id }, "thread", goal));
       let observedTasks: Array<typeof goal> = [{ ...goal, sessionName: undefined }], publicReads = 0, taskReads = 0;
       const identity = processIdentity(process.pid)!;
-      const nativeFixture = { ...bound, nativeSnapshot: { gateway: identity, processes: [] } };
+      const nativeFixture = { ...bound, nativeSnapshot: { gateway: identity, processes: [] as Array<NonNullable<ReturnType<typeof processIdentity>>> } };
       const run = Object.assign(Object.create(FeatureRun.prototype), { gatewayReady: true, gatewayIdentity: identity, proofs: [],
         goals: () => { taskReads++; return observedTasks; }, sessions: () => [row], nativeProcesses: () => [identity],
         invoke: async (name: string) => { publicReads++; assert.ok(observedTasks[0].sessionName); return { content: [{ text: name === "agent_sessions" ? listing : getSessionOutputText(manager as unknown as SessionManager, live.id) }] }; } });
