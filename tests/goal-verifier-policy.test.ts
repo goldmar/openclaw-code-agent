@@ -2,6 +2,7 @@ import "./test-env";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { processIdentity } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -217,6 +218,34 @@ describe("required suite execution and recovery", () => {
       assert.equal(f.counters().launches, 0, "no repair starts for a policy failure");
     });
   }
+
+  it("fails eager authorization during a held check without replacing its owner or terminal evidence", async () => {
+    const f = fixture(), commands = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
+    writeFileSync(join(f.dir, "ci.sh"), `echo "$$" > held.pid; touch started; while [ ! -f release ]; do sleep 0.01; done; printf '{"ordinal":1,"kind":"CI","exit":0}\\n' >> checks.jsonl\n`);
+    writeFileSync(join(f.dir, "lint.sh"), "touch unexpected-lint\n");
+    setPluginConfig({ requiredGoalVerifierCommands: commands });
+    const current = await f.controller.launchTask({ goal: "Eager policy", workdir: f.dir, maxIterations: 8 });
+    const session = createStubSession({ id: current.sessionId, name: current.sessionName, harnessSessionId: "original-thread", status: "completed" });
+    (f.manager as any).resolve = () => session;
+    const evaluation: Promise<void> = (f.controller as any).reconcileTask(current);
+    try {
+      await waitForFile(join(f.dir, "started"));
+      const check = processIdentity(Number(readFileSync(join(f.dir, "held.pid"), "utf8"))); assert.ok(check);
+      const original = structuredClone(current), launches = f.counters();
+      assert.equal((f.controller as any).inFlight.has(current.id), true); assert.equal(current.status, "running");
+      setPluginConfig({ requiredGoalVerifierCommands: ["bash changed.sh"] });
+      assert.throws(() => f.controller.assertTaskAuthorized(current.id), /Goal verifier policy changed or its stored suite does not match/);
+      assert.equal(current.status, "failed");
+      for (const field of ["id", "name", "goal", "workdir", "iteration", "sessionId", "sessionName", "harnessSessionId", "requiredVerifierCommands"] as const) assert.deepEqual(current[field], original[field]);
+      assert.equal(processIdentity(check.pid)?.startTicks, check.startTicks);
+      const terminal = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8"));
+      writeFileSync(join(f.dir, "release"), "release\n"); await evaluation;
+      assert.equal(existsSync(`/proc/${check.pid}`), false);
+      assert.deepEqual(readFileSync(join(f.dir, "checks.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line)), [{ ordinal: 1, kind: "CI", exit: 0 }]);
+      assert.equal(existsSync(join(f.dir, "unexpected-lint")), false); assert.deepEqual(f.counters(), launches);
+      assert.deepEqual(JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8")), terminal);
+    } finally { writeFileSync(join(f.dir, "release"), "cleanup release\n"); await evaluation; }
+  });
 
   it("blocks all controller continuation paths before launch or automatic reply", async () => {
     for (const phase of ["restore", "idle", "ralph", "repair", "reply", "edit"] as const) {

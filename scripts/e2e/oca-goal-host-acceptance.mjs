@@ -12,6 +12,11 @@ import { responsesFixture } from "./oca501-native-protocol.mjs";
 import { assignments, excluded, frameReceipt, HOST_PIN, sha, requiredFact } from "./oca501-evidence.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const MODEL = "gpt-6-luna", A = ["bash ci.sh", "bash lint.sh", "bash ci.sh"], B = ["bash changed.sh"];
+const POLICY_FAILURES = [
+  "Goal verifier policy changed or its stored suite does not match. Start a new goal with the complete operator-required suite; stored checks are not replaced.",
+  "Required goal verifier policy changed while checks were running. Start a new goal; the old result cannot prove the current suite.",
+  "Required goal verifier policy changed before the check result was consumed. Start a new goal; the old result cannot prove the current suite.",
+];
 const FIELD = "plugins.entries.openclaw-code-agent.config.requiredGoalVerifierCommands";
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const json = path => JSON.parse(readFileSync(path, "utf8"));
@@ -570,8 +575,9 @@ export class FeatureRun {
       assert.ok(ancestor && sameProcess(ancestor, this.gatewayIdentity));
       fixture.barrierProcess = check; fixture.barrierScriptSha256 = sha(readFileSync(join(fixture.workdir, "ci.sh")));
       const own = this.goals().find(g => g.id === goal.id);
-      assert.equal(own.status, "running");
+      assert.equal(own.status, "running"); assert.deepEqual(own.requiredVerifierCommands, A); assert.equal(own.harnessSessionId, fixture.threadId);
       await this.publicOwner(own.sessionId, "completed", fixture);
+      const originalEffects = this.effects();
       await this.suite(B);
       this.stage = "live-policy:original-task-check-held";
       assert.ok(sameProcess(check, processIdentity(pid)));
@@ -581,19 +587,39 @@ export class FeatureRun {
       assert.match(denied.content[0].text, /complete ordered|operator-required/);
       this.stage = "live-policy:zero-effects";
       assert.deepEqual(this.effects(), before);
-      this.stage = "live-policy:original-task-check-held";
+      this.stage = "live-policy:original-status";
       const held = this.goals().find(g => g.id === goal.id);
-      assert.equal(held.status, "running"); assert.equal(held.iteration, own.iteration); assert.equal(held.sessionId, own.sessionId);
-      assert.deepEqual(held.requiredVerifierCommands, A);
-      assert.ok(sameProcess(check, processIdentity(pid)));
+      assert.ok(held && ["running", "failed"].includes(held.status));
+      for (const [field, stage] of [["id", "identity"], ["name", "identity"], ["goal", "identity"], ["workdir", "identity"],
+        ["iteration", "iteration"], ["sessionId", "session"], ["sessionName", "session"], ["harnessSessionId", "native"]]) {
+        this.stage = `live-policy:original-${stage}`; assert.equal(held[field], own[field]);
+      }
+      this.stage = "live-policy:original-binding"; assert.deepEqual(held.requiredVerifierCommands, A);
+      this.stage = "live-policy:original-cause";
+      if (held.status === "failed") assert.ok(POLICY_FAILURES.includes(held.failureReason));
+      const earlyFailure = held.status === "failed" ? structuredClone(held) : undefined;
+      this.stage = "live-policy:original-check"; assert.ok(sameProcess(check, processIdentity(pid)));
       this.stage = "live-policy:release";
       writeFileSync(join(fixture.workdir, "release"), "release\n");
+      this.stage = "live-policy:check-exit";
+      await until(() => {
+        const current = processIdentity(pid); assert.ok(current || !existsSync(`/proc/${pid}`));
+        if (current) { assert.ok(sameProcess(check, current)); return false; }
+        const path = join(fixture.workdir, "checks.jsonl");
+        return existsSync(path) && readFileSync(path, "utf8").endsWith("\n");
+      });
+      this.stage = "live-policy:ordered-checks"; this.checks(fixture, [["CI", 0]]);
       this.stage = "live-policy:policy-terminal";
       const failed = await this.terminal(goal, fixture, "failed");
-      assert.match(failed.failureReason, /policy changed|stored suite/i);
-      assert.equal(failed.iteration, own.iteration);
+      assert.ok(POLICY_FAILURES.includes(failed.failureReason));
+      for (const field of ["id", "name", "goal", "workdir", "iteration", "sessionId", "sessionName", "harnessSessionId"]) assert.equal(failed[field], own[field]);
+      if (earlyFailure) assert.deepEqual(failed, earlyFailure);
       this.stage = "live-policy:ordered-checks";
       this.checks(fixture, [["CI", 0]]);
+      const starts = readFileSync(join(fixture.workdir, "starts.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+      assert.deepEqual(starts, [{ ordinal: 1, kind: "CI", pid, event: "start" }]);
+      const finalEffects = this.effects();
+      for (const field of ["goals", "sessions", "nativeRequests"]) assert.deepEqual(finalEffects[field], originalEffects[field]);
       this.proofs.push({ verifierProcess: check, policyFailure: true });
       this.receipt.completed.push("live-policy");
     }
