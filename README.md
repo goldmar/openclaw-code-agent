@@ -29,7 +29,7 @@ This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundle
 - **Simpler tools.** Goal loops use `agent_goal`; plan and worktree escalations use `agent_escalate`.
 - **Native agent controls.** Codex supports steering, rewind, compaction, and inline review; Claude Code uses native plan approval; experimental OpenCode shares one server and supports multi-select questions.
 - **Worktree setup and durable delivery.** Worktrees honor committed `.worktreeinclude` and `.openclaw/worktree-setup.sh`; notifications use OpenClaw's durable queue, and git/GitHub operations run asynchronously.
-- **Upgrade requirements.** v5.0.1 requires OpenClaw `2026.9.7`; Codex sessions require Codex CLI `0.156.1` or newer.
+- **Upgrade requirements.** v5.1.0 requires OpenClaw `2026.9.7`; Codex sessions require Codex CLI `0.156.1` or newer.
 
 **From 4.x:** Back up session and goal-task stores before upgrading: v5 rewrites session state in place. Move removed flat model settings under `harnesses.<name>` and update tool allowlists. Unset Codex execution settings now follow the host's `tools.exec.mode`; `bypassPermissions` alone no longer grants full access. Follow the [4.x migration and rollback steps](docs/REFERENCE.md#upgrading-from-4x), including state-path changes. For v5.0.0 users, see the [v5.0.1 upgrade notes](docs/REFERENCE.md#upgrading-from-500) for retired host Task Flow controls. Full release details are in the [CHANGELOG](CHANGELOG.md).
 

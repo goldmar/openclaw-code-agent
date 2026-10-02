@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-10-02
+
+### Added
+
+- **Operator-required goal checks** ([#516](https://github.com/goldmar/openclaw-code-agent/pull/516), closes [#501](https://github.com/goldmar/openclaw-code-agent/issues/501)). The new `requiredGoalVerifierCommands` setting (for example `["bash ci.sh"]`) defines the complete, ordered checks every goal must pass. Goals launched without verifiers use the suite automatically. Explicit `verifier_commands` / `--verify` must match it exactly, in order and including duplicates; subsets, extra or reordered checks, and blank or malformed entries are rejected before the goal is stored, confirmed or started. Ralph mode needs its completion promise **and** the full passing suite. Required checks need no confirmation, and Run these checks or a typed command cannot override them. An empty or malformed setting fails closed. `trustedVerifierCommands` keeps its confirmation-only meaning. See "Operator-required goal checks" in [REFERENCE.md](docs/REFERENCE.md) and [SECURITY.md](docs/SECURITY.md): this pins which commands run, not the integrity of the scripts they load.
+
+### Changed
+
+- While a goal is active, confirmation, restore, plan or input release, resume, continuation and verifier execution revalidate the current policy. A policy change, even one reverted before a verifier batch finishes, fails the affected goal instead of letting the old result succeed. Removing the setting keeps existing goals bound to their original suite; only new goals use the default again. `edit` changes goal text only.
+- A nonfork resume of an active goal's session stays part of that goal; fork the session to work independently. Once a goal has succeeded, failed or stopped (or its record is gone), any later explicit action on its session (`agent_respond`, a plan decision, a question answer, compact/review, or resume) continues it as an ordinary session that can no longer restart the goal or mark it succeeded. Goal-loop work never continues past the end of its goal.
+- Unknown session references fail closed with structured errors in the respond, output, merge and escalation tools; exact IDs and legitimate names still resolve ([#515](https://github.com/goldmar/openclaw-code-agent/pull/515)). Queued merges bind the session generation they were admitted for and recheck worktree coordinates, decisions and repository policy before changing anything.
+- Vendored Codex App Server protocol types are regenerated from Codex CLI `0.160.0` (additive plan types and error codes only). The minimum Codex CLI stays `0.156.1`.
+
+### Fixed
+
+- Native follow-up delivery falls back to the plugin queue only for clearly identified pre-submission rejections. An uncertain acknowledgement now returns `response_delivery_unconfirmed` instead of retrying blindly or reporting a delivery that may not have happened ([#515](https://github.com/goldmar/openclaw-code-agent/pull/515)).
+- PR metadata fallbacks log fixed diagnostic labels for the failing stage (availability, completion, parsing, validation) instead of raw provider errors, and still fall back to deterministic metadata ([#514](https://github.com/goldmar/openclaw-code-agent/pull/514)).
+- A stopped goal controller revokes its in-flight work before saving recovery state. Late verifier, launch, respond and restore results, including across stop/start, can no longer start more work or overwrite current goal state. Terminal goal records keep their original evidence unchanged across restarts and later writes.
+
+### Upgrade notes
+
+- No configuration change is needed; without `requiredGoalVerifierCommands`, goal verifier confirmation works as before.
+- A goal-task store with duplicate task IDs, or one that cannot be parsed, is archived and replaced on first start. If it cannot be archived, goal tasks become unavailable (they fail closed) rather than overwriting the saved evidence.
+- Release tooling and development dependencies picked up security patches (brace-expansion [#511](https://github.com/goldmar/openclaw-code-agent/pull/511); undici in the ClawHub release tools [#512](https://github.com/goldmar/openclaw-code-agent/pull/512)). The shipped runtime dependencies are unchanged.
+
 ## [5.0.1] - 2026-10-01
 
 ### Changed
