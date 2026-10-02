@@ -298,7 +298,7 @@ export function projectHostLog(input, authority, assess) {
     for (let index = 0; index < bytes.length; index++) if (bytes[index] === 10) { spans.push({ start, end: index + 1, lf: true }); start = index + 1; if (spans.length >= 10000) return blocked("SOURCE_LOG_RECORD_BOUND"); }
     spans.push({ start, end: bytes.length, lf: false });
     check(authority.responsesStarts.length <= 10000);
-    const registry = [], output = [], counts = {}, retainedDiagnostics = [], blockedDetails = [], budget = { hashChecks: 0, sourceCallIdentities: new Set() };
+    const registry = [], output = [], counts = {}, retainedDiagnostics = [], blockedDetails = [], blockedRecordIndices = [], projectedRecordIndices = [], budget = { hashChecks: 0, sourceCallIdentities: new Set() };
     let changed = 0, safeRecords = 0, blockedRecords = 0, originalGuardSafeRecords = 0;
     for (const [index, span] of spans.entries()) {
       const raw = bytes.subarray(span.start, span.end), body = raw.subarray(0, raw.length - Number(span.lf)).toString("utf8"), safe = assess(body).safe;
@@ -312,23 +312,68 @@ export function projectHostLog(input, authority, assess) {
         if (!reason) try { observation = transformRecord(record, authority, assess, budget); } catch { reason = "SOURCE_LOG_UNVALIDATED_RECORD"; }
       }
       if (reason) {
-        blockedRecords++;
+        blockedRecords++; blockedRecordIndices.push(index);
         if (blockedDetails.length < 64) blockedDetails.push({ record: index, byteStart: span.start, byteEndExclusive: span.end, originalBytes: raw.length, originalSha256: digest(raw), reason });
         continue;
       }
       if (observation) {
-        projected = JSON.stringify(observation.result); changed++;
+        projected = JSON.stringify(observation.result); changed++; projectedRecordIndices.push(index);
         for (const sourceCase of observation.cases) counts[sourceCase] = (counts[sourceCase] ?? 0) + 1;
         for (const detail of observation.details) if (object(detail) && ["Session", "SessionRuntimeRegistry", "CodexHarness", "CodexAppServerRpc"].includes(detail.component)) retainedDiagnostics.push({ record: index, diagnostic: detail });
       } else safeRecords++;
       const encoded = Buffer.from(projected + (span.lf ? "\n" : "")); output.push(encoded);
       registry.push({ record: index, byteStart: span.start, byteEndExclusive: span.end, originalBytes: raw.length, originalSha256: digest(raw), includesLF: span.lf, trailingEmpty: span.start === bytes.length, projectedBytes: encoded.length, projectedSha256: digest(encoded), sourceCases: observation?.cases ?? ["UNCHANGED_GUARD_SAFE"], ...(observation ? { severity: observation.level, omittedContextFields: observation.contexts, ownContextMatch: observation.contexts.length ? true : undefined, sourceRoles: { bindingPosition: observation.roles.bindingKey === undefined ? null : observation.roles.keys.indexOf(observation.roles.bindingKey), metadataPosition: observation.roles.metadataKey === undefined ? null : observation.roles.keys.indexOf(observation.roles.metadataKey), messagePositions: observation.roles.messageKeys.map((key) => observation.roles.keys.indexOf(key)) }, transport: observation.transport } : {}) });
     }
-    if (Buffer.byteLength(JSON.stringify(registry)) > LIMIT) return blocked("SOURCE_LOG_AUDIT_FILE_BOUND");
-    if (blockedRecords) return blocked("SOURCE_LOG_UNVALIDATED_RECORDS", { validatedRecords: registry, recordCount: spans.length, originalGuardSafeRecords, safeRecords, projectedRecords: changed, blockedRecords, omittedBlockedDetails: blockedRecords - blockedDetails.length, blockedDetails, sourceCaseCounts: counts, accountingComplete: safeRecords + changed + blockedRecords === spans.length });
-    const projectedBytes = Buffer.concat(output), audit = { original, candidateSha: authority.candidateSha, helperSha256: authority.helperSha256, hostCommit: PIN, scope: "Every original LF record; source projection, not raw-safe evidence", recordCount: registry.length, transformedRecords: changed, sourceCaseCounts: counts, records: registry, retainedDiagnostics };
+    const observations = { recordCount: spans.length, originalGuardSafeRecords, safeRecords, projectedRecords: changed, blockedRecords, blockedRecordIndices, projectedRecordIndices, omittedBlockedDetails: blockedRecords - blockedDetails.length, blockedDetails, sourceCaseCounts: counts, accountingComplete: safeRecords + changed + blockedRecords === spans.length };
+    // Index/count authority is complete and independent of detail/registry caps.
+    // Pretty serialization is shared with the actual consuming artifact writer.
+    const serializedRegistry = serializeHostLogArtifact(registry);
+    if (Buffer.byteLength(serializedRegistry) > LIMIT) return blocked("SOURCE_LOG_AUDIT_FILE_BOUND", { ...observations, validatedRegistryExcluded: true, validatedRegistrySerialization: { bytes: Buffer.byteLength(serializedRegistry), sha256: digest(serializedRegistry), scope: "Derived pretty JSON registry with newline; not original stream bytes" } });
+    if (blockedRecords) return blocked("SOURCE_LOG_UNVALIDATED_RECORDS", { ...observations, validatedRecords: registry });
+    const projectedBytes = Buffer.concat(output), audit = { original, candidateSha: authority.candidateSha, helperSha256: authority.helperSha256, hostCommit: PIN, scope: "Every original LF record; source projection, not raw-safe evidence", recordCount: registry.length, originalGuardSafeRecords, transformedRecords: changed, sourceCaseCounts: counts, records: registry, retainedDiagnostics };
     if (!changed || !assess(projectedBytes.toString("utf8")).safe) return blocked("SOURCE_LOG_WHOLE_STREAM_UNEXPLAINED", { transformedRecords: changed });
-    if (projectedBytes.length > LIMIT || Buffer.byteLength(JSON.stringify(audit)) > LIMIT) return blocked("SOURCE_LOG_PROJECTED_FILE_BOUND");
+    if (projectedBytes.length > LIMIT || Buffer.byteLength(serializeHostLogArtifact({ ...audit, projectedRecordHashScope: HOST_LOG_RECORD_HASH_SCOPE })) > LIMIT) return blocked("SOURCE_LOG_PROJECTED_FILE_BOUND", observations);
     return { outcome: "SOURCE_PROJECTED_COMPLETE", original, rawCompleteStreamSafe: false, rawContentExcluded: true, projectedText: projectedBytes.toString("utf8"), projected: { bytes: projectedBytes.length, sha256: digest(projectedBytes), identityDomain: "Complete validated projected UTF8 stream; not original bytes" }, audit };
   } catch { return blocked("SOURCE_LOG_PROJECTION_PRECONDITION"); }
+}
+
+
+export const HOST_LOG_RECORD_HASH_SCOPE = "Validated source projection before exact known synthetic fixture-token artifact redaction";
+export function serializeHostLogArtifact(value, redact = (text) => text, replacer) {
+  return redact(typeof value === "string" ? value : `${JSON.stringify(value, replacer, 2)}\n`);
+}
+
+// Prepare ALL actual final consumer bytes before registration. A bounded
+// exclusion receipt replaces an entire oversize artifact; no record is split
+// or truncated and the affected acceptance remains BLOCKED.
+export function hostLogArtifactPlan(name, receipt, originalText, { serialize, redact, guardSource, assertProjectedSafe }) {
+  if (receipt.rejectedStreamDiagnostic) {
+    const wrappedDiagnostic = (diagnostic) => serialize({ rejectedStreamDiagnostic: diagnostic, sourceIdentity: name, guardSource });
+    if (Buffer.byteLength(wrappedDiagnostic(receipt.rejectedStreamDiagnostic)) > 64 * 1024) {
+      const d = receipt.rejectedStreamDiagnostic;
+      const bounded = { diagnosticStatus: "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED", original: d.original, inputIdentityDomain: d.inputIdentityDomain, sourceTableSha256: d.sourceTableSha256, rawContentExcluded: true, inspectionComplete: false, inspectedLines: d.inspectedLines, uninspectedLines: d.uninspectedLines ?? 0, capturedLines: d.capturedLines, failedLines: d.failedLines, safeLines: d.safeLines, projectionBlockedGuardSafeLines: d.projectionBlockedGuardSafeLines, omittedFailedLineDetails: d.failedLines, omittedProjectionOnlyDetails: d.projectionBlockedGuardSafeLines, failureHistogram: d.failureHistogram, lexicalMatches: d.lexicalMatches, lexicalScanCapped: d.lexicalScanCapped, lexicalCountScope: d.lexicalCountScope, lexicalOmittedDetails: d.lexicalMatches, detailContentExcluded: true, outputBoundScope: "Actual final serialized/redacted diagnostic with source identity/guard wrapper" };
+      check(Buffer.byteLength(wrappedDiagnostic(bounded)) <= 64 * 1024);
+      const { projectedPayloadSha256: _oldHash, projectedDigestScope: _oldScope, ...payload } = { ...receipt, rejectedStreamDiagnostic: bounded };
+      receipt = { ...payload, projectedPayloadSha256: digest(JSON.stringify(payload)), projectedDigestScope: "Closed receipt after final diagnostic boundary; before digest/artifact wrapper, not original stream" };
+    }
+  }
+  const files = [], prepare = (fileName, value) => { const text = serialize(value); check(typeof text === "string"); files.push({ name: fileName, text }); };
+  let reason = "HOST_LOG_FINAL_ARTIFACT_BOUND";
+  try {
+    if (receipt.completeStreamSafe) prepare(name, originalText);
+    else if (receipt.sourceProjectedComplete) {
+      const { projectedText, audit, ...summary } = receipt, sanitized = redact(projectedText);
+      assertProjectedSafe(sanitized);
+      prepare(`${name}.source-projected.log`, sanitized);
+      prepare(`${name}.source-audit.json`, { ...audit, projectedRecordHashScope: HOST_LOG_RECORD_HASH_SCOPE });
+      prepare(name, { ...summary, sourceIdentity: name, projectedStream: `${name}.source-projected.log`, sourceAudit: `${name}.source-audit.json`, projectedHashScope: HOST_LOG_RECORD_HASH_SCOPE, exportedProjection: { bytes: Buffer.byteLength(sanitized), sha256: digest(sanitized), scope: "Actual sanitized projected stream artifact bytes" }, projectionScope: "Complete source-validated projection; original raw stream excluded; unchanged acceptance obligations" });
+    } else prepare(name, { ...receipt, sourceIdentity: name, guardSource, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
+    if (files.every((file) => Buffer.byteLength(file.text) <= LIMIT)) return { receipt, files, blocked: !receipt.completeStreamSafe && !receipt.sourceProjectedComplete };
+  } catch { reason = "HOST_LOG_FINAL_ARTIFACT_PREPARATION_FAILED"; }
+  const observations = receipt.sourceProjectionAttempt?.observations, audit = receipt.audit;
+  const counts = observations ? { recordCount: observations.recordCount, originalGuardSafeRecords: observations.originalGuardSafeRecords, safeRecords: observations.safeRecords, projectedRecords: observations.projectedRecords, blockedRecords: observations.blockedRecords, accountingComplete: observations.accountingComplete, sourceCaseCounts: observations.sourceCaseCounts } : audit ? { recordCount: audit.recordCount, originalGuardSafeRecords: audit.originalGuardSafeRecords, safeRecords: audit.recordCount - audit.transformedRecords, projectedRecords: audit.transformedRecords, blockedRecords: 0, accountingComplete: true, sourceCaseCounts: audit.sourceCaseCounts } : undefined;
+  const fallback = { completeStreamSafe: false, sourceProjectedComplete: false, projection: true, original: receipt.original, rawCompleteStreamExcluded: true, failureDiagnostic: receipt.failureDiagnostic ?? receipt.rawGuardFailureDiagnostic, rejectedStreamDiagnostic: receipt.rejectedStreamDiagnostic, sourceProjectionAttempt: { outcome: "BLOCKED", reason, observations: counts, completeAuditExcluded: true }, finalArtifactBoundary: { reason, oversizedFiles: files.filter((file) => Buffer.byteLength(file.text) > LIMIT).map((file) => ({ bytes: Buffer.byteLength(file.text), sha256: digest(file.text), scope: "Actual final serialized/redacted artifact bytes excluded; not original stream" })) }, exclusionReason: "Host log final artifact exceeds fixed bound or cannot be prepared; full stream/audit excluded; required lifecycle/error facts UNPROVEN" };
+  const text = serialize({ ...fallback, sourceIdentity: name, guardSource, projectionScope: "Entire stream excluded at actual final artifact boundary; original identity/disposition and complete counts retained" });
+  check(Buffer.byteLength(text) <= LIMIT);
+  return { receipt: fallback, files: [{ name, text }], blocked: true };
 }

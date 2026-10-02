@@ -15,7 +15,7 @@ import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
 import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
-import { renderResponsesStart, expectedEmbeddedStarts, sourceSdkTimeout, bindCanonicalTransportRequest, bindCanonicalFunctionTransportRequest } from "./oca501-host-log-projection.mjs";
+import { renderResponsesStart, expectedEmbeddedStarts, sourceSdkTimeout, bindCanonicalTransportRequest, bindCanonicalFunctionTransportRequest, serializeHostLogArtifact, hostLogArtifactPlan } from "./oca501-host-log-projection.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
@@ -217,9 +217,14 @@ class AcceptanceRun {
   }
   releaseExternal(fixture) { assert.ok(fixture.heldRequest, "Release only an actually held external Responses request"); const release = this.externalReleases.get(fixture.heldRequest); assert.ok(release); release(); }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
-  artifact(name, value) {
+  serializeArtifact(value) {
+    return serializeHostLogArtifact(value, (text) => this.redact(text), (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item);
+  }
+  artifact(name, value, { serialized = false } = {}) {
     assert.match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
-    writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item, 2)}\n`), { mode: 0o600 });
+    const text = serialized ? value : this.serializeArtifact(value);
+    if (serialized) assert.ok(typeof text === "string" && Buffer.byteLength(text) <= 4 * 1024 * 1024, "Register only final bounded prepared log artifact bytes");
+    writeFileSync(join(this.directory, name), text, { mode: 0o600 });
     this.artifactFiles.add(name);
   }
   logSourceAuthority() {
@@ -265,22 +270,20 @@ class AcceptanceRun {
     catch { return hostLogEvidence(text); }
   }
   captureHostStream(name, text) {
-    const receipt = this.hostStreamEvidence(text);
-    if (receipt.completeStreamSafe) this.artifact(name, Buffer.isBuffer(text) ? text.toString("utf8") : text);
-    else if (receipt.sourceProjectedComplete) {
-      const { projectedText, audit, ...summary } = receipt;
-      const sanitized = this.redact(projectedText); assert.ok(hostLogEvidence(sanitized).completeStreamSafe);
-      this.artifact(`${name}.source-projected.log`, sanitized);
-      this.artifact(`${name}.source-audit.json`, { ...audit, projectedRecordHashScope: "Validated source projection before exact known synthetic fixture-token artifact redaction" });
-      this.artifact(name, { ...summary, sourceIdentity: name, projectedStream: `${name}.source-projected.log`, sourceAudit: `${name}.source-audit.json`, projectedHashScope: "Validated source projection before exact known synthetic fixture-token artifact redaction", exportedProjection: { bytes: Buffer.byteLength(sanitized), sha256: hash(sanitized), scope: "Actual sanitized projected stream artifact bytes" }, projectionScope: "Complete source-validated projection; original raw stream excluded; unchanged acceptance obligations" });
-    }
-    else {
-      this.artifact(name, { ...receipt, sourceIdentity: name, guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha }, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
-      (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: receipt.exclusionReason });
-      for (const result of this.results) if (result.classification === "PASS") { result.classification = "BLOCKED"; result.unprovenReason = receipt.exclusionReason; }
+    const plan = hostLogArtifactPlan(name, this.hostStreamEvidence(text), Buffer.isBuffer(text) ? text.toString("utf8") : text, {
+      serialize: (value) => this.serializeArtifact(value), redact: (value) => this.redact(value),
+      guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha },
+      assertProjectedSafe: (value) => assert.ok(hostLogEvidence(value).completeStreamSafe),
+    });
+    // All bytes, wrappers, redaction and newline are checked before ANY log
+    // artifact is registered. The writer consumes these exact final strings.
+    for (const file of plan.files) this.artifact(file.name, file.text, { serialized: true });
+    if (plan.blocked) {
+      (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: plan.receipt.exclusionReason });
+      for (const result of this.results) if (result.classification === "PASS") { result.classification = "BLOCKED"; result.unprovenReason = plan.receipt.exclusionReason; }
       process.exitCode = 1;
     }
-    return receipt;
+    return plan.receipt;
   }
   projectHistoryStream(stdout) {
     const calls = this.parentDeliveries.flatMap((state) => state.calls.filter((call) => call.name === "tool_describe" && call.stage === "describe").map((call) => {
