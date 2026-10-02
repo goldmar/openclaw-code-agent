@@ -264,7 +264,7 @@ export class FeatureRun {
     this.parentId = created.sessionId;
     const inventory = await this.rpc("tools.effective", { sessionKey: this.sessionKey });
     const entries = inventory.groups.flatMap(group => group.tools);
-    assert.ok(entries.some(entry => entry.id === "agent_goal" && entry.pluginId === "openclaw-code-agent" && entry.deniedBySession === true));
+    assert.equal(entries.some(entry => entry.id === "agent_goal"), false);
     const before = this.effects();
     const denied = await fetch(`${this.url}/tools/invoke`, { method: "POST", headers: { authorization: `Bearer ${this.keys[0]}`, "content-type": "application/json" }, body: JSON.stringify({ name: "agent_goal", args: { action: "launch", goal: "Denied" }, sessionKey: this.sessionKey }) });
     assert.equal(denied.status, 404);
