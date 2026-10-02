@@ -36,6 +36,21 @@ for (const key of ["agent_id", "session_id", "channel"]) rejected({ ...contextRe
 for (const [key, value] of [["session_id", {}], ["foreignHeader", true], ["agent_id", null]]) rejected({ ...contextRecord, [key]: value });
 for (const level of ["UNKNOWN", "", undefined]) rejected({ ...contextRecord, _meta: { ...contextRecord._meta, logLevelName: level } });
 rejected({ ...contextRecord, _meta: { ...contextRecord._meta, logLevelId: 3 } });
+// Missing name and an out-of-range ID must never compare equal as undefined,
+// including guard-safe records traversed in a mixed projected stream.
+for (const meta of [
+  { logLevelId: -1 }, { logLevelId: 7 }, { logLevelId: 999 }, {}, { logLevelName: "DEBUG" },
+  { logLevelId: null, logLevelName: "DEBUG" }, { logLevelId: "2", logLevelName: "DEBUG" },
+  { logLevelId: 2.5, logLevelName: "DEBUG" }, { logLevelId: 2, logLevelName: null },
+  { logLevelId: 2 }, { logLevelId: 2, logLevelName: "" }, { logLevelId: 2, logLevelName: "debug" },
+  { logLevelId: -1, logLevelName: "DEBUG" }, { logLevelId: 7, logLevelName: "FATAL" },
+]) {
+  const transformed = { ...contextRecord, _meta: meta }; rejected(transformed);
+  const otherwiseSafe = logger(JSON.stringify(terminal)); otherwiseSafe._meta = meta;
+  rejected(`${JSON.stringify(contextRecord)}\n${JSON.stringify(otherwiseSafe)}`);
+}
+for (const level of ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]) { const receipt = projected(logger(JSON.stringify(terminal), { agent_id: "main" }, level)); assert.equal(receipt.audit.records[0].severity, level); }
+groups++;
 
 const detailsRecord = logger({ details: [terminal, { component: "CodexHarness", event: "turn.error", at: terminal.at, errorCode: "owned_expected_failure", reason: "Expected harmless fixture refusal" }] });
 const details = projected(detailsRecord); assert.equal(details.audit.retainedDiagnostics.length, 2); assert.equal(details.audit.retainedDiagnostics[0].diagnostic.outcome, "completed"); assert.equal(details.audit.retainedDiagnostics[1].diagnostic.event, "turn.error"); groups++;
@@ -100,11 +115,25 @@ const embedded = hostLogEvidence(Buffer.from(JSON.stringify(logger(expected.text
 assert.equal(embedded.sourceProjectedComplete, true); assert.equal(embedded.audit.records[0].transport[0].ordinal, 2); assert.match(embedded.audit.records[0].transport[0].ordinalEvidence, /^HASH_DERIVED_SOURCE_ORDINAL/); groups++;
 for (const changed of [expected.text.replace(/sha256:[a-f0-9]{64}/, `sha256:${"a".repeat(64)}`), renderResponsesStart({ ...args, requestId: "foreign:model:2" }).text, renderResponsesStart({ ...args, requestId: "own-canonical-run:model:4" }).text, start.text, expected.text.replace("timeoutMs=undefined", "timeoutMs=30000")]) rejected(logger(changed), embeddedAuthority);
 rejected(logger(expected.text), { ...embeddedAuthority, responsesStarts: [...embeddedAuthority.responsesStarts, ...embeddedAuthority.responsesStarts] });
+// One numeric argument and its pinned derived message are genuine duplicate
+// presentations. Repeated call identity across records is unresolved retry/reset.
+const embeddedLine = JSON.stringify(logger(expected.text));
+rejected(`${embeddedLine}\n${embeddedLine}\n`, embeddedAuthority);
+rejected(`${embeddedLine}\nHarmless retry boundary\n${embeddedLine}`, embeddedAuthority);
+const contextDuplicate = JSON.stringify(logger(expected.text, { agent_id: "main" }));
+rejected(`${embeddedLine}\n${contextDuplicate}`, embeddedAuthority);
+const otherOrdinal = JSON.stringify(logger(renderResponsesStart({ ...args, requestId: "own-canonical-run:model:3" }).text));
+const distinctCalls = observe(`${embeddedLine}\n${otherOrdinal}`, embeddedAuthority); assert.equal(distinctCalls.sourceProjectedComplete, true); assert.deepEqual(distinctCalls.audit.records.map((record) => record.transport[0].ordinal), [2, 3]);
+rejected(`${embeddedLine}\n${otherOrdinal}\n${embeddedLine}`, embeddedAuthority);
+groups++;
 for (const bad of [{ ...ownRequest, ownCanonicalBinding: false }, { ...ownRequest, uniqueBody: false }, { ...ownRequest, runId: "" }]) { assert.throws(() => expectedEmbeddedStarts(bad, ownOptions)); negatives++; }
 assert.equal(sourceSdkTimeout({ optionAbsenceProven: true, modelAbsenceProven: true }), undefined);
 assert.equal(sourceSdkTimeout({ explicitOption: 3000000000 }), 3000000000, "Explicit package stream option is returned without host clamp");
-assert.equal(sourceSdkTimeout({ optionAbsenceProven: true, modelValue: 3000000000 }), 2147483647);
+assert.equal(sourceSdkTimeout({ optionAbsenceProven: true, modelValue: 3000000000 }), 2147000000);
 assert.equal(sourceSdkTimeout({ optionAbsenceProven: true, modelValue: 12.8 }), 12); groups++;
+for (const [input, expected] of [[0.5, 1], [1, 1], [1.9, 1], [2146999999, 2146999999], [2146999999.9, 2146999999], [2147000000, 2147000000], [2147000000.9, 2147000000], [2147000001, 2147000000], [3000000000, 2147000000]]) assert.equal(sourceSdkTimeout({ optionAbsenceProven: true, modelValue: input }), expected);
+assert.equal(sourceSdkTimeout({ explicitOption: 2147000001 }), 2147000001, "Explicit package option must remain distinct from model clamp");
+groups++;
 for (const bad of [{}, { optionAbsenceProven: true }, { explicitOption: "30000" }, { explicitOption: -1 }, { optionAbsenceProven: true, modelValue: Infinity }, { modelValue: 30000 }]) { assert.throws(() => sourceSdkTimeout(bad)); negatives++; }
 
 const input = Buffer.from(`${JSON.stringify(contextRecord)}\n${JSON.stringify(detailsRecord)}\n${JSON.stringify(transportRecord)}\n`), result = projected(input.toString());

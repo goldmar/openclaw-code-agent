@@ -65,7 +65,7 @@ export function sourceSdkTimeout({ explicitOption, modelValue, optionAbsenceProv
   if (modelValue === undefined) { check(modelAbsenceProven === true); return undefined; }
   // Host provider-transport-fetch delegates to clampPositiveTimerTimeoutMs.
   check(typeof modelValue === "number" && Number.isFinite(modelValue) && modelValue > 0);
-  return Math.min(2147483647, Math.max(1, Math.floor(modelValue)));
+  return Math.min(2147000000, Math.max(1, Math.floor(modelValue)));
 }
 
 export function expectedEmbeddedStarts(request, options) {
@@ -110,7 +110,7 @@ function exactStartMatch(value, entry, budget) {
   }
   if (ordinal === undefined) return;
   const expected = renderResponsesStart({ ...options, body: request.body, bodySha256: request.bodySha256, requestId: `${request.runId}:model:${ordinal}` });
-  return expected.text === value ? { ...expected, ordinal, ordinalEvidence: "HASH_DERIVED_SOURCE_ORDINAL; population is search cap, not call count proof" } : undefined;
+  return expected.text === value ? { ...expected, sourceCallIdentity: `${request.runId}:model:${ordinal}`, ordinal, ordinalEvidence: "HASH_DERIVED_SOURCE_ORDINAL; population is search cap, not call count proof" } : undefined;
 }
 
 // logger-file-message.ts: the initial binding and a metadata argument do not
@@ -130,7 +130,7 @@ export function pinnedFileMessage(record) {
 
 function severity(record) {
   const meta = record._meta;
-  check(object(meta) && Number.isInteger(meta.logLevelId) && levels[meta.logLevelId] === meta.logLevelName);
+  check(object(meta) && Number.isInteger(meta.logLevelId) && meta.logLevelId >= 0 && meta.logLevelId < levels.length && typeof meta.logLevelName === "string" && levels.includes(meta.logLevelName) && levels[meta.logLevelId] === meta.logLevelName);
   return meta.logLevelName;
 }
 
@@ -165,6 +165,12 @@ function transformRecord(record, authority, assess, budget) {
       const matching = authority.responsesStarts.flatMap((entry) => { const match = exactStartMatch(value, entry, budget); return match ? [match] : []; });
       check(matching.length === 1 && matching.every((entry) => ["PRESENT_MARKER", "MISSING_MARKER"].includes(entry.presence)));
       const presence = [...new Set(matching.map((entry) => entry.presence))]; check(presence.length === 1);
+      if (matching[0].sourceCallIdentity !== undefined) {
+        // Repeated run/model-call identity in another record can be a retry or
+        // per-attempt sequence reset. This equality aid cannot resolve it.
+        check(!budget.sourceCallIdentities.has(matching[0].sourceCallIdentity));
+        budget.sourceCallIdentities.add(matching[0].sourceCallIdentity);
+      }
       // The full expected text is a source-rendered, actual request-bound
       // internal value. None of its auth-like text or dynamic tail is exported.
       result[key] = `Responses transport start source template matched (${presence[0]}).`;
@@ -192,7 +198,7 @@ export function projectHostLog(input, authority, assess) {
     for (let index = 0; index < bytes.length; index++) if (bytes[index] === 10) { spans.push({ start, end: index + 1, lf: true }); start = index + 1; if (spans.length >= 10000) return blocked("SOURCE_LOG_RECORD_BOUND"); }
     spans.push({ start, end: bytes.length, lf: false });
     check(authority.responsesStarts.length <= 10000);
-    const registry = [], output = [], counts = {}, retainedDiagnostics = [], budget = { hashChecks: 0 }; let changed = 0;
+    const registry = [], output = [], counts = {}, retainedDiagnostics = [], budget = { hashChecks: 0, sourceCallIdentities: new Set() }; let changed = 0;
     for (const [index, span] of spans.entries()) {
       const raw = bytes.subarray(span.start, span.end), body = raw.subarray(0, raw.length - Number(span.lf)).toString("utf8"), safe = assess(body).safe;
       // Unknown severity is never hidden by a mixed projected stream, even
