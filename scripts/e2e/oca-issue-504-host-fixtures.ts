@@ -271,6 +271,144 @@ export function verifyPackedPluginInspection(report: unknown, fixture: string, s
   return { installedPath, source, version: proof.version, imported: plugin.imported === true };
 }
 
+type FixtureRecord = Record<string, any>;
+
+export function generationObservation(row: FixtureRecord | undefined, target: FixtureRecord) {
+  const enums = (value: unknown) => typeof value === "string" && /^[a-z_]{1,40}$/.test(value) ? value : "unknown";
+  return { exists: Boolean(row), selectedIdMatches: row?.sessionId === target.sessionId,
+    selectedBackendMatches: Boolean(target.backendRef?.conversationId) && row?.backendRef?.conversationId === target.backendRef.conversationId,
+    expectedNameMatches: row?.name === target.name, status: enums(row?.status), lifecycle: enums(row?.lifecycle), runtimeState: enums(row?.runtimeState) };
+}
+export function stoppedGeneration(row: FixtureRecord | undefined, target: FixtureRecord): boolean {
+  const facts = generationObservation(row, target);
+  assert.ok(facts.exists && facts.selectedIdMatches && facts.selectedBackendMatches, "Captured native generation identity changed");
+  if (["starting", "running"].includes(facts.status)) return false;
+  assert.ok(["completed", "killed"].includes(facts.status), "Unsupported native terminal status");
+  assert.equal(facts.lifecycle, "terminal"); assert.equal(facts.runtimeState, "stopped");
+  return true;
+}
+export function killResultClass(result: FixtureRecord): string {
+  const value = result.content?.map((part: FixtureRecord) => part.text ?? "").join("\n") ?? "";
+  if (result.isError || /^Error:/.test(value)) return "error";
+  if (/has been terminated\.$/.test(value)) return "terminated";
+  if (/is already completed\. No action needed\.$|is a persisted completed record with no live process to kill\.$/.test(value)) return "already-completed";
+  if (/is already killed\. No action needed\.$|is a persisted killed record with no live process to kill\.$/.test(value)) return "already-killed";
+  return "other";
+}
+export function freshResume(events: FixtureRecord[], threadId: string, required: boolean): void {
+  assert.ok(threadId);
+  const requests = events.filter((event) => event.direction === "request" && event.method === "thread/resume");
+  if (required) assert.equal(requests.length, 1, "Stopped generation requires a fresh native resume");
+  for (const request of requests) {
+    assert.equal(request.threadId, threadId);
+    assert.ok(events.some((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.threadId === threadId && !event.error), "Fresh native resume must succeed on original thread");
+  }
+}
+export function responseResumeBoundary(row: FixtureRecord | undefined, target: FixtureRecord, eventStart: number) {
+  const facts = generationObservation(row, target);
+  assert.ok(facts.exists && facts.selectedIdMatches && facts.selectedBackendMatches);
+  assert.ok(Number.isInteger(eventStart) && eventStart >= 0);
+  assert.ok(["starting", "running", "completed", "killed"].includes(facts.status));
+  const required = ["completed", "killed"].includes(facts.status);
+  if (required) stoppedGeneration(row, target);
+  return { eventStart, required, facts };
+}
+export function requireResponseResume(events: FixtureRecord[], boundary: ReturnType<typeof responseResumeBoundary>, threadId: string) {
+  freshResume(events.slice(boundary.eventStart), threadId, boundary.required);
+}
+export function seedObserverAllow(config: FixtureRecord) {
+  return { ...config, plugins: { ...config.plugins, allow: ["openclaw-code-agent", "openai"] } };
+}
+export function managedObserverAllow(config: FixtureRecord): string[] {
+  const allow = config.plugins?.allow;
+  assert.ok(Array.isArray(allow) && allow.length === 3 && allow.every((id) => typeof id === "string"));
+  assert.deepEqual([...allow].sort(), ["oca504-observer", "openai", "openclaw-code-agent"].sort(), "Actual managed installer must append only observer to baseline grants");
+  return allow;
+}
+export function aliasOwnerObservation(row: FixtureRecord | undefined, target: FixtureRecord) {
+  const facts = generationObservation(row, target);
+  assert.ok(facts.exists && facts.selectedIdMatches && facts.selectedBackendMatches && facts.expectedNameMatches, "Alias owner identity changed");
+  assert.ok(["starting", "running", "completed", "killed"].includes(facts.status), "Unexpected alias owner state");
+  return { ...facts, active: ["starting", "running"].includes(facts.status) };
+}
+export function assertAliasProtection(owner: ReturnType<typeof aliasOwnerObservation>, resumed: FixtureRecord, expectedAlias: string) {
+  if (owner.active) assert.notEqual(resumed.name, expectedAlias, "Resumed older generation must not steal active alias");
+  return owner.active ? "runtime-active-owner-protected" : "terminal-owner-reuse-supported-active-protection-plugin-fixture-only";
+}
+export function requireHttpBefore(events: FixtureRecord[], tool: string, session: string, input: string) {
+  const hooks = events.filter((event) => event.phase === "before" && event.toolName === tool);
+  assert.equal(hooks.length, 1); const hook = hooks[0];
+  assert.ok(typeof hook.toolCallId === "string" && hook.toolCallId.trim() === hook.toolCallId && hook.toolCallId);
+  assert.equal(hook.session, session); assert.equal(hook.inputHash, sha256(input));
+  return hook;
+}
+export function requireEmbeddedAfter(events: FixtureRecord[], tool: string, callId: string) {
+  const hook = events.find((event) => event.phase === "after" && event.toolName === tool && event.toolCallId === callId);
+  assert.ok(hook, "Exact embedded call must expose actual after-hook outcome"); return hook;
+}
+export function classifyProvider(generation: string | undefined, marker: string | undefined, schemaNames: string[], generations: Set<string>, scenarios: Set<string>) {
+  assert.ok(schemaNames.length <= 128 && schemaNames.every((name) => typeof name === "string" && name.length <= 128));
+  assert.ok(!(generation && marker), "Native and embedded markers cannot overlap");
+  if (generation) { assert.ok(generations.has(generation), "Unknown native generation"); return "native-generation" as const; }
+  if (marker) { assert.ok(scenarios.has(marker), "Unknown embedded scenario"); return "embedded-scenario" as const; }
+  assert.ok(schemaNames.some((name) => ["agent_respond", "agent_merge", "agent_escalate", "agent_output", "tool_call", "tool_search"].includes(name)), "Unknown provider request class");
+  return "host-background" as const;
+}
+export function selectedProvider(requests: FixtureRecord[], generation: string, message: string) {
+  assert.ok(requests.length && requests.every((request) => ["native-generation", "host-background"].includes(request.requestClass)), "Unknown or embedded request in serialized native window");
+  const native = requests.filter((request) => request.requestClass === "native-generation");
+  assert.ok(native.length, "Host background cannot prove native input");
+  for (const request of native) {
+    assert.equal(request.fixtureGeneration, generation); assert.equal(request.latestInputHash, sha256(message));
+    assert.ok(request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${generation}:`));
+  }
+  return native;
+}
+
+export function observerSourceProof(fixture: string, path: string) {
+  const source = exactCandidatePath(fixture, path);
+  const names = ["index.mjs", "openclaw.plugin.json", "package.json"];
+  assert.deepEqual(readdirSync(source).sort(), [...names].sort(), "Observer source must contain exactly its three generated files");
+  const hashes: Record<string, string> = {};
+  for (const name of names) {
+    const file = exactCandidatePath(fixture, join(source, name)), info = lstatSync(file);
+    assert.ok(info.isFile() && info.uid === process.getuid!() && info.size <= 1_048_576);
+    hashes[name] = sha256(readFileSync(file));
+  }
+  const manifest = JSON.parse(readFileSync(join(source, "openclaw.plugin.json"), "utf8"));
+  assert.equal(manifest.id, "oca504-observer"); assert.ok(manifest.activation && typeof manifest.activation === "object" && !Array.isArray(manifest.activation));
+  assert.equal(manifest.activation.onStartup, true, "Observer startup activation is required");
+  const pkg = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
+  assert.equal(pkg.name, "oca504-observer"); assert.equal(pkg.version, "0.0.0"); assert.deepEqual(pkg.openclaw.extensions, ["./index.mjs"]);
+  return { source, hashes };
+}
+export async function installObserver(fixture: string, observer: { path: string; hashes: Record<string, string> }, install: (path: string) => Promise<void>) {
+  const proof = observerSourceProof(fixture, observer.path);
+  assert.deepEqual(proof.hashes, observer.hashes, "Generated observer changed before installation");
+  await install(proof.source); return proof;
+}
+export function verifyObserverInspection(report: FixtureRecord, fixture: string, state: string, proof: ReturnType<typeof observerSourceProof>, runtime = false, evidence?: HostEvidence) {
+  const { plugin, install } = report;
+  assert.ok(plugin && install); assert.equal(plugin.id, "oca504-observer"); assert.equal(plugin.version, "0.0.0");
+  assert.equal(plugin.enabled, true); assert.equal(plugin.status, "loaded"); assert.ok(!plugin.error);
+  for (const [field, expected] of [["packageName", "oca504-observer"], ["packageVersion", "0.0.0"]]) if (plugin[field] !== undefined) assert.equal(plugin[field], expected);
+  assert.equal(install.source, "path"); assert.equal(exactCandidatePath(fixture, install.sourcePath), proof.source);
+  const expectedRoot = exactCandidatePath(fixture, join(state, "extensions", "oca504-observer"));
+  assert.equal(exactCandidatePath(fixture, install.installPath), expectedRoot); assert.equal(exactCandidatePath(fixture, plugin.rootDir), expectedRoot);
+  assert.equal(exactCandidatePath(fixture, plugin.source), join(expectedRoot, "index.mjs"));
+  assert.deepEqual(readdirSync(expectedRoot).sort(), Object.keys(proof.hashes).sort());
+  const installedHashes: Record<string, string> = {};
+  for (const [name, hash] of Object.entries(proof.hashes)) {
+    const file = exactCandidatePath(fixture, join(expectedRoot, name)), info = lstatSync(file);
+    assert.ok(info.isFile() && info.uid === process.getuid!() && info.size <= 1_048_576);
+    installedHashes[name] = sha256(readFileSync(file));
+    evidence?.record("host-events.jsonl", { phase: "observer-installed-file", name, expectedSha256: hash, actualSha256: installedHashes[name], bytes: info.size });
+    assert.equal(installedHashes[name], hash);
+  }
+  if (runtime) assert.equal(plugin.imported, true);
+  return { installedHashes, imported: plugin.imported === true, version: plugin.version, sourceKind: install.source };
+}
+
 export type FixtureSessionSubscription = { subscribed: true; key: "agent:main:main"; agentId: "main"; localConnectionCorrelation: string };
 
 /** This local correlation label is fixture metadata, not a host connection receipt. */
@@ -590,7 +728,7 @@ child.on('close',(code,signal)=>{ if(signal) { process.removeAllListeners(signal
 }
 
 /** Observation hooks never return policy, parameters or replacement results. */
-export function writeHostObserver(root: string): { path: string; hash: string } {
+export function writeHostObserver(root: string): { path: string; hash: string; hashes: Record<string, string> } {
   const path = ownedPath(root, join(root, "host-observer"));
   // Caller creates this directory before asking for any child path.
   const capture = ownedPath(root, join(root, "host-tools.jsonl"));
@@ -606,7 +744,7 @@ const append=(phase,event,ctx)=>{
 export default{id:'oca504-observer',name:'Disposable OCA504 observer',register(api){api.on('before_tool_call',(event,ctx)=>{append('before',event,ctx);});api.on('after_tool_call',(event,ctx)=>{append('after',event,ctx);});}};
 `;
   writeFileSync(ownedPath(root, join(path, "index.mjs")), source, { mode: 0o600 });
-  writeFileSync(ownedPath(root, join(path, "openclaw.plugin.json")), JSON.stringify({ id: "oca504-observer", configSchema: { type: "object", additionalProperties: false, properties: {} } }), { mode: 0o600 });
+  writeFileSync(ownedPath(root, join(path, "openclaw.plugin.json")), JSON.stringify({ id: "oca504-observer", activation: { onStartup: true }, configSchema: { type: "object", additionalProperties: false, properties: {} } }), { mode: 0o600 });
   writeFileSync(ownedPath(root, join(path, "package.json")), JSON.stringify({ name: "oca504-observer", version: "0.0.0", type: "module", openclaw: { extensions: ["./index.mjs"] } }), { mode: 0o600 });
-  return { path, hash: sha256(source) };
+  return { path, hash: sha256(source), hashes: observerSourceProof(root, path).hashes };
 }

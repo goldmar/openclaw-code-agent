@@ -8,10 +8,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
-type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean };
+type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FOUR = ["agent_respond", "agent_merge", "agent_escalate", "agent_output"];
 const HOST = "2026.9.7";
@@ -93,6 +93,8 @@ async function main(): Promise<void> {
   let evidenceReceipt: { path: string; manifestSha256: string } | undefined;
   let nativeWatch: NodeJS.Timeout | undefined;
   const nativeObservationErrors: string[] = [];
+  let providerTraffic = 0;
+  const providerRequests: Json[] = [];
   const nativeProcesses = new Map<number, ProcessIdentity>();
   const observeNative = () => {
     try {
@@ -129,10 +131,11 @@ async function main(): Promise<void> {
   const observer = writeHostObserver(fixture);
   nativeWatch = setInterval(() => { try { observeNative(); } catch { if (nativeObservationErrors.length < 128) nativeObservationErrors.push("native-observer-failure"); } }, 250);
   const outcomes: Json[] = [];
-  const providerRequests: Json[] = [];
   const scenarios = new Map<string, Scenario>();
+  const generations = new Set<string>();
   const providerErrors: string[] = [];
   provider = createServer(async (request, response) => {
+    providerTraffic++;
     let stage: "provider-json" | "provider-schema" | "provider-scenario" | "provider-stream" = "provider-schema";
     try {
       assert.equal(request.socket.remoteAddress, "127.0.0.1");
@@ -145,11 +148,18 @@ async function main(): Promise<void> {
       observeNative();
       const userInput = strings((body.input ?? []).filter((item: Json) => item.role === "user"));
       const marker = userInput.findLast((item) => /OCA504_EMBED:([\w-]+)/.test(item))?.match(/OCA504_EMBED:([\w-]+)/)?.[1];
-      const generation = userInput.map((item) => item.match(/OCA504_GENERATION:([a-f0-9-]+)/)?.[1]).find(Boolean);
+      const generationMarkers = [...new Set(userInput.flatMap((item) => [...item.matchAll(/OCA504_GENERATION:([a-f0-9-]+)/g)].map((match) => match[1])))];
+      assert.ok(generationMarkers.length <= 1, "Conflicting native generation markers");
+      const generation = generationMarkers[0];
       const plan = userInput.some((item) => item.includes("OCA504_NATIVE_PLAN"));
-      const providerRecord: Json = { fixtureNativeHeaders: { session_id: request.headers.session_id, "x-codex-thread-id": request.headers["x-codex-thread-id"] }, latestInputHash: sha256(userInput.at(-1) ?? ""), inputHashes: userInput.map(sha256), fixtureGeneration: generation };
+      const providerRecord: Json = { fixtureNativeHeaders: { session_id: request.headers.session_id, "x-codex-thread-id": request.headers["x-codex-thread-id"] }, latestInputHash: sha256(userInput.at(-1) ?? ""), inputHashes: userInput.map(sha256), fixtureGeneration: generation, requestClass: "unknown" };
       if (providerRequests.length < 1_000) providerRequests.push(providerRecord);
       else if (!evidence.errors.includes("provider-record-count-overflow")) evidence.errors.push("provider-record-count-overflow");
+      const schemaNames = (body.tools ?? []).map((tool: Json) => tool.name ?? tool.function?.name);
+      providerRecord.schemaNames = schemaNames;
+      evidence.record("provider.jsonl", { phase: "request-observed", ...providerRecord });
+      providerRecord.requestClass = classifyProvider(generation, marker, schemaNames, generations, new Set(scenarios.keys()));
+      evidence.record("provider.jsonl", { phase: "request-admission", ...providerRecord });
       let output: Json[];
       if (marker) {
         stage = "provider-scenario";
@@ -173,6 +183,15 @@ async function main(): Promise<void> {
             scenario.cursor++;
           }
         } else { const emitted = functionItem(next); output = [emitted]; scenario.emitted.push({ id: emitted.call_id, itemId: emitted.id, hostCallId: compositeToolCallId(emitted.call_id, emitted.id), target: next }); scenario.cursor++; }
+        const selectedCall = scenario.emitted.at(-1)?.target;
+        if (output.some((item) => item.type === "function_call") && selectedCall?.name === "agent_respond" && selectedCall.args.session === scenario.nativeTarget.sessionId && !scenario.searching) {
+          const target = scenario.nativeTarget;
+          const boundary = responseResumeBoundary(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target, nativeEvents().length);
+          scenario.resumeWindows.push(boundary);
+          evidence.record("host-events.jsonl", { phase: "embedded-positive-response-pre-row", ...boundary.facts, resumeRequired: boundary.required, observation: "immediately-before-emitted-tool-admission" });
+        }
+      } else if (providerRecord.requestClass === "host-background") {
+        output = [messageItem("Disposable host notification acknowledged.")];
       } else {
         // The provider simulates model output ONLY. Native Codex owns all RPC.
         const latest = userInput.at(-1) ?? "";
@@ -257,7 +276,19 @@ async function main(): Promise<void> {
       writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(freshPluginBootstrap(logging, port)), { mode: 0o600 });
       await packedInstaller.install();
       await cli("plugins", "enable", "openclaw-code-agent");
+      // Existing isolated baseline grants precede the managed observer installer.
+      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(seedObserverAllow(parse(env.OPENCLAW_CONFIG_PATH!))), { mode: 0o600 });
+      const observerProof = await installObserver(fixture, observer, async (path) => {
+        evidence.record("host-events.jsonl", { phase: "observer-source-admission", sourceHashes: observer.hashes, startupActivation: true });
+        await cli("plugins", "install", "--force", "--accept-capabilities", path);
+      });
+      await cli("plugins", "enable", "oca504-observer");
+      const observerMetadata = JSON.parse(await cli("plugins", "inspect", "oca504-observer", "--json"));
+      evidence.record("host-events.jsonl", { phase: "observer-cold-inspection", inspectionSha256: sha256(JSON.stringify(observerMetadata)), sourceHashes: observerProof.hashes });
+      verifyObserverInspection(observerMetadata, fixture, state, observerProof, false, evidence);
       const installedConfig = parse(env.OPENCLAW_CONFIG_PATH!);
+      const managedAllow = managedObserverAllow(installedConfig);
+      evidence.record("host-events.jsonl", { phase: "managed-observer-allowlist", actualAllow: managedAllow, manuallyGrantedObserver: false });
       const metadata = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
       const installed = verifyPackedPluginInspection(metadata, fixture, state, tarball, candidateProof, false, evidence);
       evidence.record("host-events.jsonl", { stateRole: mode === false ? "direct" : "deferred", phase: "packed-install-metadata", sourceKind: "archive", ...installed,
@@ -269,7 +300,7 @@ async function main(): Promise<void> {
         models: { mode: "replace", providers: { oca504: { baseUrl, apiKey: "synthetic-local-fixture-only", api: "openai-responses", request: { allowPrivateNetwork: true }, models: [{ id: "gpt-6.1-sol", name: "Fixture", reasoning: false, input: ["text"], contextWindow: 100_000, maxTokens: 4_096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } },
         agents: { defaults: { workspace: ownedPath(fixture, join(fixture, "workspace")), model: { primary: "oca504/gpt-6.1-sol" } } },
         tools: { profile: "minimal", alsoAllow: ["agent_*", "tool_search", "tool_describe", "tool_call"], toolSearch: mode, exec: { mode: "full" } },
-        plugins: { ...installedConfig.plugins, load: { paths: [...(installedConfig.plugins.load?.paths ?? []), observer.path] }, allow: ["openclaw-code-agent", "openai", "oca504-observer"], slots: { memory: "none" }, entries: { ...installedConfig.plugins.entries, "oca504-observer": { enabled: true }, "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "default", planApproval: "delegate", harnesses: { codex: { defaultModel: "gpt-6.1-sol", permissionProfile: ":workspace", approvalPolicy: "never" } } } } } },
+        plugins: { ...installedConfig.plugins, allow: managedAllow, slots: { memory: "none" }, entries: { ...installedConfig.plugins.entries, "oca504-observer": { enabled: true }, "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "default", planApproval: "delegate", harnesses: { codex: { defaultModel: "gpt-6.1-sol", permissionProfile: ":workspace", approvalPolicy: "never" } } } } } },
         cron: { enabled: false }, browser: { enabled: false },
       };
       mkdirSync(config.agents!.defaults!.workspace!, { recursive: true });
@@ -301,6 +332,10 @@ async function main(): Promise<void> {
       evidence.record("host-events.jsonl", { phase: "message-subscription-acknowledgement", method: "sessions.messages.subscribe", subscribed: subscription.subscribed,
         expectedKeyMatches: subscription.key === "agent:main:main", expectedOwnerMatches: subscription.agentId === "main", localConnectionCorrelation,
         correlationKind: "fixture_local_label_not_host_issued_receipt" });
+      const observerRuntime = JSON.parse(await cli("plugins", "inspect", "oca504-observer", "--runtime", "--json"));
+      evidence.record("host-events.jsonl", { phase: "observer-runtime-cli-inspection", inspectionSha256: sha256(JSON.stringify(observerRuntime)) });
+      const observerInstalled = verifyObserverInspection(observerRuntime, fixture, state, observerProof, true, evidence);
+      evidence.record("host-events.jsonl", { phase: "observer-installed-provenance", ...observerInstalled, sourceHashes: observerProof.hashes, gatewayActivationProof: "subsequent real before hooks and embedded after hooks required" });
       const inspection = JSON.parse(await cli("plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"));
       const runtimeInstalled = verifyPackedPluginInspection(inspection, fixture, state, tarball, candidateProof, true, evidence);
       assert.equal(runtimeInstalled.installedPath, installed.installedPath);
@@ -332,19 +367,19 @@ async function main(): Promise<void> {
     const nativeEvents = () => records(join(fixture, "native-events.jsonl"));
     const hostTools = () => records(join(fixture, "host-tools.jsonl"));
     const backendRequests = () => nativeEvents().filter((event) => event.direction === "request" && ["turn/start", "turn/steer", "thread/resume", "turn/interrupt"].includes(event.method));
-    const snapshot = () => ({ git: records(gitCalls).length, backend: backendRequests().length, provider: providerRequests.length });
+    const snapshot = () => ({ git: records(gitCalls).length, backend: backendRequests().length, provider: providerTraffic });
     const assertNoAction = (prior: Json) => assert.deepEqual(snapshot(), prior, "Rejected host/plugin target performed no backend, provider or Git action");
 
     const invoke = (client: GatewayClient, name: string, args: Json, key?: string, requester?: string): Promise<Json> => (client as any).invokeOca(name, args, key, requester);
     async function launch(client: GatewayClient, name: string, extra: Json = {}, requester = "agent:main:main"): Promise<Json> {
       const before = new Set(existsSync(storePath) ? store().sessions.map((row: Json) => row.sessionId) : []);
       const workdir = createRepo(`native-${randomUUID()}`);
-      const generation = randomUUID();
+      const generation = randomUUID(); generations.add(generation);
       const result = await invoke(client, "agent_launch", { name, workdir, harness: "codex", worktree_strategy: "off", ...extra, prompt: `${extra.prompt ?? `OCA504_NATIVE:${name}`} OCA504_GENERATION:${generation}` }, undefined, requester);
       assert.doesNotMatch(text(result), /Error:|failed to start/i);
       const row = await until(() => store().sessions.find((item: Json) => !before.has(item.sessionId) && item.name === name && item.backendRef?.conversationId), "real native session receipt");
       await until(() => nativeEvents().find((event) => event.method === "turn/completed" && event.threadId === row.backendRef.conversationId && event.status === "completed"), "real native terminal turn");
-      return { ...row, fixtureGeneration: generation };
+      return { ...row, fixtureGeneration: generation, requestClass: "unknown" };
     }
     const client = await gateway(false);
     const a = await launch(client, "lynx-mcp-mvp");
@@ -373,48 +408,62 @@ async function main(): Promise<void> {
 
     async function unchangedResponse(target: Json, ref: string, message = "1", key?: string): Promise<Json> {
       const prior = nativeEvents().length, providerBefore = providerRequests.length, hooksBefore = hostTools().length;
-      const wasStopped = store().sessions.find((row: Json) => row.sessionId === target.sessionId)?.status === "killed";
+      const preRow = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
+      evidence.record("host-events.jsonl", { phase: "native-response-pre-row", ...generationObservation(preRow, target) });
+      const boundary = responseResumeBoundary(preRow, target, prior);
+      const wasStopped = boundary.required;
       const result = await invoke(client, "agent_respond", { session: ref, message }, key);
       assert.doesNotMatch(text(result), /^Error:/);
       const request = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === target.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message))), "unchanged message in selected native thread");
       assert.ok(nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method)).every((event) => event.threadId === target.backendRef.conversationId), "Response must not reach another native thread");
-      const response = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.turnId), "selected native turn response");
+      const response = await until(() => nativeEvents().slice(prior).find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && event.turnId && !event.error), "selected native turn response");
       await until(() => nativeEvents().slice(prior).find((event) => event.method === "turn/completed" && event.threadId === target.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"), "fresh matched selected native turn terminal");
       const model = providerRequests.slice(providerBefore);
-      assert.ok(model.some((body) => body.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`)), "Provider output must identify selected native generation");
-      assert.ok(model.length > 0 && model.some((body) => body.latestInputHash === sha256(message)), "Actual provider must observe exact input during selected serialized turn");
-      assert.ok(model.every((body) => body.latestInputHash === sha256(message)), "Unrelated provider input during serialized selected turn");
-      const resumes = nativeEvents().slice(prior).filter((event) => event.direction === "request" && event.method === "thread/resume");
-      if (wasStopped) assert.equal(resumes.length, 1, "Stopped original generation must actually resume");
-      for (const resume of resumes) {
-        assert.equal(resume.threadId, target.backendRef.conversationId);
-        assert.ok(nativeEvents().slice(prior).some((event) => event.direction === "response" && event.id === resume.id && event.relayPid === resume.relayPid && event.threadId === resume.threadId && !event.error), "Exact old generation resume must succeed");
-      }
-      for (const body of model) for (const value of Object.values(body.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, target.backendRef.conversationId, "Native provider thread header mismatch");
+      const nativeModel = selectedProvider(model, target.fixtureGeneration, message);
+      requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
+      for (const body of nativeModel) for (const value of Object.values(body.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, target.backendRef.conversationId, "Native provider thread header mismatch");
       const actualOutput = await invoke(client, "agent_output", { session: target.sessionId, full: true });
       assert.ok(text(actualOutput).includes(`OCA504_BACKEND_OK:${target.fixtureGeneration}:`));
       for (const other of [a, b, newer, literal]) if (other.sessionId !== target.sessionId) assert.ok(!text(actualOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`), "Other generation output must not be borrowed");
-      const hooks = hostTools().slice(hooksBefore).filter((event) => event.phase === "before" && event.toolName === "agent_respond");
-      assert.equal(hooks.length, 1); assert.ok(typeof hooks[0].toolCallId === "string" && hooks[0].toolCallId); assert.equal(hooks[0].inputHash, sha256(message));
-      return { method: request.method, threadId: request.threadId, turnId: response.turnId, actualToolCallId: hooks[0].toolCallId, providerRequests: model.length };
+      const hook = requireHttpBefore(hostTools().slice(hooksBefore), "agent_respond", ref, message);
+      return { method: request.method, threadId: request.threadId, turnId: response.turnId, actualToolCallId: hook.toolCallId, providerRequests: model.length, nativeProviderRequests: nativeModel.length, backgroundProviderRequests: model.length - nativeModel.length, resumedStoppedGeneration: wasStopped };
+    }
+    async function stopGeneration(target: Json) {
+      const before = store().sessions.find((row: Json) => row.sessionId === target.sessionId);
+      evidence.record("host-events.jsonl", { phase: "native-kill-pre-row", ...generationObservation(before, target) });
+      const result = await invoke(client, "agent_kill", { session: target.sessionId });
+      const classification = killResultClass(result);
+      evidence.record("host-events.jsonl", { phase: "native-kill-result", classification, resultSha256: sha256(JSON.stringify(result)), ...generationObservation(store().sessions.find((row: Json) => row.sessionId === target.sessionId), target) });
+      assert.ok(["terminated", "already-completed", "already-killed"].includes(classification), "Unexpected native kill outcome");
+      await until(() => {
+        const row = store().sessions.find((item: Json) => item.sessionId === target.sessionId);
+        evidence.record("host-events.jsonl", { phase: "native-kill-row-observation", ...generationObservation(row, target) });
+        return stoppedGeneration(row, target) ? true : undefined;
+      }, "captured native generation completed or killed and stopped");
     }
     const literal = await launch(client, "***");
-    const stopped = await invoke(client, "agent_kill", { session: a.sessionId });
-    assert.doesNotMatch(text(stopped), /^Error:/);
-    await until(() => store().sessions.find((row: Json) => row.sessionId === a.sessionId && row.status === "killed" && row.backendRef?.conversationId === a.backendRef.conversationId), "older native generation stopped and persisted");
+    await stopGeneration(a);
     const newer = await launch(client, a.name);
     assert.equal(newer.name, a.name); assert.notEqual(newer.sessionId, a.sessionId); assert.notEqual(newer.backendRef.conversationId, a.backendRef.conversationId);
-    for (const [target, ref] of [[newer, a.name], [a, a.sessionId], [a, a.backendRef.conversationId], [literal, literal.name]] as Array<[Json, string]>) await unchangedResponse(target, ref);
-    assert.notEqual(store().sessions.find((row: Json) => row.sessionId === a.sessionId)?.name, newer.name, "Resumed old generation must not steal active alias");
+    await unchangedResponse(newer, a.name);
+    const aliasOwner = aliasOwnerObservation(store().sessions.find((row: Json) => row.sessionId === newer.sessionId), newer);
+    evidence.record("host-events.jsonl", { phase: "newer-alias-owner-before-old-resume", ...aliasOwner });
+    await unchangedResponse(a, a.sessionId);
+    const resumedAlias = store().sessions.find((row: Json) => row.sessionId === a.sessionId);
+    assert.ok(resumedAlias && resumedAlias.backendRef?.conversationId === a.backendRef.conversationId);
+    const aliasProtection = assertAliasProtection(aliasOwner, resumedAlias, newer.name);
+    evidence.record("host-events.jsonl", { phase: "active-alias-protection", coverage: aliasProtection });
+    await unchangedResponse(a, a.backendRef.conversationId);
+    await unchangedResponse(literal, literal.name);
     const beforeNumeric = snapshot();
     const numeric = await invoke(client, "agent_respond", { session: a.sessionId, message: 1 });
     assert.equal(numeric.isError, true); assert.equal(numeric.details.code, "invalid_parameters"); assertNoAction(beforeNumeric);
     const output = await invoke(client, "agent_output", { session: a.sessionId, full: true });
     assert.ok(text(output).includes(`OCA504_BACKEND_OK:${a.fixtureGeneration}:`));
     assert.ok(!text(output).includes(`OCA504_BACKEND_OK:${newer.fixtureGeneration}:`));
-    outcomes.push({ lane: lanes.rpc, scenario: "native-older-exact-newer-name-backend-literal-mask-output", status: "PASS", numericBoundary: "plugin-invalid-parameters" });
+    outcomes.push({ lane: lanes.rpc, scenario: "native-older-exact-newer-name-backend-literal-mask-output", status: "PASS", activeAliasCoverage: aliasProtection, numericBoundary: "plugin-invalid-parameters" });
     const originalThread = a.backendRef.conversationId;
-    await invoke(client, "agent_kill", { session: a.sessionId });
+    await stopGeneration(a);
     const resumeStart = nativeEvents().length, resumeProvider = providerRequests.length;
     const resumed = await invoke(client, "agent_launch", { prompt: "OCA504_NATIVE:resume", resume_session_id: a.sessionId, harness: "codex", worktree_strategy: "off" });
     assert.doesNotMatch(text(resumed), /Error:|failed to start/i);
@@ -423,7 +472,8 @@ async function main(): Promise<void> {
     const resumedTurn = await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "request" && event.method === "turn/start" && event.threadId === originalThread && event.nativeInput?.some((input: Json) => input.sha256 === sha256("OCA504_NATIVE:resume"))), "fresh resumed native turn input");
     const resumedTurnResponse = await until(() => nativeEvents().slice(resumeStart).find((event) => event.direction === "response" && event.id === resumedTurn.id && event.relayPid === resumedTurn.relayPid && event.turnId && !event.error), "resumed native turn acceptance");
     await until(() => nativeEvents().slice(resumeStart).find((event) => event.method === "turn/completed" && event.threadId === originalThread && event.turnId === resumedTurnResponse.turnId && event.status === "completed"), "resumed native turn terminal");
-    assert.ok(providerRequests.slice(resumeProvider).some((body) => body.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${a.fixtureGeneration}:`) && body.latestInputHash === sha256("OCA504_NATIVE:resume")));
+    freshResume(nativeEvents().slice(resumeStart), originalThread, true);
+    selectedProvider(providerRequests.slice(resumeProvider), a.fixtureGeneration, "OCA504_NATIVE:resume");
     const resumedRow = store().sessions.find((row: Json) => row.sessionId === a.sessionId && row.backendRef?.conversationId === originalThread);
     assert.ok(resumedRow);
     const resumedOutput = await invoke(client, "agent_output", { session: resumedRow.sessionId, full: true });
@@ -440,7 +490,13 @@ async function main(): Promise<void> {
     for (const concurrent of [false, true]) {
       const prior = nativeEvents().length, hooksBefore = hostTools().length, providerBefore = providerRequests.length;
       const key = `same-${randomUUID()}`, message = `REPEAT-${key}`;
-      const calls = () => invoke(client, "agent_respond", { session: b.sessionId, message }, key);
+      const repeatWindows: Array<{ boundary: ReturnType<typeof responseResumeBoundary>; result?: Json }> = [];
+      const calls = async () => {
+        const boundary = responseResumeBoundary(store().sessions.find((row: Json) => row.sessionId === b.sessionId), b, nativeEvents().length);
+        evidence.record("host-events.jsonl", { phase: "concurrent-positive-response-pre-row", ...boundary.facts, resumeRequired: boundary.required, observation: "shared-overlap-runtime-window-not-per-call-receipt" });
+        const record: typeof repeatWindows[number] = { boundary }; repeatWindows.push(record);
+        record.result = await invoke(client, "agent_respond", { session: b.sessionId, message }, key); return record.result;
+      };
       const results: Json[] = [];
       if (concurrent) results.push(...await Promise.all([calls(), calls()]));
       else {
@@ -469,13 +525,14 @@ async function main(): Promise<void> {
         const settled = accepted.every((response) => events.some((event) => event.method === "turn/completed" && event.threadId === b.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"));
         return accepted.length + unconfirmed >= 2 && settled && (uncertain.length === 0 || unconfirmed > 0) ? { accepted, rejected, uncertain, unconfirmed } : undefined;
       }, "matched repeat native terminal observations");
+      for (const record of repeatWindows) if (!record.result?.isError) requireResponseResume(nativeEvents(), record.boundary, b.backendRef.conversationId);
       const actual = nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method));
       const provider = providerRequests.slice(providerBefore);
       assert.ok(actual.every((input) => input.threadId === b.backendRef.conversationId));
       assert.ok(provider.some((request) => request.latestInputHash === sha256(message) && request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`)));
       const repeatedOutput = await invoke(client, "agent_output", { session: b.sessionId, full: true });
       assert.ok(text(repeatedOutput).includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`));
-      outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginUnconfirmedOutcomes: observations.unconfirmed, terminalTurns: new Set(observations.accepted.map((item) => item.turnId)).size, providerRequests: provider.length, sameActualCallId: true, durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
+      outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginUnconfirmedOutcomes: observations.unconfirmed, terminalTurns: new Set(observations.accepted.map((item) => item.turnId)).size, providerRequests: provider.length, sameActualCallId: true, resumeObservation: concurrent ? "shared-overlapping-runtime-window-not-per-call-receipt" : "distinct-sequential-fresh-windows", durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
     }
     const firstRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
     const secondRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
@@ -549,7 +606,7 @@ async function main(): Promise<void> {
         { name: "agent_output", args: { session: target.sessionId, full: true } },
         { name: "agent_respond", args: { session: target.sessionId, message: "1" } },
       ];
-      const scenario: Scenario = { calls: mode === false ? calls : calls.map((call) => ({ deferred: call })), cursor: 0, results: [], emitted: [], schemas: [], final: false };
+      const scenario: Scenario = { calls: mode === false ? calls : calls.map((call) => ({ deferred: call })), cursor: 0, results: [], emitted: [], schemas: [], final: false, nativeTarget: target, resumeWindows: [] };
       scenarios.set(name, scenario);
       const eventStart = hostEvents.length, nativeStart = nativeEvents().length, hookStart = hostTools().length, providerStart = providerRequests.length;
       const run = await embedded.request<Json>("chat.send", { sessionKey: "agent:main:main", message: `OCA504_EMBED:${name}`, deliver: false, idempotencyKey: randomUUID() });
@@ -558,6 +615,8 @@ async function main(): Promise<void> {
       assert.equal(terminal.status, "ok"); assert.equal(scenario.final, true);
       assert.equal(scenario.cursor, 6);
       assert.equal(scenario.emitted.length, calls.length);
+      assert.equal(scenario.resumeWindows.length, 1);
+      for (const boundary of scenario.resumeWindows) requireResponseResume(nativeEvents(), boundary, target.backendRef.conversationId);
       assert.equal(new Set(scenario.emitted.map((item) => item.id)).size, calls.length);
       assert.equal(new Set(scenario.emitted.map((item) => item.itemId)).size, calls.length);
       assert.equal(new Set(scenario.emitted.map((item) => item.hostCallId)).size, calls.length);
@@ -586,7 +645,7 @@ async function main(): Promise<void> {
             // The official direct Responses converter exposes content only.
             assert.ok(strings(returned.output).some((value) => value.startsWith("Error:")));
             assert.match(strings(returned.output).join(" "), code === "session_not_found" ? /Session not found/ : /blank or masked-looking/);
-            const native = hooks.find((event) => event.phase === "after" && event.toolName === emitted.target.name);
+            const native = requireEmbeddedAfter(hooks, emitted.target.name, emitted.hostCallId);
             assert.ok(native, "Exact direct call must expose actual native result metadata");
             assert.equal(native.status, "error"); assert.equal(native.isError, true); assert.equal(native.code, code);
             assert.equal(native.targetSelected, false); assert.equal(native.operationStarted, false); assert.equal(native.recoveryPresent, true);
@@ -597,7 +656,7 @@ async function main(): Promise<void> {
             // Keep the bridge failure separate from its contained native error.
             const wrapper = typeof returned.output === "string" ? JSON.parse(returned.output) : returned.output;
             assert.equal(wrapper.tool?.id, emitted.catalogId);
-            const outer = hooks.find((event) => event.phase === "after" && event.toolName === "tool_call");
+            const outer = requireEmbeddedAfter(hooks, "tool_call", emitted.hostCallId);
             assert.ok(outer); assert.equal(outer.outerStatus, "failed");
           }
           for (const secret of [target.sessionId, target.name, target.backendRef.conversationId]) assert.ok(!JSON.stringify(returned.output).includes(secret), "Failure must not disclose another reference");
@@ -629,9 +688,9 @@ async function main(): Promise<void> {
 
     requireCandidate(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }), expectedSha,
       execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8" }));
-    summary = { fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
+    summary = { fixtureCompanionSha256: sha256(readFileSync(join(root, "scripts/e2e/oca-issue-504-host-fixtures.ts"))), observerSha256: observer.hash, observerFileHashes: observer.hashes, hostSourceProvenance: "published package metadata and npm lock integrity; compiled source attestation remains unproven", status: "PASS", candidateSha: expectedSha, gitTree: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" }).trim(), node: process.version,
       host: HOST, hostPublishedBuild: { bytesSha256: hostBuildBytes ? sha256(hostBuildBytes) : null, version: hostBuild?.version ?? null, commit: hostBuild?.commit ?? null, builtAt: hostBuild?.builtAt ?? null, buildId: hostBuild?.buildId ?? null }, hostLockSRI, hostEntrySha256: sha256(readFileSync(join(hostPath, "openclaw.mjs"))), hostPackageSha256: sha256(readFileSync(join(hostPath, "package.json"))), distHashes: candidateProof.distHashes, nativeCodex: { version: opts["--codex-version"], executableSha256: codexExecutableSha256, relaySha256: sha256(readFileSync(nativeRelay)), initialized: agents.length, completedTurns: native.filter((event) => event.method === "turn/completed" && event.status === "completed").length },
-      tarballSha256, distSha256, nativeProcessIdentities: spawned.map((event) => ({ executableSha256: event.executableHash, pid: event.nativeIdentity.pid, group: event.nativeIdentity.group, startTicks: event.nativeIdentity.startTicks })), providerThreadHeadersObserved: providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")), fixtureSha256: sha256(readFileSync(fileURLToPath(import.meta.url))), providerRequests: providerRequests.length, outcomes,
+      tarballSha256, distSha256, nativeProcessIdentities: spawned.map((event) => ({ executableSha256: event.executableHash, pid: event.nativeIdentity.pid, group: event.nativeIdentity.group, startTicks: event.nativeIdentity.startTicks })), providerThreadHeadersObserved: providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")), fixtureSha256: sha256(readFileSync(fileURLToPath(import.meta.url))), providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), outcomes,
       unproven: ["external-provider-entitlement", "production-Telegram-delivery", "reporter-host-hooks", "upstream-redaction-repair", "restart-multiple-registry-exactly-once", "compiled-host-source-attestation", ...(!hostBuild?.commit ? ["published-host-build-commit"] : []), ...(!providerRequests.some((request) => Object.values(request.fixtureNativeHeaders).some((value) => typeof value === "string")) ? ["direct-provider-thread-header-mapping"] : [])],
       pluginFixtureOnly: ["legacy-per-source-matrix", "callback-version-authority", "fine-grained-requester-report-custody", "ambiguous-backend-rejection"] };
   } catch (error) { originalFailure = error; }
@@ -670,10 +729,10 @@ async function main(): Promise<void> {
       ]);
     } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
     try {
-      evidence.record("run-summary.json", { ...summary, candidateSha: expectedSha, node: process.version, status: originalFailure || cleanupFailure || evidence.errors.length || evidence.failures.length ? "BLOCKED" : "PASS", originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, teardownVerified: !cleanupFailure });
+      evidence.record("run-summary.json", { ...summary, providerTraffic, providerRequests: providerRequests.length, providerRequestClasses: Object.fromEntries(["native-generation", "embedded-scenario", "host-background", "unknown"].map((kind) => [kind, providerRequests.filter((request) => request.requestClass === kind).length])), candidateSha: expectedSha, node: process.version, status: originalFailure || cleanupFailure || evidence.errors.length || evidence.failures.length ? "BLOCKED" : "PASS", originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, teardownVerified: !cleanupFailure });
       evidenceReceipt = evidence.persist(process.version, originalFailure || cleanupFailure ? "BLOCKED" : "PASS", !cleanupFailure);
     } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }
-    failureReport = { status: "BLOCKED", candidateSha: expectedSha, node: process.version, originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, evidenceErrors: evidence.errors, evidenceIncomplete: evidence.errors.length > 0 || !evidenceReceipt, teardownVerified: !cleanupFailure, evidence: evidenceReceipt ?? { path: evidence.path, manifestSha256: null }, mandatoryLanes: Object.values(lanes) };
+    failureReport = { status: "BLOCKED", providerTraffic, providerRequests: providerRequests.length, candidateSha: expectedSha, node: process.version, originalFailures: failures(originalFailure), cleanupFailures: failures(cleanupFailure), fixtureFailures: evidence.failures, evidenceErrors: evidence.errors, evidenceIncomplete: evidence.errors.length > 0 || !evidenceReceipt, teardownVerified: !cleanupFailure, evidence: evidenceReceipt ?? { path: evidence.path, manifestSha256: null }, mandatoryLanes: Object.values(lanes) };
     // A verified teardown permits deleting only the marked disposable profile.
     // Private receipts survive both success and failure; failed cleanup retains
     // its owned scratch for diagnosis and still blocks the run.

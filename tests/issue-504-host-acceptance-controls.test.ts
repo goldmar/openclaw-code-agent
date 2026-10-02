@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -347,6 +347,118 @@ describe("issue 504 real-host acceptance controls", () => {
       assert.equal(processIdentity(child.pid!), undefined);
       assert.ok(processIdentity(process.pid), "Unproved PID remains untouched");
     } finally { await stopOwnedChild(child); }
+  });
+
+  it("requires exact stopped generations and fresh successful resume on completed and killed rows", () => {
+    const target = { sessionId: "older-id", name: "alias", backendRef: { conversationId: "original-thread" } };
+    const row = { ...target, status: "completed", lifecycle: "terminal", runtimeState: "stopped" };
+    for (const status of ["completed", "killed"]) {
+      assert.equal(stoppedGeneration({ ...row, status }, target), true);
+      assert.throws(() => freshResume([], "original-thread", true));
+      const request = { direction: "request", method: "thread/resume", id: 1, relayPid: 1, threadId: "original-thread" };
+      const ack = { direction: "response", id: 1, relayPid: 1, threadId: "original-thread" };
+      assert.doesNotThrow(() => freshResume([request, ack], "original-thread", true));
+      for (const wrong of [{ ...ack, error: true }, { ...ack, threadId: "other" }, { ...ack, id: 0 }, { ...ack, relayPid: 2 }]) assert.throws(() => freshResume([request, wrong], "original-thread", true));
+      assert.throws(() => freshResume([{ ...request, threadId: "other" }, ack], "original-thread", true));
+    }
+    for (const status of ["starting", "running"]) assert.equal(stoppedGeneration({ ...row, status }, target), false);
+    for (const wrong of [undefined, { ...row, status: "failed" }, { ...row, status: "unknown" }, { ...row, sessionId: "newer" }, { ...row, backendRef: { conversationId: "other" } }, { ...row, lifecycle: "suspended" }, { ...row, runtimeState: "live" }]) assert.throws(() => stoppedGeneration(wrong, target));
+    assert.equal(generationObservation(undefined, target).exists, false);
+    for (const [value, expected] of [["Session synthetic has been terminated.", "terminated"], ["Session synthetic is already completed. No action needed.", "already-completed"], ["Session synthetic is already killed. No action needed.", "already-killed"], ["Error: refused", "error"], ["unexpected", "other"]]) assert.equal(killResultClass({ content: [{ text: value }] }), expected);
+  });
+
+  it("requires each positive response's fresh window while permitting honestly shared overlapping resume observation", () => {
+    const target = { sessionId: "exact-a", backendRef: { conversationId: "thread-a" } };
+    const row = { ...target, status: "completed", lifecycle: "terminal", runtimeState: "stopped" };
+    const request = { direction: "request", method: "thread/resume", id: 1, relayPid: 1, threadId: "thread-a" };
+    const response = { direction: "response", id: 1, relayPid: 1, threadId: "thread-a" };
+    const events = [request, response];
+    const first = responseResumeBoundary(row, target, 0), overlapping = responseResumeBoundary(row, target, 0);
+    assert.doesNotThrow(() => requireResponseResume(events, first, "thread-a"));
+    assert.doesNotThrow(() => requireResponseResume(events, overlapping, "thread-a"));
+    for (const status of ["completed", "killed"]) {
+      const sequential = responseResumeBoundary({ ...row, status }, target, 2);
+      assert.throws(() => requireResponseResume(events, sequential, "thread-a"), "Old success cannot satisfy later sequential or embedded window");
+      const fresh = [...events, { ...request, id: 2 }, { ...response, id: 2 }];
+      assert.doesNotThrow(() => requireResponseResume(fresh, sequential, "thread-a"));
+    }
+    assert.throws(() => responseResumeBoundary(undefined, target, 0));
+    assert.throws(() => responseResumeBoundary({ ...row, status: "failed" }, target, 0));
+  });
+
+  it("keeps fresh bootstrap unchanged and relies on managed installer append after the baseline grant", () => {
+    assert.equal(freshPluginBootstrap({ file: "owned-fixture.log" }, 12_345).plugins, undefined);
+    for (const initial of [{ logging: { file: "owned.log" } }, { plugins: { entries: { "openclaw-code-agent": { enabled: true } }, allow: [] as string[] } }]) {
+      const seeded = seedObserverAllow(initial);
+      assert.deepEqual(seeded.plugins.allow, ["openclaw-code-agent", "openai"]);
+      const installed = { ...seeded, plugins: { ...seeded.plugins, allow: [...seeded.plugins.allow, "oca504-observer"] } };
+      assert.equal(managedObserverAllow(installed), installed.plugins.allow);
+      for (const allow of [undefined, [], ["openclaw-code-agent", "openai"], ["openclaw-code-agent", "openai", "*"], ["openclaw-code-agent", "oca504-observer", "oca504-observer"], ["openclaw-code-agent", "openai", "oca504-observer", "unexpected"], ["openclaw-code-agent", "openai", false]]) assert.throws(() => managedObserverAllow({ plugins: { allow } }));
+    }
+  });
+
+  it("protects only a currently active alias owner and truthfully allows terminal reuse", () => {
+    const target = { sessionId: "newer", name: "shared", backendRef: { conversationId: "thread-newer" } };
+    for (const status of ["starting", "running", "completed", "killed"]) {
+      const owner = aliasOwnerObservation({ ...target, status }, target);
+      if (owner.active) { assert.throws(() => assertAliasProtection(owner, { name: "shared" }, "shared")); assert.equal(assertAliasProtection(owner, { name: "shared-2" }, "shared"), "runtime-active-owner-protected"); }
+      else assert.match(assertAliasProtection(owner, { name: "shared" }, "shared"), /plugin-fixture-only/);
+    }
+    for (const row of [undefined, { ...target, status: "failed" }, { ...target, status: "completed", sessionId: "other" }, { ...target, status: "running", name: "changed" }]) assert.throws(() => aliasOwnerObservation(row, target));
+  });
+
+  it("accepts genuine before-only HTTP evidence without manufacturing an after receipt", () => {
+    const hook = { phase: "before", toolName: "agent_respond", toolCallId: "actual-id", session: "exact-target", inputHash: sha256("1") };
+    assert.equal(requireHttpBefore([hook], "agent_respond", "exact-target", "1"), hook);
+    assert.throws(() => requireEmbeddedAfter([hook], "agent_respond", "actual-id"));
+    const after = { ...hook, phase: "after" };
+    assert.equal(requireEmbeddedAfter([hook, after], "agent_respond", "actual-id"), after);
+    assert.throws(() => requireEmbeddedAfter([{ ...after, toolCallId: "wrong" }], "agent_respond", "actual-id"));
+    for (const events of [[], [{ ...hook, phase: "after" }], [{ ...hook, toolCallId: "" }], [{ ...hook, session: "other" }], [{ ...hook, inputHash: sha256("changed") }], [hook, hook]]) assert.throws(() => requireHttpBefore(events, "agent_respond", "exact-target", "1"));
+  });
+
+  it("classifies every known native, embedded and background provider request without borrowing payload proof", () => {
+    const generations = new Set(["generation-a", "generation-b"]), scenarios = new Set(["direct"]);
+    assert.equal(classifyProvider("generation-a", undefined, [], generations, scenarios), "native-generation");
+    assert.equal(classifyProvider(undefined, "direct", ["agent_output"], generations, scenarios), "embedded-scenario");
+    assert.equal(classifyProvider(undefined, undefined, ["agent_respond"], generations, scenarios), "host-background");
+    for (const [generation, marker, names] of [["unknown", undefined, []], [undefined, "unknown", []], ["generation-a", "direct", []], [undefined, undefined, ["unrecognized"]]] as Array<[string | undefined, string | undefined, string[]]>) assert.throws(() => classifyProvider(generation, marker, names, generations, scenarios));
+    const native = { requestClass: "native-generation", fixtureGeneration: "generation-a", latestInputHash: sha256("1"), fixtureOutputMarkers: ["OCA504_BACKEND_OK:generation-a:"] };
+    const background = { requestClass: "host-background", latestInputHash: sha256("notification") };
+    const all = [native, background]; assert.deepEqual(selectedProvider(all, "generation-a", "1"), [native]); assert.equal(all.length, 2);
+    for (const requests of [[background], [{ ...native, fixtureGeneration: "generation-b" }, background], [{ ...native, latestInputHash: sha256("other") }], [{ ...native, fixtureOutputMarkers: [] }], [native, { requestClass: "unknown" }]]) assert.throws(() => selectedProvider(requests, "generation-a", "1"));
+  });
+
+  it("admits only startup-enabled exact generated observers and verifies managed selected-state copies", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "oca504-managed-observer-"));
+    try {
+      writeFileSync(join(fixture, ".fixture-owner"), FIXTURE_MARKER); mkdirSync(join(fixture, "host-observer"));
+      const observer = writeHostObserver(fixture), manifestPath = join(observer.path, "openclaw.plugin.json"), original = readFileSync(manifestPath);
+      let installs = 0, followons = 0;
+      const install = () => installObserver(fixture, observer, async () => { installs++; followons++; });
+      for (const activation of [undefined, false, [], { onStartup: false }, { onStartup: "true" }, null] as unknown[]) {
+        const manifest = JSON.parse(original.toString()); if (activation === undefined) delete manifest.activation; else manifest.activation = activation;
+        writeFileSync(manifestPath, JSON.stringify(manifest)); await assert.rejects(install()); assert.equal(installs, 0); assert.equal(followons, 0);
+      }
+      writeFileSync(manifestPath, original); await install(); assert.equal(installs, 1);
+      const state = join(fixture, "state"), installed = join(state, "extensions", "oca504-observer"); mkdirSync(join(state, "extensions"), { recursive: true }); cpSync(observer.path, installed, { recursive: true });
+      const proof = observerSourceProof(fixture, observer.path);
+      const report = { plugin: { id: "oca504-observer", version: "0.0.0", enabled: true, status: "loaded", source: join(installed, "index.mjs"), rootDir: installed }, install: { source: "path", sourcePath: observer.path, installPath: installed } };
+      assert.equal(verifyObserverInspection(report, fixture, state, proof).imported, false);
+      assert.throws(() => verifyObserverInspection(report, fixture, state, proof, true));
+      assert.equal(verifyObserverInspection({ ...report, plugin: { ...report.plugin, imported: true } }, fixture, state, proof, true).imported, true);
+      mkdirSync(join(fixture, "other-state", "extensions"), { recursive: true }); cpSync(observer.path, join(fixture, "other-state", "extensions", "oca504-observer"), { recursive: true });
+      for (const bad of [
+        { ...report, plugin: { ...report.plugin, enabled: false } }, { ...report, plugin: { ...report.plugin, status: "error" } },
+        { ...report, plugin: { ...report.plugin, version: "other" } }, { ...report, plugin: { ...report.plugin, source: join(observer.path, "index.mjs") } },
+        { ...report, plugin: { ...report.plugin, rootDir: observer.path } }, { ...report, install: { ...report.install, sourcePath: installed } },
+        { ...report, install: { ...report.install, source: "archive" } }, { ...report, install: { ...report.install, installPath: observer.path } },
+        { ...report, plugin: { ...report.plugin, packageName: "wrong" } },
+      ]) assert.throws(() => verifyObserverInspection(bad, fixture, state, proof));
+      assert.throws(() => verifyObserverInspection(report, fixture, join(fixture, "other-state"), proof));
+      writeFileSync(join(installed, "index.mjs"), "changed"); assert.throws(() => verifyObserverInspection(report, fixture, state, proof));
+      assert.equal(followons, 1);
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
   });
 
   it("observes exact tool IDs without returning mutations or recording requester routes", async () => {
