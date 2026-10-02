@@ -10,7 +10,7 @@ import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { makeAgentEscalateTool } from "../src/tools/agent-escalate";
 import { makeAgentOutputTool } from "../src/tools/agent-output";
 import type { SessionManager } from "../src/session-manager";
-import { distFiles, processFields, targetFacts } from "../scripts/e2e/oca-issue-504-host-acceptance";
+import { distFiles, processFields, sameLifetime, targetFacts } from "../scripts/e2e/oca-issue-504-host-acceptance";
 
 afterEach(() => setSessionManager(null));
 
@@ -56,6 +56,15 @@ describe("representative host acceptance boundaries", () => {
     assert.equal(processFields(90, `90 (same name) ${fields.join(" ")}`)?.start, "9999");
     fields[0] = "Z";
     assert.equal(processFields(90, `90 (same name) ${fields.join(" ")}`), undefined);
+  });
+
+  it("keeps a recorded unknown alive through reparent/group changes without confusing ended or reused lifetimes", () => {
+    const recorded = { pid: 90, parent: 12, group: 34, start: "5678" };
+    assert.equal(sameLifetime(recorded, recorded), true, "ordinary owned lifetime");
+    assert.equal(sameLifetime(recorded, { ...recorded, parent: 1, group: 999 }), true, "reparenting is not exit");
+    assert.equal(sameLifetime(recorded, undefined), false, "transient exited");
+    assert.equal(sameLifetime(recorded, { ...recorded, start: "new-start" }), false, "PID reuse");
+    assert.equal(sameLifetime(recorded, { ...recorded, pid: 91 }), false, "different PID cannot impersonate survivor");
   });
 });
 

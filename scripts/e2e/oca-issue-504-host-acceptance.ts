@@ -40,11 +40,14 @@ export function processFields(pid: number, value: string): Identity | undefined 
   const fields = value.slice(value.lastIndexOf(") ") + 2).split(" ");
   return fields[0] === "Z" ? undefined : { pid, parent: Number(fields[1]), group: Number(fields[2]), start: fields[19] };
 }
+export function sameLifetime(expected: Identity, current: Identity | undefined): boolean {
+  return current !== undefined && expected.pid === current.pid && expected.start === current.start;
+}
 function identity(pid: number): Identity | undefined {
   try { return processFields(pid, readFileSync(`/proc/${pid}/stat`, "utf8")); }
   catch (error) { if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code!)) return undefined; throw error; }
 }
-function same(old: Identity): boolean { return identity(old.pid)?.start === old.start; }
+function same(old: Identity): boolean { return sameLifetime(old, identity(old.pid)); }
 async function until<T>(read: () => Promise<T | undefined> | T | undefined, label: string, ms = 60_000): Promise<T> {
   const end = Date.now() + ms;
   while (Date.now() < end) { const value = await read(); if (value !== undefined) return value; await delay(100); }
@@ -110,6 +113,7 @@ async function main(): Promise<void> {
   const nativeSeen = new Set<number>();
   const gatewayDescendants = new Set<string>();
   const lifetime = (item: Identity) => `${item.pid}:${item.start}`;
+  const unproven = new Map<string, Identity>();
   let codex = "", nativeVersion = "", packageHash = "", hostBuild: Json | undefined, providerTurns = 0;
   const capture = () => {
     const snapshots = readdirSync("/proc").filter((name) => /^\d+$/.test(name)).flatMap((name) => {
@@ -128,7 +132,9 @@ async function main(): Promise<void> {
         }
       }
     }
-    for (const item of snapshots) if (groups.has(item.group)) assert.ok(owned.get(item.pid)?.start === item.start, "Unproven process survived in owned group");
+    for (const item of snapshots) if (groups.has(item.group) && !sameLifetime(item, owned.get(item.pid))) {
+      unproven.set(lifetime(item), item); // Observation never grants signalling authority.
+    }
     if (codex) for (const item of owned.values()) if (gatewayDescendants.has(lifetime(item)) && same(item)) {
       try { if (realpathSync(`/proc/${item.pid}/exe`) === codex) nativeSeen.add(item.pid); }
       catch (error) { if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code!)) throw error; }
@@ -216,7 +222,7 @@ async function main(): Promise<void> {
         try {
           assert.equal(request.socket.remoteAddress, "127.0.0.1"); assert.equal(request.method, "POST"); assert.equal(request.url, "/v1/responses");
           let body = ""; for await (const chunk of request) { body += chunk; assert.ok(Buffer.byteLength(body) <= 1_048_576); }
-          const input = JSON.parse(body); capture();
+          const input = JSON.parse(body);
           const tokens = JSON.stringify((input.input ?? []).filter((item: Json) => item.role === "user")).match(/OCA504_[A-Z0-9]+/g) ?? [];
           const marker = tokens.at(-1) ?? "BACKGROUND";
           if (marker === "OCA504_COMMIT" && !commitReleased) await commitBarrier;
@@ -406,8 +412,15 @@ async function main(): Promise<void> {
     if (watcher) clearInterval(watcher);
     try { await until(() => commands.every((item) => item.closed || item.startupFailure) ? true : undefined, "command stream close", 5000); }
     catch { errors.push("command-stream-close"); }
-    try { capture(); } catch { errors.push("ownership-final"); }
     for (const port of ports) if (await listening(port)) errors.push("listener-survivor");
+    try {
+      await until(() => {
+        capture();
+        // Direct reads retain the original lifetime even after reparent/group changes.
+        const survivors = [...owned.values(), ...unproven.values()].filter((item) => same(item));
+        return survivors.length === 0 ? true : undefined;
+      }, "unproven terminal lifetimes", 5000);
+    } catch { errors.push("ownership-final"); }
     if (observationFailure) errors.push("ownership-watch");
     if (errors.length) cleanupFailure = [...new Set(errors)].join(",");
     // Failed profiles/logs remain private under the runner's lifetime; no storage-erasure claim.
