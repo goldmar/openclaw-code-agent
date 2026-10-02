@@ -364,6 +364,13 @@ describe("issue 504 real-host acceptance controls", () => {
     const item = projectNativePlanFrame({ method: "item/completed", params: { item: { type: "plan", text, phase: "final_answer" } } }, sha256);
     assert.equal(item.genuineNativePlanItem, true); assert.equal(item.textNonempty, true); assert.equal(item.textBytes, Buffer.byteLength(text)); assert.equal(item.textSha256, sha256(text));
     assert.equal(item.proposedPlanOpen, true); assert.equal(item.proposedPlanClose, true);
+    for (const raw of [`${FIXTURE_PLAN}\n`, FIXTURE_PLAN]) {
+      const actual = projectNativePlanFrame({ method: "item/completed", params: { item: { type: "plan", text: raw } } }, sha256);
+      assert.equal(actual.textBytes, Buffer.byteLength(raw)); assert.equal(actual.textSha256, sha256(raw));
+      assert.equal(actual.trimTextBytes, 64); assert.equal(actual.trimTextSha256, "ddfaeef6b7cbae51d4e8bf8c9333fcf9c7861b9b2ba6d5ab1a25bf3dbf4ea5b2");
+      assert.doesNotMatch(JSON.stringify(actual), /Disposable fixture plan/);
+    }
+    const absent = projectNativePlanFrame({}, sha256); assert.equal(absent.trimTextBytes, null); assert.equal(absent.trimTextSha256, null);
     assert.doesNotMatch(JSON.stringify([projection, item]), /PRIVATE-|developer_instructions|"text":/);
   });
 
@@ -413,9 +420,13 @@ describe("issue 504 real-host acceptance controls", () => {
     const listing = tool(getSessionsListingText(sm, "waiting", undefined, { full: true }));
     const request = { direction: "request", method: "turn/start", id: 1, relayPid: 10, threadId: "thread-hp3", collaborationMode: "plan", executionProfile: ":read-only", approvalPolicy: "never", requestedModelMatches: true };
     const ack = { direction: "response", id: 1, relayPid: 10, turnId: "turn-hp3", error: false };
-    const item = { direction: "response", relayPid: 10, method: "item/completed", threadId: "thread-hp3", turnId: "turn-hp3", ...projectNativePlanFrame({ params: { item: { type: "plan", text: FIXTURE_PLAN } } }, sha256) };
+    const item = { direction: "response", relayPid: 10, method: "item/completed", threadId: "thread-hp3", turnId: "turn-hp3", ...projectNativePlanFrame({ params: { item: { type: "plan", text: `${FIXTURE_PLAN}\n` } } }, sha256) };
     const terminal = { direction: "response", relayPid: 10, method: "turn/completed", threadId: "thread-hp3", turnId: "turn-hp3", status: "completed" };
     const events = [request, ack, item, terminal];
+    assert.equal(item.textBytes, 65); assert.equal(item.textSha256, "85498ded1c118e3ad9f0a00c8c6b84d2978571ada6f54746b87a16ea50c9121a");
+    assert.deepEqual(nativePlanBoundary(events, 0, target), { matched: true, planBytes: 65, planSha256: item.textSha256, trimPlanBytes: 64, trimPlanSha256: sha256(FIXTURE_PLAN) });
+    const compact = { ...item, ...projectNativePlanFrame({ params: { item: { type: "plan", text: FIXTURE_PLAN } } }, sha256) };
+    assert.equal(hasLivePlanBoundary([request, ack, compact, terminal], 0, output, listing, target), true, "Unchanged valid64 native compatibility");
     assert.equal(hasLivePlanBoundary(events, 0, output, listing, target), true); assert.equal(planRowObservation(stale, target).pendingPlanApproval, false);
     assert.equal(live.outcomeSeenAt, undefined, "Running plan output cannot acknowledge a completed outcome");
     const refusal = await executeRespond(sm, { session: id, message: "approved", approve: true });
@@ -425,7 +436,15 @@ describe("issue 504 real-host acceptance controls", () => {
     for (const wrong of [tool(rawOutput.replace(id, "wrong-id")), tool(rawOutput.replace(target.name, "other-name")), tool(rawOutput.replace("awaiting_plan_decision", "active")), tool(rawOutput.replace(" | Phase: awaiting_plan_decision", "")), tool(rawOutput.replace(FIXTURE_PLAN, "# Another plan")), tool(rawOutput + "\n(showing persisted output)"), { ...output, isError: true }, { content: [] as Array<{ type: string; text: string }> }, undefined]) assert.equal(hasLivePlanBoundary(events, 0, wrong, listing, target), false);
     const other = rawListing.replaceAll(id, "other-id").replaceAll(target.name, "other-name");
     for (const wrong of [tool(rawListing + "\n\n" + rawListing), tool(rawListing.replace(target.name, "other-name")), tool(rawListing.replace("Plan waiting for the user", "Plan waiting for the orchestrator")), tool(rawListing.replace("   👉", "   omitted") + "\n\n" + other), tool(rawListing + "\n   ♻️ Recovered after a Gateway restart; no live process"), { ...listing, isError: true }, { content: [] as Array<{ type: string; text: string }> }, undefined]) assert.equal(hasLivePlanBoundary(events, 0, output, wrong, target), false);
-    for (const wrong of [[request, ack, { ...item, textSha256: sha256("another plan") }, terminal], [request, ack, { ...item, relayPid: 11 }, terminal], [request, { ...ack, error: true }, item, terminal], [request, ack, item]]) assert.equal(hasLivePlanBoundary(wrong, 0, output, listing, target), false);
+    for (const wrong of [
+      { ...item, textSha256: sha256("another plan") }, { ...item, textBytes: 64 }, { ...item, textBytes: 66 },
+      { ...item, trimTextSha256: sha256("another plan") }, { ...item, trimTextBytes: 65 }, { ...item, trimTextBytes: null }, { ...item, trimTextSha256: undefined },
+      { ...item, textBytes: item.trimTextBytes, textSha256: item.trimTextSha256, trimTextBytes: item.textBytes, trimTextSha256: item.textSha256 },
+      { ...item, ...projectNativePlanFrame({ params: { item: { type: "plan", text: ` ${FIXTURE_PLAN}\n` } } }, sha256) },
+      ...["", "Another nonempty native plan"].map((text) => ({ ...item, ...projectNativePlanFrame({ params: { item: { type: "plan", text } } }, sha256) })),
+      { ...item, itemType: "agentMessage", genuineNativePlanItem: false }, { ...item, relayPid: 11 }, { ...item, threadId: "other" }, { ...item, turnId: "old" },
+    ]) assert.equal(hasLivePlanBoundary([request, ack, wrong, terminal], 0, output, listing, target), false);
+    for (const wrong of [[{ ...request, requestedModelMatches: false }, ack, item, terminal], [request, { ...ack, error: true }, item, terminal], [request, ack, item, { ...terminal, turnId: "old" }], [request, ack, item]]) assert.equal(hasLivePlanBoundary(wrong, 0, output, listing, target), false);
     assert.equal(hasLivePlanBoundary(events, events.length, output, listing, target), false);
     assert.throws(() => requireAskPlanRefusal({ isError: true, content: [{ type: "text", text: "Ask the user to approve" }] }, target));
     for (const status of ["starting", "running", "completed", "killed"]) {

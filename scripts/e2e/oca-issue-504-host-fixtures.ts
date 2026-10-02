@@ -314,6 +314,7 @@ export function projectNativePlanFrame(frame: FixtureRecord, digest: (text: stri
   const type = item?.type;
   const phase = item?.phase;
   const observedText = typeof item?.text === "string" ? item.text : frame.method === "item/plan/delta" && typeof params?.delta === "string" ? params.delta : undefined;
+  const trimText = typeof item?.text === "string" ? item.text.trim() : undefined;
   return { collaborationMode: mode === undefined ? "absent" : ["plan", "default"].includes(mode) ? mode : "other",
     executionProfile: profile === undefined ? "absent" : [":read-only", ":workspace", ":danger-full-access"].includes(profile) ? profile : "other",
     approvalPolicy: policy === undefined ? "absent" : ["never", "on-request", "on-failure", "untrusted"].includes(policy) ? policy : "other",
@@ -322,6 +323,7 @@ export function projectNativePlanFrame(frame: FixtureRecord, digest: (text: stri
     itemPhase: phase === undefined ? "absent" : ["commentary", "final_answer"].includes(phase) ? phase : "other",
     textPresent: observedText !== undefined, textNonempty: observedText !== undefined && Boolean(observedText.trim()),
     textBytes: observedText === undefined ? null : Buffer.byteLength(observedText), textSha256: observedText === undefined ? null : digest(observedText),
+    trimTextBytes: trimText === undefined ? null : Buffer.byteLength(trimText), trimTextSha256: trimText === undefined ? null : digest(trimText),
     proposedPlanOpen: observedText === undefined ? null : observedText.includes("<proposed_plan>"), proposedPlanClose: observedText === undefined ? null : observedText.includes("</proposed_plan>"),
     genuineNativePlanItem: type === "plan" };
 }
@@ -350,7 +352,7 @@ export function planRowObservation(row: FixtureRecord | undefined, target: Fixtu
 export const FIXTURE_PLAN = "# Disposable fixture plan\n1. Inspect fixture.\n2. Report fixture.";
 export const ASK_PLAN_NEXT_STEP = "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)";
 export function nativePlanBoundary(events: FixtureRecord[], eventStart: number, target: FixtureRecord) {
-  const absent = { matched: false, planSha256: null as string | null, planBytes: null as number | null };
+  const absent = { matched: false, planSha256: null as string | null, planBytes: null as number | null, trimPlanSha256: null as string | null, trimPlanBytes: null as number | null };
   if (!Number.isSafeInteger(eventStart) || eventStart < 0) return absent;
   const fresh = events.slice(eventStart), thread = target.backendRef?.conversationId;
   if (typeof thread !== "string" || !thread) return absent;
@@ -360,7 +362,8 @@ export function nativePlanBoundary(events: FixtureRecord[], eventStart: number, 
     if (!ack) continue;
     const item = fresh.find((event) => event.direction === "response" && event.relayPid === request.relayPid && event.method === "item/completed" && event.threadId === thread && event.turnId === ack.turnId && event.itemType === "plan" && event.genuineNativePlanItem === true && event.textNonempty === true && typeof event.textBytes === "number" && event.textBytes > 0 && /^[a-f0-9]{64}$/.test(event.textSha256));
     const terminal = fresh.some((event) => event.direction === "response" && event.relayPid === request.relayPid && event.method === "turn/completed" && event.threadId === thread && event.turnId === ack.turnId && event.status === "completed" && !event.error);
-    if (item && terminal) return { matched: true, planSha256: item.textSha256 as string, planBytes: item.textBytes as number };
+    if (item && terminal) return { matched: true, planSha256: item.textSha256 as string, planBytes: item.textBytes as number,
+      trimPlanSha256: typeof item.trimTextSha256 === "string" ? item.trimTextSha256 : null, trimPlanBytes: typeof item.trimTextBytes === "number" ? item.trimTextBytes : null };
   }
   return absent;
 }
@@ -392,7 +395,8 @@ export function waitingPlanObservation(result: FixtureRecord | undefined, target
 }
 export function hasLivePlanBoundary(events: FixtureRecord[], eventStart: number, output: FixtureRecord | undefined, listing: FixtureRecord | undefined, target: FixtureRecord) {
   const native = nativePlanBoundary(events, eventStart, target), view = publicOutputObservation(output, target), waiting = waitingPlanObservation(listing, target);
-  return native.matched && native.planSha256 === sha256(FIXTURE_PLAN) && native.planBytes === Buffer.byteLength(FIXTURE_PLAN) && view.selectedReferenceMatches && view.live && view.status === "running" && view.phase === "awaiting_plan_decision" && view.exactPlanPresent && waiting.selectedEntries === 1 && waiting.selectedReferenceMatches && !waiting.recovered && waiting.userPlanNextStep;
+  const rawMatches = [FIXTURE_PLAN, `${FIXTURE_PLAN}\n`].some((text) => native.planSha256 === sha256(text) && native.planBytes === Buffer.byteLength(text));
+  return native.matched && rawMatches && native.trimPlanSha256 === sha256(FIXTURE_PLAN) && native.trimPlanBytes === Buffer.byteLength(FIXTURE_PLAN) && view.selectedReferenceMatches && view.live && view.status === "running" && view.phase === "awaiting_plan_decision" && view.exactPlanPresent && waiting.selectedEntries === 1 && waiting.selectedReferenceMatches && !waiting.recovered && waiting.userPlanNextStep;
 }
 export function requireAskPlanRefusal(result: FixtureRecord, target: FixtureRecord) {
   const expected = `Plan approval for session ${target.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused. Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(session='${target.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`;
