@@ -23,6 +23,13 @@ a missing prerequisite blocks instead of installing system packages here.
 Normal shared slots are compatible when profiles, ports and toolchains remain
 isolated; respect the canonical allocator's exclusive jobs and resource limits.
 
+Use `--mode focused` with the same command for targeted iteration of the fixed
+existing `agent-pr-execute`, `opencode-harness` and `worktree` test files. Gates
+and focused modes give private temp fixtures their own CommonJS package and Git
+discovery ceiling; the candidate checkout and host mode retain their own scope.
+Focused success is neither full verification nor real-host acceptance and runs
+no simulated model provider.
+
 The host flow verifies the same tarball in a normal reference npm consumer and
 the actual host installation. Publication-time manifest changes are compared
 against the actual reference package, not guessed from repository JSON. Complete

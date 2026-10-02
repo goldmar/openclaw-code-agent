@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     if (i % 2 === 0) pairs.push([arg, all[i + 1]]); return pairs;
   }, []));
   assert.deepEqual(Object.keys(opts).sort(), ["--expected-sha", "--mode", "--node-floor"]);
-  assert.ok(["host", "gates"].includes(opts["--mode"]));
+  assert.ok(["host", "gates", "focused"].includes(opts["--mode"]));
   assert.ok(["24.16.0", "26.1.0"].includes(opts["--node-floor"]));
   assert.match(opts["--expected-sha"], /^[a-f0-9]{40}$/);
   assert.equal(process.version, `v${opts["--node-floor"]}`);
@@ -164,16 +164,16 @@ async function main(): Promise<void> {
     };
     child.stdout.on("data", (chunk: Buffer) => {
       bytes += chunk.length; if (bytes <= 32 * 1024 * 1024) stdout.write(chunk); else overflow = true;
-      if (opts["--mode"] === "gates") process.stdout.write(chunk);
+      if (opts["--mode"] !== "host") process.stdout.write(chunk);
       const decoded = stdoutDecoder.write(chunk); output = (output + decoded).slice(-1_048_576);
       const lines = (pending + decoded).split("\n"); pending = lines.pop()!.slice(-65_536); lines.forEach(testLine);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       bytes += chunk.length; if (bytes <= 32 * 1024 * 1024) stderr.write(chunk); else overflow = true;
-      if (opts["--mode"] === "gates") process.stderr.write(chunk);
+      if (opts["--mode"] !== "host") process.stderr.write(chunk);
     });
     const finished = new Promise<string>((done, reject) => {
-      const timer = label === "gateway" ? undefined : setTimeout(() => { record.timeout = true; reject(new Error(`${label}: deadline`)); }, opts["--mode"] === "gates" ? 2_400_000 : 300_000);
+      const timer = label === "gateway" ? undefined : setTimeout(() => { record.timeout = true; reject(new Error(`${label}: deadline`)); }, opts["--mode"] !== "host" ? 2_400_000 : 300_000);
       child.once("error", () => { record.startupFailure = true; clearTimeout(timer); stdout.end(); stderr.end(); reject(new Error(`${label}: startup`)); });
       child.once("close", (code, signal) => {
         clearTimeout(timer); record.exit = code; record.signal = signal; record.outputOverflow = overflow; record.wallMs = Date.now() - began; testLine(pending + stdoutDecoder.end());
@@ -198,7 +198,11 @@ async function main(): Promise<void> {
     watcher = setInterval(() => { try { capture(); } catch { observationFailure = true; } }, 100);
     const pm = inside(fixture, join(fixture, "pm", "node_modules", "pnpm", "bin", "pnpm.mjs"));
     assert.equal(await run(process.execPath, [pm, "--version"], ROOT, "pnpm-version"), "11.15.1");
-    if (opts["--mode"] === "gates") {
+    if (opts["--mode"] === "focused") {
+      stage = "focused-temp-boundary-tests";
+      await run(process.execPath, [pm, "test:file", "tests/agent-pr-execute.test.ts", "tests/opencode-harness.test.ts", "tests/worktree.test.ts"], ROOT, stage);
+      outcomes.push(stage);
+    } else if (opts["--mode"] === "gates") {
       outcomes.push("frozen-install");
       const gates = [["verify"], ["check-plugin-security"], ["verify:npm-consumer"], ["audit:prod"], ["validate:release-metadata"]];
       for (const args of gates) { stage = args[0]; await run(process.execPath, [pm, ...args], ROOT, stage); outcomes.push(stage); }
@@ -435,7 +439,7 @@ async function main(): Promise<void> {
     failure, cleanup: cleanupFailure ?? "PASS", finalAcceptance: false,
     packageSha256: packageHash || undefined, host: hostBuild && { version: HOST, commit: hostBuild.commit },
     native: nativeVersion && { version: NATIVE, executableSha256: NATIVE_HASH, ownedExecutionObserved: nativeSeen.size > 0 },
-    commands, outcomes, simulated: ["model-provider"],
+    commands, outcomes, simulated: opts["--mode"] === "host" ? ["model-provider"] : [],
     unprovenRemote: ["queued-six-Git-races", "same-call-id-retries", "uncertain-native-ack", "live-plan-ask",
       "embedded-direct-deferred", "external-providers", "restart-multi-registry", "zero-unobserved-invocations", "retained-storage-disposition"],
   }));

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Counted private entry for a fresh remote-heavy-run --toolchain none workspace.
-# Usage: sh scripts/e2e/run-oca-issue-504-host.sh --expected-sha SHA --node-floor FLOOR --mode host|gates
+# Usage: sh scripts/e2e/run-oca-issue-504-host.sh --expected-sha SHA --node-floor FLOOR --mode host|gates|focused
 set -eu
 umask 077
 # Caller environment can never select an existing root.
@@ -44,7 +44,7 @@ case "$floor" in
   26.1.0) node_hash=62d555c329e05e3625109f2e3a8b5195b368d5ef38266292469d32f63cd98ffd ;;
   *) exit 1 ;;
 esac
-case "$mode" in host|gates) ;; *) exit 1 ;; esac
+case "$mode" in host|gates|focused) ;; *) exit 1 ;; esac
 [ "$(git rev-parse HEAD)" = "$sha" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]
 export HOME="$task_root/home" OPENCLAW_HOME="$task_root/home" OPENCLAW_STATE_DIR="$task_root/state"
 export OPENCLAW_CONFIG_PATH="$task_root/config.json" CODEX_HOME="$task_root/codex"
@@ -57,6 +57,11 @@ export NPM_CONFIG_CACHE="$task_root/npm-cache" NPM_CONFIG_REGISTRY=https://regis
 export OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_EXEC_SHELL_SNAPSHOT=0 OPENCLAW_NO_RESPAWN=1 OPENCLAW_SKIP_CHANNELS=1
 export OCA504_FIXTURE_KEY=synthetic-local-fixture-only
 mkdir -p "$HOME" "$OPENCLAW_STATE_DIR" "$CODEX_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR" "$TMPDIR" "$GH_CONFIG_DIR"
+if [ "$mode" != host ]; then
+  # Ordinary temp fixtures must not inherit the candidate's module/Git scope.
+  printf '{"type":"commonjs"}\n' > "$TMPDIR/package.json"
+  export GIT_CEILING_DIRECTORIES="$TMPDIR"
+fi
 : > "$GIT_CONFIG_GLOBAL"; : > "$NPM_CONFIG_GLOBALCONFIG"
 printf 'verify-deps-before-run=error\nstore-dir=%s/store\n' "$task_root" > "$NPM_CONFIG_USERCONFIG"
 curl --fail --silent --show-error --max-time 120 --max-filesize 134217728 --proto '=https' --tlsv1.2 "https://nodejs.org/dist/v$floor/node-v$floor-linux-x64.tar.gz" -o "$task_root/node.tar.gz"
@@ -69,7 +74,7 @@ pnpm_sri='gTULB+U8lTigLx8jA7QpD6LXvgTlbiqXDEzEtBfcdh3hlu2r1J1Vx9yVgNuBAHxEFD5OPX
 [ "$(openssl dgst -sha512 -binary "$task_root/pnpm.tgz" | openssl base64 -A)" = "$pnpm_sri" ]
 npm install --prefix "$task_root/pm" --ignore-scripts --no-audit --no-fund "$task_root/pnpm.tgz" > "$task_root/pm-install.log" 2>&1
 [ "$(pnpm --version)" = 11.15.1 ]
-if [ "$mode" = gates ]; then
+if [ "$mode" != host ]; then
   pnpm install --frozen-lockfile --store-dir "$task_root/store"
 else
   pnpm install --frozen-lockfile --store-dir "$task_root/store" > "$task_root/frozen-install.log" 2>&1
