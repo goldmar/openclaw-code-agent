@@ -5,9 +5,14 @@ import { describe, it } from "node:test";
 import { cpSync, truncateSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
+import { executeRespond } from "../src/actions/respond";
+import { Session } from "../src/session";
+import type { SessionManager } from "../src/session-manager";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -362,34 +367,98 @@ describe("issue 504 real-host acceptance controls", () => {
     assert.doesNotMatch(JSON.stringify([projection, item]), /PRIVATE-|developer_instructions|"text":/);
   });
 
-  it("requires a fresh exact native plan turn and actionable pending ask row rather than provider markup", () => {
+  it("requires a fresh exact native plan turn while retaining recovery-only row diagnostics", () => {
     const target = { sessionId: "plan-a", backendRef: { conversationId: "thread-a" } };
     const row = { ...target, status: "running", lifecycle: "awaiting_plan_decision", runtimeState: "live", currentPermissionMode: "plan", planApproval: "ask", pendingPlanApproval: true, planModeApproved: false, approvalState: "pending", planDecisionVersion: 1, actionablePlanDecisionVersion: 1 };
     const request = { direction: "request", method: "turn/start", id: 1, relayPid: 10, threadId: "thread-a", ...projectNativePlanFrame({ params: { collaborationMode: { mode: "plan", settings: { model: "gpt-6.1-sol" } }, model: "gpt-6.1-sol", permissions: ":read-only", approvalPolicy: "never" } }, sha256) };
     const ack = { direction: "response", id: 1, relayPid: 10, turnId: "turn-a" };
-    const item = { direction: "response", method: "item/completed", threadId: "thread-a", turnId: "turn-a", ...projectNativePlanFrame({ params: { item: { type: "plan", text: "Actual synthetic native plan" } } }, sha256) };
-    const terminal = { direction: "response", method: "turn/completed", threadId: "thread-a", turnId: "turn-a", status: "completed" };
-    const events = [request, ack, item, terminal]; assert.equal(hasNativePlanBoundary(events, 0, row, target), true);
-    assert.equal(hasNativePlanBoundary(events, events.length, row, target), false);
-    for (const wrong of [{ ...request, collaborationMode: "absent" }, { ...request, collaborationMode: "default" }, { ...request, executionProfile: ":workspace" }, { ...request, approvalPolicy: "on-request" }, { ...request, requestedModelMatches: false }, { ...request, threadId: "other" }]) assert.equal(hasNativePlanBoundary([wrong, ack, item, terminal], 0, row, target), false);
-    for (const wrong of [{ ...item, itemType: "agentMessage" }, { ...item, textNonempty: false, textBytes: 0 }, { ...item, threadId: "other" }, { ...item, turnId: "old" }, { ...item, direction: "request" }]) assert.equal(hasNativePlanBoundary([request, ack, wrong, terminal], 0, row, target), false);
-    for (const wrong of [undefined, { ...row, sessionId: "other" }, { ...row, backendRef: { conversationId: "other" } }, { ...row, pendingPlanApproval: false }, { ...row, planModeApproved: true }, { ...row, currentPermissionMode: "default" }, { ...row, planApproval: "delegate" }, { ...row, approvalState: "approved" }, { ...row, planDecisionVersion: 0 }, { ...row, actionablePlanDecisionVersion: 0 }, { ...row, actionablePlanDecisionVersion: 2 }]) assert.equal(hasNativePlanBoundary(events, 0, wrong, target), false);
+    const item = { direction: "response", relayPid: 10, method: "item/completed", threadId: "thread-a", turnId: "turn-a", ...projectNativePlanFrame({ params: { item: { type: "plan", text: "Actual synthetic native plan" } } }, sha256) };
+    const terminal = { direction: "response", relayPid: 10, method: "turn/completed", threadId: "thread-a", turnId: "turn-a", status: "completed" };
+    const events = [request, ack, item, terminal]; assert.equal(hasNativePlanBoundary(events, 0, target), true);
+    assert.equal(hasNativePlanBoundary(events, events.length, target), false);
+    for (const wrong of [{ ...request, collaborationMode: "absent" }, { ...request, collaborationMode: "default" }, { ...request, executionProfile: ":workspace" }, { ...request, approvalPolicy: "on-request" }, { ...request, requestedModelMatches: false }, { ...request, threadId: "other" }]) assert.equal(hasNativePlanBoundary([wrong, ack, item, terminal], 0, target), false);
+    for (const wrong of [{ ...item, itemType: "agentMessage" }, { ...item, textNonempty: false, textBytes: 0 }, { ...item, threadId: "other" }, { ...item, turnId: "old" }, { ...item, direction: "request" }]) assert.equal(hasNativePlanBoundary([request, ack, wrong, terminal], 0, target), false);
     const facts = planRowObservation(row, target); assert.equal(facts.selectedIdMatches, true); assert.doesNotMatch(JSON.stringify(facts), /plan-a|thread-a/);
     for (const state of ["not_required", "pending", "approved", "changes_requested", "rejected"]) {
       const observed = { ...row, approvalState: state };
       assert.equal(planRowObservation(observed, target).approvalState, state);
-      assert.equal(hasNativePlanBoundary(events, 0, observed, target), state === "pending");
+      assert.equal(hasNativePlanBoundary(events, 0, target), true, "Recovery approval state cannot veto a genuine native boundary");
     }
     for (const mode of ["default", "plan", "bypassPermissions"]) {
       const observed = { ...row, currentPermissionMode: mode };
       assert.equal(planRowObservation(observed, target).currentPermissionMode, mode);
-      assert.equal(hasNativePlanBoundary(events, 0, observed, target), mode === "plan");
+      assert.equal(hasNativePlanBoundary(events, 0, target), true, "Recovery permission state is observation only");
     }
     for (const unknown of [{ ...row, approvalState: "none" }, { ...row, currentPermissionMode: "acceptEdits" }]) {
-      assert.equal(hasNativePlanBoundary(events, 0, unknown, target), false);
+      assert.equal(hasNativePlanBoundary(events, 0, target), true);
     }
     assert.equal(planRowObservation({ ...row, approvalState: "none" }, target).approvalState, "UNPROVEN");
     assert.equal(planRowObservation({ ...row, currentPermissionMode: "acceptEdits" }, target).currentPermissionMode, "UNPROVEN");
+  });
+
+  it("joins owning live output/listing and exact user-only refusal despite a stale recovery row, retaining report custody", async () => {
+    const id = `hp3-${randomUUID()}`, target = { sessionId: id, name: "ask-plan", backendRef: { conversationId: "thread-hp3" } };
+    const counters = { backend: 0, git: 0, approval: 0 };
+    const forbidden = (kind: keyof typeof counters) => () => { counters[kind]++; throw new Error("Fixture side effect forbidden"); };
+    const live = { id, name: target.name, status: "running", _status: "running", phase: "awaiting_plan_decision", lifecycle: "awaiting_plan_decision", duration: 1, costUsd: 0, startedAt: Date.now(), completedAt: Date.now(), prompt: "fixture", workdir: "/isolated/fixture", multiTurn: true,
+      originSessionKey: "fixture-owner", pendingPlanApproval: true, planApproval: "ask", planModeApproved: false, approvalState: "pending", currentPermissionMode: "plan", planDecisionVersion: 1, actionablePlanDecisionVersion: 1,
+      latestPlanArtifact: { markdown: FIXTURE_PLAN }, latestPlanArtifactVersion: 1, getOutput: () => [] as string[],
+      noteOutcomeSeen: function (reader: string): boolean { return Session.prototype.noteOutcomeSeen.call(this as unknown as Session, reader); },
+      sendMessage: forbidden("backend"), interrupt: forbidden("backend"), approvePlan: forbidden("approval"), outcomeSeenAt: undefined as number | undefined };
+    const stale = { ...target, status: "running", lifecycle: "active", pendingPlanApproval: false, approvalState: "not_required", planDecisionVersion: 0, actionablePlanDecisionVersion: 0, prompt: "fixture", workdir: "/isolated/fixture", createdAt: Date.now() };
+    const sm = { resolve: (ref: string) => ref === id ? live : undefined, list: () => [live], listPersistedSessions: () => [stale], getPersistedSession: () => stale,
+      launchAndAwaitRunning: forbidden("backend"), notifySession: forbidden("approval"), updatePersistedSession: forbidden("git") } as unknown as SessionManager;
+    const tool = (text: string) => ({ isError: false, content: [{ type: "text", text }] });
+    const output = tool(getSessionOutputText(sm, id, { full: true, readerSessionKey: "fixture-owner" }));
+    const listing = tool(getSessionsListingText(sm, "waiting", undefined, { full: true }));
+    const request = { direction: "request", method: "turn/start", id: 1, relayPid: 10, threadId: "thread-hp3", collaborationMode: "plan", executionProfile: ":read-only", approvalPolicy: "never", requestedModelMatches: true };
+    const ack = { direction: "response", id: 1, relayPid: 10, turnId: "turn-hp3", error: false };
+    const item = { direction: "response", relayPid: 10, method: "item/completed", threadId: "thread-hp3", turnId: "turn-hp3", ...projectNativePlanFrame({ params: { item: { type: "plan", text: FIXTURE_PLAN } } }, sha256) };
+    const terminal = { direction: "response", relayPid: 10, method: "turn/completed", threadId: "thread-hp3", turnId: "turn-hp3", status: "completed" };
+    const events = [request, ack, item, terminal];
+    assert.equal(hasLivePlanBoundary(events, 0, output, listing, target), true); assert.equal(planRowObservation(stale, target).pendingPlanApproval, false);
+    assert.equal(live.outcomeSeenAt, undefined, "Running plan output cannot acknowledge a completed outcome");
+    const refusal = await executeRespond(sm, { session: id, message: "approved", approve: true });
+    requireAskPlanRefusal({ isError: refusal.isError, content: [{ type: "text", text: refusal.text }] }, target);
+    assert.deepEqual(counters, { backend: 0, git: 0, approval: 0 });
+    const rawOutput = output.content[0].text, rawListing = listing.content[0].text;
+    for (const wrong of [tool(rawOutput.replace(id, "wrong-id")), tool(rawOutput.replace(target.name, "other-name")), tool(rawOutput.replace("awaiting_plan_decision", "active")), tool(rawOutput.replace(" | Phase: awaiting_plan_decision", "")), tool(rawOutput.replace(FIXTURE_PLAN, "# Another plan")), tool(rawOutput + "\n(showing persisted output)"), { ...output, isError: true }, { content: [] as Array<{ type: string; text: string }> }, undefined]) assert.equal(hasLivePlanBoundary(events, 0, wrong, listing, target), false);
+    const other = rawListing.replaceAll(id, "other-id").replaceAll(target.name, "other-name");
+    for (const wrong of [tool(rawListing + "\n\n" + rawListing), tool(rawListing.replace(target.name, "other-name")), tool(rawListing.replace("Plan waiting for the user", "Plan waiting for the orchestrator")), tool(rawListing.replace("   👉", "   omitted") + "\n\n" + other), tool(rawListing + "\n   ♻️ Recovered after a Gateway restart; no live process"), { ...listing, isError: true }, { content: [] as Array<{ type: string; text: string }> }, undefined]) assert.equal(hasLivePlanBoundary(events, 0, output, wrong, target), false);
+    for (const wrong of [[request, ack, { ...item, textSha256: sha256("another plan") }, terminal], [request, ack, { ...item, relayPid: 11 }, terminal], [request, { ...ack, error: true }, item, terminal], [request, ack, item]]) assert.equal(hasLivePlanBoundary(wrong, 0, output, listing, target), false);
+    assert.equal(hasLivePlanBoundary(events, events.length, output, listing, target), false);
+    assert.throws(() => requireAskPlanRefusal({ isError: true, content: [{ type: "text", text: "Ask the user to approve" }] }, target));
+    for (const status of ["starting", "running", "completed", "killed"]) {
+      const view = tool(rawOutput.replace("Status: RUNNING", `Status: ${status.toUpperCase()}`));
+      const owner = publicAliasOwner(view, target); assert.equal(owner.active, ["starting", "running"].includes(status));
+      assert.equal(publicOutputObservation(view, { ...target, sessionId: "wrong" }).live, false);
+    }
+    assert.equal(publicAliasOwner(tool(rawOutput + "\n(showing persisted output)"), target).active, null);
+    assert.match(assertAliasProtection(publicAliasOwner(undefined, target), { name: target.name }, target.name), /UNPROVEN/);
+    assert.doesNotMatch(JSON.stringify([publicOutputObservation(output, target), waitingPlanObservation(listing, target), nativePlanBoundary(events, 0, target)]), /thread-hp3|ask-plan|hp3-/);
+    live.status = live._status = "completed"; live.phase = live.lifecycle = "terminal"; live.pendingPlanApproval = false;
+    getSessionOutputText(sm, id, { full: true, readerSessionKey: "another-requester" }); assert.equal(live.outcomeSeenAt, undefined);
+    assert.match(getSessionOutputText(sm, id, { full: true, readerSessionKey: "fixture-owner" }), /no separate wake follows/); assert.equal(typeof live.outcomeSeenAt, "number");
+  });
+
+  it("keeps strict native/Git negatives while retaining entry-sequenced background overlap without causal claims", () => {
+    const background = (sequence: number) => ({ requestSequence: sequence, requestClass: "host-background", schemaNames: ["agent_output"], fixtureOutputMarkers: [] as string[] });
+    const snapshot = (provider: number, records: Array<Record<string, any>>, git = 0, backend = 0) => negativeSnapshot(git, backend, provider, records);
+    const empty = snapshot(0, []); assert.equal(assertNegativeWindow(empty, empty, []).observedBackgroundCount, 0);
+    const records = [background(1), background(2)];
+    const observed = assertNegativeWindow(empty, snapshot(2, records), records); assert.equal(observed.observedBackgroundCount, 2); assert.equal(records.length, 2);
+    assert.equal(observed.correlation, "entry-sequence-only-not-causal-receipt");
+    assert.equal(observed.zeroBackendGit, true); assert.equal(observed.noNativeProviderContinuation, true);
+    assert.equal(Object.hasOwn(observed, "zeroGitBackendProvider"), false);
+    assert.equal(observed.providerBefore, 0); assert.equal(observed.providerAfter, 2);
+    const delayed = assertNegativeWindow(snapshot(1, []), snapshot(2, records), records); assert.equal(delayed.preWindowBackgroundAdmissions, 1); assert.equal(delayed.observedBackgroundCount, 1);
+    for (const wrong of [[{ ...background(1), requestClass: "native-generation", fixtureGeneration: "unexpected" }], [{ ...background(1), requestClass: "embedded-scenario" }], [{ ...background(1), requestClass: "unknown" }], [{ ...background(1), fixtureGeneration: "unexpected" }], [{ ...background(1), schemaNames: ["unknown-tool"] }], [{ ...background(1), fixtureOutputMarkers: ["OCA504_EMBED_DONE:wrong"] }], [], [background(1), background(1)], [background(2)], [{ ...background(1), requestSequence: false }]]) assert.throws(() => assertNegativeWindow(empty, snapshot(1, wrong), wrong));
+    assert.throws(() => assertNegativeWindow(empty, snapshot(2, [background(2)]), [background(2)]));
+    for (const current of [snapshot(0, [], 1), snapshot(0, [], 0, 1), snapshot(-1, [])]) assert.throws(() => assertNegativeWindow(empty, current, []));
+    const before = snapshot(1, [background(1)]), changed = [{ ...background(1), requestClass: "native-generation" }];
+    assert.throws(() => assertNegativeWindow(before, snapshot(1, changed), changed));
+    assert.throws(() => assertNegativeWindow(snapshot(1, []), snapshot(1, [{ ...background(1), requestClass: "unknown" }]), [{ ...background(1), requestClass: "unknown" }]));
+    assert.deepEqual(observed.providerClassesAfter, { native: 0, background: 2, embedded: 0, unknown: 0 });
   });
 
   it("records actual responseFrames events and hashes without changing model text or claiming native parser success", () => {

@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
   const generations = new Set<string>();
   const providerErrors: string[] = [];
   provider = createServer(async (request, response) => {
-    providerTraffic++;
+    const requestSequence = ++providerTraffic;
     let stage: "provider-json" | "provider-schema" | "provider-scenario" | "provider-stream" = "provider-schema";
     try {
       assert.equal(request.socket.remoteAddress, "127.0.0.1");
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
       assert.ok(generationMarkers.length <= 1, "Conflicting native generation markers");
       const generation = generationMarkers[0];
       const plan = userInput.some((item) => item.includes("OCA504_NATIVE_PLAN"));
-      const providerRecord: Json = { fixtureNativeHeaders: { session_id: request.headers.session_id, "x-codex-thread-id": request.headers["x-codex-thread-id"] }, latestInputHash: sha256(userInput.at(-1) ?? ""), inputHashes: userInput.map(sha256), fixtureGeneration: generation, requestClass: "unknown" };
+      const providerRecord: Json = { requestSequence, fixtureNativeHeaders: { session_id: request.headers.session_id, "x-codex-thread-id": request.headers["x-codex-thread-id"] }, latestInputHash: sha256(userInput.at(-1) ?? ""), inputHashes: userInput.map(sha256), fixtureGeneration: generation, requestClass: "unknown" };
       if (providerRequests.length < 1_000) providerRequests.push(providerRecord);
       else if (!evidence.errors.includes("provider-record-count-overflow")) evidence.errors.push("provider-record-count-overflow");
       const schemaNames = (body.tools ?? []).map((tool: Json) => tool.name ?? tool.function?.name);
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
       } else {
         // The provider simulates model output ONLY. Native Codex owns all RPC.
         const latest = userInput.at(-1) ?? "";
-        output = [messageItem(plan ? "<proposed_plan>\n# Disposable fixture plan\n1. Inspect fixture.\n2. Report fixture.\n</proposed_plan>" : `OCA504_BACKEND_OK:${generation}:${latest}`)];
+        output = [messageItem(plan ? `<proposed_plan>\n${FIXTURE_PLAN}\n</proposed_plan>` : `OCA504_BACKEND_OK:${generation}:${latest}`)];
       }
       const outputText = strings(output).join(" ");
       providerRecord.fixtureOutputMarkers = outputText.match(/OCA504_(?:BACKEND_OK:[a-f0-9-]+:|EMBED_DONE:[\w-]+)/g) ?? [];
@@ -208,6 +208,7 @@ async function main(): Promise<void> {
     } catch (error) {
       if (providerErrors.length < 128) providerErrors.push("provider-protocol-failure");
       evidence.failure(stage, error);
+      evidence.record("provider.jsonl", { phase: "request-error", requestSequence, stage, requestClass: "unknown" });
       closeFailedProviderResponse(response, evidence);
     }
   });
@@ -368,9 +369,13 @@ async function main(): Promise<void> {
     }
     const nativeEvents = () => records(join(fixture, "native-events.jsonl"));
     const hostTools = () => records(join(fixture, "host-tools.jsonl"));
-    const backendRequests = () => nativeEvents().filter((event) => event.direction === "request" && ["turn/start", "turn/steer", "thread/resume", "turn/interrupt"].includes(event.method));
-    const snapshot = () => ({ git: records(gitCalls).length, backend: backendRequests().length, provider: providerTraffic });
-    const assertNoAction = (prior: Json) => assert.deepEqual(snapshot(), prior, "Rejected host/plugin target performed no backend, provider or Git action");
+    const backendRequests = () => nativeEvents().filter((event) => event.direction === "request");
+    const snapshot = () => negativeSnapshot(records(gitCalls).length, backendRequests().length, providerTraffic, providerRequests);
+    const assertNoAction = (prior: ReturnType<typeof snapshot>) => {
+      const observation = assertNegativeWindow(prior, snapshot(), providerRequests);
+      evidence.record("host-events.jsonl", { phase: "negative-window-observation", ...observation });
+      return observation;
+    };
 
     const invoke = (client: GatewayClient, name: string, args: Json, key?: string, requester?: string): Promise<Json> => (client as any).invokeOca(name, args, key, requester);
     async function launch(client: GatewayClient, name: string, extra: Json = {}, requester = "agent:main:main"): Promise<Json> {
@@ -389,23 +394,29 @@ async function main(): Promise<void> {
     let previousPlanFacts = "";
     const observePlanRow = (phase: string) => {
       const row = store().sessions.find((item: Json) => item.sessionId === plan.sessionId);
-      const facts = planRowObservation(row, plan), encoded = JSON.stringify(facts);
+      const facts = { ...planRowObservation(row, plan), observation: "recovery-row-only-non-authoritative-for-live-approval" }, encoded = JSON.stringify(facts);
       if (phase !== "plan-row-change" || encoded !== previousPlanFacts) evidence.record("host-events.jsonl", { phase, ...facts });
       previousPlanFacts = encoded; return row;
     };
     observePlanRow("plan-row-before-wait");
     try {
-      await until(() => {
-        const row = observePlanRow("plan-row-change");
-        return hasNativePlanBoundary(nativeEvents(), planEventStart, row, plan) ? row : undefined;
-      }, "native generated actionable plan");
+      await until(async () => {
+        observePlanRow("plan-row-change");
+        const before = snapshot();
+        const output = await invoke(client, "agent_output", { session: plan.sessionId, full: true });
+        const listing = await invoke(client, "agent_sessions", { status: "waiting", full: true });
+        const passive = assertNoAction(before);
+        evidence.record("host-events.jsonl", { phase: "live-plan-public-observation", output: publicOutputObservation(output, plan), listing: waitingPlanObservation(listing, plan), native: nativePlanBoundary(nativeEvents(), planEventStart, plan), ...passive, liveDecisionVersion: "UNPROVEN-not-exposed-by-public-view", liveActionableVersion: "UNPROVEN-not-exposed-by-public-view" });
+        return hasLivePlanBoundary(nativeEvents(), planEventStart, output, listing, plan) ? true : undefined;
+      }, "native plan and supported live pending-user views");
     } catch (error) { observePlanRow("plan-row-final-refusal"); throw error; }
     const priorPlanRequests = snapshot();
     const approval = await invoke(client, "agent_respond", { session: plan.sessionId, message: "approved", approve: true });
-    assert.match(text(approval), /user.*approve|user.*button|ask/i); assertNoAction(priorPlanRequests);
-    outcomes.push({ lane: lanes.rpc, scenario: "native-ask-approval-authority", status: "PASS", observedNativePlanAndActionableAsk: true });
+    requireAskPlanRefusal(approval, plan); const planRefusalWindow = assertNoAction(priorPlanRequests);
+    outcomes.push({ lane: lanes.rpc, scenario: "native-ask-approval-authority", status: "PASS", observedNativePlanAndLivePendingAskAndUserOnlyRefusal: true, numericalLiveDecisionVersions: "UNPROVEN-public-view-not-exposed", ...planRefusalWindow });
     const a = await launch(client, "lynx-mcp-mvp");
     const b = await launch(client, "unrelated-session", {}, "agent:main:isolated-requester");
+    const unknownWindows: ReturnType<typeof assertNoAction>[] = [];
     for (const name of FOUR) for (const reference of ["unknown-504", "***", "   "]) {
       const prior = snapshot();
       const args = { session: reference, ...(name === "agent_respond" ? { message: "1" } : {}), ...(name === "agent_escalate" ? { kind: "plan", summary: "fixture" } : {}), ...(name === "agent_merge" ? { base_branch: "main" } : {}) };
@@ -414,19 +425,19 @@ async function main(): Promise<void> {
       assert.equal(result.details.code, !reference.trim() || reference.includes("***") ? "session_reference_unusable" : "session_not_found");
       assert.equal(result.details.targetSelected, false); assert.equal(result.details.operationStarted, false);
       for (const row of [a, b]) { assert.ok(!JSON.stringify(result).includes(row.sessionId)); assert.ok(!JSON.stringify(result).includes(row.name)); }
-      assertNoAction(prior);
+      unknownWindows.push(assertNoAction(prior));
     }
-    outcomes.push({ lane: lanes.rpc, scenario: "four-tools-unknown-masked-blank", status: "PASS", assertions: 12, zeroGitBackendProvider: true });
+    outcomes.push({ lane: lanes.rpc, scenario: "four-tools-unknown-masked-blank", status: "PASS", assertions: 12, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: unknownWindows });
     const negativesBefore = snapshot();
     const badAuth = await fetch(`${(client as any).httpOrigin}/tools/invoke`, { method: "POST", headers: { "content-type": "application/json", Authorization: "Bearer synthetic-invalid" }, body: JSON.stringify({ tool: "agent_respond", args: { session: a.sessionId, message: "AUTH_DENIED" } }), signal: AbortSignal.timeout(10_000) });
-    assert.equal(badAuth.status, 401); assertNoAction(negativesBefore);
+    assert.equal(badAuth.status, 401); const authWindows = [assertNoAction(negativesBefore)];
     for (const [name, args] of [["exec", { command: "false" }], ["unavailable-fixture-tool", {}]] as const) {
       const prior = snapshot();
       const refused = await client.request<Json>("tools.invoke", { name, args });
       assert.equal(refused.ok, false); assert.equal(refused.error.code, "not_found");
-      assertNoAction(prior);
+      authWindows.push(assertNoAction(prior));
     }
-    outcomes.push({ lane: lanes.rpc, scenario: "real-host-auth-denied-unavailable", status: "PASS", transportAndToolFailureDistinct: true, zeroBackendProviderGit: true });
+    outcomes.push({ lane: lanes.rpc, scenario: "real-host-auth-denied-unavailable", status: "PASS", transportAndToolFailureDistinct: true, zeroBackendGit: true, noNativeProviderContinuation: true, negativeWindows: authWindows });
 
     async function unchangedResponse(target: Json, ref: string, message = "1", key?: string): Promise<Json> {
       const prior = nativeEvents().length, providerBefore = providerRequests.length, hooksBefore = hostTools().length;
@@ -468,7 +479,8 @@ async function main(): Promise<void> {
     const newer = await launch(client, a.name);
     assert.equal(newer.name, a.name); assert.notEqual(newer.sessionId, a.sessionId); assert.notEqual(newer.backendRef.conversationId, a.backendRef.conversationId);
     await unchangedResponse(newer, a.name);
-    const aliasOwner = aliasOwnerObservation(store().sessions.find((row: Json) => row.sessionId === newer.sessionId), newer);
+    const aliasOutput = await invoke(client, "agent_output", { session: newer.sessionId, full: true });
+    const aliasOwner = publicAliasOwner(aliasOutput, newer);
     evidence.record("host-events.jsonl", { phase: "newer-alias-owner-before-old-resume", ...aliasOwner });
     await unchangedResponse(a, a.sessionId);
     const resumedAlias = store().sessions.find((row: Json) => row.sessionId === a.sessionId);

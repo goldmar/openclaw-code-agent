@@ -347,15 +347,84 @@ export function planRowObservation(row: FixtureRecord | undefined, target: Fixtu
     approvalState: ["not_required", "pending", "approved", "changes_requested", "rejected"].includes(row?.approvalState) ? row!.approvalState : "UNPROVEN",
     decisionVersion: version(row?.planDecisionVersion), actionableVersion: version(row?.actionablePlanDecisionVersion) };
 }
-export function hasNativePlanBoundary(events: FixtureRecord[], eventStart: number, row: FixtureRecord | undefined, target: FixtureRecord) {
-  const facts = planRowObservation(row, target);
-  if (!facts.exists || !facts.selectedIdMatches || !facts.selectedBackendMatches || facts.currentPermissionMode !== "plan" || facts.planApproval !== "ask" || facts.pendingPlanApproval !== true || facts.planModeApproved !== false || facts.approvalState !== "pending" || typeof facts.decisionVersion !== "number" || facts.decisionVersion <= 0 || facts.actionableVersion !== facts.decisionVersion) return false;
-  const fresh = events.slice(eventStart), thread = target.backendRef.conversationId;
-  return fresh.some((request) => {
-    if (request.direction !== "request" || request.method !== "turn/start" || request.threadId !== thread || request.collaborationMode !== "plan" || request.executionProfile !== ":read-only" || request.approvalPolicy !== "never" || request.requestedModelMatches !== true) return false;
+export const FIXTURE_PLAN = "# Disposable fixture plan\n1. Inspect fixture.\n2. Report fixture.";
+export const ASK_PLAN_NEXT_STEP = "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)";
+export function nativePlanBoundary(events: FixtureRecord[], eventStart: number, target: FixtureRecord) {
+  const absent = { matched: false, planSha256: null as string | null, planBytes: null as number | null };
+  if (!Number.isSafeInteger(eventStart) || eventStart < 0) return absent;
+  const fresh = events.slice(eventStart), thread = target.backendRef?.conversationId;
+  if (typeof thread !== "string" || !thread) return absent;
+  for (const request of fresh) {
+    if (request.direction !== "request" || request.method !== "turn/start" || request.threadId !== thread || request.collaborationMode !== "plan" || request.executionProfile !== ":read-only" || request.approvalPolicy !== "never" || request.requestedModelMatches !== true) continue;
     const ack = fresh.find((event) => event.direction === "response" && event.id === request.id && event.relayPid === request.relayPid && !event.error && typeof event.turnId === "string" && event.turnId);
-    return Boolean(ack && fresh.some((event) => event.direction === "response" && event.method === "item/completed" && event.threadId === thread && event.turnId === ack.turnId && event.itemType === "plan" && event.genuineNativePlanItem === true && event.textNonempty === true && typeof event.textBytes === "number" && event.textBytes > 0) && fresh.some((event) => event.direction === "response" && event.method === "turn/completed" && event.threadId === thread && event.turnId === ack.turnId && event.status === "completed"));
-  });
+    if (!ack) continue;
+    const item = fresh.find((event) => event.direction === "response" && event.relayPid === request.relayPid && event.method === "item/completed" && event.threadId === thread && event.turnId === ack.turnId && event.itemType === "plan" && event.genuineNativePlanItem === true && event.textNonempty === true && typeof event.textBytes === "number" && event.textBytes > 0 && /^[a-f0-9]{64}$/.test(event.textSha256));
+    const terminal = fresh.some((event) => event.direction === "response" && event.relayPid === request.relayPid && event.method === "turn/completed" && event.threadId === thread && event.turnId === ack.turnId && event.status === "completed" && !event.error);
+    if (item && terminal) return { matched: true, planSha256: item.textSha256 as string, planBytes: item.textBytes as number };
+  }
+  return absent;
+}
+export function hasNativePlanBoundary(events: FixtureRecord[], eventStart: number, target: FixtureRecord) {
+  return nativePlanBoundary(events, eventStart, target).matched;
+}
+function publicToolText(result: FixtureRecord | undefined) {
+  if (!result || result.isError === true || result.details?.status === "error" || !Array.isArray(result.content) || !result.content.length || !result.content.every((part: FixtureRecord) => part.type === "text" && typeof part.text === "string")) return "";
+  const text = result.content.map((part: FixtureRecord) => part.text).join("\n");
+  return Buffer.byteLength(text) <= 1_048_576 && !text.startsWith("Error:") ? text : "";
+}
+export function publicOutputObservation(result: FixtureRecord | undefined, target: FixtureRecord) {
+  const text = publicToolText(result), [header = "", ...bodyLines] = text.split("\n"), body = bodyLines.join("\n");
+  const prefix = `Session: ${target.name} [${target.sessionId}] | Status: `;
+  const fields = header.startsWith(prefix) ? header.slice(prefix.length).split(" | ") : [];
+  const phases = fields.filter((field) => field.startsWith("Phase: "));
+  const status = ["STARTING", "RUNNING", "COMPLETED", "KILLED", "FAILED"].includes(fields[0]) ? fields[0].toLowerCase() : "UNPROVEN";
+  const phase = phases.length === 1 && ["starting", "running", "active", "awaiting_plan_decision", "awaiting_user_input", "awaiting_worktree_decision", "terminal", "suspended"].includes(phases[0].slice(7)) ? phases[0].slice(7) : "UNPROVEN";
+  const recovered = /retrieved from|evicted from runtime cache|showing persisted output|persisted session metadata recovered|Recovered after a Gateway restart/.test(text);
+  return { selectedReferenceMatches: header.startsWith(prefix), live: Boolean(fields.length && status !== "UNPROVEN" && !recovered), status, phase, recovered,
+    outputSha256: sha256(text), bodySha256: sha256(body), exactPlanPresent: body.includes(FIXTURE_PLAN), expectedPlanSha256: sha256(FIXTURE_PLAN) };
+}
+export function waitingPlanObservation(result: FixtureRecord | undefined, target: FixtureRecord) {
+  const text = publicToolText(result), entries = text ? text.split("\n\n") : [];
+  const selected = entries.filter((entry) => entry.split("\n")[0].includes(` [${target.sessionId}] — `));
+  const entry = selected.length === 1 ? selected[0] : "", header = entry.split("\n")[0];
+  return { listingSha256: sha256(text), selectedEntries: selected.length, selectedReferenceMatches: Boolean(entry && header.startsWith(`📋 ${target.name} [${target.sessionId}] — `)),
+    recovered: entry.includes("Recovered after a Gateway restart"), userPlanNextStep: entry.split("\n").filter((line) => line === `   👉 ${ASK_PLAN_NEXT_STEP}`).length === 1 };
+}
+export function hasLivePlanBoundary(events: FixtureRecord[], eventStart: number, output: FixtureRecord | undefined, listing: FixtureRecord | undefined, target: FixtureRecord) {
+  const native = nativePlanBoundary(events, eventStart, target), view = publicOutputObservation(output, target), waiting = waitingPlanObservation(listing, target);
+  return native.matched && native.planSha256 === sha256(FIXTURE_PLAN) && native.planBytes === Buffer.byteLength(FIXTURE_PLAN) && view.selectedReferenceMatches && view.live && view.status === "running" && view.phase === "awaiting_plan_decision" && view.exactPlanPresent && waiting.selectedEntries === 1 && waiting.selectedReferenceMatches && !waiting.recovered && waiting.userPlanNextStep;
+}
+export function requireAskPlanRefusal(result: FixtureRecord, target: FixtureRecord) {
+  const expected = `Plan approval for session ${target.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused. Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(session='${target.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`;
+  assert.equal(result.isError, true); assert.deepEqual(result.content, [{ type: "text", text: expected }], "Ask approval must expose the actual source-defined user-only refusal");
+}
+export function publicAliasOwner(result: FixtureRecord | undefined, target: FixtureRecord) {
+  const facts = publicOutputObservation(result, target);
+  return { ...facts, active: !facts.live || !["starting", "running", "completed", "killed"].includes(facts.status) ? null : ["starting", "running"].includes(facts.status) };
+}
+export function negativeSnapshot(git: number, backend: number, provider: number, records: FixtureRecord[]) {
+  const classCounts = { native: 0, background: 0, embedded: 0, unknown: 0 };
+  for (const record of records) classCounts[record.requestClass === "native-generation" ? "native" : record.requestClass === "host-background" ? "background" : record.requestClass === "embedded-scenario" ? "embedded" : "unknown"]++;
+  return { git, backend, provider, admissionIndex: records.length, classCounts, admissions: records.map((record) => ({ sequence: record.requestSequence, requestClass: record.requestClass })) };
+}
+export function assertNegativeWindow(prior: ReturnType<typeof negativeSnapshot>, current: ReturnType<typeof negativeSnapshot>, records: FixtureRecord[]) {
+  assert.equal(current.git, prior.git, "Negative window performed Git action"); assert.equal(current.backend, prior.backend, "Negative window performed native backend action");
+  assert.ok(Number.isSafeInteger(prior.provider) && prior.provider >= 0 && Number.isSafeInteger(current.provider) && current.provider >= prior.provider);
+  assert.equal(current.admissionIndex, records.length); assert.deepEqual(current.admissions.slice(0, prior.admissionIndex), prior.admissions, "Existing admission changed");
+  const seen = new Set<number>();
+  for (const record of records) { assert.ok(Number.isSafeInteger(record.requestSequence) && record.requestSequence > 0 && record.requestSequence <= current.provider && !seen.has(record.requestSequence), "Invalid/duplicate provider entry sequence"); seen.add(record.requestSequence); }
+  const background = (record: FixtureRecord) => {
+    assert.equal(record.requestClass, "host-background"); assert.equal(record.fixtureGeneration, undefined);
+    assert.ok(!(record.fixtureOutputMarkers ?? []).some((marker: string) => marker.startsWith("OCA504_EMBED_DONE:")));
+    assert.equal(classifyProvider(undefined, undefined, record.schemaNames, new Set(), new Set()), "host-background");
+  };
+  let observedBackgroundCount = 0, preWindowBackgroundAdmissions = 0;
+  for (let sequence = prior.provider + 1; sequence <= current.provider; sequence++) { const record = records.find((record) => record.requestSequence === sequence); assert.ok(record, "Provider entry has no classified retained admission"); background(record); observedBackgroundCount++; }
+  for (const record of records.slice(prior.admissionIndex)) if (record.requestSequence <= prior.provider) { background(record); preWindowBackgroundAdmissions++; }
+  return { zeroBackendGit: true, noNativeProviderContinuation: true, providerBefore: prior.provider, providerAfter: current.provider,
+    providerClassesBefore: prior.classCounts, providerClassesAfter: current.classCounts,
+    providerAdmissionsBefore: prior.admissionIndex, providerAdmissionsAfter: current.admissionIndex, observedBackgroundCount, preWindowBackgroundAdmissions,
+    correlation: "entry-sequence-only-not-causal-receipt" };
 }
 
 export function responseResumeBoundary(row: FixtureRecord | undefined, target: FixtureRecord, eventStart: number) {
@@ -385,9 +454,9 @@ export function aliasOwnerObservation(row: FixtureRecord | undefined, target: Fi
   assert.ok(["starting", "running", "completed", "killed"].includes(facts.status), "Unexpected alias owner state");
   return { ...facts, active: ["starting", "running"].includes(facts.status) };
 }
-export function assertAliasProtection(owner: ReturnType<typeof aliasOwnerObservation>, resumed: FixtureRecord, expectedAlias: string) {
+export function assertAliasProtection(owner: { active: boolean | null }, resumed: FixtureRecord, expectedAlias: string) {
   if (owner.active) assert.notEqual(resumed.name, expectedAlias, "Resumed older generation must not steal active alias");
-  return owner.active ? "runtime-active-owner-protected" : "terminal-owner-reuse-supported-active-protection-plugin-fixture-only";
+  return owner.active === null ? "active-alias-protection-UNPROVEN-plugin-fixture-only" : owner.active ? "runtime-active-owner-protected" : "terminal-owner-reuse-supported-active-protection-plugin-fixture-only";
 }
 export function requireHttpBefore(events: FixtureRecord[], tool: string, session: string, input: string) {
   const hooks = events.filter((event) => event.phase === "before" && event.toolName === tool);
