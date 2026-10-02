@@ -295,18 +295,55 @@ export class FeatureRun {
     await this.completion(row, true);
     this.proofs.push({ setupOnly: true, nativeThreadId: ordinary.threadId, nativeReceiptSha256: sha(readFileSync(join(ordinary.workdir, "native-receipt.txt"))), parentProof: true });
   }
+  nativeProcesses(gateway = this.gatewayIdentity) {
+    if (gateway) {
+      assert.ok(sameProcess(gateway, processIdentity(gateway.pid)));
+      assert.equal(readlinkSync(`/proc/${gateway.pid}/cwd`), this.workspace);
+    }
+    const native = [];
+    for (const name of readdirSync("/proc").filter(n => /^\d+$/.test(n))) {
+      if (Number(name) === gateway?.pid) continue;
+      if (gateway) {
+        let ancestor = Number(name);
+        try {
+          while (ancestor && ancestor !== gateway.pid) {
+            const stat = readFileSync(`/proc/${ancestor}/stat`, "utf8");
+            ancestor = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+          }
+        } catch (error) {
+          if (["ENOENT", "ESRCH"].includes(error.code)) continue;
+          throw new Error("NATIVE_PROCESS_ANCESTRY_UNAVAILABLE");
+        }
+        if (ancestor !== gateway.pid) continue;
+      }
+      let executable;
+      try { executable = readlinkSync(`/proc/${name}/exe`); }
+      catch (error) {
+        if (["ENOENT", "ESRCH"].includes(error.code) || !gateway && error.code === "EACCES") continue;
+        throw new Error("NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
+      }
+      if (executable !== this.native) continue;
+      const current = processIdentity(Number(name));
+      assert.ok(current, "NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
+      if (current.state === "Z") continue;
+      if (gateway) assert.equal(readlinkSync(`/proc/${name}/cwd`), this.workspace);
+      native.push(current);
+    }
+    if (gateway) assert.ok(sameProcess(gateway, processIdentity(gateway.pid)));
+    return native;
+  }
   async nativeOwner(fixture, record) {
+    await until(() => this.gatewayReady);
     const goal = fixture.intent.kind === "ordinary" ? undefined : await until(() => this.goals().find(g => g.name === fixture.name && g.goal === fixture.intent.goal));
     const listing = await this.invoke("agent_sessions", { status: "running", full: true });
     const row = currentOwner(this.sessions(), listing.content.map(c => c.text ?? "").join("\n"), fixture, record.threadId, goal?.id);
     await this.publicOwner(row.sessionId, "running");
-    const native = readdirSync("/proc").filter(n => /^\d+$/.test(n)).map(n => processIdentity(Number(n))).filter(p => p?.executable === this.native).filter(p => {
-      try { return readlinkSync(`/proc/${p.pid}/cwd`) === fixture.workdir; } catch { return false; }
-    });
+    assert.ok(sameProcess(fixture.nativeSnapshot?.gateway, this.gatewayIdentity));
+    const census = this.nativeProcesses();
+    const native = fixture.nativeProcess ? census.filter(p => sameProcess(p, fixture.nativeProcess))
+      : census.filter(p => !fixture.nativeSnapshot.processes.some(previous => sameProcess(p, previous)));
     assert.equal(native.length, 1);
-    let ancestor = native[0];
-    while (ancestor && ancestor.pid !== this.gateway.pid) ancestor = processIdentity(ancestor.parent);
-    assert.ok(sameProcess(ancestor, this.gatewayIdentity));
+    fixture.nativeProcess ??= native[0];
     return { sessionId: row.sessionId, nativeProcess: native[0] };
   }
   async start() {
@@ -314,15 +351,25 @@ export class FeatureRun {
     assert.deepEqual(tree(join(this.installed, "dist")), this.packedTree);
     const child = spawn(process.execPath, [this.hostEntry, "gateway", "run", "--bind", "loopback", "--port", String(this.port)], { cwd: this.workspace, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.gateway = child;
+    this.gatewayReady = false;
+    this.gatewayIdentity = undefined;
     this.children.add(child);
     childIdentities.set(child, processIdentity(child.pid));
     const buffers = { stdout: [], stderr: [] };
     child.stdout.on("data", data => buffers.stdout.push(data));
     child.stderr.on("data", data => buffers.stderr.push(data));
     child.once("close", () => { for (const [name, chunks] of Object.entries(buffers)) this.raw.push(excluded(`gateway-${this.raw.length}.${name}`, Buffer.concat(chunks))); });
-    await until(async () => { assert.equal(child.exitCode, null); assert.equal(child.signalCode, null); try { return (await fetch(`${this.url}/readyz`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } });
     this.gatewayIdentity = processIdentity(child.pid);
     assert.ok(this.gatewayIdentity);
+    assert.equal(readlinkSync(`/proc/${child.pid}/cwd`), this.workspace);
+    for (const fixture of this.fixture.cases.values()) if (fixture.nativeSnapshot && !fixture.nativeSnapshot.gateway) {
+      assert.equal(fixture.intent.kind, "restore");
+      assert.equal(fixture.nativeSnapshot.processes.length, 0);
+      fixture.nativeSnapshot.gateway = this.gatewayIdentity;
+    }
+    await until(async () => { assert.equal(child.exitCode, null); assert.equal(child.signalCode, null); try { return (await fetch(`${this.url}/readyz`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; } });
+    this.gatewayReady = true;
+    assert.ok(sameProcess(this.gatewayIdentity, processIdentity(child.pid)));
     assert.equal(realpathSync(this.gatewayIdentity.executable), realpathSync(process.execPath));
     const cfg = await this.rpc("config.get");
     assert.equal(cfg.valid, true);
@@ -369,7 +416,8 @@ export class FeatureRun {
     const tag = `OCA501_CASE_${name}`, workdir = join(this.workspace, name);
     mkdirSync(workdir);
     this.workdirs.push(workdir);
-    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold };
+    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold,
+      nativeSnapshot: { gateway: this.gatewayIdentity, processes: this.nativeProcesses() } };
     this.fixture.cases.set(tag, fixture);
     const script = kind => `index=$(wc -l < checks.jsonl 2>/dev/null || printf 0)\nindex=$((index+1))\nprintf '{"ordinal":%s,"kind":"${kind}","pid":%s,"event":"start"}\\n' "$index" "$$" >> starts.jsonl\n` + (barrier && kind === "CI" ? `if [ "$index" = 1 ]; then echo "$$" > barrier.pid; while [ ! -f release ]; do sleep 0.05; done; fi\n` : "") + `printf '{"ordinal":%s,"kind":"${kind}","exit":${lintFailure && kind === "LINT" ? 3 : 0}}\\n' "$index" >> checks.jsonl\nexit ${lintFailure && kind === "LINT" ? 3 : 0}\n`;
     writeFileSync(join(workdir, "ci.sh"), script("CI"));
@@ -513,6 +561,14 @@ export class FeatureRun {
       fixture.hold = false;
       fixture.intent = { ...fixture.intent, kind: "restore" };
       fixture.oldTurns = [fixture.turnId]; fixture.turnId = undefined; fixture.call = undefined;
+      for (const previous of this.fixture.cases.values()) if (previous.nativeProcess) {
+        const current = processIdentity(previous.nativeProcess.pid);
+        assert.ok(current || !existsSync(`/proc/${previous.nativeProcess.pid}`), "NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
+        assert.ok(!sameProcess(previous.nativeProcess, current) || current.state === "Z");
+      }
+      fixture.nativeProcess = undefined;
+      fixture.nativeSnapshot = { processes: this.nativeProcesses(null) };
+      assert.equal(fixture.nativeSnapshot.processes.length, 0);
       await this.start();
       const resumed = await until(() => { const current = this.goals().find(g => g.id === goal.id); return current?.sessionId !== oldSession && current; });
       assert.equal(resumed.harnessSessionId, fixture.threadId);
@@ -531,11 +587,13 @@ export class FeatureRun {
     const stopped = await stopOwnedChild(gateway, { identity: this.gatewayIdentity, ...this.shutdownOptions });
     if (stopped.complete) this.children.delete(gateway);
     this.gateway = undefined;
+    this.gatewayReady = false;
     assert.equal(stopped.complete, true, "OWNED_PROCESS_OR_STDIO_SHUTDOWN_FAILED");
     assert.equal(stopped.graceful, true, "GRACEFUL_SHUTDOWN_FAILED");
     await until(() => new Promise(done => { const connection = createConnection({ host: "127.0.0.1", port: this.port }); connection.once("error", () => done(true)); connection.once("connect", () => { connection.destroy(); done(false); }); }));
     this.proofs.push({ ownedShutdown: true, gateway: stopped.targets[0], descendants: stopped.targets.slice(1).map(p => ({ pid: p.pid, startTicks: p.startTicks, executable: p.executable })), listenerClosed: true });
     this.gateway = undefined;
+    this.gatewayIdentity = undefined;
   }
   async settleParentReplies() {
     const history = await this.rpc("chat.history", { sessionKey: this.sessionKey, limit: 100 });

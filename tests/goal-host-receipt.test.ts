@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact } from "../scripts/e2e/oca501-evidence.mjs";
 import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
+import { linkSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
 const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
@@ -100,6 +103,58 @@ describe("bounded representative host receipts", () => {
     }
     assert.throws(() => currentOwner([live], listing, fixture, "foreign", "goal"));
     assert.throws(() => currentOwner([live], listing, fixture, "thread", "foreign"));
+  });
+  it("binds the sole newly admitted native instance and never reselects an earlier or replacement child", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "oca501-native-owner-")), executable = join(directory, "native");
+    const workspace = readlinkSync(`/proc/${process.pid}/cwd`), gateway = processIdentity(process.pid);
+    const fixture: any = { name: "owned", workdir: join(directory, "logical-case"), intent: { kind: "ordinary" } };
+    const row = { ...fixture, sessionId: "owner", backendRef: { conversationId: "thread" } };
+    const run = Object.assign(Object.create(FeatureRun.prototype), { native: executable, workspace, gatewayIdentity: gateway, gatewayReady: true,
+      sessions: () => [row], invoke: async () => ({ content: [{ text: "🟢 owned [owner] — running · 1s" }] }), publicOwner: async () => {} });
+    const children: any[] = []; let primary: unknown, cleanupFailed = false;
+    const start = async (cwd = workspace) => {
+      const child = spawn(executable, ["-e", "console.log('ready');setInterval(()=>{},1000)"], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      children.push(child);
+      await new Promise((resolve, reject) => { child.stdout.once("data", resolve); child.once("error", reject); });
+      child.ownedIdentity = processIdentity(child.pid);
+      return child;
+    };
+    try {
+      linkSync(readlinkSync(`/proc/${process.pid}/exe`), executable);
+      const earlier = await start();
+      fixture.nativeSnapshot = { gateway, processes: run.nativeProcesses() };
+      assert.ok(fixture.nativeSnapshot.processes.some(p => p.pid === earlier.pid));
+      const current = await start(), request = { threadId: "thread" };
+      assert.equal(run.nativeProcesses(null).length, 2);
+      const first = await run.nativeOwner(fixture, request);
+      assert.equal(first.nativeProcess.pid, current.pid);
+      const repeated = (await run.nativeOwner(fixture, request)).nativeProcess;
+      for (const field of ["pid", "startTicks", "executable"]) assert.equal(repeated[field], first.nativeProcess[field]);
+      fixture.nativeProcess = { ...first.nativeProcess, startTicks: `${first.nativeProcess.startTicks}-reused` };
+      await assert.rejects(run.nativeOwner(fixture, request)); fixture.nativeProcess = first.nativeProcess;
+      run.gatewayIdentity = { ...gateway, startTicks: `${gateway.startTicks}-foreign` };
+      await assert.rejects(run.nativeOwner(fixture, request)); run.gatewayIdentity = gateway;
+      await assert.rejects(run.nativeOwner(fixture, { threadId: "foreign" }));
+      const another = await start();
+      await assert.rejects(run.nativeOwner({ ...fixture, nativeProcess: undefined }, request)); // Two new instances.
+      const foreignBaseline = { ...fixture, nativeProcess: undefined, nativeSnapshot: { gateway: earlier.ownedIdentity, processes: [] } };
+      run.gatewayIdentity = earlier.ownedIdentity;
+      await assert.rejects(run.nativeOwner(foreignBaseline, request)); run.gatewayIdentity = gateway;
+      const wrongCwd = await start(directory);
+      assert.throws(() => run.nativeProcesses());
+      assert.equal((await stopOwnedChild(wrongCwd, { identity: wrongCwd.ownedIdentity, graceMs: 100, killMs: 100 })).complete, true);
+      run.native = "/oca501-foreign-executable"; await assert.rejects(run.nativeOwner(fixture, request)); run.native = executable;
+      assert.equal((await stopOwnedChild(current, { identity: current.ownedIdentity, graceMs: 100, killMs: 100 })).complete, true);
+      await assert.rejects(run.nativeOwner(fixture, request)); // The live replacement must not be selected.
+      assert.ok(processIdentity(another.pid));
+    } catch (error) { primary = error; }
+    finally {
+      for (const child of children) try { if (!(await stopOwnedChild(child, { identity: child.ownedIdentity, graceMs: 100, killMs: 100 })).complete) cleanupFailed = true; } catch { cleanupFailed = true; }
+      if (!cleanupFailed) try { assert.deepEqual(run.nativeProcesses(null), []); } catch (error) { primary ??= error; cleanupFailed = true; }
+      if (!cleanupFailed) rmSync(directory, { recursive: true, force: true });
+    }
+    if (primary) throw primary;
+    assert.equal(cleanupFailed, false);
   });
   it("bounds stubborn child and inherited-pipe cleanup and preserves the primary failure", async () => {
     const child = spawn(process.execPath, ["-e", `const {spawn}=require('node:child_process'); const writer=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{}); setInterval(()=>process.stdout.write('writer\\n'),20)"],{stdio:['ignore','inherit','inherit']}); process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); console.log(writer.pid);`], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
