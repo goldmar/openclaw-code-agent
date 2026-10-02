@@ -352,18 +352,19 @@ export class FeatureRun {
       assert.equal(task.name, fixture.name); assert.equal(task.goal, fixture.intent.goal);
       assert.equal(task.workdir, fixture.workdir); assert.equal(task.loopMode, fixture.ralph ? "ralph" : "verifier");
       assert.ok(["waiting_for_session", "running"].includes(task.status));
+      assert.ok(typeof task.id === "string" && task.id.trim());
       if (fixture.goalId) assert.equal(task.id, fixture.goalId); else fixture.goalId = task.id;
+      const fields = ["sessionId", "sessionName", "harnessSessionId"];
+      for (const field of fields) if (task[field] !== undefined) assert.ok(typeof task[field] === "string" && task[field].trim());
       if (task.harnessSessionId !== undefined) assert.equal(task.harnessSessionId, record.threadId);
+      if (fixture.nativeSessionId && task.sessionId !== undefined) assert.equal(task.sessionId, fixture.nativeSessionId);
+      if (fixture.nativeSessionName && task.sessionName !== undefined) assert.equal(task.sessionName, fixture.nativeSessionName);
       if (task.sessionId === fixture.oldSessionId && fixture.intent.kind === "restore") {
         if (task.sessionName !== undefined) assert.equal(task.sessionName, fixture.oldSessionName);
         return false;
       }
-      for (const field of ["sessionId", "sessionName", "harnessSessionId"]) {
-        if (task[field] === undefined) return false;
-        assert.ok(typeof task[field] === "string" && task[field]);
-      }
+      if (fields.some(field => task[field] === undefined)) return false;
       assert.equal(task.status, "running");
-      if (fixture.nativeSessionId) assert.equal(task.sessionId, fixture.nativeSessionId);
       return task;
     });
     const listing = await this.invoke("agent_sessions", { status: "running", full: true });
@@ -375,7 +376,7 @@ export class FeatureRun {
       : census.filter(p => !fixture.nativeSnapshot.processes.some(previous => sameProcess(p, previous)));
     assert.equal(native.length, 1);
     fixture.nativeProcess ??= native[0];
-    fixture.nativeSessionId ??= row.sessionId;
+    fixture.nativeSessionId ??= row.sessionId; fixture.nativeSessionName ??= row.name;
     return { sessionId: row.sessionId, nativeProcess: native[0] };
   }
   async start() {
@@ -612,7 +613,7 @@ export class FeatureRun {
         assert.ok(current || !existsSync(`/proc/${previous.nativeProcess.pid}`), "NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
         assert.ok(!sameProcess(previous.nativeProcess, current) || current.state === "Z");
       }
-      fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined;
+      fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined; fixture.nativeSessionName = undefined;
       fixture.nativeSnapshot = { processes: this.nativeProcesses(null) };
       assert.equal(fixture.nativeSnapshot.processes.length, 0);
       await this.start();

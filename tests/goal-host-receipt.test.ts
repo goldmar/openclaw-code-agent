@@ -153,6 +153,15 @@ describe("bounded representative host receipts", () => {
       for (const tasks of contradictions) {
         observedTasks = tasks; await assert.rejects(run.nativeOwner(nativeFixture, { threadId: "thread" })); assert.equal(publicReads, before);
       }
+      const missingAndInvalid: Array<Partial<typeof goal>> = [{ sessionId: undefined, sessionName: null }, { sessionId: undefined, sessionName: " " },
+        { sessionId: undefined, harnessSessionId: "foreign" }, { sessionName: undefined, sessionId: "foreign" },
+        { sessionId: undefined, id: null }, { sessionId: undefined, id: " " }];
+      for (const change of missingAndInvalid) {
+        let reads = 0;
+        run.goals = () => { reads++; return reads === 1 ? [{ ...goal, ...change }] : [{ ...goal }]; };
+        await assert.rejects(run.nativeOwner({ ...nativeFixture, goalId: change.id === undefined ? goal.id : undefined }, { threadId: "thread" }));
+        assert.equal(reads, 1); assert.equal(publicReads, before, "Invalid present fields cannot be retried away before public output");
+      }
       const terminal = { ...row, status: "completed", goalTaskId: goal.id };
       assert.throws(() => currentOwner([terminal], listing, { ...fixture, name: live.name }, "thread", undefined), "Ordinary cannot borrow a goal owner");
     } finally {
