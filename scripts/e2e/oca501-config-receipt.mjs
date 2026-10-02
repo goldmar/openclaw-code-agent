@@ -147,4 +147,3 @@ export function selectRoutedCompletion(input, goals) {
   assert.deepEqual(route, storedRoute, "Task/wake account value and presence remain unchanged");
   return { goal, route, wake, index };
 }
-
