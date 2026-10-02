@@ -8,11 +8,13 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 import { executeRespond } from "../src/actions/respond";
+import { SessionStore } from "../src/session-store";
+import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { Session } from "../src/session";
 import type { SessionManager } from "../src/session-manager";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, repeatOutcome, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, repeatOutcome, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -50,6 +52,89 @@ function syntheticPackedInstall() {
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("proves cloned storage-key collision through actual SessionStore and independent Git fixtures survive reload", () => {
+    const root = mkdtempSync(join(tmpdir(), "oca504-git-rows-"));
+    writeFileSync(join(root, ".fixture-owner"), FIXTURE_MARKER);
+    try {
+      const repo = join(root, "repo"); mkdirSync(repo);
+      const rows = [0, 1, 2].map((i) => gitFixtureRow(root, { repo, path: join(root, `worktree-${i}`), branch: `branch-${i}`, name: `alias-${i}` }));
+      requireGitFixtureIdentities(rows, { sessionId: "native-id", harnessSessionId: "native-storage", backendRef: { conversationId: "native-thread" } });
+      const indexPath = join(root, "sessions.json");
+      const load = (items: typeof rows) => {
+        writeFileSync(indexPath, JSON.stringify({ schemaVersion: STORE_SCHEMA_VERSION, sessions: items, actionTokens: [], repoPolicies: [] }));
+        return new SessionStore({ indexPath, env: {} });
+      };
+      const clones = rows.map((row) => ({ ...row, harnessSessionId: rows[0].harnessSessionId, backendRef: rows[0].backendRef }));
+      const collided = load(clones);
+      assert.equal(collided.getSessionGeneration({ kind: "oca", sessionId: clones[0].sessionId! }), undefined);
+      assert.equal(collided.getSessionGeneration({ kind: "oca", sessionId: clones[1].sessionId! }), undefined);
+      assert.equal(collided.getSessionGeneration({ kind: "oca", sessionId: clones[2].sessionId! })?.sessionId, clones[2].sessionId);
+      for (let pass = 0; pass < 2; pass++) {
+        const corrected = load(rows);
+        for (const row of rows) {
+          const exact = corrected.getSessionGeneration({ kind: "oca", sessionId: row.sessionId! });
+          assert.ok(exact); assert.equal(corrected.getPersistedSession(row.name)?.sessionId, row.sessionId);
+          assert.deepEqual([exact.workdir, exact.worktreePath, exact.worktreeBranch, exact.worktreeBaseBranch], [repo, row.worktreePath, row.worktreeBranch, "main"]);
+          assert.equal(exact.runtimeOwner, undefined); assert.equal(exact.outputPath, undefined); assert.equal(exact.taskFlowMirror, undefined);
+          assert.equal(exact.pendingPlanApproval, false); assert.equal(exact.approvalState, "not_required");
+        }
+      }
+      assert.throws(() => requireGitFixtureIdentities(clones, {}));
+      assert.throws(() => requireGitFixtureIdentities(rows, rows[0]));
+      assert.throws(() => gitFixtureRow(root, { repo, path: join(root, "..", "foreign"), branch: "b", name: "bad" }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("records early public refusal and transport rejection before barrier failure without dispatching a second call", async () => {
+    for (const call of [Promise.resolve({ content: [{ text: "Error: exact fixture refusal" }], isError: true }), Promise.reject(new Error("synthetic transport rejection"))]) {
+      const events: Record<string, any>[] = [];
+      const observed = observeGitCall(call, "alias", "first", "synthetic-selected", (value) => events.push(value));
+      await observed.done;
+      await assert.rejects(requireGitBarrier(observed, () => false, (value) => events.push(value), 100), /settled before/);
+      assert.equal(events[0].phase, "git-public-outcome"); assert.equal(events[1].phase, "git-barrier-not-entered");
+      assert.equal(events[1].publicOutcome, "SETTLED"); assert.equal(events.filter((event) => event.position === "second").length, 0);
+      if (observed.error) assert.throws(() => gitCallResult(observed), /synthetic transport/);
+      else assert.match(gitCallResult(observed).content[0].text, /exact fixture refusal/);
+    }
+  });
+
+  it("retains pending deadline honesty and known release while preserving the original barrier failure", async () => {
+    const events: Record<string, any>[] = []; let release!: () => void;
+    const observed = observeGitCall(new Promise((done) => { release = () => done({ content: [{ text: "Merged fixture" }] }); }), "alias", "first", "synthetic-selected", (value) => events.push(value));
+    let original: unknown;
+    try { await requireGitBarrier(observed, () => false, (value) => events.push(value), 30); }
+    catch (error) { original = error; }
+    finally { release(); await observed.done; }
+    assert.match(String(original), /within 30 ms/); assert.equal(events[0].publicOutcome, "PENDING_UNPROVEN");
+    assert.equal(events[1].phase, "git-public-outcome"); assert.match(gitCallResult(observed).content[0].text, /Merged/);
+  });
+
+  it("actual advanced-base rebase enters the generated owned hook and completes only after release", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oca504-git-hook-"));
+    writeFileSync(join(root, ".fixture-owner"), FIXTURE_MARKER);
+    const repo = join(root, "repo"), path = join(root, "worktree"), entered = join(root, "entered"), release = join(root, "release");
+    mkdirSync(repo); const env = fixtureEnv(root); let child: ReturnType<typeof spawn> | undefined;
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      git(repo, "init", "-b", "main"); git(repo, "config", "user.name", "Fixture"); git(repo, "config", "user.email", "fixture@example.invalid");
+      writeFileSync(join(repo, "base"), "base"); git(repo, "add", "base"); git(repo, "commit", "-m", "base");
+      git(repo, "worktree", "add", "-b", "fixture-branch", path, "main");
+      writeFileSync(join(path, "branch"), "branch"); git(path, "add", "branch"); git(path, "commit", "-m", "branch");
+      writeFileSync(join(repo, "advanced"), "advanced"); git(repo, "add", "advanced"); git(repo, "commit", "-m", "advance");
+      writeFileSync(join(repo, ".git", "hooks", "pre-rebase"), gitBarrierHook(path, entered, release), { mode: 0o700 });
+      child = spawn("git", ["-C", path, "rebase", "main"], { env, detached: true, stdio: "ignore" }); trackOwnedChild(child);
+      const done = new Promise<Record<string, any>>((resolve, reject) => { child!.once("error", reject); child!.once("close", (code) => code === 0 ? resolve({ content: [{ text: "Merged prerequisite rebase" }] }) : reject(new Error(`Fixture rebase exit ${code}`))); });
+      const events: Record<string, any>[] = [], observed = observeGitCall(done, "alias", "first", "synthetic-selected", (value) => events.push(value));
+      await requireGitBarrier(observed, () => { try { return readFileSync(entered, "utf8") === "entered"; } catch { return false; } }, (value) => events.push(value));
+      assert.equal(observed.settled, false); writeFileSync(release, "release");
+      await until(() => observed.settled ? true : undefined, "actual prerequisite rebase settlement"); await observed.done;
+      assert.match(gitCallResult(observed).content[0].text, /Merged/); assert.equal(events[0].phase, "git-public-outcome");
+      assert.equal(readFileSync(join(path, "advanced"), "utf8"), "advanced");
+    } finally {
+      writeFileSync(release, "release"); if (child) await stopOwnedChild(child);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("validates fixed cohorts before setup and distinguishes partial coverage from complete one-floor coverage", () => {
     const provenance = ["--expected-sha", "a".repeat(40), "--codex-bin", "/fixture/native", "--codex-version", "0.159.3"];
     assert.equal(hostCohort(options(provenance)["--cohort"]), "all");

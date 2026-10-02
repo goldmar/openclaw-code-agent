@@ -5,9 +5,66 @@ import type { ServerResponse } from "node:http";
 import { closeSync, constants, fstatSync, openSync, readSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep, join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PersistedSessionInfo } from "../../src/types";
 
 export const FIXTURE_MARKER = "oca-issue-504-host-acceptance-v1";
 export const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+/** Persisted Git-only fixture data, never a native thread or delivery receipt. */
+export function gitFixtureRow(root: string, coordinates: { repo: string; path: string; branch: string; name: string }): PersistedSessionInfo {
+  const now = Date.now();
+  return { sessionId: `fixture-${randomUUID()}`, harnessSessionId: `fixture-storage-${randomUUID()}`,
+    backendRef: { kind: "codex-app-server", conversationId: `fixture-backend-${randomUUID()}` },
+    name: coordinates.name, prompt: "Synthetic Git-only fixture", workdir: ownedPath(root, coordinates.repo),
+    createdAt: now, completedAt: now, status: "completed", lifecycle: "awaiting_worktree_decision", runtimeState: "stopped",
+    approvalState: "not_required", pendingPlanApproval: false, costUsd: 0,
+    route: { provider: "webchat", target: "agent:main:main", sessionKey: "agent:main:main" },
+    originAgentId: "main", originChannel: "webchat", originSessionKey: "agent:main:main",
+    worktreePath: ownedPath(root, coordinates.path), worktreeBranch: coordinates.branch, worktreeBaseBranch: "main",
+    worktreeStrategy: "manual", worktreeMerged: false, worktreeState: "pending_decision",
+    worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } };
+}
+export function requireGitFixtureIdentities(rows: PersistedSessionInfo[], native: FixtureRecord): void {
+  for (const field of ["sessionId", "harnessSessionId"] as const) {
+    assert.ok(rows.every((row) => row[field] && row[field] !== native[field]));
+    assert.equal(new Set(rows.map((row) => row[field])).size, rows.length);
+  }
+  const ids = rows.map((row) => row.backendRef?.conversationId);
+  assert.ok(ids.every((id) => id && id !== native.backendRef?.conversationId)); assert.equal(new Set(ids).size, rows.length);
+}
+export function gitBarrierHook(path: string, entered: string, release: string): string {
+  return `#!${process.execPath}\nconst{existsSync,writeFileSync}=require('node:fs');if(process.cwd()===${JSON.stringify(path)}){writeFileSync(${JSON.stringify(entered)},'entered');const end=Date.now()+30000;while(!existsSync(${JSON.stringify(release)})){if(Date.now()>end)process.exit(1);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);}}`;
+}
+export function observeGitCall(call: Promise<FixtureRecord>, variant: string, position: "first" | "second", sessionId: string, record: (value: FixtureRecord) => void) {
+  const observed: { settled: boolean; result?: FixtureRecord; error?: unknown; done?: Promise<void> } = { settled: false };
+  observed.done = call.then((result) => {
+    observed.result = result; observed.settled = true;
+    const content = (result.content ?? []).map((part: FixtureRecord) => typeof part.text === "string" ? part.text : "").join("\n");
+    record({ phase: "git-public-outcome", variant, position, sessionId, contentBytes: Buffer.byteLength(content), contentSha256: sha256(content), contentExcerpt: Buffer.from(content).subarray(0, 512).toString(),
+      ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+      ...Object.fromEntries(["status", "code", "targetSelected", "operationStarted"].filter((key) => ["string", "boolean"].includes(typeof result.details?.[key])).map((key) => [key, result.details[key]])) });
+  }, (error: unknown) => {
+    observed.error = error; observed.settled = true;
+    const message = error instanceof Error ? error.message : String(error);
+    record({ phase: "git-public-outcome", variant, position, sessionId, transportRejected: true, errorClass: error instanceof Error ? error.name : "UnknownError", causeSha256: sha256(message), causeExcerpt: Buffer.from(message).subarray(0, 512).toString() });
+  });
+  return observed;
+}
+export async function requireGitBarrier(observed: ReturnType<typeof observeGitCall>, entered: () => boolean, record: (value: FixtureRecord) => void, timeoutMs = 30_000): Promise<void> {
+  try {
+    await until(() => {
+      if (entered()) return true;
+      assert.equal(observed.settled, false, "BLOCKED: first public merge settled before its required hook barrier");
+      return undefined;
+    }, "real first merge pre-rebase hook barrier", timeoutMs);
+  } catch (error) {
+    record({ phase: "git-barrier-not-entered", publicOutcome: observed.settled ? "SETTLED" : "PENDING_UNPROVEN" }); throw error;
+  }
+}
+export function gitCallResult(observed: ReturnType<typeof observeGitCall>): FixtureRecord {
+  assert.ok(observed.settled, "Git public outcome is still pending/unproven");
+  if (observed.error !== undefined) throw observed.error;
+  assert.ok(observed.result); return observed.result;
+}
 export const HOST_COHORTS = ["smoke", "plan", "references", "retries", "git", "embedded-direct", "embedded-deferred", "all"] as const;
 export type HostCohort = typeof HOST_COHORTS[number];
 export function hostCohort(value: string | undefined): HostCohort {

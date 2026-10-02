@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
@@ -234,6 +234,7 @@ async function main(): Promise<void> {
   env.OPENCLAW_CODEX_APP_SERVER_COMMAND = nativeRelay;
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const gitCalls = join(fixture, "git-calls.jsonl");
+  writeFileSync(gitCalls, "", { mode: 0o600 });
   const bin = ownedPath(fixture, join(fixture, "bin")); mkdirSync(bin);
   writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst {spawnSync}=require('node:child_process');const{appendFileSync,existsSync,statSync,writeFileSync}=require('node:fs');const append=value=>{try{const text=JSON.stringify(value)+'\\n';if((existsSync(${JSON.stringify(gitCalls)})?statSync(${JSON.stringify(gitCalls)}).size:0)+Buffer.byteLength(text)>1048576)throw Error();appendFileSync(${JSON.stringify(gitCalls)},text,{mode:0o600});}catch{try{writeFileSync(${JSON.stringify(join(fixture, "capture-incomplete"))},'git-proof-incomplete',{mode:0o600});}catch{}}};const args=process.argv.slice(2);append({args,at:Date.now(),phase:'start'});const r=spawnSync(${JSON.stringify(realGit)},args,{env:process.env,stdio:'inherit'});append({args,at:Date.now(),phase:'end',code:r.status});if(r.signal)process.kill(process.pid,r.signal);else process.exit(r.status??1);`, { mode: 0o700 });
   env.PATH = `${bin}:${env.PATH}`;
@@ -617,28 +618,39 @@ async function main(): Promise<void> {
     // Real Git and packed plugin, with only marker-validated persisted fixture rows.
     for (const variant of ["alias", "coordinates", "competing-decision", "policy", "merged-cleanup", "new-hooks"]) {
       begin(`real-git-queue-${variant}`);
-      const repo = createRepo(`queue-${variant}`), row0 = structuredClone(b), rowA = structuredClone(b), rowB = structuredClone(b);
-      const paths: string[] = [];
-      for (const [i, row] of [row0, rowA, rowB].entries()) {
+      const repo = createRepo(`queue-${variant}`);
+      const paths: string[] = [], rows: Json[] = [];
+      for (let i = 0; i < 3; i++) {
         const branch = `fixture-${variant}-${i}`, path = ownedPath(fixture, join(fixture, `worktree-${variant}-${i}`));
         git(repo, "worktree", "add", "-b", branch, path, "main");
         writeFileSync(join(path, `${i}.txt`), `fixture ${i}\n`); git(path, "add", `${i}.txt`); git(path, "commit", "-m", `fixture ${i}`);
-        Object.assign(row, { sessionId: `fixture-${randomUUID()}`, name: i === 1 ? `queue-alias-${variant}` : `queue-${variant}-${i}`, status: "completed", lifecycle: "completed", pendingPlanApproval: false, workdir: repo, worktreePath: path, worktreeBranch: branch, worktreeBaseBranch: "main", worktreeStrategy: "manual", worktreeMerged: false, worktreeState: "pending_decision", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date().toISOString() } });
+        rows.push(gitFixtureRow(fixture, { repo, path, branch, name: i === 1 ? `queue-alias-${variant}` : `queue-${variant}-${i}` }));
         paths.push(path);
       }
       writeFileSync(join(repo, "advanced.txt"), "base advanced\n"); git(repo, "add", "advanced.txt"); git(repo, "commit", "-m", "advance base");
-      await invoke(client, "agent_repo_policy", { workdir: repo, policy: "never-pr" });
-      mutate((value) => value.sessions.push(row0, rowA, rowB));
+      requireGitFixtureIdentities(rows as Parameters<typeof requireGitFixtureIdentities>[0], b);
+      const [row0, rowA, rowB] = rows;
+      evidence.record("host-events.jsonl", { phase: "git-fixture-identities", variant, classification: "SYNTHETIC_PERSISTED_GIT_ONLY", identities: rows.map((row) => ({ sessionId: row.sessionId, storageHash: sha256(row.harnessSessionId), backendHash: sha256(row.backendRef.conversationId), coordinatesHash: sha256(JSON.stringify([row.workdir, row.worktreePath, row.worktreeBranch, row.worktreeBaseBranch])) })) });
+      const policyResult = await invoke(client, "agent_repo_policy", { workdir: repo, policy: "never-pr" });
+      evidence.record("host-events.jsonl", { phase: "git-policy-result", variant, content: text(policyResult), isError: policyResult.isError });
+      assert.ok(!policyResult.isError && !text(policyResult).startsWith("Error:"));
+      const policyBefore = store().repoPolicies.filter((policy: Json) => policy.repoRoot === repo);
+      assert.equal(policyBefore.length, 1); assert.equal(policyBefore[0].policy, "never-pr");
+      mutate((value) => value.sessions.push(...rows));
       const entered = ownedPath(fixture, join(fixture, `entered-${variant}`)), release = ownedPath(fixture, join(fixture, `release-${variant}`));
       const hook = join(repo, ".git", "hooks", "pre-rebase");
-      writeFileSync(hook, `#!${process.execPath}\nconst{existsSync,writeFileSync}=require('node:fs');if(process.cwd()===${JSON.stringify(paths[0])}){writeFileSync(${JSON.stringify(entered)},'entered');const end=Date.now()+30000;while(!existsSync(${JSON.stringify(release)})){if(Date.now()>end)process.exit(1);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);}}`, { mode: 0o700 });
+      writeFileSync(hook, gitBarrierHook(paths[0], entered, release), { mode: 0o700 });
       chmodSync(hook, 0o700);
-      const first = invoke(client, "agent_merge", { session: row0.sessionId, base_branch: "main", delete_branch: false, push: false });
-      await until(() => existsSync(entered) ? true : undefined, "real first merge pre-rebase hook barrier");
+      const recordGit = (value: Json) => evidence.record("host-events.jsonl", { variant, ...value });
+      const first = observeGitCall(invoke(client, "agent_merge", { session: row0.sessionId, base_branch: "main", delete_branch: false, push: false }), variant, "first", row0.sessionId, recordGit);
+      let second: ReturnType<typeof observeGitCall> | undefined, variantFailure: unknown;
+      try {
+      await requireGitBarrier(first, () => existsSync(entered), recordGit);
       const start = records(gitCalls).length;
-      const second = invoke(client, "agent_merge", { session: rowA.name, base_branch: "main", delete_branch: false, push: false });
+      second = observeGitCall(invoke(client, "agent_merge", { session: rowA.name, base_branch: "main", delete_branch: false, push: false }), variant, "second", rowA.sessionId, recordGit);
       await until(() => records(gitCalls).slice(start).find((call) => call.phase === "end" && call.args.includes("diff") && call.args.some((arg: string) => arg.includes(rowA.worktreeBranch))), "second target initial safe Git inspection");
       const bBefore = sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowB.sessionId)));
+      evidence.record("host-events.jsonl", { phase: "git-before-mutation", variant, selectedRowHash: sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId))), policyHash: sha256(JSON.stringify(policyBefore[0])) });
       if (variant === "new-hooks") {
         mkdirSync(join(paths[1], ".openclaw"), { recursive: true });
         writeFileSync(join(paths[1], ".openclaw", "worktree-setup.sh"), "#!/bin/sh\nexit 0\n"); git(paths[1], "add", ".openclaw/worktree-setup.sh"); git(paths[1], "commit", "-m", "fixture hook change");
@@ -650,8 +662,10 @@ async function main(): Promise<void> {
         if (variant === "policy") value.repoPolicies.find((policy: Json) => policy.repoRoot === repo).policy = "pr-required";
         if (variant === "merged-cleanup") { current.worktreeMerged = true; current.worktreeLifecycle.state = "merged"; delete current.worktreePath; delete current.worktreeBranch; }
       });
-      writeFileSync(release, "release");
-      const firstResult = await first, secondResult = await second;
+      evidence.record("host-events.jsonl", { phase: "git-after-mutation", variant, selectedRowHash: sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId))), policyHash: sha256(JSON.stringify(store().repoPolicies.find((policy: Json) => policy.repoRoot === repo))) });
+      writeFileSync(release, "release", { mode: 0o600 });
+      await Promise.all([first.done, second.done]);
+      const firstResult = gitCallResult(first), secondResult = gitCallResult(second);
       assert.match(text(firstResult), /Merged|merged/);
       if (variant === "alias") {
         assert.match(text(secondResult), /Merged|merged/); assert.ok(existsSync(join(repo, "1.txt"))); assert.ok(!existsSync(join(repo, "2.txt")));
@@ -667,6 +681,18 @@ async function main(): Promise<void> {
         if (variant === "new-hooks") assert.match(text(secondResult), /hook|user|button/i);
       }
       outcomes.push({ lane: lanes.rpc, scenario: `real-git-queue-${variant}`, status: "PASS", externalWriterAtomicity: false });
+      } catch (error) { variantFailure = error; throw error; }
+      finally {
+        try {
+          writeFileSync(release, "release", { mode: 0o600 });
+          await until(() => first.settled && (!second || second.settled) ? true : undefined, "released Git calls settlement");
+          await Promise.all([first.done, second?.done]);
+        } catch (error) {
+          recordGit({ phase: "git-release-settlement-incomplete", first: first.settled ? "SETTLED" : "PENDING_UNPROVEN", second: second ? second.settled ? "SETTLED" : "PENDING_UNPROVEN" : "NOT_DISPATCHED" });
+          if (!variantFailure) throw error;
+          evidence.errors.push("git-release-settlement-incomplete");
+        }
+      }
     }
 
     }
