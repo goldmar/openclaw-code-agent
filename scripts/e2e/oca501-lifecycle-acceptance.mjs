@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { readNativeReview } from "./oca501-review-protocol.mjs";
 import { projectConfigResponse, readOwnedConfig } from "./oca501-config-receipt.mjs";
+import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
 import { assertNoNativeContinuation, messageText, nativeDiagnostics, assertVisibleCanonical, selectCanonicalProbe, currentRevisionSegments, revisionInstruction, assertOrdinaryCompleted, planPromptAuthority } from "./oca501-lifecycle-protocol.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -347,17 +348,24 @@ async function operatorSchema(run) {
 }
 
 export async function runL1(run) {
+  const assignment = l1Assignment("matrix-l1", run.options["l1-cohort"]);
+  const requestStart = run.modelRequests.length;
   await run.settleGoalDelivery(run.goals().find((goal) => goal.name === "host-prerequisite"));
   const publicConfig = await run.rpc("config.get"); const ownedSource = readOwnedConfig(run.env.OPENCLAW_CONFIG_PATH, run.directory);
   assert.equal(publicConfig.config.logging.level, "debug"); assert.equal(ownedSource.config.logging.level, "debug");
   run.artifact("lifecycle-observability.json", { loggingLevel: "debug", ownedLogFile: join(run.directory, "openclaw-runtime.log"), publicAndOwnedSourceAgree: true, projection: true, rawFullConfigExcluded: true, identityLimit: "Native diagnostic IDs are presence booleans; actual provider metadata/backend/public output independently prove conversation association" });
-  const requestStart = run.modelRequests.length;
-  await confirmations(run); await plans(run);
-  await pendingInputAndControls(run); await operatorSchema(run);
+  const routines = { H06: confirmations, H07: plans, H09: pendingInputAndControls, V1: operatorSchema };
+  for (const cohort of assignment.selected) await routines[cohort](run);
+  const coverage = l1Coverage(assignment.selectedL1Cohort, run.results.filter((row) => assignment.assignedCaseIds.includes(row.scenario) && row.classification === "PASS").map((row) => row.scenario), 0);
   await settleParentReplies(run, requestStart);
-  for (const scenario of ["H06", "H07", "H09", "V1"]) {
+  for (const scenario of assignment.unassignedCohorts) {
+    run.results = run.results.filter((row) => row.scenario !== scenario);
+    run.results.push({ ...run.provenance, scenario, classification: "UNPROVEN", unprovenReason: "Not assigned to this selected L1 invocation" });
+  }
+  for (const scenario of assignment.selected) {
     run.results = run.results.filter((row) => !(row.scenario === scenario && row.classification === "UNPROVEN"));
     run.results.push({ ...run.provenance, scenario, classification: "PASS", assertions: run.results.filter((row) => row.scenario.startsWith(`${scenario}-`)).map((row) => row.scenario), exitCode: 0, remaining: "H08/H10-H12 and final exact-head cumulative both-floor acceptance remain UNPROVEN" });
   }
   await run.finalDrain();
+  run.artifact("l1-cohort-completion.json", { ...coverage, scope: "Selected primary inventory and all original subsidiary checks; final cleanup and safe export remain required" });
 }

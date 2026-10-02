@@ -17,6 +17,7 @@ import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult 
 import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
+import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
 import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -37,10 +38,12 @@ const inside = (parent, path) => { const rel = relative(parent, path); return !r
 function parseOptions(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
-    assert.ok(["--expected-sha", "--node-version", "--artifacts", "--phase"].includes(argv[i]), `Unknown option ${argv[i]}`);
+    assert.ok(["--expected-sha", "--node-version", "--artifacts", "--phase", "--l1-cohort"].includes(argv[i]), `Unknown option ${argv[i]}`);
+    assert.ok(!Object.hasOwn(options, argv[i].slice(2)), "Duplicate option is refused before fixture effects");
     assert.ok(argv[i + 1], `Missing value for ${argv[i]}`);
     options[argv[i].slice(2)] = argv[i + 1];
   }
+  l1Assignment(options.phase ?? "prerequisites", options["l1-cohort"]);
   assert.match(options["expected-sha"] ?? "", /^[a-f0-9]{40}$/);
   assert.ok(["24.16.0", "26.1.0"].includes(options["node-version"]));
   assert.equal(process.versions.node, options["node-version"], "Use the exact supported Node floor");
@@ -197,6 +200,12 @@ class AcceptanceRun {
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
     this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
+    if (options.phase === "matrix-l1") {
+      this.l1Assignment = l1Assignment(options.phase, options["l1-cohort"]);
+      this.provenance.selectedL1Cohort = this.l1Assignment.selectedL1Cohort;
+      this.provenance.l1CohortHelperHash = fileHash(join(ROOT, "scripts/e2e/oca501-l1-cohort.mjs"));
+      this.artifact("l1-cohort-assignment.json", this.l1Assignment);
+    }
   }
   set nativeFixture(value) { assert.ok(!this.nativeCases.has(value.tag), "Do not overwrite a real case's fixture history"); this.nativeCases.set(value.tag, value); this.lastNativeFixture = value; }
   get nativeFixture() { return this.lastNativeFixture; }
@@ -1484,7 +1493,8 @@ class AcceptanceRun {
     }
     for (const name of ["cleanup.json", "gateway.log", "fixtures.json", "provenance.json", "results.json", "acceptance-command.stdout.log", "acceptance-command.stderr.log"]) assert.ok(this.artifactFiles.has(name), `Required evidence not captured: ${name}`);
     const cleanup = json(join(this.directory, "cleanup.json"));
-    const metadata = { ...this.provenance, phase: this.options.phase ?? "prerequisites", scriptExitCode: process.exitCode ?? 0, primaryFailure: this.primaryFailure ?? null, cleanup: { classification: cleanup.classification, failures: cleanup.failures }, independentErrors: this.independentErrors ?? [], unavailable, excludes: ["openclaw.json/raw config", "auth/environment/provider keys", "native binaries/rollout/cache", "tarballs/unpacked/install trees", "unrelated files"], sourceReceipts: "Nonsensitive command stdout/stderr complete and separate; config commands export closed projections with original stream hashes, full config/streams/arguments excluded; artifact receipts exact-key redacted, runtime/store original hashes precede export redaction" };
+    const coverage = this.l1Assignment ? l1Coverage(this.l1Assignment.selectedL1Cohort, this.results.filter((row) => this.l1Assignment.assignedCaseIds.includes(row.scenario) && row.classification === "PASS").map((row) => row.scenario), process.exitCode ?? 0) : {};
+    const metadata = { ...this.provenance, ...coverage, phase: this.options.phase ?? "prerequisites", scriptExitCode: process.exitCode ?? 0, primaryFailure: this.primaryFailure ?? null, cleanup: { classification: cleanup.classification, failures: cleanup.failures }, independentErrors: this.independentErrors ?? [], unavailable, excludes: ["openclaw.json/raw config", "auth/environment/provider keys", "native binaries/rollout/cache", "tarballs/unpacked/install trees", "unrelated files"], sourceReceipts: "Nonsensitive command stdout/stderr complete and separate; config commands export closed projections with original stream hashes, full config/streams/arguments excluded; artifact receipts exact-key redacted, runtime/store original hashes precede export redaction" };
     const bundle = buildEvidence(this.directory, entries, metadata, this.secrets);
     const framed = frameEvidence(bundle);
     // Awaiting the write callback keeps the complete end/digest inside the
@@ -1511,7 +1521,8 @@ try {
       run.stderrCapture = (run.stderrCapture ?? "") + `${message}\n`; console.error(message);
     }
     const remaining = run.options.phase === "matrix-l1" ? "H01–H05/H08/H10–H12 final cumulative coverage remains UNPROVEN in this phase" : "H06–H12 remain UNPROVEN in these milestone phases";
-    const summary = `${LABEL}: ${run.options.phase ?? "prerequisites"} ${process.exitCode ? "BLOCKED" : "MILESTONE COMPLETE"}; ${remaining}; evidence ${run.directory}`;
+    const selected = run.l1Assignment ? ` selected L1 cohort ${run.l1Assignment.selectedL1Cohort}; unassigned ${run.l1Assignment.unassignedCohorts.join(",") || "none"}` : "";
+    const summary = `${LABEL}: ${run.options.phase ?? "prerequisites"}${selected} ${process.exitCode ? "BLOCKED" : "MILESTONE COMPLETE"}; ${remaining}; evidence ${run.directory}`;
     run.artifact("acceptance-command.stdout.log", `${run.progressCapture}${summary}\n`);
     run.artifact("acceptance-command.stderr.log", run.stderrCapture ?? "");
     try { await run.exportEvidence(); } catch (error) {

@@ -8,6 +8,7 @@ import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { validateL1Coverage, l1Assignment } from "./oca501-l1-cohort.mjs";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const PREFIX = "OCA501_EVIDENCE ";
@@ -25,6 +26,7 @@ function validateIdentity(manifest, expected) {
   assert.ok(PHASES.includes(expected.phase) || (expected.controlsOnly === true && expected.phase === "controls-only"));
   for (const field of ["candidateSha", "nodeVersion", "phase"]) assert.equal(manifest[field], expected[field], `Expected ${field} mismatch`);
   assert.ok(Number.isSafeInteger(manifest.scriptExitCode) && manifest.scriptExitCode >= 0);
+  validateL1Coverage(manifest, expected.selectedL1Cohort);
   if (expected.controlsOnly === true) { assert.equal(manifest.phase, "controls-only"); return; }
   assert.equal(manifest.expectedHostVersion, HOST_VERSION); assert.equal(manifest.expectedNativeVersion, NATIVE_VERSION);
   for (const [field, pinned] of [["hostVersion", HOST_VERSION], ["upstreamTagCommit", HOST_COMMIT], ["nativeVersion", NATIVE_VERSION]]) {
@@ -100,18 +102,19 @@ export function decodeEvidence(stdout, expected) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const options = {};
   const args = process.argv.slice(2);
-  assert.equal(args.length, 10, "Provide exactly decode/out/expected-sha/node-version/phase options");
+  assert.ok([10, 12].includes(args.length), "Provide decode/out/expected-sha/node-version/phase and optional matrix-l1 cohort");
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index];
-    assert.ok(["--decode", "--out", "--expected-sha", "--node-version", "--phase"].includes(name) && !Object.hasOwn(options, name), "Unknown/duplicate decoder option");
+    assert.ok(["--decode", "--out", "--expected-sha", "--node-version", "--phase", "--l1-cohort"].includes(name) && !Object.hasOwn(options, name), "Unknown/duplicate decoder option");
     assert.ok(args[index + 1]); options[name] = args[index + 1];
   }
   const source = options["--decode"]; const output = options["--out"];
+  const l1 = l1Assignment(options["--phase"], options["--l1-cohort"]);
   assert.ok(isAbsolute(source) && isAbsolute(output));
-  const decoded = decodeEvidence(readFileSync(source, "utf8"), { candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], phase: options["--phase"] });
+  const decoded = decodeEvidence(readFileSync(source, "utf8"), { candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], phase: options["--phase"], ...(l1 ? { selectedL1Cohort: l1.selectedL1Cohort } : {}) });
   // Exclusive writes prevent replacing another run's receipts.
   mkdirSync(output, { mode: 0o700 });
   for (const file of decoded.files) writeFileSync(join(output, file.name), file.content, { flag: "wx", mode: 0o600 });
   writeFileSync(join(output, "export-manifest.json"), JSON.stringify({ ...decoded.manifest, digest: decoded.digest }, null, 2), { flag: "wx", mode: 0o600 });
-  console.log(JSON.stringify({ complete: true, acceptance: decoded.manifest.scriptExitCode === 0 ? "MILESTONE_COMPLETE" : "BLOCKED", files: decoded.files.length, bytes: decoded.manifest.totalSanitizedBytes, candidateSha: decoded.manifest.candidateSha, nodeVersion: decoded.manifest.nodeVersion, phase: decoded.manifest.phase, digest: decoded.digest }));
+  console.log(JSON.stringify({ complete: true, acceptance: decoded.manifest.scriptExitCode === 0 ? l1 ? "SELECTED_L1_COHORT_MILESTONE_COMPLETE" : "MILESTONE_COMPLETE" : "BLOCKED", files: decoded.files.length, bytes: decoded.manifest.totalSanitizedBytes, candidateSha: decoded.manifest.candidateSha, nodeVersion: decoded.manifest.nodeVersion, phase: decoded.manifest.phase, ...(l1 ? { selectedL1Cohort: l1.selectedL1Cohort, assignedCaseIds: decoded.manifest.assignedCaseIds, completedCaseIds: decoded.manifest.completedCaseIds, remainingAssignedCaseIds: decoded.manifest.remainingAssignedCaseIds, unassignedCohorts: decoded.manifest.unassignedCohorts } : {}), digest: decoded.digest }));
 }
