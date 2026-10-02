@@ -546,6 +546,73 @@ export function selectedProvider(requests: FixtureRecord[], generation: string, 
   return native;
 }
 
+function repeatResultText(result: FixtureRecord | undefined): string | undefined {
+  return result && Array.isArray(result.content) && result.content.every((part: FixtureRecord) => part?.type === "text" && typeof part.text === "string") ? result.content.map((part: FixtureRecord) => part.text).join("\n") : undefined;
+}
+/** Whole public source templates only; classification runs before receipt sanitation. */
+export function repeatOutcome(result: FixtureRecord | undefined, target: FixtureRecord) {
+  const value = repeatResultText(result);
+  if (!result || typeof value !== "string" || !value) return "unknown" as const;
+  if (result.isError === true && result.details?.status === "error" && result.details?.code === "response_delivery_unconfirmed" && result.details.targetSelected === true && !("operationStarted" in result.details)) return "unconfirmed" as const;
+  if (result.details?.code !== undefined) return "unknown" as const;
+  const id = target.sessionId, thread = target.backendRef?.conversationId, name = target.name;
+  if (typeof id !== "string" || !id || typeof thread !== "string" || !thread || typeof name !== "string" || !name) return "unknown" as const;
+  const guards = [`Cannot resume backend thread ${thread}: session ${id} still owns its active writer.`, ...["starting", "running"].map((status) => `Cannot reuse session ID ${id}: that session is still ${status}.`)];
+  const exactGuard = guards.some((guard) => value === `Resume unavailable for session ${name} [${id}] (missing_backend_state). Backend resume failed: ${guard} No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${id}', fork_session=true, prompt='<new task>').`);
+  if (result.isError === true) return exactGuard && (result.details?.status === undefined || result.details.status === "error") ? "guard" as const : "unknown" as const;
+  if ((result.isError === undefined || result.isError === false) && (result.details?.status === undefined || result.details.status === "success") && !/^(?:Error|Resume unavailable)/.test(value)) return "success" as const;
+  return "unknown" as const;
+}
+
+/** Both already-started public calls settle and are recorded before any outcome assertion. */
+export async function settleRepeatCalls(calls: [() => Promise<FixtureRecord>, () => Promise<FixtureRecord>], target: FixtureRecord,
+  record: (value: FixtureRecord) => void) {
+  const settled = await Promise.allSettled(calls.map((call) => Promise.resolve().then(call)));
+  return settled.map((item, callIndex) => {
+    if (item.status === "rejected") {
+      const errorClass = item.reason instanceof Error && ["Error", "TypeError", "SyntaxError", "AssertionError", "RangeError"].includes(item.reason.name) ? item.reason.name : "UnknownError";
+      const errorText = item.reason instanceof Error ? item.reason.message : "Non-Error transport rejection";
+      record({ phase: "concurrent-public-outcome", callIndex, outcomeClass: "transport-exception", errorClass, exceptionTextSha256: sha256(errorText), diagnosticExcerpt: Buffer.from(errorText).subarray(0, 512).toString() });
+      return { callIndex, classification: "unknown" as const, transportException: true };
+    }
+    const result = item.value, classification = repeatOutcome(result, target);
+    const value = repeatResultText(result) ?? "";
+    record({ phase: "concurrent-public-outcome", callIndex, outcomeClass: classification,
+      isError: result?.isError, status: result?.details?.status, code: result?.details?.code,
+      resultSha256: sha256(JSON.stringify(result) ?? "undefined"), textSha256: sha256(value),
+      exactSelectedResumeGuard: classification === "guard", diagnosticExcerpt: Buffer.from(value).subarray(0, 512).toString() });
+    return { callIndex, classification, result, transportException: false };
+  });
+}
+
+export function repeatOutcomeCounts(classes: string[]) {
+  assert.equal(classes.length, 2); assert.ok(classes.every((value) => ["success", "unconfirmed", "guard"].includes(value)), "Unknown concurrent public outcome");
+  return { successes: classes.filter((value) => value === "success").length,
+    unconfirmed: classes.filter((value) => value === "unconfirmed").length, guards: classes.filter((value) => value === "guard").length };
+}
+
+/** Native attempts are runtime observations, never independent per-call delivery receipts. */
+export function repeatNativeObservation(events: FixtureRecord[], target: FixtureRecord, message: string,
+  counts: ReturnType<typeof repeatOutcomeCounts>) {
+  const thread = target.backendRef?.conversationId;
+  assert.ok(thread); assert.equal(counts.successes + counts.unconfirmed + counts.guards, 2);
+  const inputs = events.filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method));
+  assert.ok(inputs.every((input) => input.threadId === thread && input.nativeInput?.some((part: FixtureRecord) => part.sha256 === sha256(message))), "Unexpected repeat input or generation");
+  const accepted: FixtureRecord[] = [], rejected: FixtureRecord[] = [], uncertain: FixtureRecord[] = [];
+  for (const input of inputs) {
+    const responses = events.filter((event) => event.direction === "response" && event.id === input.id && event.relayPid === input.relayPid);
+    assert.ok(responses.length <= 1, "Duplicate native acknowledgement"); const response = responses[0];
+    if (response && !response.error && typeof response.turnId === "string" && response.turnId && (input.method === "turn/start" || response.turnId === input.expectedTurnId)) accepted.push(response);
+    else if (input.method === "turn/steer" && response?.error && response.errorCode === -32600 && response.errorDataPresent === false && (response.noActiveTurn === true || (response.mismatchExact === true && response.mismatchExpected === input.expectedTurnId && typeof response.mismatchActual === "string" && response.mismatchActual && response.mismatchActual !== input.expectedTurnId))) rejected.push(response);
+    else uncertain.push(input);
+  }
+  const turns = new Set(accepted.map((response) => response.turnId));
+  const terminalTurns = [...turns].filter((turnId) => accepted.filter((response) => response.turnId === turnId).every((response) => events.some((event) => event.method === "turn/completed" && event.relayPid === response.relayPid && event.threadId === thread && event.turnId === turnId && event.status === "completed" && !event.error)));
+  const ready = inputs.length >= counts.successes + counts.unconfirmed && accepted.length >= counts.successes && accepted.length >= 1
+    && uncertain.length <= counts.unconfirmed && terminalTurns.length === turns.size;
+  return { ready, inputs, accepted, rejected, uncertain, terminalTurns, ...counts };
+}
+
 export function observerSourceProof(fixture: string, path: string) {
   const source = exactCandidatePath(fixture, path);
   const names = ["index.mjs", "openclaw.plugin.json", "package.json"];

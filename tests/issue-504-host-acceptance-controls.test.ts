@@ -12,7 +12,7 @@ import { Session } from "../src/session";
 import type { SessionManager } from "../src/session-manager";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { HostEvidence, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { HostEvidence, repeatOutcome, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -93,6 +93,68 @@ describe("issue 504 real-host acceptance controls", () => {
     assert.throws(() => replayObservedPlan(events, []));
     for (const output of [{ ...observations[0].output, exactPlanPresent: false }, { ...observations[0].output, selectedReferenceMatches: false }, { ...observations[0].output, phase: "terminal" }]) assert.throws(() => replayObservedPlan(events, [{ ...observations[0], output }]));
     assert.throws(() => replayObservedPlan(events, [{ ...observations[0], listing: { ...observations[0].listing, recovered: true } }]));
+  });
+
+  it("admits only entire selected-generation public resume guard templates", () => {
+    const target = { sessionId: "selected", name: "fixture-selected", backendRef: { conversationId: "original-thread" } };
+    const guard = (reason: string) => ({ isError: true, content: [{ type: "text", text: `Resume unavailable for session ${target.name} [${target.sessionId}] (missing_backend_state). Backend resume failed: ${reason} No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${target.sessionId}', fork_session=true, prompt='<new task>').` }] });
+    const active = guard("Cannot resume backend thread original-thread: session selected still owns its active writer.");
+    for (const result of [active, guard("Cannot reuse session ID selected: that session is still starting."), guard("Cannot reuse session ID selected: that session is still running.")]) assert.equal(repeatOutcome(result, target), "guard");
+    for (const replacement of [["original-thread", "other-thread"], ["fixture-selected", "other-name"], ["session selected still", "session other still"], ["missing_backend_state", "completed"], ["active writer.", "active writer. extra"]]) {
+      const result = structuredClone(active); result.content[0].text = result.content[0].text.replace(replacement[0], replacement[1]); assert.equal(repeatOutcome(result, target), "unknown");
+    }
+    for (const extra of ["\n", "\r\n", "\u2028"]) assert.equal(repeatOutcome({ ...active, content: [{ type: "text", text: active.content[0].text + extra }] }, target), "unknown");
+    for (const result of [guard("Cannot reuse session ID selected: that session is still completed."), guard("arbitrary backend failure"), { ...active, details: { code: "other" } }, { ...active, details: { status: "success" } }, { isError: true, content: [{ type: "text", text: "Error sending response" }] }, { content: {} }, { content: [{ type: "text", text: 1 }] }, undefined]) assert.equal(repeatOutcome(result, target), "unknown");
+    assert.equal(repeatOutcome({ content: [{ type: "text", text: "Resume started for session fixture-selected [selected]. Use agent_output to see the response." }] }, target), "success");
+    const unconfirmed = { isError: true, content: [{ type: "text", text: "Delivery unconfirmed" }], details: { status: "error", code: "response_delivery_unconfirmed", targetSelected: true } };
+    assert.equal(repeatOutcome(unconfirmed, target), "unconfirmed");
+    const { targetSelected: _selected, ...withoutSelected } = unconfirmed.details;
+    assert.equal(repeatOutcome({ ...unconfirmed, details: withoutSelected }, target), "unknown");
+    for (const targetSelected of [undefined, false, "true", 1, null]) assert.equal(repeatOutcome({ ...unconfirmed, details: { ...unconfirmed.details, targetSelected } }, target), "unknown");
+    assert.equal(repeatOutcome({ ...unconfirmed, details: { ...unconfirmed.details, operationStarted: false } }, target), "unknown");
+  });
+
+  it("settles both started public calls and retains outcomes before the first assertion", async () => {
+    const target = { sessionId: "selected", name: "fixture", backendRef: { conversationId: "thread" } };
+    const observations: any[] = []; let secondSettled = false;
+    const settled = await settleRepeatCalls([async () => { throw new TypeError("transport fixture only"); }, async () => { await Promise.resolve(); secondSettled = true; return { content: [{ type: "text", text: "accepted" }] }; }], target, (record) => { assert.equal(secondSettled, true); observations.push(record); });
+    assert.equal(observations.length, 2); assert.deepEqual(observations.map((item) => item.callIndex), [0, 1]);
+    assert.equal(observations[0].outcomeClass, "transport-exception"); assert.equal(observations[0].exceptionTextSha256, sha256("transport fixture only")); assert.equal(observations[1].outcomeClass, "success");
+    assert.match(observations[1].resultSha256, /^[a-f0-9]{64}$/); assert.match(observations[1].textSha256, /^[a-f0-9]{64}$/);
+    assert.throws(() => repeatOutcomeCounts(settled.map((item) => item.classification)), /Unknown/); assert.equal(observations.length, 2);
+  });
+
+  it("accounts success, unconfirmed and guards against all actual native attempts and accepted terminals", () => {
+    const target = { backendRef: { conversationId: "thread" } }, message = "REPEAT-fixture";
+    const input = (id: number, method = "turn/start") => ({ direction: "request", method, threadId: "thread", id, relayPid: 10, nativeInput: [{ sha256: sha256(message) }], expectedTurnId: "turn" });
+    const ack = (id: number, turnId = "turn") => ({ direction: "response", id, relayPid: 10, turnId, error: false });
+    const terminal = (turnId = "turn") => ({ method: "turn/completed", relayPid: 10, threadId: "thread", turnId, status: "completed", error: false });
+    const one = [input(1), ack(1), terminal()];
+    const guardCounts = repeatOutcomeCounts(["success", "guard"]), successCounts = repeatOutcomeCounts(["success", "success"]);
+    assert.equal(repeatNativeObservation(one, target, message, guardCounts).ready, true);
+    assert.equal(repeatNativeObservation(one, target, message, successCounts).ready, false);
+    const resumed = [{ direction: "request", method: "thread/resume", id: 9, relayPid: 10, threadId: "thread" }, { direction: "response", id: 9, relayPid: 10, threadId: "thread", error: false }, ...one];
+    const boundary = responseResumeBoundary({ sessionId: "selected", backendRef: target.backendRef, status: "completed", lifecycle: "terminal", runtimeState: "stopped" }, { sessionId: "selected", backendRef: target.backendRef }, 0);
+    requireResponseResume(resumed, boundary, "thread"); assert.throws(() => requireResponseResume(one, boundary, "thread"));
+    const two = [...one, input(2, "turn/steer"), ack(2)];
+    assert.equal(repeatNativeObservation(two, target, message, successCounts).ready, true, "Accepted steer may share one terminal turn");
+    assert.equal(repeatNativeObservation([...one, input(2), ack(2, "turn2")], target, message, successCounts).ready, false);
+    assert.equal(repeatNativeObservation([...one, input(2), ack(2, "turn2"), terminal("turn2")], target, message, successCounts).ready, true);
+    const rejected = { direction: "response", id: 2, relayPid: 10, error: true, errorCode: -32600, errorDataPresent: false, noActiveTurn: true };
+    const queued = [input(2, "turn/steer"), rejected, ...one, input(3), ack(3, "turn3"), terminal("turn3")];
+    assert.equal(repeatNativeObservation(queued, target, message, successCounts).ready, true);
+    assert.equal(repeatNativeObservation(queued, target, message, successCounts).rejected.length, 1);
+    const ambiguous = [...one, input(2, "turn/steer"), { ...rejected, errorCode: -32000 }];
+    assert.equal(repeatNativeObservation(ambiguous, target, message, successCounts).ready, false);
+    assert.equal(repeatNativeObservation(ambiguous, target, message, repeatOutcomeCounts(["success", "unconfirmed"])).ready, true);
+    const unconfirmedCounts = repeatOutcomeCounts(["success", "unconfirmed"]);
+    assert.equal(repeatNativeObservation([...ambiguous, input(3)], target, message, unconfirmedCounts).ready, false, "One public unconfirmed cannot account for two unresolved inputs");
+    assert.equal(repeatNativeObservation([...ambiguous, input(3, "turn/steer"), ack(3, "other-turn")], target, message, unconfirmedCounts).ready, false, "One public unconfirmed cannot account for two unknown acceptances");
+    for (const events of [[], [input(1)], [input(1), ack(1)], [input(1), ack(1), { ...terminal(), relayPid: 20 }]]) assert.equal(repeatNativeObservation(events, target, message, guardCounts).ready, false);
+    for (const events of [[{ ...input(1), threadId: "other" }, ack(1), terminal()], [{ ...input(1), nativeInput: [{ sha256: sha256("other") }] }, ack(1), terminal()]]) assert.throws(() => repeatNativeObservation(events, target, message, guardCounts));
+    assert.throws(() => repeatOutcomeCounts(["success"])); assert.throws(() => repeatOutcomeCounts(["success", "transport-exception"]));
+    selectedProvider([{ requestClass: "native-generation", fixtureGeneration: "selected", latestInputHash: sha256(message), fixtureOutputMarkers: ["OCA504_BACKEND_OK:selected:"] }], "selected", message);
+    for (const request of [{ requestClass: "unknown" }, { requestClass: "native-generation", fixtureGeneration: "other", latestInputHash: sha256(message), fixtureOutputMarkers: ["OCA504_BACKEND_OK:other:"] }]) assert.throws(() => selectedProvider([request], "selected", message));
   });
 
   it("uses the actual message subscription seam and refuses invalid acknowledgements before follow-ons", async () => {

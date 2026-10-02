@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { HostEvidence, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
@@ -568,42 +568,41 @@ async function main(): Promise<void> {
         const record: typeof repeatWindows[number] = { boundary }; repeatWindows.push(record);
         record.result = await invoke(client, "agent_respond", { session: b.sessionId, message }, key); return record.result;
       };
-      const results: Json[] = [];
-      if (concurrent) results.push(...await Promise.all([calls(), calls()]));
-      else {
+      let counts = { successes: 2, unconfirmed: 0, guards: 0 };
+      if (concurrent) {
+        const settled = await settleRepeatCalls([calls, calls], b, (record) => evidence.record("host-events.jsonl", { ...record, sharedRuntimeWindow: true }));
+        const classes = settled.map((item) => item.classification);
+        evidence.record("host-events.jsonl", { phase: "concurrent-public-counts", successes: classes.filter((value) => value === "success").length, unconfirmed: classes.filter((value) => value === "unconfirmed").length, guards: classes.filter((value) => value === "guard").length, unknown: classes.filter((value) => value === "unknown").length });
+        counts = repeatOutcomeCounts(classes);
+      } else {
         // A second explicit sequential call begins after the first turn settles.
         await unchangedResponse(b, b.sessionId, message, key);
         await unchangedResponse(b, b.sessionId, message, key);
       }
-      for (const result of results) if (result.isError) {
-        assert.equal(result.details?.code, "response_delivery_unconfirmed");
-        assert.ok(!("operationStarted" in result.details));
-      }
       const hooks = hostTools().slice(hooksBefore).filter((event) => event.phase === "before" && event.toolName === "agent_respond");
       assert.equal(hooks.length, 2); assert.ok(hooks[0].toolCallId); assert.equal(hooks[0].toolCallId, hooks[1].toolCallId, "SAME actual admitted plugin call ID must be measured");
-      await until(() => nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === b.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message))).length >= 2 ? true : undefined, "both same-call-ID inputs observed by selected native backend");
+      let latest: ReturnType<typeof repeatNativeObservation> | undefined;
       const observations = await until(() => {
-        const events = nativeEvents().slice(prior);
-        const inputs = events.filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method) && event.threadId === b.backendRef.conversationId && event.nativeInput?.some((input: Json) => input.sha256 === sha256(message)));
-        const accepted: Json[] = [], rejected: Json[] = [], uncertain: Json[] = [];
-        for (const input of inputs) {
-          const response = events.find((event) => event.direction === "response" && event.id === input.id && event.relayPid === input.relayPid);
-          if (response && !response.error && typeof response.turnId === "string" && response.turnId && (input.method === "turn/start" || response.turnId === input.expectedTurnId)) accepted.push(response);
-          else if (input.method === "turn/steer" && response?.error && response.errorCode === -32600 && !response.errorDataPresent && (response.noActiveTurn || (response.mismatchExact && response.mismatchExpected === input.expectedTurnId && response.mismatchActual && response.mismatchActual !== input.expectedTurnId))) rejected.push(response);
-          else uncertain.push(input);
-        }
-        const unconfirmed = results.filter((result) => result.details?.code === "response_delivery_unconfirmed").length;
-        const settled = accepted.every((response) => events.some((event) => event.method === "turn/completed" && event.threadId === b.backendRef.conversationId && event.turnId === response.turnId && event.status === "completed"));
-        return accepted.length + unconfirmed >= 2 && settled && (uncertain.length === 0 || unconfirmed > 0) ? { accepted, rejected, uncertain, unconfirmed } : undefined;
-      }, "matched repeat native terminal observations");
-      for (const record of repeatWindows) if (!record.result?.isError) requireResponseResume(nativeEvents(), record.boundary, b.backendRef.conversationId);
-      const actual = nativeEvents().slice(prior).filter((event) => event.direction === "request" && ["turn/start", "turn/steer"].includes(event.method));
+        latest = repeatNativeObservation(nativeEvents().slice(prior), b, message, counts);
+        return latest.ready ? latest : undefined;
+      }, "matched repeat native terminal observations").finally(() => {
+        if (latest) evidence.record("host-events.jsonl", { phase: "repeat-native-counts", ...counts, ready: latest.ready, starts: latest.inputs.filter((input) => input.method === "turn/start").length, steers: latest.inputs.filter((input) => input.method === "turn/steer").length, observedInputAttempts: latest.inputs.length, acceptedAcknowledgements: latest.accepted.length, knownNotSubmittedRejections: latest.rejected.length, acceptanceUnknown: latest.uncertain.length, terminalTurns: latest.terminalTurns.length });
+      });
+      // Guard races also require the fresh successful shared original-thread resume.
+      if (counts.guards > 0) freshResume(nativeEvents().slice(prior), b.backendRef.conversationId, true);
+      for (const record of repeatWindows) requireResponseResume(nativeEvents(), record.boundary, b.backendRef.conversationId);
+      const actual = observations.inputs;
       const provider = providerRequests.slice(providerBefore);
       assert.ok(actual.every((input) => input.threadId === b.backendRef.conversationId));
-      assert.ok(provider.some((request) => request.latestInputHash === sha256(message) && request.fixtureOutputMarkers.includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`)));
+      const nativeProvider = selectedProvider(provider, b.fixtureGeneration, message);
+      for (const request of nativeProvider) {
+        assert.ok(request.fixtureOutputMarkers.every((marker: string) => marker === `OCA504_BACKEND_OK:${b.fixtureGeneration}:`), "Competing native generation output in repeat window");
+        for (const value of Object.values(request.fixtureNativeHeaders)) if (typeof value === "string") assert.equal(value, b.backendRef.conversationId);
+      }
       const repeatedOutput = await invoke(client, "agent_output", { session: b.sessionId, full: true });
       assert.ok(text(repeatedOutput).includes(`OCA504_BACKEND_OK:${b.fixtureGeneration}:`));
-      outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginUnconfirmedOutcomes: observations.unconfirmed, terminalTurns: new Set(observations.accepted.map((item) => item.turnId)).size, providerRequests: provider.length, sameActualCallId: true, resumeObservation: concurrent ? "shared-overlapping-runtime-window-not-per-call-receipt" : "distinct-sequential-fresh-windows", durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
+      for (const other of knownTargets) if (other.sessionId !== b.sessionId) assert.ok(!text(repeatedOutput).includes(`OCA504_BACKEND_OK:${other.fixtureGeneration}:`));
+      outcomes.push({ lane: lanes.rpc, scenario: concurrent ? "same-actual-call-id-concurrent" : "same-actual-call-id-sequential", status: "PASS", starts: actual.filter((item) => item.method === "turn/start").length, steers: actual.filter((item) => item.method === "turn/steer").length, acceptedAcknowledgements: observations.accepted.length, knownNotSubmittedRejections: observations.rejected.length, unconfirmedAttempts: observations.uncertain.length, pluginSuccessOutcomes: observations.successes, pluginUnconfirmedOutcomes: observations.unconfirmed, exactResumeGuardOutcomes: observations.guards, observedInputAttempts: observations.inputs.length, terminalTurns: observations.terminalTurns.length, providerRequests: provider.length, sameActualCallId: true, resumeObservation: concurrent ? "shared-overlapping-runtime-window-not-per-call-receipt" : "distinct-sequential-fresh-windows", durableExactlyOnce: false, modelRetries: "separate and unproven; native rejected-steer queue recovery is OCA behavior" });
     }
     begin("different-actual-call-id-identical-input");
     const firstRepeat = await unchangedResponse(b, b.sessionId, "INTENTIONAL_REPEAT", randomUUID());
