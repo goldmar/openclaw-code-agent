@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { nativeInventory } from "./oca501-native-protocol.mjs";
+import { projectHostLog } from "./oca501-host-log-projection.mjs";
 
 export const messageText = (entry) => typeof entry.content === "string" ? entry.content : (entry.content ?? []).map((part) => part.text ?? "").join("\n");
 export function latestParentUser(input) {
@@ -494,13 +495,15 @@ export function rejectedHostLogDiagnostic(input, options) {
 export function hostLogEvidence(input, options) {
   const raw = Buffer.isBuffer(input), bytes = raw ? input : Buffer.from(input), text = raw ? bytes.toString("utf8") : input;
   const original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), identityDomain: raw ? "original captured stream bytes" : "captured text UTF8 encoding; original undecoded byte validity unavailable" };
-  const assessment = assessHostLog(text, options);
+  const assessment = raw && !Buffer.from(text).equals(bytes) ? { safe: false, failureDiagnostic: { code: "UNKNOWN_GUARD_FAILURE", guardSite: "captured-source-utf8-identity", sourceClass: "unknown", location: { scope: "whole-stream", available: false } } } : assessHostLog(text, options);
   if (assessment.safe) { const commandMetadata = assessment.commandMetadata; return { completeStreamSafe: true, original, ...(commandMetadata.length ? { commandMetadata } : {}) }; }
   {
+    const sourceProjection = options?.sourceAuthority ? projectHostLog(input, options.sourceAuthority, (value) => assessHostLog(value)) : undefined;
+    if (sourceProjection?.outcome === "SOURCE_PROJECTED_COMPLETE") return { completeStreamSafe: false, sourceProjectedComplete: true, projection: true, original, rawCompleteStreamExcluded: true, rawGuardFailureDiagnostic: assessment.failureDiagnostic, ...sourceProjection };
     const failureDiagnostic = assessment.failureDiagnostic;
     const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: rejectedHostLogDiagnostic(raw ? bytes : text, options),
       excludedRecordRange: { first: 0, last: text.split("\n").length - 1, numbering: "zero-based captured stream lines; entire stream excluded" },
-      exclusionReason: "Unsafe or unknown structured profile/auth/content-bearing log; omitted lifecycle/error facts remain BLOCKED" };
+      ...(sourceProjection ? { sourceProjectionAttempt: sourceProjection } : {}), exclusionReason: "Unsafe or unknown structured profile/auth/content-bearing log; omitted lifecycle/error facts remain BLOCKED" };
     return { ...payload, projectedPayloadSha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"), projectedDigestScope: "Closed projection payload before digest/source wrapper; not the original stream" };
   }
 }

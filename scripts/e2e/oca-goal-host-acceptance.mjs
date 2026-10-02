@@ -15,6 +15,7 @@ import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
 import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
+import { renderResponsesStart, expectedEmbeddedStarts, sourceSdkTimeout, bindCanonicalTransportRequest } from "./oca501-host-log-projection.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
@@ -199,7 +200,7 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), hostLogProjectionHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-host-log-projection.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
     if (options.phase === "matrix-l1") {
       this.l1Assignment = l1Assignment(options.phase, options["l1-cohort"]);
       this.provenance.selectedL1Cohort = this.l1Assignment.selectedL1Cohort;
@@ -221,9 +222,55 @@ class AcceptanceRun {
     writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, (_key, item) => item && typeof item === "object" ? this.historyExportProjections.get(item) ?? item : item, 2)}\n`), { mode: 0o600 });
     this.artifactFiles.add(name);
   }
+  logSourceAuthority() {
+    const responsesStarts = [];
+    let modelAbsenceProven = false;
+    if (this.logModelReadback && existsSync(this.env.OPENCLAW_CONFIG_PATH)) {
+      const source = readOwnedConfig(this.env.OPENCLAW_CONFIG_PATH, this.directory).config;
+      const provider = source.models?.providers?.oca501, model = provider?.models?.find((entry) => entry.id === MODEL);
+      modelAbsenceProven = provider?.baseUrl === this.logModelReadback.baseUrl && provider.api === "openai-responses" && model && JSON.stringify(provider.models) === JSON.stringify(this.logModelReadback.models) && !Object.hasOwn(model, "requestTimeoutMs");
+    }
+    const population = this.modelRequests.filter((request) => request.transport === "host-parent").length;
+    for (const request of this.modelRequests) {
+      if (!modelAbsenceProven || request.transport !== "host-parent" || request.authorization !== "validated synthetic fixture key") continue;
+      const path = join(this.directory, `responses-request-${request.requestIndex}.json`);
+      if (!this.artifactFiles.has(`responses-request-${request.requestIndex}.json`)) continue;
+      const input = json(path).input;
+      const options = { provider: "oca501", model: MODEL, baseUrl: `${this.providerUrl}/host/v1`, timeoutMs: sourceSdkTimeout({ optionAbsenceProven: true, modelAbsenceProven: true }), presence: "present", requestPopulation: population, allowedToolNames: ["tool_call", "tool_describe", "tool_search", "message", ...(this.pluginToolNames ?? [])] };
+      // Pinned c074 attempt.model-diagnostic-lifecycle passes requestId only,
+      // never options.timeoutMs; isolated simple-completion-execution likewise
+      // passes its deadline via signal, not a stream timeout. The actual owned
+      // model/readback absence above supplies the other SDK timeout branch.
+      // host-prepared-isolated-completion/simple-completion-execution supplies
+      // no requestId or stream timeout; its separate deadline is an AbortSignal.
+      if (request.parentRequestClassification?.kind === "activity-recap") {
+        responsesStarts.push(renderResponsesStart({ ...options, body: input, bodySha256: request.bodyHash })); continue;
+      }
+      const bound = bindCanonicalTransportRequest(request, { receipts: this.logRpcReceipts ?? [], requests: this.modelRequests, sessionKey: this.sessionKey, sessionId: this.parentSessionId, body: input, completedRunIds: this.sessions().filter((row) => row.originSessionKey === this.sessionKey && row.completionWakeIssuedAt && row.completionWakeSucceededAt && !row.completionWakeFailedAt && !row.completionWakeSkippedAt).map((row) => row.completionWakeRunId).filter(Boolean) }, assertCompletionTerminal, assertVisibleCanonical);
+      if (bound) responsesStarts.push(...expectedEmbeddedStarts(bound, options));
+    }
+    const ownRows = this.sessions().filter((row) => row.originSessionKey === this.sessionKey && ([...this.nativeCases.values()].some((fixture) => fixture.sessionId === row.sessionId) || this.goals().some((goal) => goal.sessionId === row.sessionId && goal.id === row.goalTaskId)));
+    return { candidateSha: this.provenance.candidateSha, helperSha256: this.provenance.hostLogProjectionHelperHash, hostCommit: this.provenance.upstreamTagCommit,
+      agentIds: this.logParentIdentity ? [this.logParentIdentity.agentId] : [],
+      sessionIds: this.logParentIdentity ? [this.logParentIdentity.sessionId, this.logParentIdentity.sessionKey] : [],
+      channels: [...new Set(ownRows.map((row) => row.route?.provider).filter((value) => ["telegram", "webchat"].includes(value)))], responsesStarts };
+  }
+  hostStreamEvidence(text) {
+    // A missing/unstable source proof never prevents the existing fixed safe
+    // failure/cleanup receipt from being exported.
+    try { return hostLogEvidence(text, { sourceAuthority: this.logSourceAuthority() }); }
+    catch { return hostLogEvidence(text); }
+  }
   captureHostStream(name, text) {
-    const receipt = hostLogEvidence(text);
+    const receipt = this.hostStreamEvidence(text);
     if (receipt.completeStreamSafe) this.artifact(name, Buffer.isBuffer(text) ? text.toString("utf8") : text);
+    else if (receipt.sourceProjectedComplete) {
+      const { projectedText, audit, ...summary } = receipt;
+      const sanitized = this.redact(projectedText); assert.ok(hostLogEvidence(sanitized).completeStreamSafe);
+      this.artifact(`${name}.source-projected.log`, sanitized);
+      this.artifact(`${name}.source-audit.json`, { ...audit, projectedRecordHashScope: "Validated source projection before exact known synthetic fixture-token artifact redaction" });
+      this.artifact(name, { ...summary, sourceIdentity: name, projectedStream: `${name}.source-projected.log`, sourceAudit: `${name}.source-audit.json`, projectedHashScope: "Validated source projection before exact known synthetic fixture-token artifact redaction", exportedProjection: { bytes: Buffer.byteLength(sanitized), sha256: hash(sanitized), scope: "Actual sanitized projected stream artifact bytes" }, projectionScope: "Complete source-validated projection; original raw stream excluded; unchanged acceptance obligations" });
+    }
     else {
       this.artifact(name, { ...receipt, sourceIdentity: name, guardSource: { helper: "scripts/e2e/oca501-lifecycle-protocol.mjs", helperSha256: this.provenance.lifecycleProtocolHelperHash, candidateSha: this.provenance.candidateSha }, projectionScope: "Entire unsafe stream excluded; original bytes/hash retained; lifecycle/error facts UNPROVEN" });
       (this.independentErrors ??= []).push({ stage: "log-export-boundary", source: name, error: receipt.exclusionReason });
@@ -665,6 +712,7 @@ class AcceptanceRun {
         const projection = this.projectHistoryStream(output);
         if (projection.receipt.projection) this.historyExportProjections.set(value, { ...JSON.parse(projection.stdout), exportProjection: projection.receipt });
       }
+      if (["chat.send", "chat.history", "agent.wait"].includes(method)) (this.logRpcReceipts ??= []).push({ method, params: structuredClone(params), value: structuredClone(value) });
       return value;
     } catch (error) {
       if (method.startsWith("config.")) throw new Error(`Invalid internal ${method} response; bytes=${Buffer.byteLength(output)} sha256=${hash(output)} (raw response excluded)`);
@@ -824,6 +872,8 @@ class AcceptanceRun {
     const loadedDefaults = loadedConfig.config.agents.defaults;
     assert.equal(loadedModels.mode, "replace"); assert.deepEqual(Object.keys(loadedModels.providers), ["oca501"]);
     assert.equal(loadedModels.providers.oca501.baseUrl, `${this.providerUrl}/host/v1`);
+    const sourceModel = readOwnedConfig(this.env.OPENCLAW_CONFIG_PATH, this.directory).config.models?.providers?.oca501;
+    if (sourceModel && JSON.stringify(sourceModel.models) === JSON.stringify(loadedModels.providers.oca501.models) && !Object.hasOwn(sourceModel.models.find((entry) => entry.id === MODEL) ?? {}, "requestTimeoutMs")) this.logModelReadback = { baseUrl: sourceModel.baseUrl, models: structuredClone(sourceModel.models) };
     assert.equal(loadedModels.providers.oca501.request.allowPrivateNetwork, true);
     assert.equal(loadedModels.catalogRefresh.enabled, false);
     assert.deepEqual(loadedDefaults.model, { primary: PARENT_MODEL, fallbacks: [] });
@@ -847,6 +897,8 @@ class AcceptanceRun {
     this.artifact("parent-model-session-before.json", modelSession);
     const effectiveSession = modelSession.sessions.find((entry) => entry.key === this.sessionKey);
     assert.ok(effectiveSession, "Real host lists the created parent session");
+    assert.equal(effectiveSession.sessionId, created.sessionId); assert.equal(effectiveSession.agentId, "main");
+    this.logParentIdentity = { agentId: effectiveSession.agentId, sessionId: effectiveSession.sessionId, sessionKey: effectiveSession.key };
     assert.equal(effectiveSession.modelProvider, "oca501"); assert.equal(effectiveSession.model, MODEL);
     if (effectiveSession.activeModelProvider !== undefined) assert.equal(effectiveSession.activeModelProvider, "oca501");
     if (effectiveSession.activeModel !== undefined) assert.equal(effectiveSession.activeModel, MODEL);
@@ -1483,14 +1535,14 @@ class AcceptanceRun {
     // deliberately excluded, even though they live under the disposable root.
     let runtimeSafe = true;
     if (existsSync(join(this.directory, "openclaw-runtime.log"))) {
-      const receipt = hostLogEvidence(readFileSync(join(this.directory, "openclaw-runtime.log")));
+      const receipt = this.hostStreamEvidence(readFileSync(join(this.directory, "openclaw-runtime.log")));
       runtimeSafe = receipt.completeStreamSafe;
       if (!runtimeSafe) { this.captureHostStream("runtime-log.projection.json", readFileSync(join(this.directory, "openclaw-runtime.log"))); this.artifact("results.json", this.results); }
     }
     const entries = [...this.artifactFiles].map((name) => ({ name, alreadyRedacted: true }));
     const unavailable = [];
     for (const name of ["goals.json", "sessions.json", "openclaw-runtime.log"]) {
-      if (name === "openclaw-runtime.log" && !runtimeSafe) unavailable.push({ name, reason: "Unsafe complete stream excluded with original byte/hash projection; acceptance BLOCKED" });
+      if (name === "openclaw-runtime.log" && !runtimeSafe) unavailable.push({ name, reason: "Original guard-rejected raw stream excluded; source projection or BLOCKED receipt retains original identity and complete classification" });
       else if (existsSync(join(this.directory, name))) entries.push({ name, alreadyRedacted: false });
       else {
         assert.ok(!this.hostGoalAdmitted, `Required ${name} evidence missing after real admission`);
