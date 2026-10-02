@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
+import { readGitTrace, gitQueueBoundary, gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, hostCohort, runsHostCohort, hostCohortCoverage, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, providerSseObservation, planRowObservation, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, installObserver, verifyObserverInspection, closeFailedProviderResponse, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, type FixtureSessionSubscription, command, fixtureEnv, FIXTURE_MARKER, functionItem, messageItem, ownedPath, preparePackedInstaller, validatePackSource, verifyPackedPluginInspection, freshPluginBootstrap, requireCandidate, responseFrames, sha256, stopOwnedChild, trackOwnedChild, stopNativeProcesses, captureDescendants, cleanupAll, sameProcess, processIdentity, until, writeNativeRelay, writeHostObserver, validateNativeExecutable, NATIVE_CODEX_SHA256, type ProcessIdentity, type FixtureCall } from "./oca-issue-504-host-fixtures";
 
 type Json = Record<string, any>;
 type Scenario = { calls: Array<FixtureCall | { deferred: FixtureCall }>; cursor: number; results: Json[]; emitted: Array<{ id: string; itemId: string; hostCallId: string; target: FixtureCall; catalogId?: string }>; schemas: Json[][]; searching?: FixtureCall; final: boolean; nativeTarget: Json; resumeWindows: Array<ReturnType<typeof responseResumeBoundary>> };
@@ -235,9 +235,13 @@ async function main(): Promise<void> {
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const gitCalls = join(fixture, "git-calls.jsonl");
   writeFileSync(gitCalls, "", { mode: 0o600 });
-  const bin = ownedPath(fixture, join(fixture, "bin")); mkdirSync(bin);
-  writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst {spawnSync}=require('node:child_process');const{appendFileSync,existsSync,statSync,writeFileSync}=require('node:fs');const append=value=>{try{const text=JSON.stringify(value)+'\\n';if((existsSync(${JSON.stringify(gitCalls)})?statSync(${JSON.stringify(gitCalls)}).size:0)+Buffer.byteLength(text)>1048576)throw Error();appendFileSync(${JSON.stringify(gitCalls)},text,{mode:0o600});}catch{try{writeFileSync(${JSON.stringify(join(fixture, "capture-incomplete"))},'git-proof-incomplete',{mode:0o600});}catch{}}};const args=process.argv.slice(2);append({args,at:Date.now(),phase:'start'});const r=spawnSync(${JSON.stringify(realGit)},args,{env:process.env,stdio:'inherit'});append({args,at:Date.now(),phase:'end',code:r.status});if(r.signal)process.kill(process.pid,r.signal);else process.exit(r.status??1);`, { mode: 0o700 });
-  env.PATH = `${bin}:${env.PATH}`;
+  env.GIT_TRACE2_EVENT = gitCalls;
+  const gitVersion = execFileSync(realGit, ["--version"], { env, encoding: "utf8" }).trim();
+  assert.match(gitVersion, /^git version \d+\.\d+/);
+  const versionTrace = readGitTrace(gitCalls);
+  assert.ok(versionTrace.events.some((event) => event.event === "start" && event.argv?.at(-1) === "--version"));
+  assert.ok(versionTrace.events.some((event) => event.event === "exit" && event.code === 0));
+  evidence.record("host-events.jsonl", { phase: "git-native-observer", version: gitVersion, executableHash: sha256(readFileSync(realGit)), traceBytes: versionTrace.bytes.length, traceSha256: versionTrace.sha256 });
   const git = (cwd: string, ...args: string[]) => execFileSync(realGit, ["-C", ownedPath(fixture, cwd), ...args], { env, encoding: "utf8" }).trim();
   const createRepo = (name: string) => {
     const dir = ownedPath(fixture, join(fixture, name)); mkdirSync(dir);
@@ -376,7 +380,7 @@ async function main(): Promise<void> {
     const nativeEvents = () => records(join(fixture, "native-events.jsonl"));
     const hostTools = () => records(join(fixture, "host-tools.jsonl"));
     const backendRequests = () => nativeEvents().filter((event) => event.direction === "request");
-    const snapshot = () => negativeSnapshot(records(gitCalls).length, backendRequests().length, providerTraffic, providerRequests);
+    const snapshot = () => negativeSnapshot(readGitTrace(gitCalls).starts, backendRequests().length, providerTraffic, providerRequests);
     const assertNoAction = (prior: ReturnType<typeof snapshot>) => {
       const observation = assertNegativeWindow(prior, snapshot(), providerRequests);
       evidence.record("host-events.jsonl", { phase: "negative-window-observation", ...observation });
@@ -642,13 +646,15 @@ async function main(): Promise<void> {
       writeFileSync(hook, gitBarrierHook(paths[0], entered, release), { mode: 0o700 });
       chmodSync(hook, 0o700);
       const recordGit = (value: Json) => evidence.record("host-events.jsonl", { variant, ...value });
+      const firstTraceAfter = readGitTrace(gitCalls).events.length;
       const first = observeGitCall(invoke(client, "agent_merge", { session: row0.sessionId, base_branch: "main", delete_branch: false, push: false }), variant, "first", row0.sessionId, recordGit);
       let second: ReturnType<typeof observeGitCall> | undefined, variantFailure: unknown;
       try {
       await requireGitBarrier(first, () => existsSync(entered), recordGit);
-      const start = records(gitCalls).length;
+      const secondTraceAfter = readGitTrace(gitCalls).events.length;
       second = observeGitCall(invoke(client, "agent_merge", { session: rowA.name, base_branch: "main", delete_branch: false, push: false }), variant, "second", rowA.sessionId, recordGit);
-      await until(() => records(gitCalls).slice(start).find((call) => call.phase === "end" && call.args.includes("diff") && call.args.some((arg: string) => arg.includes(rowA.worktreeBranch))), "second target initial safe Git inspection");
+      const boundary = await until(() => gitQueueBoundary(readGitTrace(gitCalls), { firstAfter: firstTraceAfter, secondAfter: secondTraceAfter, firstPath: paths[0], repo, branch: rowA.worktreeBranch, gitExecutable: realGit, entered: existsSync(entered), released: existsSync(release), firstSettled: first.settled, secondSettled: second!.settled }), "second target initial safe Git inspection");
+      recordGit({ phase: "git-prequeue-boundary", ...boundary });
       const bBefore = sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowB.sessionId)));
       evidence.record("host-events.jsonl", { phase: "git-before-mutation", variant, selectedRowHash: sha256(JSON.stringify(store().sessions.find((row: Json) => row.sessionId === rowA.sessionId))), policyHash: sha256(JSON.stringify(policyBefore[0])) });
       if (variant === "new-hooks") {
@@ -833,7 +839,8 @@ async function main(): Promise<void> {
       : error === undefined ? [] : [{ name: error instanceof Error ? error.name : "UnknownError", message: evidence.sanitize(error instanceof Error ? error.message : String(error)).slice(0, 1_000) }];
     try {
       await cleanupAll([
-        ...[["native-events.jsonl", "native-events.jsonl"], ["host-tools.jsonl", "host-tools.jsonl"], ["git.jsonl", "git-calls.jsonl"]].map(([file, source]) => () => evidence.copyProof(file, join(fixture, source))),
+        ...[["native-events.jsonl", "native-events.jsonl"], ["host-tools.jsonl", "host-tools.jsonl"]].map(([file, source]) => () => evidence.copyProof(file, join(fixture, source))),
+        () => { const trace = readGitTrace(join(fixture, "git-calls.jsonl"), true); evidence.append("git.jsonl", trace.bytes); evidence.record("host-events.jsonl", { phase: "git-native-final-proof", bytes: trace.bytes.length, sha256: trace.sha256, startEvents: trace.starts }); },
         () => { const incomplete = existsSync(join(fixture, "capture-incomplete")); evidence.record("capture-status.json", { complete: !incomplete }); if (incomplete) evidence.errors.push("fixture-capture-incomplete"); },
       ]);
     } catch (collectionError) { evidence.errors.push(`collection-incomplete:${collectionError instanceof Error ? collectionError.name : "UnknownError"}`); }

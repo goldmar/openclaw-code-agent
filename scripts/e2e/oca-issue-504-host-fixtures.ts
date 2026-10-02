@@ -65,6 +65,61 @@ export function gitCallResult(observed: ReturnType<typeof observeGitCall>): Fixt
   if (observed.error !== undefined) throw observed.error;
   assert.ok(observed.result); return observed.result;
 }
+/** Git's native JSONL is the evidence; incomplete last writes cannot be events. */
+export function parseGitTrace(bytes: Buffer, final = false) {
+  assert.ok(bytes.length <= 1_048_576, "Git trace exceeds proof cap");
+  const last = bytes.lastIndexOf(10), pending = last !== bytes.length - 1 && bytes.length !== 0;
+  assert.ok(!final || !pending, "Git trace has an unfinished final line");
+  const events: FixtureRecord[] = [], starts = new Map<string, FixtureRecord>(), endings = new Map<string, FixtureRecord>();
+  const complete = bytes.subarray(0, last + 1), text = complete.toString();
+  assert.ok(Buffer.from(text).equals(complete), "Malformed Git trace UTF-8");
+  for (const line of text.split("\n").slice(0, -1)) {
+    const event = JSON.parse(line);
+    assert.ok(event && typeof event.event === "string" && typeof event.sid === "string" && event.sid.length > 0, "Malformed Git trace event");
+    if (event.event === "start") {
+      assert.ok(Array.isArray(event.argv) && event.argv.length > 0 && event.argv.every((arg: unknown) => typeof arg === "string"));
+      assert.ok(!starts.has(event.sid), "Duplicate Git trace start identity"); starts.set(event.sid, event);
+    }
+    if (["exit", "atexit"].includes(event.event)) {
+      assert.ok(Number.isSafeInteger(event.code) && starts.has(event.sid), "Malformed or unmatched Git trace exit");
+      const key = `${event.sid}:${event.event}`;
+      assert.ok(!endings.has(key), "Duplicate Git trace exit identity");
+      const other = endings.get(`${event.sid}:${event.event === "exit" ? "atexit" : "exit"}`);
+      assert.ok(!other || other.code === event.code, "Contradictory Git trace exits"); endings.set(key, event);
+    }
+    events.push(event);
+  }
+  return { bytes, sha256: sha256(bytes), pending, events, starts: starts.size };
+}
+export function readGitTrace(path: string, final = false) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    assert.ok(before.isFile() && before.uid === process.getuid!() && (before.mode & 0o777) === 0o600 && before.size <= 1_048_576, "Git trace must be bounded owned regular proof");
+    const bytes = Buffer.alloc(before.size); let count = 0;
+    while (count < bytes.length) { const n = readSync(fd, bytes, count, bytes.length - count, null); assert.ok(n > 0, "Git trace shrank during observation"); count += n; }
+    const after = fstatSync(fd);
+    assert.ok(after.size >= before.size && after.size <= 1_048_576, "Git trace changed incompatibly or overflowed");
+    if (final) { assert.equal(after.size, before.size); assert.equal(after.mtimeMs, before.mtimeMs); }
+    return parseGitTrace(bytes, final);
+  } finally { closeSync(fd); }
+}
+export function gitQueueBoundary(trace: ReturnType<typeof parseGitTrace>, args: { firstAfter: number; secondAfter: number; firstPath: string; repo: string; branch: string; gitExecutable: string; entered: boolean; released: boolean; firstSettled: boolean; secondSettled: boolean }) {
+  assert.ok(args.entered && !args.released && !args.firstSettled, "First actual merge is no longer held at its hook");
+  assert.equal(args.secondSettled, false, "Second public merge settled before queue readiness");
+  const sameArgs = (event: FixtureRecord, expected: string[]) => event.event === "start" && ["git", args.gitExecutable].includes(event.argv?.[0]) && JSON.stringify(event.argv.slice(1)) === JSON.stringify(expected);
+  const first = trace.events.slice(args.firstAfter).filter((event) => sameArgs(event, ["-C", args.firstPath, "rebase", "refs/heads/main"]));
+  assert.ok(first.length <= 1, "Ambiguous first rebase trace"); if (!first.length) return undefined;
+  assert.ok(!trace.events.some((event) => event.sid === first[0].sid && ["exit", "atexit"].includes(event.event)), "First rebase already exited its actual hook hold");
+  if (trace.pending) return undefined;
+  const expected = ["-C", args.repo, "diff", "--name-only", "--no-renames", "-z", `refs/heads/main...refs/heads/${args.branch}`];
+  const matches = trace.events.slice(args.secondAfter).filter((event) => sameArgs(event, expected));
+  assert.ok(matches.length <= 1, "Ambiguous second prequeue diff trace"); if (!matches.length) return undefined;
+  const exit = trace.events.slice(args.secondAfter).find((event) => event.sid === matches[0].sid && event.event === "exit");
+  if (!exit) return undefined;
+  assert.equal(exit.code, 0, "Second prequeue hook diff failed");
+  return { sid: matches[0].sid, argv: matches[0].argv, code: exit.code, firstSid: first[0].sid, firstHeld: true, released: false, traceBytes: trace.bytes.length, traceSha256: trace.sha256 };
+}
 export const HOST_COHORTS = ["smoke", "plan", "references", "retries", "git", "embedded-direct", "embedded-deferred", "all"] as const;
 export type HostCohort = typeof HOST_COHORTS[number];
 export function hostCohort(value: string | undefined): HostCohort {

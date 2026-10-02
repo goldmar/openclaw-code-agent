@@ -14,7 +14,7 @@ import { Session } from "../src/session";
 import type { SessionManager } from "../src/session-manager";
 import type { ServerResponse } from "node:http";
 import { options, nativeResult, compositeToolCallId } from "../scripts/e2e/oca-issue-504-host-acceptance";
-import { gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, repeatOutcome, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
+import { parseGitTrace, readGitTrace, gitQueueBoundary, gitFixtureRow, requireGitFixtureIdentities, gitBarrierHook, observeGitCall, requireGitBarrier, gitCallResult, HostEvidence, repeatOutcome, settleRepeatCalls, repeatOutcomeCounts, repeatNativeObservation, HOST_COHORTS, hostCohort, hostCohortCoverage, requiredHostScenarios, runsHostCohort, replayObservedPlan, FIXTURE_PLAN, nativePlanBoundary, publicOutputObservation, waitingPlanObservation, hasLivePlanBoundary, requireAskPlanRefusal, publicAliasOwner, negativeSnapshot, assertNegativeWindow, projectNativePlanFrame, providerSseObservation, planRowObservation, hasNativePlanBoundary, responseFrames, messageItem, writeNativeRelay, responseResumeBoundary, requireResponseResume, seedObserverAllow, managedObserverAllow, generationObservation, stoppedGeneration, killResultClass, freshResume, aliasOwnerObservation, assertAliasProtection, requireHttpBefore, requireEmbeddedAfter, classifyProvider, selectedProvider, observerSourceProof, installObserver, verifyObserverInspection, sha256, subscribeFixtureMessages, projectFixtureHostEvent, hasFreshSubscribedTerminal, preparePackedInstaller, command, closeFailedProviderResponse, cleanupAll, currentDescendant, ignorableProcReadFailure, fixtureEnv, FIXTURE_MARKER, ownedPath, packedCandidateProof, expectedPublishedPackage, verifyPackedPluginInspection, freshPluginBootstrap, processIdentity, requireCandidate, sameProcess, sameProcessFields, stopNativeProcesses, trackOwnedChild, stopOwnedChild, until, validateNativeExecutable, writeHostObserver } from "../scripts/e2e/oca-issue-504-host-fixtures";
 
 const archiveReader = join(process.cwd(), "scripts", "e2e", "oca-issue-504-archive-proof.py");
 function readArchive(path: string) {
@@ -52,6 +52,94 @@ function syntheticPackedInstall() {
 
 // Utility controls only. These tests provide no real-host/native acceptance receipt.
 describe("issue 504 real-host acceptance controls", () => {
+  it("matches only the fresh exact native hook diff with the same successful SID while the first rebase remains held", () => {
+    const first = { event: "start", sid: "first", argv: ["git", "-C", "/fixture/first", "rebase", "refs/heads/main"] };
+    const second = { event: "start", sid: "second", argv: ["git", "-C", "/fixture/repo", "diff", "--name-only", "--no-renames", "-z", "refs/heads/main...refs/heads/selected"] };
+    const exit = { event: "exit", sid: "second", code: 0 };
+    const trace = (events: Record<string, any>[]) => parseGitTrace(Buffer.from(events.map((event) => JSON.stringify(event)).join("\n") + "\n"));
+    const args = { firstAfter: 0, secondAfter: 1, firstPath: "/fixture/first", repo: "/fixture/repo", branch: "selected", gitExecutable: "/usr/bin/git", entered: true, released: false, firstSettled: false, secondSettled: false };
+    assert.equal(gitQueueBoundary(trace([first, second, exit]), args)?.sid, "second");
+    const validBytes = trace([first, second, exit]).bytes;
+    for (const tail of ['{"event":"exit","sid":"first","code":0}', '{"event":"atexit","sid":"first","code":0}', '{"unfinished":']) {
+      const pending = parseGitTrace(Buffer.concat([validBytes, Buffer.from(tail)]));
+      assert.equal(gitQueueBoundary(pending, args), undefined);
+      assert.throws(() => gitQueueBoundary(pending, { ...args, firstSettled: true }));
+      assert.throws(() => gitQueueBoundary(pending, { ...args, secondSettled: true }));
+    }
+    assert.throws(() => gitQueueBoundary(parseGitTrace(Buffer.concat([validBytes, Buffer.from('{"event":"exit","sid":"first","code":0}\n')])), args));
+    for (const event of ["exit", "atexit"]) {
+      const completeFirstExit = Buffer.from(JSON.stringify({ event, sid: "first", code: 0 }) + '\n{"unfinished":');
+      assert.throws(() => gitQueueBoundary(parseGitTrace(Buffer.concat([validBytes, completeFirstExit])), args), /First rebase already exited/);
+    }
+    assert.equal(gitQueueBoundary(parseGitTrace(Buffer.concat([validBytes, Buffer.from('{"event":"data","sid":"second","key":"unrelated"}\n')])), args)?.sid, "second");
+    for (const wrong of [{ ...args, secondAfter: 2 }, { ...args, repo: "/other" }, { ...args, branch: "other" }]) assert.equal(gitQueueBoundary(trace([first, second, exit]), wrong), undefined);
+    for (const wrong of [{ ...args, firstSettled: true }, { ...args, secondSettled: true }, { ...args, entered: false }, { ...args, released: true }]) assert.throws(() => gitQueueBoundary(trace([first, second, exit]), wrong));
+    assert.equal(gitQueueBoundary(trace([first, second]), args), undefined);
+    assert.equal(gitQueueBoundary(trace([first, second, { event: "start", sid: "other", argv: ["git", "status"] }, { ...exit, sid: "other" }]), args), undefined);
+    for (const argv of [["git", "-C", "/fixture/repo", "diff", "--shortstat", "main...selected"], ["not-git", ...second.argv.slice(1)], [...second.argv, "extra"]]) assert.equal(gitQueueBoundary(trace([first, { ...second, argv }, exit]), args), undefined);
+    assert.throws(() => gitQueueBoundary(trace([first, second, { ...exit, code: 1 }]), args));
+    for (const event of ["exit", "atexit"]) assert.throws(() => gitQueueBoundary(trace([first, { event, sid: "first", code: 0 }, second, exit]), args));
+    for (const events of [[first, first], [first, second, exit, exit], [first, second, exit, { event: "atexit", sid: "second", code: 1 }], [first, { ...exit, code: "0" }], [{ event: "start", sid: "bad", argv: [1] }]]) assert.throws(() => trace(events));
+  });
+
+  it("bounds owned native trace reads and keeps incomplete last records pending rather than readiness", () => {
+    const root = mkdtempSync(join(tmpdir(), "oca504-trace-control-")), path = join(root, "trace.jsonl");
+    const complete = JSON.stringify({ event: "start", sid: "fixture", argv: ["git", "--version"] }) + "\n";
+    try {
+      assert.throws(() => readGitTrace(path));
+      writeFileSync(path, complete + '{"event":"exit"', { mode: 0o600 });
+      const pending = readGitTrace(path); assert.equal(pending.pending, true); assert.equal(pending.starts, 1); assert.equal(pending.events.length, 1);
+      assert.throws(() => readGitTrace(path, true), /unfinished/);
+      writeFileSync(path, complete + "invalid\n"); assert.throws(() => readGitTrace(path));
+      assert.throws(() => parseGitTrace(Buffer.from(complete + "\n")));
+      assert.throws(() => parseGitTrace(Buffer.from([0xff, 10])), /UTF-8/);
+      writeFileSync(path, Buffer.alloc(1_048_577)); assert.throws(() => readGitTrace(path), /bounded/);
+      writeFileSync(path, complete); assert.equal(readGitTrace(path, true).sha256, sha256(complete));
+      symlinkSync(path, join(root, "link")); assert.throws(() => readGitTrace(join(root, "link")));
+      assert.throws(() => parseGitTrace(Buffer.alloc(1_048_577)));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("actual owning runGit survives pinned PATH normalization and proves the held prequeue hook diff through native Trace2", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oca504-owning-git-"));
+    writeFileSync(join(root, ".fixture-owner"), FIXTURE_MARKER);
+    const repo = join(root, "repo"), path = join(root, "first"), wrapper = join(root, "bin"), entered = join(root, "entered"), release = join(root, "release"), trace = join(root, "git.jsonl"), wrapperHit = join(root, "wrapper-hit");
+    mkdirSync(repo); mkdirSync(wrapper); writeFileSync(trace, "", { mode: 0o600 });
+    const env = fixtureEnv(root);
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      git(repo, "init", "-b", "main"); git(repo, "config", "user.name", "Fixture"); git(repo, "config", "user.email", "fixture@example.invalid");
+      writeFileSync(join(repo, "base"), "base"); git(repo, "add", "base"); git(repo, "commit", "-m", "base");
+      git(repo, "worktree", "add", "-b", "fixture-branch", path, "main");
+      writeFileSync(join(path, "branch"), "branch"); git(path, "add", "branch"); git(path, "commit", "-m", "branch");
+      writeFileSync(join(repo, "advanced"), "advanced"); git(repo, "add", "advanced"); git(repo, "commit", "-m", "advance");
+      writeFileSync(join(repo, ".git", "hooks", "pre-rebase"), gitBarrierHook(path, entered, release), { mode: 0o700 });
+      writeFileSync(join(wrapper, "git"), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(wrapperHit)},'hit');process.exit(91);`, { mode: 0o700 });
+      env.PATH = `${wrapper}:${env.PATH}`; env.GIT_TRACE2_EVENT = trace;
+      const moduleUrl = (name: string) => `file://${join(process.cwd(), name)}`;
+      const normalizer = join(process.cwd(), "node_modules/openclaw/dist/path-env-D6iOXGHT.mjs");
+      assert.equal(JSON.parse(readFileSync(join(process.cwd(), "node_modules/openclaw/package.json"), "utf8")).version, "2026.9.7");
+      const script = `import assert from 'node:assert/strict';import{existsSync,readFileSync,writeFileSync}from'node:fs';
+        import{runGit}from${JSON.stringify(moduleUrl("src/git-exec.ts"))};import{listHookPathChanges}from${JSON.stringify(moduleUrl("src/git-hooks.ts"))};
+        import{readGitTrace,gitQueueBoundary,until,sha256}from${JSON.stringify(moduleUrl("scripts/e2e/oca-issue-504-host-fixtures.ts"))};
+        const normalizer=${JSON.stringify(normalizer)},normalizerHash=sha256(readFileSync(normalizer));assert.equal(normalizerHash,'2bbd18f0854398c0c2629dba7bf7d3e3afaa0590fa091364ccdca5d0f995a315');
+        assert.equal(process.env.OPENCLAW_PATH_BOOTSTRAPPED,undefined);(await import('file://'+normalizer)).t();
+        const version=(await runGit(['--version'],{timeout:5000})).trim();assert.match(version,/^git version /);assert.equal(existsSync(${JSON.stringify(wrapperHit)}),false);
+        const trace=${JSON.stringify(trace)}, firstAfter=readGitTrace(trace).events.length;let firstSettled=false;
+        const first=runGit(['-C',${JSON.stringify(path)},'rebase','refs/heads/main'],{timeout:60000}).then(()=>{firstSettled=true;return{ok:true}},error=>{firstSettled=true;return{ok:false,error:error.message}});
+        try{
+          await until(()=>existsSync(${JSON.stringify(entered)})?true:undefined,'owning first native hook');
+          const secondAfter=readGitTrace(trace).events.length;assert.deepEqual(await listHookPathChanges(${JSON.stringify(repo)},'fixture-branch','main'),[]);
+          const boundary=gitQueueBoundary(readGitTrace(trace),{firstAfter,secondAfter,firstPath:${JSON.stringify(path)},repo:${JSON.stringify(repo)},branch:'fixture-branch',gitExecutable:'/usr/bin/git',entered:existsSync(${JSON.stringify(entered)}),released:existsSync(${JSON.stringify(release)}),firstSettled,secondSettled:false});assert.ok(boundary);
+          writeFileSync(${JSON.stringify(release)},'release');const result=await first;assert.equal(result.ok,true,result.error);
+          assert.equal(existsSync(${JSON.stringify(wrapperHit)}),false);const final=readGitTrace(trace,true);assert.ok(final.events.some(e=>e.event==='exit'&&e.sid===boundary.firstSid&&e.code===0));
+          console.log(JSON.stringify({label:'PLUGIN_FIXTURE',version,normalizerHash,wrapperInvocations:0,nativeTraceBytes:final.bytes.length,nativeTraceSha256:final.sha256,prequeueSameSidExit:boundary.code,firstHeld:true,firstCompletion:true}));
+        }finally{writeFileSync(${JSON.stringify(release)},'release');await first;}`;
+      const output = await command(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { cwd: process.cwd(), env, timeoutMs: 75_000 });
+      const proof = JSON.parse(output.trim()); assert.equal(proof.label, "PLUGIN_FIXTURE"); assert.equal(proof.wrapperInvocations, 0); assert.equal(proof.prequeueSameSidExit, 0); assert.equal(proof.firstCompletion, true);
+      assert.equal(readFileSync(join(path, "advanced"), "utf8"), "advanced");
+    } finally { writeFileSync(release, "release"); rmSync(root, { recursive: true, force: true }); }
+  });
   it("proves cloned storage-key collision through actual SessionStore and independent Git fixtures survive reload", () => {
     const root = mkdtempSync(join(tmpdir(), "oca504-git-rows-"));
     writeFileSync(join(root, ".fixture-owner"), FIXTURE_MARKER);
