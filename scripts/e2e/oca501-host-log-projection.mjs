@@ -1,6 +1,8 @@
 // Export-only projections of three pinned logger producers. Original guard,
 // runtime records and acceptance readers are never changed by this module.
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { actualToolPayload, assertActualSendResult, exactFixtureRoute, sourceSendArgs } from "./oca501-config-receipt.mjs";
 
 const PIN = "c074824a27c96d3983043f9eeb33823cd1772d8c";
 const LIMIT = 4 * 1024 * 1024;
@@ -97,6 +99,78 @@ export function bindCanonicalTransportRequest(request, { receipts, requests, ses
   return { ownCanonicalBinding: true, uniqueBody: true, runId, body, bodySha256: request.bodyHash };
 }
 
+// Separate informational attribution for completed function-call responses.
+// Every eligible run is already fully settled by the existing host source
+// assertions. This join never creates delivery or execution evidence.
+export function bindCanonicalFunctionTransportRequest(request, { receipts, requests, sessionKey, sessionId, body, settlements }, assertTerminal) {
+  try {
+    check(request?.responseCompleted === true && request.transport === "host-parent" && request.parentRequestClassification?.kind === "embedded-parent" && request.hasParentTools === true && request.emittedType === "function_call" && object(body));
+    check(digest(JSON.stringify(body)) === request.bodyHash && requests.filter((other) => other.transport === "host-parent" && other.bodyHash === request.bodyHash).length === 1);
+    const emitted = request.emittedFunctionCall, call = request.parentCall;
+    check(object(emitted) && Object.keys(emitted).toSorted().join(",") === "arguments,call_id,id,name,type" && emitted.type === "function_call" && typeof emitted.arguments === "string");
+    check(call && emitted.call_id === call.id && emitted.id === call.itemId && emitted.name === call.name && call.request === request.requestIndex && isDeepStrictEqual(JSON.parse(emitted.arguments), call.args));
+    check(typeof call.id === "string" && call.id && typeof call.itemId === "string" && call.itemId && ["search", "describe", "send"].includes(call.stage));
+    check(({ search: "tool_search", describe: "tool_describe" })[call.stage] === call.name || call.stage === "send" && ["tool_call", "message"].includes(call.name));
+    const advertised = (body.tools ?? []).filter((tool) => (tool.name ?? tool.function?.name) === call.name);
+    check(advertised.length === 1 && advertised[0].type === "function" && (advertised[0].parameters ?? advertised[0].function?.parameters)?.type === "object");
+    const fullId = `${call.id}|${call.itemId}`;
+    const histories = receipts.filter((receipt) => receipt.method === "chat.history" && receipt.params.sessionKey === sessionKey && receipt.value.sessionKey === sessionKey && receipt.value.sessionId === sessionId);
+    const physical = new Map();
+    for (const history of histories) {
+      const records = (history.value.messages ?? []).filter((entry) => entry.role === "assistant" && entry.responseId === request.responseId);
+      check(records.length <= 1);
+      if (!records.length) continue;
+      const entry = records[0], meta = entry.__openclaw;
+      check(object(meta) && typeof meta.id === "string" && meta.id && typeof meta.runId === "string" && meta.runId && meta.truncated !== true && Array.isArray(entry.content));
+      const calls = entry.content.filter((part) => part.type === "toolCall");
+      check(calls.length === 1 && calls[0].id === fullId && calls[0].name === call.name && isDeepStrictEqual(calls[0].arguments, call.args));
+      const previous = physical.get(meta.id);
+      // Repeated observations only deduplicate the same complete physical
+      // assistant. Timestamp/position/seq and the entire content stay equal.
+      check(!previous || isDeepStrictEqual(previous, entry)); physical.set(meta.id, entry);
+    }
+    check(physical.size === 1);
+    const canonical = [...physical.values()][0], runId = canonical.__openclaw.runId;
+    const matching = settlements.filter((proof) => proof.runId === runId && proof.state?.sessionId === request.parentDelivery?.sessionId && proof.state?.wakeHash === request.parentDelivery?.wakeHash && proof.state?.goalId === request.parentDelivery?.goalId && proof.state?.ordinarySessionId === request.parentDelivery?.ordinarySessionId);
+    check(matching.length === 1); const proof = matching[0], state = proof.state, row = proof.row;
+    check(row?.sessionId === state.sessionId && state.ownerId === (state.goalId ?? state.ordinarySessionId) && !state.toolError && proof.sessionKey === sessionKey && proof.sessionId === sessionId);
+    const registeredCalls = state.calls.filter((entry) => entry.id === call.id && entry.itemId === call.itemId);
+    check(registeredCalls.length === 1 && isDeepStrictEqual(registeredCalls[0], call));
+    check(isDeepStrictEqual(exactFixtureRoute(state.route), { provider: row.route.provider, target: row.route.target, ...(own(row.route, "accountId") ? { accountId: row.route.accountId } : {}) }));
+    assertTerminal(proof.terminal, runId, true);
+    if (state.goalId || proof.kind === "completed") {
+      check(row.completionWakeRunId === runId && row.completionWakeIssuedAt && row.completionWakeSucceededAt && row.completionWakeRoutedReply === true && row.completionWakeSummaryRequired === undefined);
+      check(!row.completionWakeFailedAt && !row.completionWakeSkippedAt && !row.completionWakeSkipReason && row.completionWakeSubmissionState !== "not_submitted");
+      const fact = row.completionWakeSummaryFact;
+      check(fact?.required === true && fact.producer === (state.goalId ? "goal" : "terminal") && fact.outcomeKey === row.completionWakeOutcomeKey && typeof fact.outcomeKey === "string" && fact.outcomeKey);
+      if (state.goalId) check(row.goalTaskId === state.goalId && proof.task?.id === state.goalId && proof.task.sessionId === state.sessionId && row.completionWakeOutcomeKey === `goal:${proof.task.id}`);
+    }
+    if (state.ordinarySessionId) {
+      const completion = state.actualNativeCompletion;
+      check(row.goalTaskId === undefined && completion?.nativeCompleted === true && completion.threadId === row.backendRef?.conversationId && typeof completion.turnId === "string" && completion.turnId && proof.ordinaryCycle === state.ordinaryCycle && proof.wakeHash === state.wakeHash);
+      check(proof.kind === "turn-ended" || proof.kind === "completed" && row.backendRef?.runId === completion.turnId);
+    }
+    const final = state.calls.at(-1); check(final?.stage === "send");
+    check(isDeepStrictEqual(final.name === "tool_call" ? final.args.args : final.args, sourceSendArgs(state.route, state.summary)));
+    const wire = proof.wire;
+    check(Array.isArray(wire) && wire.length === 1 && wire[0].method === "sendMessage" && wire[0].respondedAt && wire[0].result?.text === state.summary && wire[0].result?.chat?.id === 501002 && Number.isSafeInteger(wire[0].result?.message_id));
+    const params = JSON.parse(wire[0].params);
+    check(!["reply_to_message_id", "reply_parameters", "message_thread_id", "direct_messages_topic_id"].some((key) => own(params, key)));
+    const finalId = `${final.id}|${final.itemId}`;
+    const results = (proof.canonicalHistory?.messages ?? []).filter((entry) => entry.role === "toolResult" && entry.toolCallId === finalId && entry.__openclaw?.runId === runId && entry.__openclaw?.truncated !== true && entry.isError !== true && entry.toolName === final.name);
+    check(results.length === 1 && Array.isArray(results[0].content) && results[0].content.every((part) => part.type === "text" && typeof part.text === "string"));
+    // Full actual canonical result is the approved final-hook alternative.
+    assertActualSendResult(JSON.parse(results[0].content.map((part) => part.text).join("\n")), final.name, state.tool, final.id);
+    if (call.actualOutput) {
+      check(call.actualOutput.call_id === call.id); const output = actualToolPayload(call.actualOutput);
+      if (call.stage === "search") check(Array.isArray(output) && output.filter((tool) => tool.name === "message" && tool.source === "openclaw" && tool.sourceName === "core" && tool.id === state.tool?.id).length === 1 && isDeepStrictEqual(output.find((tool) => tool.id === state.tool.id), state.tool));
+      else if (call.stage === "describe") check(isDeepStrictEqual(output, state.description) && output.id === state.tool.id && output.name === "message" && output.source === "openclaw" && output.sourceName === "core" && output.parameters?.type === "object");
+      else assertActualSendResult(output, call.name, state.tool, call.id);
+    } else check(call.stage === "send" && call.id === final.id && call.itemId === final.itemId);
+    return { ownCanonicalBinding: true, uniqueBody: true, runId, body, bodySha256: request.bodyHash, association: "Actual emitted paired function call, physical canonical assistant and independently settled same-owner source run" };
+  } catch { return undefined; }
+}
+
 function exactStartMatch(value, entry, budget) {
   if (entry.sourceKind !== "BOUND_OWN_EMBEDDED_REQUEST") return entry.text === value ? entry : undefined;
   // The hash narrows ONLY the already independently attributed own run/body;
@@ -115,18 +189,23 @@ function exactStartMatch(value, entry, budget) {
 
 // logger-file-message.ts: the initial binding and a metadata argument do not
 // contribute to the message; all other parts do, with UTF16-safe source cap.
-export function pinnedFileMessage(record) {
-  let args = Object.keys(record).filter((key) => /^\d+$/.test(key)).toSorted((a, b) => Number(a) - Number(b)).map((key) => record[key]);
-  if (typeof args[0] === "string" && args[0].length <= 8192 && args[0].trim().startsWith("{")) {
-    try { if (object(JSON.parse(args[0]))) args = args.slice(1); } catch { /* Source leaves a non-JSON binding as an ordinary part. */ }
+export function pinnedMessageRoles(record) {
+  const keys = Object.keys(record).filter((key) => /^\d+$/.test(key)).toSorted((a, b) => Number(a) - Number(b));
+  let remaining = [...keys], bindingKey, metadataKey;
+  if (typeof record[remaining[0]] === "string" && record[remaining[0]].length <= 8192 && record[remaining[0]].trim().startsWith("{")) {
+    try { if (object(JSON.parse(record[remaining[0]]))) bindingKey = remaining.shift(); } catch { /* No binding on malformed JSON. */ }
   }
-  if (object(args[0]) && typeof args[0].message !== "string") args = args.slice(1);
-  const parts = args.map((value) => typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : object(value) && typeof value.message === "string" ? value.message : value != null ? JSON.stringify(value) : undefined).filter((value) => value?.trim());
+  if (object(record[remaining[0]]) && typeof record[remaining[0]].message !== "string") metadataKey = remaining.shift();
+  return { keys, bindingKey, metadataKey, messageKeys: remaining };
+}
+function fileMessageWithRoles(record, roles) {
+  const parts = roles.messageKeys.map((key) => record[key]).map((value) => typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : object(value) && typeof value.message === "string" ? value.message : value != null ? JSON.stringify(value) : undefined).filter((value) => value?.trim());
   if (!parts.length) return undefined;
   const joined = parts.join(" "); let end = Math.min(joined.length, 4096);
   if (end < joined.length && /[\uD800-\uDBFF]/.test(joined[end - 1]) && /[\uDC00-\uDFFF]/.test(joined[end])) end--;
   return joined.slice(0, end) + (joined.length > 4096 ? "...(truncated)" : "");
 }
+export function pinnedFileMessage(record) { return fileMessageWithRoles(record, pinnedMessageRoles(record)); }
 
 function severity(record) {
   const meta = record._meta;
@@ -136,7 +215,8 @@ function severity(record) {
 
 function transformRecord(record, authority, assess, budget) {
   check(object(record) && own(record, "_meta"));
-  const level = severity(record), result = clone(record), cases = [], contexts = [];
+  const level = severity(record), result = clone(record), cases = [], contexts = [], roles = pinnedMessageRoles(record);
+  check(roles.keys.length <= 64 && roles.keys.every((key) => /^(?:0|[1-9][0-9]?)$/.test(key) && Number(key) < 64));
   for (const [field, name, values] of [["agent_id", "AGENT_ID", authority.agentIds], ["session_id", "SESSION_ID", authority.sessionIds], ["channel", "CHANNEL", authority.channels]]) {
     if (!own(result, field)) continue;
     check(typeof result[field] === "string" && values.includes(result[field]));
@@ -145,6 +225,21 @@ function transformRecord(record, authority, assess, budget) {
   if (contexts.length) cases.push("SOURCE_APPENDED_CONTEXT_ONLY");
   // Check the original producer's derived message before replacing any part.
   if (own(record, "message")) check(typeof record.message === "string" && record.message === pinnedFileMessage(record));
+  // Preserve ORIGINAL source roles across normalization: a message that looks
+  // like JSON must never become a newly extracted/discarded binding prefix.
+  if (roles.bindingKey !== undefined) {
+    const binding = JSON.parse(record[roles.bindingKey]);
+    const fields = Object.keys(binding).toSorted().join(",");
+    check(["plugin,subsystem", "module,storeKey", "subsystem"].includes(fields) && Object.values(binding).every((value) => typeof value === "string") && assess(record[roles.bindingKey]).safe);
+    cases.push("SAFE_SOURCE_BINDING_PRESERVED");
+  }
+  if (roles.metadataKey !== undefined && Object.keys(record[roles.metadataKey]).length === 0) {
+    delete result[roles.metadataKey]; cases.push("EMPTY_METADATA_ZERO_FIELDS");
+  }
+  for (const key of roles.messageKeys) if (object(record[key]) && own(record[key], "message")) {
+    check(Object.keys(record[key]).length === 1 && typeof record[key].message === "string" && assess(record[key].message).safe);
+    result[key] = record[key].message; cases.push("SOLE_MESSAGE_ROLE_NORMALIZED");
+  }
   const details = [], transport = [];
   for (const key of Object.keys(result).filter((key) => /^\d+$/.test(key))) {
     const value = result[key];
@@ -179,11 +274,16 @@ function transformRecord(record, authority, assess, budget) {
     }
   }
   check(cases.length > 0);
-  if (own(record, "message")) { const message = pinnedFileMessage(result); if (message === undefined) delete result.message; else result.message = message; }
+  if (own(record, "message")) { const message = fileMessageWithRoles(result, roles); if (message === undefined) delete result.message; else result.message = message; }
   // This validates the entire remaining header, all binding/argument values,
   // severity and derived output with the unchanged original safety guard.
   check(assess(JSON.stringify(result)).safe);
-  return { result, cases: [...new Set(cases)], contexts, level, details, transport };
+  for (const key of roles.keys) {
+    let value = result[key];
+    if (typeof value === "string") { try { value = JSON.parse(value); } catch { continue; } }
+    if (object(value) && ["Session", "SessionRuntimeRegistry", "CodexHarness", "CodexAppServerRpc"].includes(value.component) && ["turn.terminal", "turn.error"].includes(value.event) && assess(JSON.stringify(value)).safe && !details.some((existing) => isDeepStrictEqual(existing, value))) details.push(clone(value));
+  }
+  return { result, cases: [...new Set(cases)], contexts, level, details, transport, roles };
 }
 
 export function projectHostLog(input, authority, assess) {
@@ -198,26 +298,34 @@ export function projectHostLog(input, authority, assess) {
     for (let index = 0; index < bytes.length; index++) if (bytes[index] === 10) { spans.push({ start, end: index + 1, lf: true }); start = index + 1; if (spans.length >= 10000) return blocked("SOURCE_LOG_RECORD_BOUND"); }
     spans.push({ start, end: bytes.length, lf: false });
     check(authority.responsesStarts.length <= 10000);
-    const registry = [], output = [], counts = {}, retainedDiagnostics = [], budget = { hashChecks: 0, sourceCallIdentities: new Set() }; let changed = 0;
+    const registry = [], output = [], counts = {}, retainedDiagnostics = [], blockedDetails = [], budget = { hashChecks: 0, sourceCallIdentities: new Set() };
+    let changed = 0, safeRecords = 0, blockedRecords = 0, originalGuardSafeRecords = 0;
     for (const [index, span] of spans.entries()) {
       const raw = bytes.subarray(span.start, span.end), body = raw.subarray(0, raw.length - Number(span.lf)).toString("utf8"), safe = assess(body).safe;
-      // Unknown severity is never hidden by a mixed projected stream, even
-      // when this one record happened to pass the existing privacy guard.
+      if (safe) originalGuardSafeRecords++;
+      let projected = body, observation, reason;
       if (safe) {
-        let record; try { record = JSON.parse(body); } catch { /* Unchanged safe plain text has no logger severity. */ }
-        if (object(record) && own(record, "_meta")) { try { severity(record); } catch { return blocked("SOURCE_LOG_UNKNOWN_SEVERITY", { record: index }); } }
+        let record; try { record = JSON.parse(body); } catch { /* Safe plain text has no logger severity. */ }
+        if (object(record) && own(record, "_meta")) { try { severity(record); } catch { reason = "SOURCE_LOG_UNKNOWN_SEVERITY"; } }
+      } else {
+        let record; try { record = JSON.parse(body); } catch { reason = "SOURCE_LOG_UNKNOWN_RECORD"; }
+        if (!reason) try { observation = transformRecord(record, authority, assess, budget); } catch { reason = "SOURCE_LOG_UNVALIDATED_RECORD"; }
       }
-      let projected = body, observation;
-      if (!safe) {
-        let record; try { record = JSON.parse(body); } catch { return blocked("SOURCE_LOG_UNKNOWN_RECORD", { record: index, classifiedRecords: index, transformedRecords: changed }); }
-        try { observation = transformRecord(record, authority, assess, budget); } catch { return blocked("SOURCE_LOG_UNVALIDATED_RECORD", { record: index, classifiedRecords: index, transformedRecords: changed }); }
+      if (reason) {
+        blockedRecords++;
+        if (blockedDetails.length < 64) blockedDetails.push({ record: index, byteStart: span.start, byteEndExclusive: span.end, originalBytes: raw.length, originalSha256: digest(raw), reason });
+        continue;
+      }
+      if (observation) {
         projected = JSON.stringify(observation.result); changed++;
         for (const sourceCase of observation.cases) counts[sourceCase] = (counts[sourceCase] ?? 0) + 1;
         for (const detail of observation.details) if (object(detail) && ["Session", "SessionRuntimeRegistry", "CodexHarness", "CodexAppServerRpc"].includes(detail.component)) retainedDiagnostics.push({ record: index, diagnostic: detail });
-      }
+      } else safeRecords++;
       const encoded = Buffer.from(projected + (span.lf ? "\n" : "")); output.push(encoded);
-      registry.push({ record: index, byteStart: span.start, byteEndExclusive: span.end, originalBytes: raw.length, originalSha256: digest(raw), includesLF: span.lf, trailingEmpty: span.start === bytes.length, projectedBytes: encoded.length, projectedSha256: digest(encoded), sourceCases: observation?.cases ?? ["UNCHANGED_GUARD_SAFE"], ...(observation ? { severity: observation.level, omittedContextFields: observation.contexts, ownContextMatch: true, transport: observation.transport } : {}) });
+      registry.push({ record: index, byteStart: span.start, byteEndExclusive: span.end, originalBytes: raw.length, originalSha256: digest(raw), includesLF: span.lf, trailingEmpty: span.start === bytes.length, projectedBytes: encoded.length, projectedSha256: digest(encoded), sourceCases: observation?.cases ?? ["UNCHANGED_GUARD_SAFE"], ...(observation ? { severity: observation.level, omittedContextFields: observation.contexts, ownContextMatch: observation.contexts.length ? true : undefined, sourceRoles: { bindingPosition: observation.roles.bindingKey === undefined ? null : observation.roles.keys.indexOf(observation.roles.bindingKey), metadataPosition: observation.roles.metadataKey === undefined ? null : observation.roles.keys.indexOf(observation.roles.metadataKey), messagePositions: observation.roles.messageKeys.map((key) => observation.roles.keys.indexOf(key)) }, transport: observation.transport } : {}) });
     }
+    if (Buffer.byteLength(JSON.stringify(registry)) > LIMIT) return blocked("SOURCE_LOG_AUDIT_FILE_BOUND");
+    if (blockedRecords) return blocked("SOURCE_LOG_UNVALIDATED_RECORDS", { validatedRecords: registry, recordCount: spans.length, originalGuardSafeRecords, safeRecords, projectedRecords: changed, blockedRecords, omittedBlockedDetails: blockedRecords - blockedDetails.length, blockedDetails, sourceCaseCounts: counts, accountingComplete: safeRecords + changed + blockedRecords === spans.length });
     const projectedBytes = Buffer.concat(output), audit = { original, candidateSha: authority.candidateSha, helperSha256: authority.helperSha256, hostCommit: PIN, scope: "Every original LF record; source projection, not raw-safe evidence", recordCount: registry.length, transformedRecords: changed, sourceCaseCounts: counts, records: registry, retainedDiagnostics };
     if (!changed || !assess(projectedBytes.toString("utf8")).safe) return blocked("SOURCE_LOG_WHOLE_STREAM_UNEXPLAINED", { transformedRecords: changed });
     if (projectedBytes.length > LIMIT || Buffer.byteLength(JSON.stringify(audit)) > LIMIT) return blocked("SOURCE_LOG_PROJECTED_FILE_BOUND");

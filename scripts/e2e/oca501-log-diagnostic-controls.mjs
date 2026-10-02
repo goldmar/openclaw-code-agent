@@ -60,14 +60,16 @@ positiveGroups++;
 const extraPayloads = [{ unknown: { value: 1 } }, { phaseDurationsMs: { run: -1 } }, { phaseDurationsMs: { "1invalid": 0 } }, { reason: {} }, { component: "CodexHarness", event: "turn.terminal", foreign: 1 }, [{}], 'bad {"safe":', String.raw`bad "{\"safe\":`];
 const oversizedDetails = Array.from({ length: 64 }, (_, i) => logger(i % 2 ? "plugins.entries: value" : { gateway: {} }, i % 7, ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"][i % 7]));
 for (const payload of extraPayloads) for (const [id, severity] of ["SILLY", "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"].entries()) oversizedDetails.push(logger(payload, id, severity));
-// The actual exported wrapper must include domain labels inside the cap/digest.
+// The actual exported wrapper includes the newly retained source observations
+// and domain labels inside its unchanged cap/digest. The prior 79/80-record
+// specimens remain overflow negatives; 39/40 now bracket the larger receipt.
 const boundaryInput = (count) => "x".repeat(100000) + "\n" + oversizedDetails.slice(0, count).join("\n");
-const below = hostLogEvidence(boundaryInput(79)); assert.equal(below.completeStreamSafe, false);
+const below = hostLogEvidence(boundaryInput(39)); assert.equal(below.completeStreamSafe, false);
 const actualBelow = below.rejectedStreamDiagnostic; assert.equal(actualBelow.diagnosticStatus, "REJECTED_STREAM_OBSERVED");
 assert.ok(Buffer.byteLength(JSON.stringify(actualBelow)) <= 65536 && Buffer.byteLength(JSON.stringify(actualBelow)) > 65000);
 const { projectedDiagnosticSha256, projectedDigestScope, ...digestedPayload } = actualBelow;
 assert.equal(projectedDiagnosticSha256, hash(JSON.stringify(digestedPayload))); assert.match(digestedPayload.inputIdentityDomain, /undecoded byte validity unavailable/);
-for (const input of [boundaryInput(80), boundaryInput(81), Buffer.from(boundaryInput(84))]) {
+for (const input of [boundaryInput(40), boundaryInput(79), boundaryInput(80), boundaryInput(81), Buffer.from(boundaryInput(84))]) {
   const receipt = hostLogEvidence(input); assert.equal(receipt.completeStreamSafe, false); assert.equal(receipt.rawCompleteStreamExcluded, true);
   const actual = receipt.rejectedStreamDiagnostic; assert.equal(actual.diagnosticStatus, "DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"); assert.equal(actual.inspectionComplete, false);
   assert.ok(Buffer.byteLength(JSON.stringify(actual)) <= 65536); assert.equal(actual.original.sha256, hash(input));

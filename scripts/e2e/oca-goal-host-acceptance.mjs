@@ -15,7 +15,7 @@ import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
 import { messageText, latestParentUser, selectParentProbe, selectCanonicalProbe, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, hostLogEvidence, assertCompletionTerminal, assertVisibleCanonical, assertOrdinaryCompleted, selectOrdinaryCompletion, ordinaryNativeCompletion, projectHistoryPreviews, assertPreviewSettlement, nativeDiagnostics, activeSessionView, sessionListing, assertWaitingView } from "./oca501-lifecycle-protocol.mjs";
-import { renderResponsesStart, expectedEmbeddedStarts, sourceSdkTimeout, bindCanonicalTransportRequest } from "./oca501-host-log-projection.mjs";
+import { renderResponsesStart, expectedEmbeddedStarts, sourceSdkTimeout, bindCanonicalTransportRequest, bindCanonicalFunctionTransportRequest } from "./oca501-host-log-projection.mjs";
 import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
 import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { l1Assignment, l1Coverage } from "./oca501-l1-cohort.mjs";
@@ -200,7 +200,7 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), hostLogProjectionHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-host-log-projection.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), hostLogProjectionHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-host-log-projection.mjs")), logSourceObservationHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-log-source-observation.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
     if (options.phase === "matrix-l1") {
       this.l1Assignment = l1Assignment(options.phase, options["l1-cohort"]);
       this.provenance.selectedL1Cohort = this.l1Assignment.selectedL1Cohort;
@@ -233,9 +233,11 @@ class AcceptanceRun {
     const population = this.modelRequests.filter((request) => request.transport === "host-parent").length;
     for (const request of this.modelRequests) {
       if (!modelAbsenceProven || request.transport !== "host-parent" || request.authorization !== "validated synthetic fixture key") continue;
-      const path = join(this.directory, `responses-request-${request.requestIndex}.json`);
-      if (!this.artifactFiles.has(`responses-request-${request.requestIndex}.json`)) continue;
-      const input = json(path).input;
+      const originalBody = this.originalModelBodies?.get(request.requestIndex);
+      if (typeof originalBody !== "string" || hash(originalBody) !== request.bodyHash) continue;
+      const input = JSON.parse(originalBody);
+      // Actual captured HTTP bytes, never a token-redacted artifact body.
+      if (hash(JSON.stringify(input)) !== request.bodyHash) continue;
       const options = { provider: "oca501", model: MODEL, baseUrl: `${this.providerUrl}/host/v1`, timeoutMs: sourceSdkTimeout({ optionAbsenceProven: true, modelAbsenceProven: true }), presence: "present", requestPopulation: population, allowedToolNames: ["tool_call", "tool_describe", "tool_search", "message", ...(this.pluginToolNames ?? [])] };
       // Pinned c074 attempt.model-diagnostic-lifecycle passes requestId only,
       // never options.timeoutMs; isolated simple-completion-execution likewise
@@ -246,7 +248,8 @@ class AcceptanceRun {
       if (request.parentRequestClassification?.kind === "activity-recap") {
         responsesStarts.push(renderResponsesStart({ ...options, body: input, bodySha256: request.bodyHash })); continue;
       }
-      const bound = bindCanonicalTransportRequest(request, { receipts: this.logRpcReceipts ?? [], requests: this.modelRequests, sessionKey: this.sessionKey, sessionId: this.parentSessionId, body: input, completedRunIds: this.sessions().filter((row) => row.originSessionKey === this.sessionKey && row.completionWakeIssuedAt && row.completionWakeSucceededAt && !row.completionWakeFailedAt && !row.completionWakeSkippedAt).map((row) => row.completionWakeRunId).filter(Boolean) }, assertCompletionTerminal, assertVisibleCanonical);
+      const binding = { receipts: this.logRpcReceipts ?? [], requests: this.modelRequests, sessionKey: this.sessionKey, sessionId: this.parentSessionId, body: input, settlements: this.logSourceSettlements ?? [], completedRunIds: this.sessions().filter((row) => row.originSessionKey === this.sessionKey && row.completionWakeIssuedAt && row.completionWakeSucceededAt && !row.completionWakeFailedAt && !row.completionWakeSkippedAt).map((row) => row.completionWakeRunId).filter(Boolean) };
+      const bound = request.emittedType === "function_call" ? bindCanonicalFunctionTransportRequest(request, binding, assertCompletionTerminal) : bindCanonicalTransportRequest(request, binding, assertCompletionTerminal, assertVisibleCanonical);
       if (bound) responsesStarts.push(...expectedEmbeddedStarts(bound, options));
     }
     const ownRows = this.sessions().filter((row) => row.originSessionKey === this.sessionKey && ([...this.nativeCases.values()].some((fixture) => fixture.sessionId === row.sessionId) || this.goals().some((goal) => goal.sessionId === row.sessionId && goal.id === row.goalTaskId)));
@@ -373,6 +376,7 @@ class AcceptanceRun {
         attempt.authorization = "validated synthetic fixture key";
       }
       const input = JSON.parse(body); assert.equal(input.model, MODEL); assert.equal(input.stream, true);
+      (this.originalModelBodies ??= new Map()).set(requestIndex, body);
       attempt.hasParentTools = transport === "host-parent" && !!input.tools?.length;
       attempt.model = input.model;
       this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
@@ -492,6 +496,7 @@ class AcceptanceRun {
       event("response.completed", { response: { ...base, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
       response.end();
       attempt.responseCompleted = true; attempt.emittedType = item.type; attempt.emittedText = item.type === "message" ? marker : undefined;
+      if (item.type === "function_call") attempt.emittedFunctionCall = structuredClone(item);
     });
     let messageId = 0;
     this.botUrl = await this.serve(async (request, response, body) => {
@@ -1185,6 +1190,7 @@ class AcceptanceRun {
       for (const key of ["reply_to_message_id", "reply_parameters", "message_thread_id", "direct_messages_topic_id"]) assert.equal(Object.hasOwn(params, key), false, "Explicit off source send has no fabricated reply/thread identifiers");
     }
     const source = { retainedRunId: row.completionWakeRunId, terminalReceipt: terminal.terminalReceipt, protocol: proof.state, messageCallId: proof.call.id, wire: proof.wire, canonicalHistory: history, resultTransport: proof.state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool transcript and terminal source receipt (final hook ended before next Responses request)" };
+    (this.logSourceSettlements ??= []).splice(0, this.logSourceSettlements.length, ...this.logSourceSettlements.filter((proof) => proof.runId !== row.completionWakeRunId), { runId: row.completionWakeRunId, sessionKey: history.sessionKey, sessionId: history.sessionId, task: structuredClone(task), row: structuredClone(row), state: proof.state, terminal: structuredClone(terminal), wire: structuredClone(proof.wire), canonicalHistory: structuredClone(history) });
     this.artifact(`source-delivery-${task.id}.json`, source);
     return source;
   }
@@ -1220,6 +1226,7 @@ class AcceptanceRun {
     }
     await waitFor("ordinary direct delivery drained", () => { const value = this.sessions().find((row) => row.sessionId === sessionId); return !["notifying", "wake_pending"].includes(value.deliveryState) && !value.notificationDedupe?.some((entry) => entry.status === "in_flight"); });
     const evidence = { sessionId, kind, ordinaryCycle: state.ordinaryCycle, wakeHash: state.wakeHash, actualNativeCompletion: state.actualNativeCompletion, state, canonicalHistory: history.value, runId, terminal, wire, row: this.sessions().find((row) => row.sessionId === sessionId), resultTransport: state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool result + terminal source receipt after final hook" };
+    (this.logSourceSettlements ??= []).splice(0, this.logSourceSettlements.length, ...this.logSourceSettlements.filter((proof) => proof.runId !== runId), { ...evidence, state, sessionKey: history.value.sessionKey, sessionId: history.value.sessionId });
     this.artifact(`ordinary-source-${sessionId}-${kind}.json`, evidence); return evidence;
   }
   async routedNegative() {

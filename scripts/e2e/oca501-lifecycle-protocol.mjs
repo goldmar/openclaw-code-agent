@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { nativeInventory } from "./oca501-native-protocol.mjs";
 import { projectHostLog } from "./oca501-host-log-projection.mjs";
+import { sourceLogObservation, LOG_SOURCE_TABLE_SHA256 } from "./oca501-log-source-observation.mjs";
 
 export const messageText = (entry) => typeof entry.content === "string" ? entry.content : (entry.content ?? []).map((part) => part.text ?? "").join("\n");
 export function latestParentUser(input) {
@@ -446,7 +447,7 @@ function diagnosticEnvelope(text) {
   return { envelope, severity, header: "PINNED_OUTER_HEADER" };
 }
 // Rejection-only observation. This never supplies acceptance or exports text.
-export function rejectedHostLogDiagnostic(input, options) {
+export function rejectedHostLogDiagnostic(input, options, validatedProjectionRecords = new Set(), blockedProjectionRecords = new Set()) {
   const raw = Buffer.isBuffer(input), bytes = raw ? input : Buffer.from(input), original = { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
   const inputIdentityDomain = raw ? "original captured stream bytes" : "captured text UTF8 encoding; original undecoded byte validity unavailable";
   const fallback = (status) => ({ diagnosticStatus: status, original, inputIdentityDomain, rawContentExcluded: true, inspectionComplete: false, inspectedLines: 0, uninspectedLines: "NOT_COUNTED", lexicalCountScope: "NOT_COUNTED" });
@@ -460,13 +461,14 @@ export function rejectedHostLogDiagnostic(input, options) {
     lines.push({ start, end: bytes.length, lf: false });
     const digest = (buffer) => createHash("sha256").update(buffer).digest("hex");
     const span = (begin, end) => ({ byteStart: begin, byteEndExclusive: end, bytes: end - begin, sha256: digest(bytes.subarray(begin, end)) });
-    const failedDetails = [], histogram = {}; let failed = 0;
+    const failedDetails = [], histogram = {}; let failed = 0, projectionOnlyFailed = 0;
     for (const [index, line] of lines.entries()) {
       const body = bytes.subarray(line.start, line.lf ? line.end - 1 : line.end).toString("utf8"), assessed = assessHostLog(body, options);
-      if (!assessed.safe) {
-        failed++; const envelope = diagnosticEnvelope(body), d = assessed.failureDiagnostic;
-        const key = `${d.code}/${d.guardSite}/${d.sourceClass}/${envelope.envelope}/${envelope.severity}`; histogram[key] = (histogram[key] ?? 0) + 1;
-        if (failedDetails.length < 64) failedDetails.push({ line: index, ...span(line.start, line.end), includesLF: line.lf, trailingEmpty: line.start === bytes.length, unterminated: !line.lf && line.start < bytes.length, ...d, ...envelope });
+      if (!assessed.safe || blockedProjectionRecords.has(index)) {
+        if (!assessed.safe) failed++; else projectionOnlyFailed++;
+        const envelope = diagnosticEnvelope(body), d = assessed.safe ? { originalLineGuardSafe: true, projectionDisposition: "UNVALIDATED_RECORD" } : assessed.failureDiagnostic;
+        const key = assessed.safe ? `UNCHANGED_LINE_GUARD_SAFE/SOURCE_PROJECTOR_BLOCKED/${envelope.envelope}/${envelope.severity}` : `${d.code}/${d.guardSite}/${d.sourceClass}/${envelope.envelope}/${envelope.severity}`; histogram[key] = (histogram[key] ?? 0) + 1;
+        if (failedDetails.length < 64) failedDetails.push({ line: index, ...span(line.start, line.end), includesLF: line.lf, trailingEmpty: line.start === bytes.length, unterminated: !line.lf && line.start < bytes.length, ...d, ...envelope, ...(validatedProjectionRecords.has(index) ? { sourceObservation: { status: "VALIDATED_SOURCE_PROJECTION; see complete record audit" } } : { sourceObservation: sourceLogObservation(body, (value) => assessHostLog(value, options)) }) });
       }
     }
     const lexicalDetails = []; let lexicalMatches = 0, lexicalCapped = false;
@@ -486,10 +488,16 @@ export function rejectedHostLogDiagnostic(input, options) {
       }
       if (lexicalCapped) break;
     }
-    const payload = { diagnosticStatus: "REJECTED_STREAM_OBSERVED", original, inputIdentityDomain, rawContentExcluded: true, inspectionComplete: !lexicalCapped, capturedLines: lines.length, inspectedLines: lines.length, failedLines: failed, safeLines: lines.length - failed, omittedFailedLineDetails: failed - failedDetails.length, failureHistogram: histogram, failedLineDetails: failedDetails, wholeFailure: whole.failureDiagnostic, crossingLineUnresolved: failed === 0, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches - lexicalDetails.length, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", lexicalDetails, acceptanceEvidence: false };
-    if (Buffer.byteLength(JSON.stringify(payload)) > 64 * 1024) return fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
+    const payload = { diagnosticStatus: "REJECTED_STREAM_OBSERVED", sourceTableSha256: LOG_SOURCE_TABLE_SHA256, original, inputIdentityDomain, rawContentExcluded: true, inspectionComplete: !lexicalCapped, capturedLines: lines.length, inspectedLines: lines.length, failedLines: failed, safeLines: lines.length - failed, omittedFailedLineDetails: failed - failedDetails.filter((detail) => !detail.originalLineGuardSafe).length, projectionBlockedGuardSafeLines: projectionOnlyFailed, omittedProjectionOnlyDetails: projectionOnlyFailed - failedDetails.filter((detail) => detail.originalLineGuardSafe).length, failureHistogram: histogram, failedLineDetails: failedDetails, wholeFailure: whole.failureDiagnostic, crossingLineUnresolved: failed === 0, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches - lexicalDetails.length, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", lexicalDetails, acceptanceEvidence: false };
+    const outputFallback = () => {
+      // Complete finite counts survive a detail/output cap. No unsafe record
+      // value or dynamic key is carried into this closed fallback.
+      const summary = { ...fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED"), sourceTableSha256: LOG_SOURCE_TABLE_SHA256, capturedLines: lines.length, inspectedLines: lines.length, uninspectedLines: 0, failedLines: failed, safeLines: lines.length - failed, projectionBlockedGuardSafeLines: projectionOnlyFailed, failureHistogram: histogram, omittedFailedLineDetails: failed, omittedProjectionOnlyDetails: projectionOnlyFailed, lexicalMatches, lexicalScanCapped: lexicalCapped, lexicalOmittedDetails: lexicalMatches, lexicalCountScope: lexicalCapped ? "lower bound; scan incomplete" : "all original regex matches", detailContentExcluded: true };
+      return Buffer.byteLength(JSON.stringify(summary)) <= 64 * 1024 ? summary : fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
+    };
+    if (Buffer.byteLength(JSON.stringify(payload)) > 64 * 1024) return outputFallback();
     const result = { ...payload, projectedDiagnosticSha256: digest(Buffer.from(JSON.stringify(payload))), projectedDigestScope: "Closed diagnostic payload; not original stream" };
-    return Buffer.byteLength(JSON.stringify(result)) <= 64 * 1024 ? result : fallback("DIAGNOSTIC_OUTPUT_BOUND_EXCEEDED");
+    return Buffer.byteLength(JSON.stringify(result)) <= 64 * 1024 ? result : outputFallback();
   } catch { return fallback("DIAGNOSTIC_UNKNOWN_FAILURE"); }
 }
 export function hostLogEvidence(input, options) {
@@ -501,7 +509,7 @@ export function hostLogEvidence(input, options) {
     const sourceProjection = options?.sourceAuthority ? projectHostLog(input, options.sourceAuthority, (value) => assessHostLog(value)) : undefined;
     if (sourceProjection?.outcome === "SOURCE_PROJECTED_COMPLETE") return { completeStreamSafe: false, sourceProjectedComplete: true, projection: true, original, rawCompleteStreamExcluded: true, rawGuardFailureDiagnostic: assessment.failureDiagnostic, ...sourceProjection };
     const failureDiagnostic = assessment.failureDiagnostic;
-    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: rejectedHostLogDiagnostic(raw ? bytes : text, options),
+    const payload = { completeStreamSafe: false, projection: true, original, rawCompleteStreamExcluded: true, failureDiagnostic, rejectedStreamDiagnostic: rejectedHostLogDiagnostic(raw ? bytes : text, options, new Set(sourceProjection?.observations?.validatedRecords?.filter((record) => !record.sourceCases.includes("UNCHANGED_GUARD_SAFE")).map((record) => record.record) ?? []), new Set(sourceProjection?.observations?.blockedDetails?.map((record) => record.record) ?? [])),
       excludedRecordRange: { first: 0, last: text.split("\n").length - 1, numbering: "zero-based captured stream lines; entire stream excluded" },
       ...(sourceProjection ? { sourceProjectionAttempt: sourceProjection } : {}), exclusionReason: "Unsafe or unknown structured profile/auth/content-bearing log; omitted lifecycle/error facts remain BLOCKED" };
     return { ...payload, projectedPayloadSha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"), projectedDigestScope: "Closed projection payload before digest/source wrapper; not the original stream" };
