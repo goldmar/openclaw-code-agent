@@ -226,10 +226,44 @@ export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {
   const diagnosticFields = new Set("component event at sessionId name status lifecycle runtimeState harness hasHarnessSessionId model reasoningEffort hasWorkdir hasResumeSessionId forkSessionRequested hasBackendRef hasStreamInput hasInterrupt hasClose hasPermissionModeSwitch backendRefKind hasBackendConversationId hasBackendRunId nextStatus reason currentStatus messageCount activeAtEnd activeCountBefore kind outcome hasThreadId hasTurnId error errorCode requestKind queued method hasCwd durationMs commandKind argsCount transport timeoutMs requestId pendingCount code signal hasStdin hasStdout hasStderr hasPid channel namespace payloadByteLength tokenHash isAuthorizedSender tokenFound actionKind planDecisionVersion consumptionId consumed version queuedCount runtimeOwner storeRevision instanceId buildId caller hasText textLength permissionMode messageLength pid pendingRequests appServerSubcommand configuredArgCount closing closed errorName exitCode argvCount requestMethod requestedEffort runtimeEffort hasPendingInput hasPlanArtifact revision expectedTurnId hasExpectedTurnId hasPayload stderrLength byteLength requestCount live requestVersion supportedVersion deliveryRef chars idleTimeoutMinutes backendModel requestTimeoutMs recentStderr id accountType runCounter effort rewindTurns what".split(" "));
   const harmlessFields = new Set("subsystem plugin module storeKey enabled kind label path action storePath jobId jobName schedulerNextWakeAtMs timerArmed cronEnabled nextRunAtMs pid threadId isMainThread diagnosticEpoch omittedObservations operationId operation operationTraceId operationSpanId elapsedMs completionDelayMs mutationQueueWaitMs lifecycleQueueWaitMs phaseDurationsMs signalAborted reclamationKind workerThreadId outcome reason opsServed ageMs platform arch node v8 uv openssl sqlite".split(" "));
   const scalar = (value) => value == null || ["string", "number", "boolean"].includes(typeof value);
+  const phaseMap = (data) => {
+    assert.ok(data && !Array.isArray(data) && typeof data === "object" && Object.keys(data).length <= 32, "Unknown phase timing metadata excluded");
+    for (const [phase, duration] of Object.entries(data)) {
+      const names = [phase, ...phase.replace(/([a-z0-9])([A-Z])/g, "$1.$2").split(/[._-]/)];
+      assert.ok(/^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(phase) && names.every((name) => !profileKeys.test(JSON.stringify(name) + ":")), "Profile/auth phase-map key excluded");
+      assert.ok(typeof duration === "number" && Number.isFinite(duration) && duration >= 0, "Unknown phase timing metadata excluded");
+    }
+  };
+  let inspectionDepth = 0;
   const inspect = (value) => {
+    assert.ok(++inspectionDepth <= 32, "Deep unknown structured log content excluded");
+    try {
     if (typeof value === "string") {
       assert.ok(!profileKeys.test(value) && !multilineProfile.test(value), "Unsafe profile/auth or config-bearing log excluded");
       let parsed; try { parsed = JSON.parse(value); } catch {
+        // A plain log prefix can precede a genuine JSON string literal. Parse
+        // each complete literal with JSON.parse, then apply the same closed
+        // inspection to its actual decoded value. Malformed quoted structures
+        // are blocked rather than permissively unescaped or repaired.
+        const literalRanges = [];
+        for (let index = 0; index < value.length; index++) {
+          if (value[index] !== '"' || value[index - 1] === "\\") continue;
+          const begin = index; let escaped = false, closed = false;
+          for (++index; index < value.length; index++) {
+            const char = value[index];
+            if (escaped) escaped = false;
+            else if (char === "\\") escaped = true;
+            else if (char === '"') { closed = true; break; }
+          }
+          const literal = value.slice(begin, closed ? index + 1 : value.length);
+          if (!closed) { assert.ok(!/\\|[{}\[]/.test(literal), "Malformed quoted structured log excluded"); break; }
+          let decoded; try { decoded = JSON.parse(literal); } catch { throw new Error("Malformed quoted log content excluded"); }
+          inspect(decoded); literalRanges.push([begin, index + 1]);
+        }
+        let previousEnd = 0; const unparsed = [];
+        for (const [begin, end] of literalRanges) { unparsed.push(value.slice(previousEnd, begin)); previousEnd = end; }
+        unparsed.push(value.slice(previousEnd));
+        assert.ok(!/[{\[]\s*\\+["'{\[]|\\(?:"|u[0-9a-f]{0,4})/i.test(unparsed.join(" ")), "Unknown escaped embedded structure excluded");
         // Inspect every embedded JSON payload, including multiple bounded
         // worker-memory metadata arrays embedded in one genuine diagnostic.
         const starts = /\{\s*["']|\[\s*\{/g; let match;
@@ -245,7 +279,7 @@ export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {
           assert.equal(depth, 0, "Malformed embedded structured log content excluded");
           let embedded; try { embedded = JSON.parse(value.slice(begin, end)); } catch { throw new Error("Unknown embedded structured log content excluded"); }
           if (!Array.isArray(embedded) && /phaseDurationsMs=$/.test(value.slice(0, begin))) {
-            assert.ok(Object.keys(embedded).length <= 32 && Object.keys(embedded).every((phase) => /^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(phase)) && Object.values(embedded).every((duration) => typeof duration === "number" && Number.isFinite(duration) && duration >= 0), "Unknown phase timing metadata excluded");
+            phaseMap(embedded);
           } else if (Array.isArray(embedded)) {
             assert.ok(/(?:workerMemoryMissing|workerHeaps)=$/.test(value.slice(0, begin)) && embedded.length <= 64, "Unknown embedded content-bearing array excluded");
             for (const worker of embedded) {
@@ -268,6 +302,7 @@ export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {
       assert.ok(!Array.isArray(value), "Unknown content-bearing log array excluded");
       const keys = Object.keys(value);
       assert.ok(keys.every((key) => !profileKeys.test(JSON.stringify(key) + ":")), "Unsafe profile/auth log object excluded");
+      if (Object.hasOwn(value, "phaseDurationsMs")) phaseMap(value.phaseDurationsMs);
       if (commandStream) { for (const item of Object.values(value)) { if (Array.isArray(item)) item.forEach(inspect); else inspect(item); } }
       else if (keys.length && keys.every((key) => /^\d+$/.test(key))) {
         assert.ok(Object.values(value).every(scalar), "Unknown logger payload excluded"); Object.values(value).forEach(inspect);
@@ -301,11 +336,12 @@ export function assertSafeHostLog(text, { commandStream = false, rpcMethod } = {
         assert.ok(keys.length && keys.every((key) => harmlessFields.has(key)), "Unknown structured log content excluded");
         for (const [key, data] of Object.entries(value)) {
           if (key === "phaseDurationsMs") {
-            assert.ok(data && !Array.isArray(data) && typeof data === "object" && Object.keys(data).length <= 32 && Object.keys(data).every((phase) => /^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(phase)) && Object.values(data).every((duration) => typeof duration === "number" && Number.isFinite(duration) && duration >= 0), "Unknown phase timing metadata excluded");
+            phaseMap(data);
           } else { assert.ok(scalar(data), "Unknown nested metadata excluded"); inspect(data); }
         }
       }
     }
+    } finally { inspectionDepth--; }
   };
   let complete; try { complete = JSON.parse(text); } catch { /* JSONL/plain streams are checked record by record. */ }
   if (complete && typeof complete === "object") {

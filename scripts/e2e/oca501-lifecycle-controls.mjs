@@ -83,6 +83,45 @@ assertSafeHostLog(JSON.stringify({ "0": JSON.stringify({ component: "CodexHarnes
 for (const raw of [JSON.stringify({ channels: { telegram: { botToken: "PRIVATE_CONFIG_NOT_EXPORTABLE" } } }), JSON.stringify({ "0": JSON.stringify({ models: { providers: { own: { apiKey: "PRIVATE_CONFIG_NOT_EXPORTABLE" } } } }) })]) refuse("raw config debug export blocked", () => assertSafeHostLog(raw));
 // C10 whole-stream boundaries: projection contains original hashes, never the
 // dangerous payload; safe native lifecycle/error facts remain complete.
+// Residual F21: escaped quoted JSON behind a plain log prefix must use the
+// same closed inspection, and timing maps cannot hide prohibited key names.
+const escapedPrivate = JSON.stringify({ gateway: { auth: { token: "SYNTHETIC_PRIVATE" } } });
+const escapedFailures = [
+  String.raw`error "{\"gateway\":{\"auth\":{\"token\":\"SYNTHETIC_PRIVATE\"}}}"`,
+  `error ${JSON.stringify(escapedPrivate)}`,
+  `error ${JSON.stringify(JSON.stringify(escapedPrivate))}`,
+  JSON.stringify({ "0": `error ${JSON.stringify(escapedPrivate)}`, _meta: { name: "gateway" } }),
+  `error ${JSON.stringify(JSON.stringify({ unknown: { payload: "SYNTHETIC_PRIVATE" } }))}`,
+  `error ${JSON.stringify(escapedPrivate).slice(0, -1)}`,
+  String.raw`error "{\"gateway\":{\"auth\":`,
+  String.raw`error "\q{\"gateway\":{}}"`,
+  `error '${JSON.stringify(escapedPrivate).slice(1, -1)}'`,
+  `error "${[...escapedPrivate].map((char) => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0")).join("")}"`,
+];
+for (const original of escapedFailures) {
+  refuse("escaped/nested/malformed quoted embedded content excluded", () => assertSafeHostLog(original));
+  const evidence = hostLogEvidence(original); assert.equal(evidence.completeStreamSafe, false); assert.equal(evidence.rawCompleteStreamExcluded, true);
+  assert.equal(evidence.original.bytes, Buffer.byteLength(original)); assert.equal(evidence.original.sha256, createHash("sha256").update(original).digest("hex"));
+  assert.ok(!JSON.stringify(evidence).includes("SYNTHETIC_PRIVATE"));
+}
+const genuineDiagnostic = { component: "CodexHarness", event: "turn.terminal", hasThreadId: true, hasTurnId: true, kind: "user", outcome: "completed" };
+assertSafeHostLog(`diagnostic ${JSON.stringify(JSON.stringify(genuineDiagnostic))}`);
+assertSafeHostLog(`diagnostic ${JSON.stringify(JSON.stringify(JSON.stringify(genuineDiagnostic)))}`);
+assertSafeHostLog('ToolInputError: replyTo must be a positive integer.');
+const finiteTimings = { prepare: 0, "native.run": 2015.5, finalize: 0 };
+for (const source of [JSON.stringify({ phaseDurationsMs: finiteTimings }), `phaseDurationsMs=${JSON.stringify(finiteTimings)}`, JSON.stringify({ "0": JSON.stringify({ phaseDurationsMs: finiteTimings }), _meta: { name: "gateway" } }), `timings ${JSON.stringify(JSON.stringify({ phaseDurationsMs: finiteTimings }))}`]) assertSafeHostLog(source);
+assertSafeHostLog(JSON.stringify({ phaseDurationsMs: finiteTimings }), { commandStream: true });
+for (const key of ["credentials", "gateway.auth", "agents.defaults", "models.providers", "plugins.entries.config", "process.env", "botToken", "tokenFile", "gatewayAuth", "run.credentials.elapsed"]) {
+  const map = { [key]: 0 };
+  for (const source of [JSON.stringify({ phaseDurationsMs: map }), `phaseDurationsMs=${JSON.stringify(map)}`, JSON.stringify({ "0": JSON.stringify({ phaseDurationsMs: map }), _meta: { name: "gateway" } }), `timings ${JSON.stringify(JSON.stringify({ phaseDurationsMs: map }))}`]) {
+    refuse("structured/embedded/wrapped phase credential key excluded", () => assertSafeHostLog(source));
+    assert.equal(hostLogEvidence(source).completeStreamSafe, false);
+  }
+  refuse("command timing map uses the same prohibited keys", () => assertSafeHostLog(JSON.stringify({ phaseDurationsMs: map }), { commandStream: true }));
+}
+for (const bad of [{ run: { credentials: 0 } }, { run: Infinity }, { run: NaN }, { run: -1 }, { run: "0" }]) {
+  refuse("timing map finite scalar boundary remains strict", () => assertSafeHostLog(JSON.stringify({ phaseDurationsMs: bad })));
+}
 const unsafeLogs = [
   '{"gateway":{"auth":{"token":"PRIVATE_LOG_NOT_EXPORTABLE"}}}',
   '{"agents":{"defaults":{"workspace":"PRIVATE_LOG_NOT_EXPORTABLE"}},"bindings":[]}',
@@ -337,4 +376,4 @@ try {
   rmSync(rollout); refuse("actual missing native file", () => readNativeReview(root, nativeExpected, true));
   refuse("malformed original UUID before readback", () => readNativeReview(root, { ...nativeExpected, originalThreadId: "../foreign" }, true));
 } finally { rmSync(directory, { recursive: true, force: true }); }
-console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 39, negativeControls: negatives.length, negatives }));
+console.log(JSON.stringify({ classification: "OFFLINE_ASSERTION_CONTROLS_ONLY", goldenRequestSha256: createHash("sha256").update(bytes).digest("hex"), positiveGroups: 43, negativeControls: negatives.length, negatives }));
