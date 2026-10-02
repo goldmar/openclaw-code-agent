@@ -225,7 +225,7 @@ describe("bounded representative host receipts", () => {
 
   it("retains a live command after both output pipes close until terminal cleanup", async () => {
     const run = Object.assign(Object.create(FeatureRun.prototype), { env: process.env, children: new Set(), raw: [], proofs: [] });
-    const outcome = run.command(process.execPath, ["-e", "console.log(process.pid);setTimeout(()=>{require('node:fs').closeSync(1);require('node:fs').closeSync(2)},50);setInterval(()=>{},1000)"], { allowFailure: true, timeoutMs: 500, graceMs: 100, killMs: 100 }).then(() => null, (error: Error) => error);
+    const outcome = run.command(process.execPath, ["-e", "console.log(process.pid);setTimeout(()=>{require('node:fs').closeSync(1);require('node:fs').closeSync(2)},50);setInterval(()=>{},1000)"], { allowFailure: true, timeoutMs: 500, graceMs: 100, killMs: 100 }).then((): null => null, (error: Error): Error => error);
     const child: any = [...run.children][0], identity = processIdentity(child.pid);
     try {
       await Promise.all([child.stdout, child.stderr].map((stream: Readable) => stream.closed ? Promise.resolve() : new Promise<void>(resolve => stream.once("close", resolve))));
