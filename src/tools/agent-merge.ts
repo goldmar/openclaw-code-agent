@@ -1,3 +1,4 @@
+import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { Type } from "../tool-parameter-schema";
 import { existsSync } from "fs";
@@ -20,7 +21,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { getPersistedTargetMutationRefs, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -37,7 +38,11 @@ interface AgentMergeParams {
 function isAgentMergeParams(value: unknown): value is AgentMergeParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string";
+  return typeof params.session === "string"
+    && (params.base_branch === undefined || typeof params.base_branch === "string")
+    && (params.strategy === undefined || params.strategy === "merge" || params.strategy === "squash")
+    && ["push", "delete_branch"].every((key) => params[key] === undefined || typeof params[key] === "boolean")
+    && (params.summary === undefined || typeof params.summary === "string");
 }
 
 function buildStashOutcomeDetailLines(args: {
@@ -141,28 +146,25 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
-        return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+        return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       // Keep the manager this call started with: a Gateway stop can clear the
       // shared reference while a merge or PR is still running, and the outcome
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
       if (!isAgentMergeParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch?, summary? }." }] };
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch?, summary? }.");
       }
 
-      if (params.base_branch !== undefined) {
-        const branchError = await branchNameValidationError(params.base_branch);
-        if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
-      }
-
-      // Resolve session (active or persisted)
+      // Unknown targets perform zero Git operations, including ref validation.
       const target = resolveWorktreeToolTarget(sm, params.session);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
-
-      if (!targetSession && !persistedSession) {
-        return { content: [{ type: "text", text: `Error: Session "${params.session}" not found.` }] };
+      if (!targetSession && !persistedSession) return unknownSessionError(params.session);
+      const admitted = captureWorktreeTarget(target);
+      if (params.base_branch !== undefined) {
+        const branchError = await branchNameValidationError(params.base_branch);
+        if (branchError) return sessionToolError("invalid_parameters", `Error: ${branchError}`);
       }
 
       const { worktreePath, originalWorkdir, branchName } = target;
@@ -222,38 +224,80 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         };
       }
 
+      const decisionRef = worktreeDecisionRef(sm, target);
+      if (!decisionRef) return sessionToolError("session_target_changed", "Error: The selected session changed before worktree preparation.", true);
       const hookRefusal = await refuseHookChangesWithoutUser({
         sessionManager: sm,
         toolCallId: _id,
-        sessionRef: params.session,
+        sessionRef: decisionRef,
+        decisionRef: () => worktreeDecisionRef(sm, target),
         repoDir: effectiveWorkdir,
         branchName,
         baseBranch,
         action: "merge",
       });
-      if (hookRefusal) return { content: [{ type: "text", text: hookRefusal }] };
+      if (hookRefusal) return typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal;
 
       // Serialise against concurrent merges on the same repo directory
-      let toolResult: { content: Array<{ type: string; text: string }>; meta?: { success: boolean; conflictResolverSessionId?: string } } = {
+      let toolResult: { isError?: boolean; details?: ReturnType<typeof sessionToolError>["details"]; content: Array<{ type: string; text: string }>; meta?: { success: boolean; conflictResolverSessionId?: string } } = {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
       await sm.enqueueMerge(effectiveWorkdir, async () => {
-        // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
-        const freshPersisted = sm.getPersistedSession(params.session);
-        if (freshPersisted?.worktreeLifecycle?.state === "merged" || freshPersisted?.worktreeMerged) {
+        const refuseChanged = () => {
+          toolResult = sessionToolError("session_target_changed", "Error: The selected session's worktree target changed before merge mutation. Reconcile its current state before retrying.", true);
+        };
+        let current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
+        if (current.changed) { refuseChanged(); return; }
+        if (current.merged) {
           toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
           return;
         }
 
-        // Get diff summary before merging for outcome notification
+        const currentPolicy = await sm.resolveRepoPolicy(effectiveWorkdir);
+        if (currentPolicy?.policy === "pr-required") {
+          toolResult = { content: [{ type: "text", text: `❌ Merge blocked: repo policy requires a pull request for ${currentPolicy.identity?.repoRoot ?? effectiveWorkdir}. Use agent_pr if PR automation is available.` }] };
+          return;
+        }
+        const currentDecisionRef = worktreeDecisionRef(sm, target);
+        if (!currentDecisionRef) { refuseChanged(); return; }
+        const currentHookRefusal = await refuseHookChangesWithoutUser({
+          sessionManager: sm, toolCallId: _id, sessionRef: currentDecisionRef,
+          repoDir: effectiveWorkdir, branchName, baseBranch, action: "merge",
+          decisionRef: () => worktreeDecisionRef(sm, target),
+        });
+        if (currentHookRefusal) {
+          toolResult = typeof currentHookRefusal === "string" ? { content: [{ type: "text", text: currentHookRefusal }] } : currentHookRefusal;
+          return;
+        }
+        // Get diff summary before merging for outcome notification.
         const diffSummary = await getDiffSummary(effectiveWorkdir, branchName, resolvedBaseBranch);
+        // Hooks/diff preparation awaits. Policy must be current at the last
+        // pre-mutation boundary, immediately followed by synchronous facts checks.
+        const finalPolicy = await sm.resolveRepoPolicy(effectiveWorkdir);
+        if (finalPolicy?.policy === "pr-required") {
+          toolResult = { content: [{ type: "text", text: `❌ Merge blocked: repo policy requires a pull request for ${finalPolicy.identity?.repoRoot ?? effectiveWorkdir}. Use agent_pr if PR automation is available.` }] };
+          return;
+        }
+        // Policy and hook inspection await; check the binding again immediately
+        // before mutation, including live facts when the persisted row lags.
+        current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
+        if (current.changed) { refuseChanged(); return; }
+        if (current.merged) {
+          toolResult = { content: [{ type: "text", text: `ℹ️ Session was already merged while preparing the merge.` }] };
+          return;
+        }
+        const freshPersisted = current.persisted;
 
         // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
         const mergeResult = await mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
         const warningDetailLines = buildMergeWarningLines(mergeResult);
 
         if (mergeResult.success) {
+          if (checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined).changed) {
+            toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile before retrying; push, cleanup and session updates were skipped." }] };
+            return;
+          }
           const stashDetailLines = buildStashOutcomeDetailLines({
             mergeResult,
             repoDir: effectiveWorkdir,
@@ -282,6 +326,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             }
           }
 
+          if (checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined).changed) {
+            toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge/push operations completed, but the selected worktree target changed. Cleanup and session updates were skipped; reconcile before retrying." }] };
+            return;
+          }
           let branchDeleted = false;
           let worktreeCleanedUp = false;
           const worktreeAlreadyAbsent = !existsSync(worktreePath);
@@ -299,16 +347,21 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             worktreeAlreadyAbsent,
           });
 
-          // Persist merge status if we have a persisted session
-          if (freshPersisted) {
+          // A post-mutation target change is an uncertain outcome, never an
+          // assertion that the Git operation did not start or a retry receipt.
+          const afterMerge = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
+          if (afterMerge.changed) {
+            toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile Git and session state before retrying; the changed session was not patched." }] };
+            return;
+          }
+          {
             const mergedAt = new Date().toISOString();
-            for (const mutationRef of getPersistedTargetMutationRefs({ ...target, persistedSession: freshPersisted })) {
-              sm.updatePersistedSession(mutationRef, {
+            const patched = patchWorktreeTarget(sm, target, {
                 ...buildMergedPatch(
                   {
                     worktreeBaseBranch: resolvedBaseBranch,
-                    worktreePrTargetRepo: freshPersisted.worktreePrTargetRepo,
-                    worktreePushRemote: freshPersisted.worktreePushRemote,
+                    worktreePrTargetRepo: freshPersisted?.worktreePrTargetRepo,
+                    worktreePushRemote: freshPersisted?.worktreePushRemote,
                   },
                   {
                     mergedAt,
@@ -319,6 +372,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                 ),
                 worktreeDisposition: "merged",
               });
+            if (!patched) {
+              toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but its session state could not be updated. Reconcile before retrying." }] };
+              return;
             }
           }
 

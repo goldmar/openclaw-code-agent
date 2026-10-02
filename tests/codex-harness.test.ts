@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId, resetCodexAllowlistWarningsForTests } from "../src/harness/codex";
 import { JsonRpcRemoteError, JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
+import { FollowUpDeliveryUnconfirmedError } from "../src/harness/follow-up-delivery-error";
 import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { MIN_CODEX_CLI_VERSION, codexVersionError, codexVersionFromUserAgent } from "../src/harness/codex-protocol";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
@@ -80,7 +81,9 @@ type MockOptions = {
   accountId?: string | null;
   /** Turns returned by thread/turns/list pages (newest first), chunked per page. */
   turnsPages?: Array<Array<{ id: string; status?: TurnStatus }>>;
-  steerError?: string;
+  steerError?: Error;
+  steerResponse?: unknown;
+  acceptSteerBeforeError?: boolean;
   /** `initialize` userAgent; defaults to a supported Codex version. */
   userAgent?: string;
 };
@@ -108,6 +111,7 @@ class MockCodexClient {
   readonly protocol = new CodexProtocolChecker();
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
   serverResponses: unknown[] = [];
+  acceptedSteers: Record<string, unknown>[] = [];
   closeCalls = 0;
   private turnCounter = 0;
   private activeTurnId: string | undefined;
@@ -210,8 +214,10 @@ class MockCodexClient {
       case "turn/interrupt":
         return {} satisfies TurnInterruptResponse;
       case "turn/steer":
-        if (this.options.steerError) throw new Error(this.options.steerError);
-        if (record.expectedTurnId !== this.activeTurnId) throw new Error("codex app server rpc error (-32600): no active turn to steer");
+        if (this.options.acceptSteerBeforeError) this.acceptedSteers.push(record);
+        if (this.options.steerError) throw this.options.steerError;
+        if ("steerResponse" in this.options) return this.options.steerResponse;
+        if (record.expectedTurnId !== this.activeTurnId) throw new JsonRpcRemoteError("turn/steer", -32600, "no active turn to steer");
         return { turnId: this.activeTurnId! } satisfies TurnSteerResponse;
       case "turn/start":
         return { turn: turnPayload(this.startTurn("user"), "inProgress") } satisfies TurnStartResponse;
@@ -1421,8 +1427,8 @@ describe("CodexHarness steering, interrupts, and thread actions", () => {
     });
   });
 
-  it("falls back to queueing when Codex rejects the steer", async () => {
-    const client = new MockCodexClient({ holdTurns: true, steerError: "codex app server rpc error (-32600): expected active turn id" });
+  for (const remoteMessage of ["no active turn to steer", "expected active turn id `turn-1` but found `turn-2`"]) it(`permits queued fallback for verified NotSubmitted: ${remoteMessage}`, async () => {
+    const client = new MockCodexClient({ holdTurns: true, steerError: new JsonRpcRemoteError("turn/steer", -32600, remoteMessage) });
     const session = launch(client);
     const iter = session.messages[Symbol.asyncIterator]();
     await nextOfType(iter, "run_started");
@@ -1430,6 +1436,39 @@ describe("CodexHarness steering, interrupts, and thread actions", () => {
     assert.equal(await session.steer?.("more"), false);
     await client.completeTurn();
     await nextOfType(iter, "run_completed");
+  });
+
+  for (const [label, options] of [
+    ["forged plain error", { steerError: new Error("no active turn to steer") }],
+    ["wrong method", { steerError: new JsonRpcRemoteError("turn/start", -32600, "no active turn to steer") }],
+    ["wrong code", { steerError: new JsonRpcRemoteError("turn/steer", -32603, "no active turn to steer") }],
+    ["wrong expected ID", { steerError: new JsonRpcRemoteError("turn/steer", -32600, "expected active turn id `other` but found `turn-2`") }],
+    ["contradictory same IDs", { steerError: new JsonRpcRemoteError("turn/steer", -32600, "expected active turn id `turn-1` but found `turn-1`") }],
+    ...["\n", "\r\n", "\u2028", "\u2029"].map((suffix): [string, Partial<MockOptions>] => ["extra final separator", { steerError: new JsonRpcRemoteError("turn/steer", -32600, `expected active turn id \`turn-1\` but found \`turn-2\`${suffix}`) }]),
+    ["additional data", { steerError: new JsonRpcRemoteError("turn/steer", -32600, "no active turn to steer", { private: "PRIVATE_BACKEND_DATA" }) }],
+    ["invalid input", { steerError: new JsonRpcRemoteError("turn/steer", -32600, "input must not be empty") }],
+    ["internal error", { steerError: new JsonRpcRemoteError("turn/steer", -32603, "PRIVATE_BACKEND_DATA") }],
+    ["closed transport", { steerError: new Error("stdio disconnected") }],
+    ["lost accepted acknowledgement", { steerError: new Error("timeout after accepted input"), acceptSteerBeforeError: true }],
+    ["missing acknowledgement", { steerResponse: undefined }],
+    ["empty acknowledgement", { steerResponse: { turnId: "" } }],
+    ["mismatched acknowledgement", { steerResponse: { turnId: "other" } }],
+  ] as Array<[string, Partial<MockOptions>]>) it(`does not authorize fallback for ${label}`, async () => {
+    const client = new MockCodexClient({ holdTurns: true, ...options });
+    const session = launch(client), iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    try {
+      await assert.rejects(session.steer!("UNCHANGED_FOLLOWUP"), (error: unknown) => {
+        assert.ok(error instanceof FollowUpDeliveryUnconfirmedError);
+        assert.doesNotMatch(error.message, /PRIVATE_BACKEND_DATA|UNCHANGED_FOLLOWUP|turn-1/);
+        return true;
+      });
+      assert.equal(client.requestsFor("turn/steer").length, 1);
+      assert.equal((client.requestsFor("turn/steer")[0] as { input: Array<{ text: string }> }).input[0].text, "UNCHANGED_FOLLOWUP");
+      assert.equal(client.requestsFor("turn/start").length, 1, "No speculative second turn");
+      assert.equal(client.acceptedSteers.length, options.acceptSteerBeforeError ? 1 : 0);
+    } finally { await session.close?.(); }
   });
 
   it("runs compaction and inline review as serialized thread-action turns (B12, B13)", async () => {

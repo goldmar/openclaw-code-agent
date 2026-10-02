@@ -80,6 +80,7 @@ import {
   removeWorktree,
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
+import { matchesGeneration, persistedForActiveGeneration, persistedGeneration, type SessionGeneration } from "./session-generation";
 import { SessionMaintenanceService } from "./session-maintenance-service";
 import { buildPendingDecisionPatch } from "./worktree-session-patches";
 import {
@@ -1563,7 +1564,9 @@ export class SessionManager {
     if (!trimmedSummary) return "Error: summary must not be empty.";
 
     const activeSession = this.resolve(ref);
-    const persistedSession = this.getPersistedSession(ref);
+    const persistedSession = activeSession
+      ? this.getPersistedForActiveGeneration(activeSession)
+      : this.getPersistedSession(ref);
     const session = activeSession ?? persistedSession;
     if (!session) return `Error: Session "${ref}" not found.`;
     if (!options.hookWarning && session.worktreeStrategy !== "delegate") {
@@ -1583,8 +1586,11 @@ export class SessionManager {
     const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
     const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
+    const selectedWorkdir = activeSession?.originalWorkdir ?? persistedSession?.workdir;
+    const legacyBinding = activeSession && persistedSession && !persistedSession.sessionId
+      ? persistedGeneration(persistedSession) : undefined;
     const repoDir = await this.resolveWorktreeRepoDir(
-      activeSession?.originalWorkdir ?? persistedSession?.workdir,
+      selectedWorkdir,
       worktreePath,
     );
     if (!worktreePath) return `Error: Session "${ref}" has no managed worktree path.`;
@@ -1613,6 +1619,20 @@ export class SessionManager {
       .split(/\r?\n/)
       .map((line) => line.replace(/^[-*]\s+/, "").trim())
       .filter((line) => line.length > 0);
+
+    // Legacy metadata was admitted only by a unique exact active/row pairing.
+    // Root/diff/button preparation awaits; prove that same pairing at dispatch.
+    if (legacyBinding && activeSession) {
+      const currentActive = this.get(activeSession.id);
+      const currentRow = currentActive ? this.getPersistedForActiveGeneration(currentActive) : undefined;
+      const samePath = (a?: string, b?: string) => a === b || pathsReferToSameLocation(a, b);
+      if (!currentRow || !matchesGeneration(currentRow, legacyBinding)
+        || !samePath(currentActive?.worktreePath ?? currentRow.worktreePath, worktreePath)
+        || (currentActive?.worktreeBranch ?? currentRow.worktreeBranch) !== branchName
+        || !samePath(currentActive?.originalWorkdir ?? currentRow.workdir, selectedWorkdir)) {
+        return "Error: The selected legacy worktree target changed before the decision could be delivered.";
+      }
+    }
 
     const delivery = await this.dispatchAndAwaitUserDelivery(
       this.buildRoutingProxy({
@@ -2301,6 +2321,26 @@ export class SessionManager {
     if (updated) {
       this.onPersistedSessionChanged(this.store.getPersistedSession(ref));
     }
+    return updated;
+  }
+
+  getSessionGeneration(generation: SessionGeneration): PersistedSessionInfo | undefined {
+    return this.store.getSessionGeneration(generation);
+  }
+
+  private getPersistedForActiveGeneration(active: Session): PersistedSessionInfo | undefined {
+    return persistedForActiveGeneration(active, {
+      getSessionGeneration: (generation) => this.getSessionGeneration(generation),
+      listPersistedSessions: () => this.listPersistedSessions(),
+      listActiveSessions: () => this.list("all"),
+    });
+  }
+
+  updateSessionGeneration(generation: SessionGeneration, patch: Partial<PersistedSessionInfo>, options: { persisted: boolean }): boolean {
+    const existing = options.persisted ? this.store.getSessionGeneration(generation) : undefined;
+    if (options.persisted && !existing) return false;
+    const updated = this.stateSync.applyGenerationPatch(generation, existing, patch);
+    if (updated && existing) this.onPersistedSessionChanged(existing);
     return updated;
   }
 

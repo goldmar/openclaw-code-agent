@@ -2,10 +2,13 @@ import type { PersistedSessionInfo } from "../types";
 import { existsSync, readFileSync } from "fs";
 import type { ResolvedWorktreeLifecycle } from "../types";
 import type { Session } from "../session";
-import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "../session-backend-ref";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { SessionManager } from "../session-manager";
 import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
 import { describeHookPathChanges, listHookPathChanges } from "../git-hooks";
+import { persistedForActiveGeneration, persistedGeneration, type SessionGeneration } from "../session-generation";
+import { pathsReferToSameLocation } from "../path-utils";
+import { sessionToolError } from "./session-tool-error";
 
 /**
  * Tool-call id the button callback handler uses when a user's Merge / Open PR
@@ -27,7 +30,9 @@ export async function refuseHookChangesWithoutUser(args: {
   branchName: string;
   baseBranch: string;
   action: "merge" | "pr";
-}): Promise<string | undefined> {
+  /** Revalidate supported resolution immediately before decision dispatch. */
+  decisionRef?: () => string | undefined;
+}): Promise<string | ReturnType<typeof sessionToolError> | undefined> {
   if (args.toolCallId === USER_BUTTON_TOOL_CALL_ID) return undefined;
   let hookWarning: string | undefined;
   try {
@@ -38,8 +43,10 @@ export async function refuseHookChangesWithoutUser(args: {
     return undefined;
   }
   if (!hookWarning) return undefined;
+  const decisionRef = args.decisionRef ? args.decisionRef() : args.sessionRef;
+  if (!decisionRef) return sessionToolError("session_target_changed", "Error: The selected session changed before its worktree decision could be escalated.", true);
   const prompt = await args.sessionManager.requestWorktreeDecisionFromUser?.(
-    args.sessionRef,
+    decisionRef,
     "Changes git hook or worktree setup files; waiting for your decision.",
     { hookWarning },
   ) ?? "";
@@ -50,6 +57,8 @@ export async function refuseHookChangesWithoutUser(args: {
 }
 
 export interface ResolvedWorktreeToolTarget {
+  generation?: SessionGeneration;
+  initiallyPersisted?: boolean;
   activeSession?: Session;
   persistedSession?: PersistedSessionInfo;
   persistedRef?: string;
@@ -92,10 +101,21 @@ function containsPrSessionReport(output: string | undefined): boolean {
 
 export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: string): ResolvedWorktreeToolTarget {
   const activeSession = sessionManager.resolve(ref);
-  const persistedSession = sessionManager.getPersistedSession(ref);
+  // An alias may resolve to different active and persisted winners. Once an
+  // active OCA ID won, only that ID's row may supply metadata or output.
+  const persistedSession = activeSession
+    ? persistedForActiveGeneration(activeSession, {
+        getSessionGeneration: (generation) => sessionManager.getSessionGeneration(generation),
+        listPersistedSessions: () => sessionManager.listPersistedSessions(),
+        listActiveSessions: () => sessionManager.list("all"),
+      })
+    : sessionManager.getPersistedSession(ref);
+  const generation = persistedSession ? persistedGeneration(persistedSession)
+    : activeSession ? { kind: "oca" as const, sessionId: activeSession.id } : undefined;
+  if (generation?.kind === "legacy" && activeSession) generation.pinnedLiveSessionId = activeSession.id;
   const persistedRef = activeSession
-    ? getPrimarySessionLookupRef(activeSession)
-    : (persistedSession ? getPrimarySessionLookupRef(persistedSession) : undefined);
+    ? activeSession.id
+    : (persistedSession?.sessionId ?? getBackendConversationId(persistedSession ?? {}) ?? persistedSession?.harnessSessionId);
   const activeOutput = activeSession?.getOutput?.().join("\n").trim();
   let persistedOutput: string | undefined;
   if (persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
@@ -112,6 +132,8 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
     : (persistedHasReport ? persistedOutput : activeOutput);
 
   return {
+    generation,
+    initiallyPersisted: Boolean(persistedSession),
     activeSession,
     persistedSession,
     persistedRef,
@@ -143,11 +165,90 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
   };
 }
 
-export function getPersistedTargetMutationRefs(target: ResolvedWorktreeToolTarget): string[] {
-  return [
-    ...(target.persistedSession ? getPersistedMutationRefs(target.persistedSession) : []),
-    ...(target.activeSession ? getPersistedMutationRefs(target.activeSession) : []),
-  ].filter((ref, index, refs) => refs.indexOf(ref) === index);
+export function patchWorktreeTarget(sm: SessionManager, target: ResolvedWorktreeToolTarget, patch: Partial<PersistedSessionInfo>): boolean {
+  return !!target.generation && sm.updateSessionGeneration(target.generation, patch, { persisted: !!target.initiallyPersisted });
+}
+
+/** The supported decision API still accepts references; prove it selects the binding. */
+export function worktreeDecisionRef(sm: SessionManager, target: ResolvedWorktreeToolTarget): string | undefined {
+  if (!target.generation) return undefined;
+  if (target.generation.kind === "oca") {
+    const id = target.generation.sessionId;
+    const selectedActive = sm.resolve(id);
+    if (selectedActive && selectedActive.id !== id) return undefined;
+    if (target.initiallyPersisted && !sm.getSessionGeneration(target.generation)) return undefined;
+    if (!target.initiallyPersisted && !sm.get(id)) return undefined;
+    return id;
+  }
+  const row = sm.getSessionGeneration(target.generation);
+  const ref = row?.backendRef?.conversationId ?? row?.harnessSessionId;
+  if (!row || !ref) return undefined;
+  const selectedActive = sm.resolve(ref);
+  if (selectedActive && (selectedActive.id !== target.activeSession?.id
+    || getBackendConversationId(selectedActive) !== target.generation.backendConversationId)) return undefined;
+  const selected = sm.getPersistedSession(ref);
+  return selected && !selected.sessionId && selected.harnessSessionId === target.generation.storageKey
+    && getBackendConversationId(selected) === target.generation.backendConversationId ? ref : undefined;
+}
+
+function coordinates(active?: Session, persisted?: PersistedSessionInfo) {
+  return {
+    worktreePath: active?.worktreePath ?? persisted?.worktreePath,
+    originalWorkdir: active?.originalWorkdir ?? persisted?.workdir,
+    branchName: active?.worktreeBranch ?? persisted?.worktreeBranch,
+    baseBranch: active?.worktreeBaseBranch ?? persisted?.worktreeBaseBranch,
+  };
+}
+
+const COMPETING_RESOLUTIONS = new Set(["pr_open", "released", "dismissed", "no_change"]);
+function resolutions(session: Session | PersistedSessionInfo | undefined): string[] {
+  if (!session) return [];
+  const values = [session.worktreeLifecycle?.state, session.worktreeState,
+    "worktreeDisposition" in session ? session.worktreeDisposition : undefined];
+  return values.flatMap((value) => value === "pr-opened" ? ["pr_open"] : value === "later" ? [] : value ? [value] : []);
+}
+
+export function captureWorktreeTarget(target: ResolvedWorktreeToolTarget) {
+  return { ...coordinates(target.activeSession, target.persistedSession),
+    activeFacts: target.activeSession ? coordinates(target.activeSession) : undefined,
+    persistedFacts: target.persistedSession ? coordinates(undefined, target.persistedSession) : undefined,
+    resolutions: new Set([...resolutions(target.activeSession), ...resolutions(target.persistedSession)]) };
+}
+
+/** Check only captured generation and consequential worktree facts, never aliases. */
+export function checkWorktreeTarget(sm: SessionManager, target: ResolvedWorktreeToolTarget,
+  admitted: ReturnType<typeof captureWorktreeTarget>, explicitBase: boolean): { changed: boolean; merged: boolean; persisted?: PersistedSessionInfo } {
+  if (!target.generation) return { changed: true, merged: false };
+  const persisted = target.initiallyPersisted ? sm.getSessionGeneration(target.generation) : undefined;
+  const activeId = target.activeSession?.id ?? (target.generation.kind === "oca" ? target.generation.sessionId : target.generation.pinnedLiveSessionId);
+  const active = activeId ? sm.get(activeId) : undefined;
+  if ((target.initiallyPersisted && !persisted) || (!target.initiallyPersisted && !active)) return { changed: true, merged: false };
+  const currentResolutions = [...resolutions(active), ...resolutions(persisted)];
+  const merged = currentResolutions.includes("merged") || !!persisted?.worktreeMerged;
+  // A proven exact generation may have cleared its coordinates during cleanup.
+  if (merged) return { changed: false, merged: true, persisted };
+  const samePath = (a?: string, b?: string) => a === b || pathsReferToSameLocation(a, b);
+  const changedFacts = (facts: ReturnType<typeof coordinates>, before?: ReturnType<typeof coordinates>) => {
+    const expected = (key: keyof typeof facts) => before?.[key] ?? admitted[key];
+    return !samePath(facts.worktreePath, expected("worktreePath"))
+      || !samePath(facts.originalWorkdir, expected("originalWorkdir"))
+      || facts.branchName !== expected("branchName")
+      || (!explicitBase && facts.baseBranch !== expected("baseBranch"));
+  };
+  // Compare both authoritative sources; a stale live value must not conceal a
+  // changed persisted coordinate (or the reverse). Missing initial fields keep
+  // their normal metadata fallback unless filled incompatibly.
+  const changedSource = (facts: ReturnType<typeof coordinates>, before?: ReturnType<typeof coordinates>) => {
+    const effective = { ...facts };
+    for (const key of Object.keys(effective) as Array<keyof typeof effective>) {
+      if (facts[key] === undefined && before?.[key] === undefined) effective[key] = admitted[key];
+    }
+    return changedFacts(effective, before);
+  };
+  const changed = (active && changedSource(coordinates(active), admitted.activeFacts))
+    || (persisted && changedSource(coordinates(undefined, persisted), admitted.persistedFacts));
+  const competing = currentResolutions.some((state) => COMPETING_RESOLUTIONS.has(state) && !admitted.resolutions.has(state));
+  return { changed: !!changed || competing, merged, persisted };
 }
 
 export interface WorktreeToolListingTarget {

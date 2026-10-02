@@ -14,6 +14,8 @@ This plugin is an orchestration layer around local developer tooling. It is expe
 
 Anyone who can launch an OCA session can make a coding agent run arbitrary commands in the chosen repository. The orchestrator is itself a model: it fills in tool parameters such as the launch `workdir` and goal `verifier_commands` from the conversation, so a prompt it reads can steer them. Treat access to the orchestrator, and every repository the Gateway user can reach, accordingly.
 
+Session-reference diagnostics return a status and recovery guidance without candidate IDs, routes or requester identities. Origin routes and caller session keys determine routing and report custody; they are not tenant authorization tokens. Existing host tool grants and user decision buttons still govern authority. Worktree merge and PR state updates target the selected OCA ID, or an exact ID-less legacy store row, without updating shared-name/backend aliases. A queued merge rechecks that generation, worktree coordinates, competing resolution, repository policy and hook changes before Git mutation. These checks do not provide a distributed lock against external Git writers or a durable response delivery guarantee across retries, restarts or multiple registries.
+
 The package declares OpenClaw install metadata in `package.json` and dangerous configuration flags in `openclaw.plugin.json`, so review tools can identify it as an executable, high-trust developer automation plugin rather than an instruction-only helper.
 
 ## Operator-required goal checks

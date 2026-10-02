@@ -1,3 +1,4 @@
+import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
@@ -12,7 +13,9 @@ interface AgentOutputParams {
 function isAgentOutputParams(value: unknown): value is AgentOutputParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string";
+  return typeof params.session === "string"
+    && (params.lines === undefined || typeof params.lines === "number")
+    && (params.full === undefined || typeof params.full === "boolean");
 }
 
 /** Register the `agent_output` tool factory. */
@@ -27,12 +30,16 @@ export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
-        return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+        return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentOutputParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, lines?, full? }." }] };
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, lines?, full? }.");
       }
-      const text = getSessionOutputText(sessionManager, params.session, {
+      const sm = sessionManager;
+      if (!sm.resolve(params.session) && !sm.getPersistedSession(params.session)) {
+        return unknownSessionError(params.session);
+      }
+      const text = getSessionOutputText(sm, params.session, {
         full: params.full,
         lines: params.lines,
         readerSessionKey: ctx?.sessionKey || undefined,

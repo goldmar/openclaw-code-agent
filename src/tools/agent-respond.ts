@@ -1,3 +1,4 @@
+import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
@@ -17,6 +18,7 @@ function isAgentRespondParams(value: unknown): value is AgentRespondParams {
   const params = value as Record<string, unknown>;
   return typeof params.session === "string"
     && typeof params.message === "string"
+    && ["interrupt", "userInitiated", "approve"].every((key) => params[key] === undefined || typeof params[key] === "boolean")
     && (params.approval_rationale === undefined || typeof params.approval_rationale === "string");
 }
 
@@ -42,10 +44,10 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
-        return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+        return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentRespondParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve?, approval_rationale? }." }] };
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
       }
 
       const result = await executeRespond(sessionManager, {
@@ -60,6 +62,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
 
       return {
         isError: result.isError ?? false,
+        ...(result.details ? { details: result.details } : {}),
         content: [{ type: "text", text: result.text }],
       };
     },

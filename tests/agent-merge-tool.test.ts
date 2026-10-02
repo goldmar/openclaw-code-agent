@@ -1,11 +1,12 @@
 import "./test-env";
+import { withGenerationMethods } from "./session-generation-fixture";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { setSessionManager } from "../src/singletons";
+import { setSessionManager as setSingletonManager } from "../src/singletons";
 import { SessionNotificationService } from "../src/session-notifications";
 import { formatCleanupOutcome, makeAgentMergeTool } from "../src/tools/agent-merge";
 import { createWorktree, getBranchName } from "../src/worktree";
@@ -678,4 +679,109 @@ describe("agent_merge push behavior", () => {
       rmSync(remoteDir, { recursive: true, force: true });
     }
   });
+});
+
+function setSessionManager(manager: any): void {
+  setSingletonManager(manager ? withGenerationMethods(manager) : null);
+}
+
+describe("agent_merge captured generation through the repository queue", () => {
+  const cases = [
+    "alias-retarget", "branch-change", "path-change", "repo-change", "base-change", "explicit-base",
+    "row-disappears", "new-pr-open", "initial-pr-open", "new-released", "new-dismissed", "new-no-change",
+    "already-merged", "merged-cleared-coordinates", "runtime-status", "live-change-stale-row", "persisted-change-stale-live", "policy-change", "policy-after-hooks", "change-during-policy", "new-hook",
+    "active-only-disappears",
+  ] as const;
+  for (const scenario of cases) {
+    it(scenario, async () => {
+      const { repoDir, remoteDir } = createRepoWithRemote(`merge-binding-${scenario}`);
+      try {
+        const { worktreePath, branchName } = await createCommittedWorktree(repoDir, scenario);
+        const initialHead = git(repoDir, "rev-parse", "main");
+        const a: any = {
+          sessionId: "a", harnessSessionId: "ha", name: "shared", status: "completed", costUsd: 0,
+          workdir: repoDir, worktreePath, worktreeBranch: branchName, worktreeBaseBranch: "main",
+          worktreeState: scenario === "initial-pr-open" ? "pr_open" : "pending_decision",
+          backendRef: { kind: "codex-app-server", conversationId: "shared-backend" },
+        };
+        const b: any = { ...a, sessionId: "b", harnessSessionId: "hb", worktreeBranch: "agent/foreign", route: { sessionKey: "foreign-route" } };
+        let alias = a;
+        let exactRow: any = scenario === "active-only-disappears" ? undefined : a;
+        let live: any = scenario === "live-change-stale-row" || scenario === "persisted-change-stale-live" || scenario === "active-only-disappears"
+          ? { ...a, id: "a", originalWorkdir: repoDir, getOutput: (): string[] => [] }
+          : undefined;
+        let policies = 0;
+        let patchCount = 0;
+        let escalated: string | undefined;
+        const manager: any = {
+          resolve: (ref: string) => live && (ref === "shared" || ref === "a") ? live : undefined,
+          get: (id: string) => id === "a" ? live : undefined,
+          getPersistedSession: (ref: string) => ref === "shared" ? alias : ref === "a" ? exactRow : undefined,
+          getSessionGeneration: (generation: any) => generation.kind === "oca" && generation.sessionId === "a" ? exactRow : undefined,
+          listPersistedSessions: () => exactRow ? [a, b] : [b],
+          resolveRepoPolicy: async () => {
+            policies++;
+            if (scenario === "change-during-policy" && policies === 2) a.worktreeBranch = "agent/changed";
+            return { policy: ((scenario === "policy-change" && policies === 2) || (scenario === "policy-after-hooks" && policies === 3)) ? "pr-required" : "pr-allowed", identity: { repoRoot: repoDir } };
+          },
+          enqueueMerge: async (_repo: string, fn: () => Promise<void>) => {
+            alias = b;
+            if (scenario === "branch-change") a.worktreeBranch = "agent/changed";
+            if (scenario === "path-change") a.worktreePath = `${worktreePath}-changed`;
+            if (scenario === "repo-change") a.workdir = remoteDir;
+            if (scenario === "base-change" || scenario === "explicit-base") a.worktreeBaseBranch = "changed-base";
+            if (scenario === "row-disappears") exactRow = undefined;
+            if (scenario === "new-pr-open") a.worktreeState = "pr_open";
+            if (scenario === "new-released") a.worktreeDisposition = "released";
+            if (scenario === "new-dismissed") a.worktreeLifecycle = { state: "dismissed" };
+            if (scenario === "new-no-change") a.worktreeState = "no_change";
+            if (scenario === "already-merged") a.worktreeMerged = true;
+            if (scenario === "merged-cleared-coordinates") {
+              a.worktreeMerged = true; a.worktreePath = undefined; a.worktreeBranch = undefined; a.workdir = undefined;
+            }
+            if (scenario === "persisted-change-stale-live") a.worktreeBranch = "agent/changed-persisted";
+            if (scenario === "runtime-status") a.status = "running";
+            if (scenario === "live-change-stale-row") live.worktreeBranch = "agent/changed-live";
+            if (scenario === "active-only-disappears") live = undefined;
+            if (scenario === "new-hook") {
+              const { mkdirSync } = await import("node:fs");
+              mkdirSync(join(worktreePath, ".openclaw"));
+              writeFileSync(join(worktreePath, ".openclaw", "worktree-setup.sh"), "#!/bin/sh\ntrue\n");
+              git(worktreePath, "add", ".openclaw/worktree-setup.sh");
+              git(worktreePath, "commit", "-m", "add setup hook");
+            }
+            await fn();
+          },
+          updateSessionGeneration: (generation: any, patch: any) => {
+            assert.deepEqual(generation, { kind: "oca", sessionId: "a" });
+            assert.ok(exactRow);
+            patchCount++; Object.assign(a, patch); return true;
+          },
+          requestWorktreeDecisionFromUser: async (ref: string) => { escalated = ref; return "Decision queued"; },
+          notifyWorktreeOutcome: (target: any) => { assert.equal(target.id, "a"); },
+        };
+        setSessionManager(manager);
+        const result = await makeAgentMergeTool().execute("model-call", { session: "shared", ...(scenario === "explicit-base" ? { base_branch: "main" } : {}) });
+        const compatible = ["alias-retarget", "explicit-base", "initial-pr-open", "runtime-status"].includes(scenario);
+        if (compatible) {
+          assert.match(result.content[0].text, /✅/);
+          assert.notEqual(git(repoDir, "rev-parse", "main"), initialHead);
+          assert.equal(patchCount, 1);
+        } else {
+          assert.equal(git(repoDir, "rev-parse", "main"), initialHead);
+          assert.equal(patchCount, 0);
+          if (!["already-merged", "merged-cleared-coordinates", "policy-change", "policy-after-hooks", "new-hook"].includes(scenario)) {
+            assert.equal(result.isError, true);
+            assert.equal(result.details?.code, "session_target_changed");
+            assert.equal(result.details?.operationStarted, false);
+          }
+        }
+        if (scenario === "new-hook") assert.equal(escalated, "a");
+        assert.equal(b.worktreeMerged, undefined, "foreign alias B must stay untouched");
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+        rmSync(remoteDir, { recursive: true, force: true });
+      }
+    });
+  }
 });

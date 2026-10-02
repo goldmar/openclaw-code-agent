@@ -232,6 +232,10 @@ describe("snooze and reminders", () => {
     assert.match(s.sm.snoozeWorktreeDecision(session.id), /Reminder snoozed 24h/);
     await s.waitForMessage(/Reminder snoozed 24h/, sendsBeforeSnooze);
 
+    // Finish the preceding day's Git-backed schedule work before moving the
+    // fixture timestamps forward. Keep the real reminder delivery deadline.
+    await (s.sm as unknown as { maintenance: { whenIdle(): Promise<void> } }).maintenance.whenIdle();
+
     // A day later: the snooze has ended and the reminder is due.
     const hour = 60 * 60 * 1000;
     const sendsBefore = s.host.durableSends.length;
