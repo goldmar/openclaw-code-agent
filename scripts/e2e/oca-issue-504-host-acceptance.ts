@@ -365,19 +365,25 @@ async function main(): Promise<void> {
         for (const target of targets) assert.ok(!JSON.stringify(result).includes(target.sessionId) && !JSON.stringify(result).includes(target.backendRef.conversationId));
       }
       assert.deepEqual(await snapshot(), before); outcomes.push("four-tool-unknown-masked-blank-no-observed-effects");
-      stage = "managed-worktree-policy-and-merge";
+      stage = "managed-worktree-setup";
       const mergeRepo = repo("merge"); git(mergeRepo, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent");
       const managed = await launch("managed", mergeRepo, "OCA504_COMMIT", "manual");
       const worktree = inside(fixture, realpathSync(managed.worktreePath)); assert.ok(managed.worktreeBranch); assert.equal(managed.workdir, mergeRepo);
       writeFileSync(join(worktree, "selected.txt"), "selected fixture change\n"); git(worktree, "add", "selected.txt"); git(worktree, "commit", "-m", "fixture selected change");
       commitReleased = true; releaseCommit!(); await completed(managed, "OCA504_COMMIT");
-      const policy = store().repoPolicies.find((item: Json) => item.repoRoot === mergeRepo); assert.equal(policy?.policy, "pr-required");
+      stage = "managed-seeded-launch-policy";
+      assert.equal(row(managed.sessionId).repoIntegrationPolicy, "pr-required");
+      assert.equal(row(managed.sessionId).repoIntegrationPolicySource, "seeded");
       const beforeMerge = { main: git(mergeRepo, "rev-parse", "main"), tip: git(mergeRepo, "rev-parse", managed.worktreeBranch), other: targetFacts(row(unrelated.sessionId)), otherRef: git(unrelatedRepo, "show-ref") };
+      stage = "managed-policy-refusal";
       await tool("agent_merge", { session: managed.sessionId, base_branch: "main", push: false, delete_branch: false });
       assert.equal(git(mergeRepo, "rev-parse", "main"), beforeMerge.main); assert.equal(git(mergeRepo, "rev-parse", managed.worktreeBranch), beforeMerge.tip);
       assert.equal(existsSync(join(mergeRepo, "selected.txt")), false); assert.ok(existsSync(worktree)); assert.ok(!row(managed.sessionId).worktreeMerged);
+      assert.deepEqual(targetFacts(row(unrelated.sessionId)), beforeMerge.other); assert.equal(git(unrelatedRepo, "show-ref"), beforeMerge.otherRef);
+      stage = "managed-current-policy-change";
       await tool("agent_repo_policy", { workdir: mergeRepo, policy: "never-pr" });
       await until(() => store().repoPolicies.find((item: Json) => item.repoRoot === mergeRepo)?.policy === "never-pr" ? true : undefined, "fixture policy persisted");
+      stage = "managed-selected-merge-effects";
       await tool("agent_merge", { session: managed.sessionId, base_branch: "main", push: false, delete_branch: false });
       const keptTip = git(mergeRepo, "rev-parse", managed.worktreeBranch); git(mergeRepo, "merge-base", "--is-ancestor", keptTip, "main");
       assert.notEqual(git(mergeRepo, "rev-parse", "main"), beforeMerge.main); assert.equal(readFileSync(join(mergeRepo, "selected.txt"), "utf8"), "selected fixture change\n");
