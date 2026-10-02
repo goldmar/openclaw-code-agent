@@ -330,7 +330,7 @@ export function requestPlanDecisionChanges(
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
-  try { if (target) sm.continueGoalSession(target, active); } catch (err) {
+  try { if (target?.goalTaskId) sm.continueGoalSession(target, active); } catch (err) {
     return { text: `Error: ${errorMessage(err)}`, isError: true };
   }
   const name = target?.name ?? sessionId;
@@ -532,7 +532,7 @@ export async function executeRespond(
   let goalOwnership: SessionConfig["goalOwnership"];
   if (textPlanDecision !== "reject") {
     try {
-      goalOwnership = sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController });
+      if (target.goalTaskId) goalOwnership = sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController });
     } catch (err) {
       return { text: `Error: ${errorMessage(err)}`, isError: true };
     }
@@ -675,6 +675,8 @@ export async function executeRespond(
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
+    // Goal-loop replies re-check after the awaits above; they never detach.
+    if (params.fromGoalController && session.goalTaskId) sm.continueGoalSession(session, session, { fromGoalController: true });
     const delivery = await session.sendMessage(params.message);
     if (isPlanApproval) {
       persistPlanApprovalState(sm, session);

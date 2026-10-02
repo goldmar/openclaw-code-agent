@@ -605,17 +605,12 @@ export class SessionManager {
   ): SessionConfig["goalOwnership"] {
     const id = target.goalTaskId;
     if (!id) return undefined;
-    if (session?.goalDetached) return "detached";
     if (!options.fromGoalController && this.goalTaskEnded(id)) {
       session?.detachGoal();
       return "detached";
     }
     this.assertGoalTaskAuthorized(id);
     return "attached";
-  }
-
-  private assertSessionGoalAuthorized(session: Session): void {
-    if (!session.goalDetached) this.assertGoalTaskAuthorized(session.goalTaskId);
   }
 
   assertGoalTaskAuthorized(id?: string): void {
@@ -631,7 +626,7 @@ export class SessionManager {
         throw new Error("An independent fork cannot reuse an existing session identity. Omit sessionIdOverride to create a new session.");
       }
       if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
-      return { ...config, assertGoalTaskAuthorized: undefined };
+      return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
     }
     const owners = new Set<string>();
     for (const [ref, identity] of [
@@ -666,11 +661,13 @@ export class SessionManager {
     // Decided at the first check of a launch: once attached, a later goal end
     // found during preparation fails the launch instead of detaching it.
     if (goalTaskId && config.goalOwnership !== "attached" && this.goalTaskEnded(goalTaskId)) {
-      return { ...config, goalTaskId: undefined, goalOwnership: "detached", assertGoalTaskAuthorized: undefined };
+      return { ...config, goalTaskId: undefined, goalOwnership: "detached", assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
     }
     this.assertGoalTaskAuthorized(goalTaskId);
-    return { ...config, goalTaskId, goalOwnership: goalTaskId ? "attached" : undefined, assertGoalTaskAuthorized: goalTaskId
-      ? () => this.assertGoalTaskAuthorized(goalTaskId) : undefined };
+    if (!goalTaskId) return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+    return { ...config, goalTaskId, goalOwnership: "attached",
+      assertGoalTaskAuthorized: () => this.assertGoalTaskAuthorized(goalTaskId),
+      isGoalTaskEnded: () => this.goalTaskEnded(goalTaskId) };
   }
 
   /**
@@ -2402,9 +2399,9 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    this.assertSessionGoalAuthorized(session);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
     const answer = await this.questions.handleAskUserQuestion(session, input, context);
-    this.assertSessionGoalAuthorized(session);
+    this.assertGoalTaskAuthorized(session.goalTaskId);
     return answer;
   }
 
@@ -2418,7 +2415,8 @@ export class SessionManager {
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
-      this.assertSessionGoalAuthorized(session);
+      // The user's answer is an explicit action: an ended goal detaches the session.
+      this.continueGoalSession(session, session);
       assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
     }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);

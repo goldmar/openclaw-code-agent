@@ -204,8 +204,9 @@ export class Session extends EventEmitter {
 
   // Multi-turn
   readonly multiTurn: boolean;
-  readonly goalTaskId?: string;
+  private readonly ownerGoalTaskId?: string;
   private readonly goalTaskAuthorizer?: () => void;
+  private readonly goalTaskEnded?: () => boolean;
   /** Set when an explicit action continued this session after its goal ended. */
   private goalOwnerDetached = false;
   private messageStream?: MessageStream;
@@ -347,8 +348,9 @@ export class Session extends EventEmitter {
     this.forkBaselineUsage = config.forkBaselineUsage;
     this.rewindTurns = config.rewindTurns;
     this.multiTurn = config.multiTurn ?? true;
-    this.goalTaskId = config.goalTaskId;
+    this.ownerGoalTaskId = config.goalTaskId;
     this.goalTaskAuthorizer = config.assertGoalTaskAuthorized;
+    this.goalTaskEnded = config.isGoalTaskEnded;
     this.worktreeStrategy = config.worktreeStrategy;
     this.repoIntegrationPolicy = config.repoIntegrationPolicy;
     this.repoIntegrationPolicySource = config.repoIntegrationPolicySource;
@@ -877,6 +879,11 @@ export class Session extends EventEmitter {
     return true;
   }
 
+  /** The owning goal; unset once the session continued as an ordinary session. */
+  get goalTaskId(): string | undefined {
+    return this.goalOwnerDetached ? undefined : this.ownerGoalTaskId;
+  }
+
   get goalDetached(): boolean {
     return this.goalOwnerDetached;
   }
@@ -886,8 +893,22 @@ export class Session extends EventEmitter {
     this.goalOwnerDetached = true;
   }
 
-  private assertCurrentModelAllowed(): void {
-    if (this.goalTaskId && !this.goalOwnerDetached) {
+  /**
+   * Checks at the start of an explicit action (a reply, plan decision, input
+   * answer or thread action). A goal that had already ended detaches the
+   * session, which continues as an ordinary session. Returns whether the action
+   * runs as goal work; its checks after each await then stay strict, so an
+   * action that discovers a policy change or goal end mid-flight is rejected.
+   */
+  private beginAction(): boolean {
+    if (this.goalTaskId && this.goalTaskEnded?.()) this.detachGoal();
+    const goalWork = this.goalTaskId !== undefined;
+    this.assertCurrentModelAllowed(goalWork);
+    return goalWork;
+  }
+
+  private assertCurrentModelAllowed(goalWork = this.goalTaskId !== undefined): void {
+    if (goalWork) {
       if (!this.goalTaskAuthorizer) throw new Error("Goal controller authorization is unavailable for this session.");
       this.goalTaskAuthorizer();
     }
@@ -976,20 +997,20 @@ export class Session extends EventEmitter {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
 
-    this.assertCurrentModelAllowed();
+    const goalWork = this.beginAction();
     this.resetIdleTimer();
     const planDecisionPending = !!this.pendingModeSwitch
       || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
     if (this.turnInProgress && !planDecisionPending && this.harnessHandle?.steer) {
       const steered = await this.harnessHandle.steer(text);
-      this.assertCurrentModelAllowed();
+      this.assertCurrentModelAllowed(goalWork);
       if (steered) {
         this.logDiagnostic("turn.steered", { chars: text.length });
         return "steered";
       }
     }
 
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
 
@@ -997,10 +1018,10 @@ export class Session extends EventEmitter {
     let effectiveText = text;
     if (this.pendingModeSwitch) {
       const newMode = this.pendingModeSwitch;
-      if (await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode })) {
+      if (await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode }, goalWork)) {
         // The backend received the approval as the native permission result
         // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
-        this.assertCurrentModelAllowed();
+        this.assertCurrentModelAllowed(goalWork);
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
         if (isBareApprovalMessage(text)) return "queued";
@@ -1013,7 +1034,7 @@ export class Session extends EventEmitter {
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
-        this.assertCurrentModelAllowed();
+        this.assertCurrentModelAllowed(goalWork);
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
         if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
@@ -1033,10 +1054,10 @@ export class Session extends EventEmitter {
       }
       // Native backends receive the feedback as the plan request's denial
       // (Claude: ExitPlanMode deny message) and keep planning in the same turn.
-      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text })) return "queued";
+      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text }, goalWork)) return "queued";
       if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
-      this.assertCurrentModelAllowed();
+      this.assertCurrentModelAllowed(goalWork);
       // Re-assert plan mode at the backend level so revision stays read-only.
       if (this.harnessHandle?.setPermissionMode) {
         try {
@@ -1049,7 +1070,7 @@ export class Session extends EventEmitter {
       }
     }
 
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     if (this.multiTurn && this.messageStream) {
         this.messageStream.push(
           this.harness.buildUserMessage(effectiveText, this.backendConversationId ?? ""),
@@ -1073,7 +1094,7 @@ export class Session extends EventEmitter {
     if (this._status !== "running") {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
-    this.assertCurrentModelAllowed();
+    const goalWork = this.beginAction();
     const supported = this.harness.capabilities.threadActions ?? [];
     if (!supported.includes(action.kind) || !this.harness.buildThreadActionMessage) {
       throw new Error(`The ${this.harness.name} harness does not support the "${action.kind}" thread action.`);
@@ -1082,7 +1103,7 @@ export class Session extends EventEmitter {
       throw new Error("Session does not support follow-up actions (launched in single-turn mode).");
     }
     this.resetIdleTimer();
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
     this.messageStream.push(this.harness.buildThreadActionMessage(action));
@@ -1090,9 +1111,10 @@ export class Session extends EventEmitter {
 
   private async resolveNativePlanDecision(
     decision: Parameters<NonNullable<HarnessSession["resolvePlanDecision"]>>[0],
+    goalWork: boolean,
   ): Promise<boolean> {
     if (!this.harnessHandle?.resolvePlanDecision) return false;
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     let resolved: boolean;
     try {
       resolved = await this.harnessHandle.resolvePlanDecision(decision);
@@ -1100,7 +1122,7 @@ export class Session extends EventEmitter {
       log.warn(`[Session ${this.id}] native plan decision (${decision.kind}) failed: ${errorMessage(err)}`);
       resolved = false;
     }
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     return resolved;
   }
 
@@ -1162,12 +1184,12 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
-    this.assertCurrentModelAllowed();
+    const goalWork = this.beginAction();
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
   }
@@ -1191,12 +1213,12 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;
     }
-    this.assertCurrentModelAllowed();
+    const goalWork = this.beginAction();
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
     const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputText(text);
-    this.assertCurrentModelAllowed();
+    this.assertCurrentModelAllowed(goalWork);
     if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
   }

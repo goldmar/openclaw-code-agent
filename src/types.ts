@@ -431,6 +431,8 @@ export interface SessionConfig {
    * an ordinary session. Unset lets SessionManager decide from the owner state.
    */
   goalOwnership?: "attached" | "detached";
+  /** Internal, installed with the live guard: whether the owning goal has ended. */
+  isGoalTaskEnded?: () => boolean;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
@@ -593,8 +595,6 @@ export interface PersistedSessionInfo {
   harness?: string;
   /** Original user-facing session name when this record represents a relabeled non-fork resume. */
   resumedFromSessionName?: string;
-  /** Internal live authorization installed by SessionManager; never persisted or caller selectable. */
-  assertGoalTaskAuthorized?: () => void;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   requestedPermissionMode?: PermissionMode;

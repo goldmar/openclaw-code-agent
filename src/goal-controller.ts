@@ -1174,6 +1174,8 @@ export class GoalController {
       this.markTaskFailedWaitingForUser(task, result.text);
       return;
     }
+    // The goal may have ended (stopped, or failed by policy) during the reply.
+    if (isTerminalGoalTaskStatus(task.status)) return;
 
     task.status = "running";
     task.waitingForUserReason = undefined;
