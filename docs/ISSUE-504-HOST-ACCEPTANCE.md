@@ -30,6 +30,9 @@ dist membership/content, plugin manifest and shrinkwrap are compared. Host build
 metadata identifies the published version/commit, without claiming compiled-source
 attestation. The official native executable is checked before execution against
 SHA256 `8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479`.
+The fixture acknowledges its verified local archive with `--force` only after
+checking its fresh bound profile has no installed extensions or plugin config
+references. This acknowledges source provenance and never replaces an install.
 
 | Behavior | Representative real host | Detailed deterministic owner |
 | --- | --- | --- |

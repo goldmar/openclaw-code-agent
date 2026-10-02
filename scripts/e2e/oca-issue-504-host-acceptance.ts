@@ -97,6 +97,10 @@ async function main(): Promise<void> {
     assert.equal(readOwned(join(fixture, ".owner")).toString(), "oca504-slim-v1\n");
   };
   verifyRoot();
+  const profile = inside(fixture, process.env.OPENCLAW_STATE_DIR!);
+  const profileIdentity = lstatSync(profile);
+  assert.ok(profileIdentity.isDirectory() && !profileIdentity.isSymbolicLink());
+  assert.equal(profileIdentity.uid, process.getuid!());
   assert.equal(realpathSync(process.execPath), join(fixture, "node", "bin", "node"));
   const env: NodeJS.ProcessEnv = { ...process.env };
   const owned = new Map<number, Identity>(), groups = new Set<number>(), ports: number[] = [];
@@ -245,7 +249,8 @@ async function main(): Promise<void> {
       ].join("\n"), { mode: 0o600 });
       mkdirSync(join(env.HOME!, ".codex")); writeFileSync(join(env.HOME!, ".codex", "config.toml"), readFileSync(join(env.CODEX_HOME!, "config.toml")), { mode: 0o600 });
       const logging = { file: join(fixture, "openclaw.log"), level: "info" };
-      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ logging, gateway: { mode: "local", bind: "loopback", port } }), { mode: 0o600 });
+      const bootstrapConfig = { logging, gateway: { mode: "local", bind: "loopback", port } };
+      writeFileSync(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(bootstrapConfig), { mode: 0o600 });
       const cli = (...args: string[]) => run(process.execPath, [join(hostPath, "openclaw.mjs"), ...args], fixture, `host-${args.slice(0, 2).join("-")}`);
       stage = "pack-install";
       const packedDir = join(fixture, "packed"); mkdirSync(packedDir);
@@ -257,7 +262,21 @@ async function main(): Promise<void> {
       assert.deepEqual(distFiles(join(reference, "dist")), distFiles(join(ROOT, "dist")));
       const publication = readJson(join(reference, "package.json")), source = readJson(join(ROOT, "package.json"));
       for (const key of ["name", "version", "main", "openclaw", "dependencies", "peerDependencies"]) assert.deepEqual(publication[key], source[key]);
-      await cli("plugins", "install", "--accept-capabilities", tarball); await cli("plugins", "enable", "openclaw-code-agent");
+      verifyRoot();
+      const currentProfile = lstatSync(profile);
+      assert.ok(currentProfile.isDirectory() && !currentProfile.isSymbolicLink());
+      assert.equal(currentProfile.dev, profileIdentity.dev); assert.equal(currentProfile.ino, profileIdentity.ino);
+      assert.equal(currentProfile.uid, process.getuid!());
+      assert.deepEqual(readJson(env.OPENCLAW_CONFIG_PATH!), bootstrapConfig, "No previous plugin install/config reference");
+      const extensions = join(profile, "extensions");
+      try {
+        const stat = lstatSync(extensions);
+        assert.ok(stat.isDirectory() && !stat.isSymbolicLink()); assert.equal(stat.uid, process.getuid!());
+        assert.deepEqual(readdirSync(extensions), [], "Archive acknowledgement must never overwrite an existing install");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      assert.equal(hash(readFileSync(tarball)), packageHash);
+      // --force acknowledges a non-ClawHub source; this profile has no replacement target.
+      await cli("plugins", "install", "--force", "--accept-capabilities", tarball); await cli("plugins", "enable", "openclaw-code-agent");
       const installedConfig = readJson(env.OPENCLAW_CONFIG_PATH!);
       const inspect = readJsonFrom(await cli("plugins", "inspect", "openclaw-code-agent", "--json"));
       assert.equal(inspect.plugin.id, "openclaw-code-agent"); assert.equal(inspect.plugin.enabled, true); assert.equal(inspect.plugin.status, "loaded");
