@@ -286,12 +286,10 @@ export class FeatureRun {
     ordinary.intent = { kind: "ordinary", prompt: `${ordinary.tag}: Run the harmless receipt command.` };
     await this.invoke("agent_launch", { name: ordinary.name, prompt: ordinary.intent.prompt, workdir: ordinary.workdir, harness: "codex", permission_mode: "bypassPermissions", worktree_strategy: "off" });
     await until(() => ordinary.executed);
-    const admittedOwner = await until(() => this.sessions().find(s => s.name === ordinary.name));
-    await this.publicOwner(admittedOwner.sessionId, "running");
-    const stopped = await this.invoke("agent_kill", { session: admittedOwner.sessionId, reason: "completed" });
-    assert.ok(stopped.content[0].text.includes("marked as completed"));
-    const row = await until(() => this.sessions().find(s => s.sessionId === admittedOwner.sessionId && s.status === "completed"));
-    assert.equal(row.backendRef.conversationId, ordinary.threadId);
+    const owners = new Set(this.fixture.requests.filter(r => r.native && r.case === ordinary.tag && r.turnId === ordinary.turnId).map(r => r.owner?.sessionId));
+    assert.equal(owners.size, 1); const owner = [...owners][0]; assert.ok(owner);
+    const row = await until(() => this.sessions().find(s => s.sessionId === owner && s.status === "completed"));
+    await this.publicOwner(owner, "completed", ordinary);
     await this.completion(row, true);
     this.proofs.push({ setupOnly: true, nativeThreadId: ordinary.threadId, nativeReceiptSha256: sha(readFileSync(join(ordinary.workdir, "native-receipt.txt"))), parentProof: true });
   }
@@ -456,12 +454,24 @@ export class FeatureRun {
       requiredAdmissionFact: requiredFact(journal.completionWakeSummaryFact), issuedAt: journal.completionWakeIssuedAt, succeededAt: journal.completionWakeSucceededAt,
       notificationKeys: journal.notificationDedupe.filter(n => n.status === "delivered").map(n => ({ key: n.key, label: n.label })), deliveryState: journal.deliveryState });
   }
-  async publicOwner(id, status) {
+  async publicOwner(id, status, fixture) {
     const row = this.sessions().find(s => s.sessionId === id);
     assert.ok(row);
-    const output = await this.invoke("agent_output", { session: id, full: true });
-    const first = output.content.map(c => c.text ?? "").join("\n").split("\n")[0];
-    assert.ok(first.startsWith(`Session: ${row.name} [${id}] | Status: ${status.toUpperCase()} |`));
+    if (status === "completed") {
+      assert.equal(row.status, "completed"); assert.equal(row.name, fixture.name); assert.equal(row.workdir, fixture.workdir);
+      assert.equal(row.backendRef?.conversationId, fixture.threadId);
+      const goal = fixture.intent.kind === "ordinary" ? undefined : this.goals().find(g => g.name === fixture.name && g.goal === fixture.intent.goal);
+      if (fixture.intent.kind !== "ordinary") assert.ok(goal && goal.sessionId === id);
+      assert.equal(row.goalTaskId, goal?.id);
+      const listing = await this.invoke("agent_sessions", { status: "all", full: true });
+      const blocks = listing.content.map(c => c.text ?? "").join("\n").split("\n\n").filter(block => block.startsWith(`✅ ${row.name} [${id}] — completed · `));
+      assert.equal(blocks.length, 1);
+      assert.ok(!blocks[0].includes("♻️ Recovered after a Gateway restart; no live process"));
+    } else {
+      const output = await this.invoke("agent_output", { session: id, full: true });
+      const first = output.content.map(c => c.text ?? "").join("\n").split("\n")[0];
+      assert.ok(first.startsWith(`Session: ${row.name} [${id}] | Status: ${status.toUpperCase()} |`));
+    }
     this.proofs.push({ publicOwnerId: id, publicOwnerStatus: status, activePublicView: true });
   }
   async terminal(goal, fixture, status) {
@@ -523,7 +533,7 @@ export class FeatureRun {
       assert.ok(ancestor && sameProcess(ancestor, this.gatewayIdentity));
       const own = this.goals().find(g => g.id === goal.id);
       assert.equal(own.status, "running");
-      await this.publicOwner(own.sessionId, "running");
+      await this.publicOwner(own.sessionId, "completed", fixture);
       await this.suite(B);
       assert.ok(sameProcess(check, processIdentity(pid)));
       const before = this.effects();

@@ -8,6 +8,8 @@ import { chmodSync, copyFileSync, mkdtempSync, readlinkSync, rmSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
+import { Session } from "../src/session";
+import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
 const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
 describe("bounded representative host receipts", () => {
@@ -103,6 +105,35 @@ describe("bounded representative host receipts", () => {
     }
     assert.throws(() => currentOwner([live], listing, fixture, "foreign", "goal"));
     assert.throws(() => currentOwner([live], listing, fixture, "thread", "foreign"));
+  });
+  it("observes natural completion through the real listing without claiming the outcome", async () => {
+    const origin = "agent:main:main", fixture: any = { name: "natural", workdir: "/tmp/owned-case", threadId: "thread", intent: { kind: "ordinary" } };
+    const session = new Session({ prompt: "Receipt", workdir: fixture.workdir, harness: "codex", permissionMode: "bypassPermissions", worktreeStrategy: "off",
+      originSessionKey: origin, backendRef: { kind: "codex", conversationId: fixture.threadId } }, fixture.name);
+    session.transition("running");
+    (session as any).turnRuntime.finishSuccessfulTurn({ currentPermissionMode: "bypassPermissions", permissionMode: "bypassPermissions", pendingPlanApproval: false, planModeApproved: false, hasPendingMessages: false });
+    assert.equal(session.status, "completed"); assert.equal(session.phase, "terminal");
+    const manager: any = { list: () => [session], listPersistedSessions: () => [], resolve: (id: string) => id === session.id ? session : undefined };
+    let row: any = { sessionId: session.id, name: session.name, status: session.status, workdir: session.workdir, backendRef: session.backendRef };
+    let listing = () => getSessionsListingText(manager, "all", undefined, { full: true });
+    const calls: string[] = [], run = Object.assign(Object.create(FeatureRun.prototype), { proofs: [], sessions: () => [row], goals: () => [{ id: "goal", sessionId: session.id, name: fixture.name, goal: "Finish" }],
+      invoke: async (name: string) => { calls.push(name); return { content: [{ text: name === "agent_sessions" ? listing() : getSessionOutputText(manager, session.id, { readerSessionKey: origin }) }] }; } });
+    await run.publicOwner(session.id, "completed", fixture);
+    assert.deepEqual(calls, ["agent_sessions"]); assert.equal(session.outcomeSeenAt, undefined);
+    for (const change of [{ status: "running" }, { status: "failed" }, { status: "killed" }, { name: "foreign" }, { workdir: "/tmp/foreign" }, { backendRef: { kind: "codex", conversationId: "foreign" } }, { goalTaskId: "foreign" }]) {
+      const original = row; row = { ...row, ...change }; await assert.rejects(run.publicOwner(session.id, "completed", fixture)); row = original;
+    }
+    await assert.rejects(run.publicOwner("foreign", "completed", fixture));
+    const originalListing = listing;
+    for (const text of [originalListing().replace(`[${session.id}]`, "[foreign]"), originalListing() + "\n   ♻️ Recovered after a Gateway restart; no live process", `${originalListing()}\n\n${originalListing()}`, "Persisted output only"]) {
+      listing = () => text; await assert.rejects(run.publicOwner(session.id, "completed", fixture));
+    }
+    listing = originalListing; fixture.intent = { kind: "launch", goal: "Finish" }; row.goalTaskId = "goal";
+    await run.publicOwner(session.id, "completed", fixture); // A running GoalTask may own a terminal native Session.
+    row.goalTaskId = "foreign"; await assert.rejects(run.publicOwner(session.id, "completed", fixture)); delete row.goalTaskId;
+    await assert.rejects(run.publicOwner(session.id, "running"));
+    assert.equal(typeof session.outcomeSeenAt, "number", "The old terminal agent_output read would consume the short-launch outcome");
+    await session.waitForTeardown();
   });
   it("binds the sole newly admitted native instance and never reselects an earlier or replacement child", async () => {
     const directory = mkdtempSync(join(tmpdir(), "oca501-native-owner-")), executable = join(directory, "native");
