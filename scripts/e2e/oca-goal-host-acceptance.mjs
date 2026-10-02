@@ -7,12 +7,16 @@ import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
 import { captureCommand } from "./oca501-command-receipt.mjs";
 import { nativeExecutionCall, matchingNativeOutput, assertNativeExecutionResult } from "./oca501-native-protocol.mjs";
+import { messageText, latestParentUser, selectNativeCase, questionCall, assertQuestionAnswer, assertConfigSchemaRefusal, assertSafeHostLog, selectOrdinaryCompletion, nativeDiagnostics } from "./oca501-lifecycle-protocol.mjs";
+import { reviewDelegate, readNativeReview, assertFullReviewOutput } from "./oca501-review-protocol.mjs";
+import { runL1 } from "./oca501-lifecycle-acceptance.mjs";
 import { configMethod, projectConfigCommand, projectConfigRequest, projectConfigResponse, telegramAuthority, exactFixtureRoute, sourceSendArgs, selectRoutedCompletion, readOwnedConfig, assertStableAuthority, actualToolPayload, assertActualSendResult } from "./oca501-config-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -43,7 +47,7 @@ function parseOptions(argv) {
   assert.equal(process.platform, "linux"); assert.equal(process.arch, "x64", "This Hetzner fixture pins the Linux x64 native package");
   assert.ok(options.artifacts && isAbsolute(options.artifacts), "--artifacts must be absolute");
   assert.ok(!inside(ROOT, resolve(options.artifacts)), "Keep evidence outside the checkout");
-  assert.ok(["prerequisites", "matrix-h01-h05", "routed-negative"].includes(options.phase ?? "prerequisites"), "Use an explicitly reviewed milestone phase");
+  assert.ok(["prerequisites", "matrix-h01-h05", "matrix-l1", "routed-negative"].includes(options.phase ?? "prerequisites"), "Use an explicitly reviewed milestone phase");
   return options;
 }
 
@@ -195,6 +199,7 @@ class AcceptanceRun {
     this.nativeExecutions = []; this.ownedProcesses = new Map();
     this.artifactFiles = new Set(); this.parentDeliveries = []; this.negativeDeliveryGoal = undefined;
     this.botUpdates = []; this.updateId = 1000; this.receiptWorkdirs = new Set(); this.patchCounter = 0;
+    this.nativeCases = new Map(); this.externalReleases = new Map(); this.parentProbes = new Map(); this.progressCapture = "";
     this.secrets = [randomBytes(24).toString("hex"), "501001:disposable_fixture_token_oca501_only", randomBytes(24).toString("hex")];
     this.env = Object.fromEntries(["PATH", "LANG", "LC_ALL", "TZ"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     for (const [key, folder] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "xdg-config", XDG_STATE_HOME: "xdg-state", XDG_DATA_HOME: "xdg-data", XDG_CACHE_HOME: "xdg-cache", XDG_RUNTIME_DIR: "xdg-runtime", CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", OPENCLAW_STATE_DIR: "state" })) {
@@ -206,15 +211,23 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")) };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")), configReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-config-receipt.mjs")), nativeProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-native-protocol.mjs")), lifecycleProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-protocol.mjs")), lifecycleAcceptanceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-lifecycle-acceptance.mjs")), reviewProtocolHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-review-protocol.mjs")) };
   }
+  set nativeFixture(value) { assert.ok(!this.nativeCases.has(value.tag), "Do not overwrite a real case's fixture history"); this.nativeCases.set(value.tag, value); this.lastNativeFixture = value; }
+  get nativeFixture() { return this.lastNativeFixture; }
+  progress(id, boundary) {
+    assert.match(id, /^[A-Za-z0-9_-]+$/); assert.ok(["start", "completed"].includes(boundary));
+    const line = `OCA501_PROGRESS ${JSON.stringify({ scope: "progress-only; not acceptance evidence", phase: this.options.phase, case: id, boundary, time: new Date().toISOString() })}\n`;
+    this.progressCapture += line; process.stdout.write(line);
+  }
+  releaseExternal(fixture) { assert.ok(fixture.heldRequest, "Release only an actually held external Responses request"); const release = this.externalReleases.get(fixture.heldRequest); assert.ok(release); release(); }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
   artifact(name, value) {
     assert.match(name, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
     writeFileSync(join(this.directory, name), this.redact(typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`), { mode: 0o600 });
     this.artifactFiles.add(name);
   }
-  async command(command, args, { cwd = ROOT, env = this.env, timeoutMs = 180_000 } = {}) {
+  async command(command, args, { cwd = ROOT, env = this.env, timeoutMs = 180_000, expectedConfigSchemaError } = {}) {
     const receipt = await captureCommand(command, args, { cwd, env, timeoutMs, track: (child) => this.children.add(child), untrack: (child) => this.children.delete(child) });
     const sensitive = configMethod(args);
     const identity = `command-${++this.commandCounter}`;
@@ -230,6 +243,12 @@ class AcceptanceRun {
     const failure = sensitive ? `${sensitive}: disposition/stream failure; original stream hashes are in ${identity}.json (raw config excluded)` : `${command} ${args.join(" ")} failed (${receipt.exit.signal ?? receipt.exit.code}): ${receipt.exit.spawnError ?? this.redact(receipt.stdout + receipt.stderr).slice(-6000)}`;
     assert.equal(receipt.streamsComplete, true, sensitive ? failure : `Incomplete command streams are BLOCKED: ${receipt.errors.join("; ")}`);
     assert.equal(receipt.timedOut, false, failure);
+    if (expectedConfigSchemaError) {
+      assert.ok(sensitive === "config.patch" || sensitive === "config.apply");
+      const refusal = assertConfigSchemaRefusal(receipt, expectedConfigSchemaError);
+      this.artifact(`${identity}-schema-refusal.json`, { ...refusal, commandReceipt: `${identity}.json` });
+      return { refusal, receiptProjection: projectConfigCommand(sensitive, args, receipt) };
+    }
     assert.equal(receipt.exit.code, 0, failure);
     return receipt.stdout;
   }
@@ -267,18 +286,32 @@ class AcceptanceRun {
       const transport = request.url === "/host/v1/responses" ? "host-parent" : request.url === "/v1/responses" ? "native-codex" : "unexpected";
       const attempt = { httpMethod: request.method, path: request.url, bodyHash: hash(body), transport, receivedAt: new Date().toISOString() };
       this.modelRequests.push(attempt);
+      const requestIndex = this.modelRequests.length; attempt.requestIndex = requestIndex;
       assert.equal(request.method, "POST"); assert.notEqual(transport, "unexpected", "Only the two explicit loopback Responses routes are permitted");
       if (transport === "host-parent") {
         assert.equal(request.headers.authorization, `Bearer ${this.secrets[2]}`, "Genuine parent client uses only the synthetic local API key");
         attempt.authorization = "validated synthetic fixture key";
       }
       const input = JSON.parse(body); assert.equal(input.model, MODEL); assert.equal(input.stream, true);
+      attempt.hasParentTools = transport === "host-parent" && !!input.tools?.length;
       attempt.model = input.model;
-      this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
+      this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
       if (this.gateway?.pid) this.observeNativeProcesses(this.gateway.pid);
-      const id = `resp_${this.modelRequests.length}`; const itemId = `msg_${this.modelRequests.length}`;
-      const fixture = transport === "native-codex" ? this.nativeFixture : undefined;
+      const id = `resp_${requestIndex}`; const itemId = `msg_${requestIndex}`; attempt.responseId = id;
+      const fixture = transport === "native-codex" ? selectNativeCase(input, this.nativeCases) : undefined;
       if (fixture) { assert.ok(body.includes(fixture.tag), "Actual native request contains this case's unique goal tag"); attempt.case = fixture.tag; }
+      attempt.nativeIdentity = transport === "native-codex" ? input.client_metadata : undefined;
+      if (fixture?.hold && !fixture.heldRequest) {
+        fixture.heldRequest = requestIndex; attempt.externalHeld = true;
+        this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
+        await new Promise((done) => {
+          const finish = () => { this.externalReleases.delete(requestIndex); done(); };
+          this.externalReleases.set(requestIndex, () => { attempt.externalReleasedAt = new Date().toISOString(); finish(); });
+          response.once("close", () => { if (!response.writableFinished) { attempt.externalAbortedAt = new Date().toISOString(); finish(); } });
+        });
+        this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
+        if (attempt.externalAbortedAt) return;
+      }
       let marker = transport === "host-parent" ? PARENT_MARKER : fixture?.text ?? MARKER;
       let item = { id: itemId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
       if (transport === "host-parent") {
@@ -288,10 +321,53 @@ class AcceptanceRun {
           marker = decision.text;
           item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
         }
-        this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
+        this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
+      }
+      if (fixture?.mode === "plan" && !fixture.planSent) {
+        const row = this.sessions().find((entry) => entry.backendRef?.conversationId === input.client_metadata?.thread_id);
+        assert.equal(row?.currentPermissionMode, "plan", "Actual OCA-owned native conversation has Plan posture");
+        fixture.planSent = true; marker = `<proposed_plan>\n${fixture.planMarkdown}\n</proposed_plan>`;
+        item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
+        attempt.nativePlanModelText = marker;
+      } else if (fixture?.mode === "plan") {
+        assert.ok(body.includes("Approved. Go ahead."), "Actual second native turn carries genuine user approval");
+        attempt.actualApprovalInput = input; fixture.approvalObserved = true;
+      }
+      if (fixture?.mode === "question" && !fixture.question) {
+        const row = this.sessions().find((entry) => entry.backendRef?.conversationId === input.client_metadata?.thread_id);
+        assert.equal(row?.currentPermissionMode, "plan", "Question is emitted only for a real Plan conversation");
+        fixture.question = questionCall(input, fixture, { callId: `oca501_question_${requestIndex}`, itemId, validate: this.validateHostSchema });
+        fixture.questionNativeThread = input.client_metadata.thread_id; item = fixture.question.item; attempt.actualQuestionCall = fixture.question;
+      } else if (fixture?.mode === "question") {
+        assert.equal(input.client_metadata?.thread_id, fixture.questionNativeThread);
+        const outputs = input.input.filter((entry) => entry.type === "function_call_output" && entry.call_id === fixture.question.callId);
+        assert.equal(outputs.length, 1); attempt.actualQuestionOutput = outputs[0];
+        this.artifact(`native-question-${fixture.question.callId}.json`, { case: fixture.tag, call: fixture.question, output: outputs[0] });
+        fixture.answerObserved = assertQuestionAnswer(outputs[0], fixture.question, fixture.expectedAnswer);
+        if (fixture.planAfterAnswer && !fixture.planSent) {
+          fixture.planSent = true; marker = `<proposed_plan>\n${fixture.planMarkdown}\n</proposed_plan>`;
+          item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
+          attempt.nativePlanModelText = marker;
+        } else if (fixture.planAfterAnswer) { assert.ok(body.includes("Approved. Go ahead.")); fixture.approvalObserved = true; }
+
+      }
+      if (fixture?.operation === "review") {
+        assert.ok(attempt.receivedAt >= fixture.reviewStartedAt && !fixture.reviewResponseSent, "Only the actually admitted fresh review action may receive its one result");
+        const original = this.sessions().find((row) => row.sessionId === fixture.sessionId); assert.equal(original.goalTaskId, undefined);
+        const relation = reviewDelegate(input, { instructions: fixture.reviewInstructions, startedAt: fixture.reviewStartedAt, threadId: original.backendRef.conversationId });
+        const expected = { ...relation, workdir: fixture.workdir, output: fixture.reviewOutput };
+        let lastError;
+        let entry;
+        try { entry = await waitFor("organic original native review entered exact outer turn", () => { try { return readNativeReview(this.env.CODEX_HOME, expected, false); } catch (error) { lastError = String(error); return false; } }); }
+        catch (error) { this.artifact(`native-review-entry-${requestIndex}.json`, { relation, error: String(error), lastIncompleteObservation: lastError, projection: true, rawRolloutExcluded: true }); throw error; }
+        fixture.reviewRelation = relation; fixture.reviewExpected = expected; fixture.reviewResponseSent = true;
+        assertFullReviewOutput(fixture.reviewOutput, fixture.reviewOutput); marker = JSON.stringify(fixture.reviewOutput);
+        item = { ...item, content: [{ type: "output_text", text: marker, annotations: [], logprobs: [] }] };
+        attempt.nativeReviewModelText = marker; attempt.actualReviewRelation = relation;
+        this.artifact(`native-review-entry-${requestIndex}.json`, { relation, entry, priorIncompleteObservation: lastError, projection: true, rawRolloutExcluded: true });
       }
       if (fixture?.execute && !fixture.commandSent) {
-        fixture.nativeCall = nativeExecutionCall(input, { transport, caseTag: fixture.tag, workdir: fixture.workdir, ownedRoot: this.workspace, callId: `oca501_exec_${this.modelRequests.length}`, itemId, validate: this.validateHostSchema });
+        fixture.nativeCall = nativeExecutionCall(input, { transport, caseTag: fixture.tag, workdir: fixture.workdir, ownedRoot: this.workspace, callId: `oca501_exec_${requestIndex}`, itemId, validate: this.validateHostSchema });
         fixture.commandSent = true; item = fixture.nativeCall.item;
         attempt.nativeExecutionCall = fixture.nativeCall;
         this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, { case: fixture.tag, requestHash: attempt.bodyHash, actualCall: fixture.nativeCall });
@@ -305,7 +381,7 @@ class AcceptanceRun {
         attempt.nativeExecutionOutput = output; fixture.executionProved = true;
         this.artifact(`native-execution-${fixture.nativeCall.callId}.json`, proof);
       }
-      this.artifact(`responses-request-${this.modelRequests.length}.json`, { ...attempt, input });
+      this.artifact(`responses-request-${requestIndex}.json`, { ...attempt, input });
       const base = { id, object: "response", created_at: Math.floor(Date.now() / 1000), model: MODEL, status: "in_progress", output: [], error: null, incomplete_details: null };
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
@@ -321,7 +397,7 @@ class AcceptanceRun {
       event("response.output_item.done", { output_index: 0, item });
       event("response.completed", { response: { ...base, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
       response.end();
-      attempt.responseCompleted = true;
+      attempt.responseCompleted = true; attempt.emittedType = item.type; attempt.emittedText = item.type === "message" ? marker : undefined;
     });
     let messageId = 0;
     this.botUrl = await this.serve(async (request, response, body) => {
@@ -372,25 +448,37 @@ class AcceptanceRun {
     });
   }
   async parentResponse(input, attempt, itemId) {
+    const latest = latestParentUser(input); const text = latest ? messageText(latest) : "";
+    const probes = [...this.parentProbes.values()].filter((probe) => text.includes(`Reply exactly ${probe.marker}. Use no tools.`));
+    assert.ok(probes.length <= 1, "A current actual parent request cannot borrow multiple probe cases");
+    if (probes.length) { attempt.parentProbe = probes[0].id; attempt.actualProbeInput = input; return { text: probes[0].marker }; }
     // Ignore only the host's explicitly delimited context attached to a user
     // request. A quoted completion in an older turn cannot select a case.
-    const selected = selectRoutedCompletion(input, this.goals());
+    const ordinaryOwners = [...this.nativeCases.values()].filter((fixture) => fixture.ordinary && fixture.sessionId).map((fixture) => {
+      const row = this.sessions().find((row) => row.sessionId === fixture.sessionId);
+      const actual = this.modelRequests.findLast((request) => request.transport === "native-codex" && request.case === fixture.tag && request.responseCompleted && request.emittedType === "message" && request.emittedText === fixture.text);
+      const events = existsSync(join(this.directory, "openclaw-runtime.log")) ? nativeDiagnostics(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8")) : [];
+      const terminal = actual && events.find((event) => event.event === "turn.terminal" && event.hasThreadId && event.hasTurnId && event.outcome === "completed" && event.kind === "user" && event.at >= actual.receivedAt);
+      return { row, fixture, completion: actual && terminal ? { nativeCompleted: true, caseTag: fixture.tag, threadId: actual.nativeIdentity.thread_id, turnId: actual.nativeIdentity.turn_id, request: actual.requestIndex, terminalDiagnostic: terminal } : undefined };
+    }).filter((owner) => owner.row);
+    const selected = selectOrdinaryCompletion(input, ordinaryOwners) ?? selectRoutedCompletion(input, this.goals());
     if (!selected) return;
-    const { goal, route, wake, index } = selected;
+    const { goal, ordinary, route, wake, index } = selected;
+    const ownerId = goal?.id ?? ordinary.sessionId; const sessionId = goal?.sessionId ?? ordinary.sessionId;
     const entries = input.input;
     const tools = input.tools ?? [];
     if (!tools.length) return; // Tool-less auxiliary/compaction request is not source delivery.
-    attempt.case = goal.name; attempt.goalId = goal.id; attempt.wakeHash = hash(wake);
-    if (this.options.phase === "routed-negative" && goal.name === "routed-source-negative") {
+    attempt.case = goal?.name ?? ordinary.name; attempt.goalId = goal?.id; attempt.ordinarySessionId = ordinary?.sessionId; attempt.wakeHash = hash(wake);
+    if (this.options.phase === "routed-negative" && goal?.name === "routed-source-negative") {
       this.negativeDeliveryGoal = goal.id; attempt.expectedUnfulfilled = true; return;
     }
     const tail = entries.slice(index + 1);
-    let state = this.parentDeliveries.findLast((delivery) => delivery.goalId === goal.id && delivery.wakeHash === hash(wake) && delivery.calls.some((call) => tail.some((entry) => entry.call_id === call.id)));
+    let state = this.parentDeliveries.findLast((delivery) => (goal ? delivery.goalId === goal.id : delivery.ordinarySessionId === ordinary.sessionId) && delivery.wakeHash === hash(wake) && delivery.calls.some((call) => tail.some((entry) => entry.call_id === call.id)));
     if (!state) {
-      state = { goalId: goal.id, sessionId: goal.sessionId, wakeHash: hash(wake), route, calls: [], summary: `OCA501 source receipt ${goal.id}: ${goal.name} ${goal.status}.`, admittedAt: attempt.receivedAt };
+      state = { ownerId, goalId: goal?.id, ordinarySessionId: ordinary?.sessionId, sessionId, wakeHash: hash(wake), ordinaryCycle: selected.cycle, actualNativeCompletion: selected.completion, route, calls: [], summary: goal ? `OCA501 source receipt ${goal.id}: ${goal.name} ${goal.status}.` : `OCA501 ordinary source receipt ${selected.cycle}: ${ordinary.name} native turn completed.`, admittedAt: attempt.receivedAt };
       this.parentDeliveries.push(state);
     }
-    attempt.parentDelivery = { goalId: state.goalId, sessionId: state.sessionId, wakeHash: state.wakeHash };
+    attempt.parentDelivery = { goalId: state.goalId, ordinarySessionId: state.ordinarySessionId, sessionId: state.sessionId, wakeHash: state.wakeHash };
     const advertised = (name) => {
       const matches = tools.filter((tool) => (tool.name ?? tool.function?.name) === name);
       assert.equal(matches.length, 1, `Actual host must advertise exactly one ${name} capability`);
@@ -400,9 +488,9 @@ class AcceptanceRun {
       const schema = advertised(name);
       const valid = this.validateHostSchema({ schema, value: args, cacheKey: `oca501:${hash(JSON.stringify(schema))}` });
       assert.equal(valid.ok, true, `Fixture arguments must match the actual advertised ${name} schema: ${JSON.stringify(valid.errors)}`);
-      const id = `call_oca501_parent_${this.modelRequests.length}`;
-      const functionItemId = `fc_oca501_parent_${this.modelRequests.length}`;
-      state.calls.push({ id, itemId: functionItemId, name, stage, args, request: this.modelRequests.length });
+      const id = `call_oca501_parent_${attempt.requestIndex}`;
+      const functionItemId = `fc_oca501_parent_${attempt.requestIndex}`;
+      state.calls.push({ id, itemId: functionItemId, name, stage, args, request: attempt.requestIndex });
       attempt.parentCall = state.calls.at(-1);
       this.artifact("parent-delivery-protocol.json", this.parentDeliveries);
       return { item: { id: functionItemId, type: "function_call", call_id: id, name, arguments: JSON.stringify(args) } };
@@ -567,7 +655,7 @@ class AcceptanceRun {
     this.pluginToolNames = pluginToolNames;
     const config = {
       gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token: this.secrets[0] }, reload: { mode: "hybrid" } },
-      logging: { file: join(this.directory, "openclaw-runtime.log") },
+      logging: { file: join(this.directory, "openclaw-runtime.log"), ...(this.options.phase === "matrix-l1" ? { level: "debug" } : {}) },
       models: { mode: "replace", catalogRefresh: { enabled: false }, providers: { oca501: {
         baseUrl: `${this.providerUrl}/host/v1`, api: "openai-responses", auth: "api-key", apiKey: this.secrets[2], request: { allowPrivateNetwork: true },
         models: [{ id: MODEL, name: "OCA501 Fixture", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 131072, maxTokens: 4096 }],
@@ -580,7 +668,7 @@ class AcceptanceRun {
       memory: { search: { enabled: false } },
       cron: { enabled: false }, discovery: { mdns: { mode: "off" } },
       tools: { profile: "full", allow: [...pluginToolNames, "message"] },
-      plugins: { allow: ["openclaw-code-agent", "telegram"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", requiredGoalVerifierCommands: ["bash ci.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } },
+      plugins: { allow: ["openclaw-code-agent", "telegram"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", planApproval: "ask", requiredGoalVerifierCommands: ["bash ci.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } },
       channels: { telegram: { enabled: true, botToken: this.secrets[1], apiRoot: this.botUrl, dmPolicy: "allowlist", allowFrom: ["501002"], replyToMode: "off", streaming: { mode: "off" } } },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
@@ -618,8 +706,11 @@ class AcceptanceRun {
     this.provenance.installedEntryHash = fileHash(this.provenance.installedEntry);
     this.gateway = spawn(process.execPath, [this.hostEntry, "gateway", "run", "--bind", "loopback", "--port", String(port)], { cwd: this.workspace, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.children.add(this.gateway); this.gatewayLog = ""; this.gatewayStdout = ""; this.gatewayStderr = "";
-    this.gateway.stdout.on("data", (chunk) => { const text = this.redact(chunk); this.gatewayStdout += text; this.gatewayLog += text; });
-    this.gateway.stderr.on("data", (chunk) => { const text = this.redact(chunk); this.gatewayStderr += text; this.gatewayLog += text; });
+    const stdoutDecoder = new StringDecoder("utf8"), stderrDecoder = new StringDecoder("utf8");
+    this.gateway.stdout.on("data", (chunk) => { const text = stdoutDecoder.write(chunk); this.gatewayStdout += text; this.gatewayLog += text; });
+    this.gateway.stderr.on("data", (chunk) => { const text = stderrDecoder.write(chunk); this.gatewayStderr += text; this.gatewayLog += text; });
+    this.gateway.stdout.once("end", () => { const text = stdoutDecoder.end(); this.gatewayStdout += text; this.gatewayLog += text; });
+    this.gateway.stderr.once("end", () => { const text = stderrDecoder.end(); this.gatewayStderr += text; this.gatewayLog += text; });
     await waitFor("actual pinned Gateway readiness", async () => {
       assert.equal(this.gateway.exitCode, null, this.gatewayLog);
       try { const response = await fetch(`${this.gatewayUrl}/readyz`, { signal: AbortSignal.timeout(2000) }); return response.ok; } catch { return false; }
@@ -707,6 +798,7 @@ class AcceptanceRun {
     this.results.push({ ...this.provenance, scenario: "H01", classification: "UNPROVEN", unprovenReason: "Prerequisite phase does not yet execute the host tool-denial control" });
     for (let id = 2; id <= 12; id++) this.results.push({ scenario: `H${String(id).padStart(2, "0")}`, classification: "UNPROVEN", unprovenReason: "Scenario implementation belongs to the next independently reviewed milestone", ...this.provenance });
     if (this.options.phase === "matrix-h01-h05") await this.matrixH01H05();
+    if (this.options.phase === "matrix-l1") await runL1(this);
     if (this.options.phase === "routed-negative") await this.routedNegative();
   }
   goals() { return existsSync(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) ? json(this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH) : []; }
@@ -724,6 +816,7 @@ class AcceptanceRun {
     this.currentScenario = id;
     this.artifact(`${id}.json`, evidence);
     this.results.push({ ...this.provenance, scenario: id, classification: "PASS", command: "Actual Gateway tools/Telegram ingress + genuine native Codex + real shell receipts", exitCode: 0, assertions: evidence.assertions, skips: [], logPath: join(this.directory, `${id}.json`) });
+    this.progress(id, "completed");
   }
   async patch(raw, replacePaths) {
     const before = await this.rpc("config.get");
@@ -923,6 +1016,34 @@ class AcceptanceRun {
     this.artifact(`source-delivery-${task.id}.json`, source);
     return source;
   }
+  async ordinarySourceSettlement(sessionId, kind) {
+    const cycle = kind === "completed" ? "/completed" : "/turn-ended";
+    const state = await waitFor("actual ordinary source send", () => this.parentDeliveries.find((state) => state.ordinarySessionId === sessionId && state.ordinaryCycle?.endsWith(cycle) && state.calls.at(-1)?.stage === "send"));
+    const call = state.calls.at(-1);
+    const history = await waitFor("actual ordinary send canonical result", async () => {
+      const value = await this.rpc("chat.history", { sessionKey: this.sessionKey, limit: 200, maxBytes: 2_000_000, maxChars: 500_000 });
+      const entries = value.messages.filter((entry) => entry.__openclaw?.runId && ((entry.role === "toolResult" && matchesHostCallId(entry.toolCallId, call) && [call.name, "message"].includes(entry.toolName)) || entry.content?.some((part) => part.type === "toolResult" && part.toolName === "message" && matchesHostCallId(part.parentToolCallId, call) && part.runId === entry.__openclaw.runId)));
+      return entries.length ? { value, entries } : false;
+    });
+    const runIds = [...new Set(history.entries.map((entry) => entry.__openclaw.runId))]; assert.equal(runIds.length, 1);
+    const runId = runIds[0]; const terminal = await waitFor("actual ordinary source own-run terminal", async () => { const value = await this.rpc("agent.wait", { runId, timeoutMs: 1000 }); return ["pending", "timeout"].includes(value.status) ? false : value; });
+    assertCompletionTerminal(terminal, runId, true);
+    for (const entry of history.entries) assert.notEqual(entry.__openclaw.truncated, true, "Complete canonical actual tool execution receipt required");
+    const wire = this.botRequests.filter((request) => request.method === "sendMessage" && request.result?.text === state.summary && request.result.chat.id === 501002);
+    assert.equal(wire.length, 1); assert.ok(wire[0].respondedAt);
+    const params = JSON.parse(wire[0].params); assert.equal(params.reply_to_message_id, undefined); assert.equal(params.message_thread_id, undefined); assert.equal(params.reply_parameters, undefined);
+    const args = call.name === "tool_call" ? call.args.args : call.args; assert.deepEqual(args, sourceSendArgs(state.route, state.summary));
+    const row = this.sessions().find((row) => row.sessionId === sessionId);
+    const projected = { provider: row.route.provider, target: row.route.target, ...(Object.hasOwn(row.route, "accountId") ? { accountId: row.route.accountId } : {}) }; assert.deepEqual(state.route, exactFixtureRoute(projected));
+    assert.ok(state.actualNativeCompletion.nativeCompleted); assert.equal(state.actualNativeCompletion.threadId, row.backendRef.conversationId);
+    if (kind === "completed" && row.completionWakeRunId) {
+      const settled = await waitFor("ordinary actual required completion journal settled", () => { const value = this.sessions().find((row) => row.sessionId === sessionId); if (value.completionWakeFailedAt) throw new Error("Actual ordinary completion wake failed"); return value.completionWakeSucceededAt && value.completionWakeOutcomeKey && value.completionWakeRunId === runId && value.completionWakeRoutedReply === true ? value : false; });
+      assert.ok(settled.completionWakeOutcomeKey.startsWith(`terminal:${sessionId}:`));
+    }
+    await waitFor("ordinary direct delivery drained", () => { const value = this.sessions().find((row) => row.sessionId === sessionId); return !["notifying", "wake_pending"].includes(value.deliveryState) && !value.notificationDedupe?.some((entry) => entry.status === "in_flight"); });
+    const evidence = { sessionId, kind, ordinaryCycle: state.ordinaryCycle, wakeHash: state.wakeHash, actualNativeCompletion: state.actualNativeCompletion, state, canonicalHistory: history.value, runId, terminal, wire, row: this.sessions().find((row) => row.sessionId === sessionId), resultTransport: state.actualSendResult ? "actual Responses function_call_output" : "canonical actual host tool result + terminal source receipt after final hook" };
+    this.artifact(`ordinary-source-${sessionId}-${kind}.json`, evidence); return evidence;
+  }
   async routedNegative() {
     // A distinct command invocation creates a new own profile, port and state;
     // it cannot contaminate positive-profile settlement or consume its fence.
@@ -958,6 +1079,7 @@ class AcceptanceRun {
     this.results.push({ ...this.provenance, scenario: id, classification: "EXPECTED_UNFULFILLED", exitCode: 0, assertions: evidence.assertions, logPath: join(this.directory, "routed-source-negative.json") });
   }
   async launchCase(id, { commands, extra = {}, expected = {}, script = {}, text = MARKER, execute = false, slash = false } = {}) {
+    this.progress(id, "start");
     this.currentScenario = id;
     const workdir = await this.workdir(id, script);
     this.nativeFixture = { tag: `OCA501_CASE_${id}`, text, execute, workdir };
@@ -985,7 +1107,7 @@ class AcceptanceRun {
     return task;
   }
   async deniedCase(id, verifierCommands, { slash = false, expectedHostDeny = false, extra = {} } = {}) {
-    this.currentScenario = id;
+    this.currentScenario = id; this.progress(id, "start");
     const workdir = await this.workdir(id);
     const before = this.effects();
     let admission;
@@ -1215,6 +1337,8 @@ class AcceptanceRun {
       process.exitCode = 1;
     }
     this.artifact("cleanup.json", { ownedProcesses: [...this.ownedProcesses.values()], checkedPorts: ports, classification: failures.length ? "BLOCKED" : "PASS", failures });
+    if (this.gateway) await waitFor("actual owned Gateway stdout/stderr complete", () => this.gateway.stdout.readableEnded && this.gateway.stderr.readableEnded, 5000);
+    assertSafeHostLog(this.gatewayLog ?? ""); assertSafeHostLog(this.gatewayStdout ?? ""); assertSafeHostLog(this.gatewayStderr ?? "");
     this.artifact("gateway.log", this.gatewayLog ?? "Gateway not started");
     this.artifact("gateway.stdout.log", this.gatewayStdout ?? ""); this.artifact("gateway.stderr.log", this.gatewayStderr ?? "");
     this.artifact("fixtures.json", { modelRequests: this.modelRequests, botRequests: this.botRequests, botMessages: this.botMessages, botMenus: [...this.botMenus.entries()], fixtureErrors: this.fixtureErrors, nativeExecutions: this.nativeExecutions });
@@ -1226,6 +1350,7 @@ class AcceptanceRun {
     // artifact(), plus three explicitly identified owned runtime/store files.
     // Config/auth/env, caches, native rollout/binary and package archives are
     // deliberately excluded, even though they live under the disposable root.
+    if (existsSync(join(this.directory, "openclaw-runtime.log"))) assertSafeHostLog(readFileSync(join(this.directory, "openclaw-runtime.log"), "utf8"));
     const entries = [...this.artifactFiles].map((name) => ({ name, alreadyRedacted: true }));
     const unavailable = [];
     for (const name of ["goals.json", "sessions.json", "openclaw-runtime.log"]) {
@@ -1263,8 +1388,9 @@ try {
       const message = `Cleanup/evidence failure: ${run.redact(error.stack ?? error)}`;
       run.stderrCapture = (run.stderrCapture ?? "") + `${message}\n`; console.error(message);
     }
-    const summary = `${LABEL}: ${run.options.phase ?? "prerequisites"} ${process.exitCode ? "BLOCKED" : "MILESTONE COMPLETE"}; H06–H12 remain UNPROVEN in these milestone phases; evidence ${run.directory}`;
-    run.artifact("acceptance-command.stdout.log", `${summary}\n`);
+    const remaining = run.options.phase === "matrix-l1" ? "H01–H05/H08/H10–H12 final cumulative coverage remains UNPROVEN in this phase" : "H06–H12 remain UNPROVEN in these milestone phases";
+    const summary = `${LABEL}: ${run.options.phase ?? "prerequisites"} ${process.exitCode ? "BLOCKED" : "MILESTONE COMPLETE"}; ${remaining}; evidence ${run.directory}`;
+    run.artifact("acceptance-command.stdout.log", `${run.progressCapture}${summary}\n`);
     run.artifact("acceptance-command.stderr.log", run.stderrCapture ?? "");
     try { await run.exportEvidence(); } catch (error) {
       process.exitCode = 1;

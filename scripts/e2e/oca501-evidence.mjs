@@ -16,7 +16,7 @@ const safeName = (name) => typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9._
 const HOST_VERSION = "2026.9.7";
 const HOST_COMMIT = "c074824a27c96d3983043f9eeb33823cd1772d8c";
 const NATIVE_VERSION = "0.159.3";
-const PHASES = ["prerequisites", "matrix-h01-h05", "routed-negative"];
+const PHASES = ["prerequisites", "matrix-h01-h05", "matrix-l1", "routed-negative"];
 
 function validateIdentity(manifest, expected) {
   assert.ok(expected && typeof expected === "object", "External expected receipt identity is mandatory");
