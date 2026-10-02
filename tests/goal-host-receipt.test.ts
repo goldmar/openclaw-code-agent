@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact } from "../scripts/e2e/oca501-evidence.mjs";
 import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
-import { linkSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
@@ -120,7 +120,8 @@ describe("bounded representative host receipts", () => {
       return child;
     };
     try {
-      linkSync(readlinkSync(`/proc/${process.pid}/exe`), executable);
+      copyFileSync(readlinkSync(`/proc/${process.pid}/exe`), executable);
+      chmodSync(executable, 0o700);
       const earlier = await start();
       fixture.nativeSnapshot = { gateway, processes: run.nativeProcesses() };
       assert.ok(fixture.nativeSnapshot.processes.some(p => p.pid === earlier.pid));
