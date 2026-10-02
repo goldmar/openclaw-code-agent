@@ -1,6 +1,7 @@
 // Bounded receipt transport for the issue-501 disposable-host acceptance job.
 // Decode on the coordinator host immediately after the owning remote job ends:
-// node scripts/e2e/oca501-evidence.mjs --decode /tmp/job.stdout --out /tmp/receipts
+// node scripts/e2e/oca501-evidence.mjs --decode /tmp/job.stdout --out /tmp/receipts \
+//   --expected-sha <reviewed SHA> --node-version 24.16.0 --phase matrix-h01-h05
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -12,6 +13,36 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 const PREFIX = "OCA501_EVIDENCE ";
 const LIMITS = { files: 2000, fileBytes: 4 * 1024 * 1024, totalBytes: 64 * 1024 * 1024 };
 const safeName = (name) => typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
+const HOST_VERSION = "2026.9.7";
+const HOST_COMMIT = "c074824a27c96d3983043f9eeb33823cd1772d8c";
+const NATIVE_VERSION = "0.159.3";
+const PHASES = ["prerequisites", "matrix-h01-h05", "routed-negative"];
+
+function validateIdentity(manifest, expected) {
+  assert.ok(expected && typeof expected === "object", "External expected receipt identity is mandatory");
+  assert.match(expected.candidateSha ?? "", /^[a-f0-9]{40}$/); assert.match(manifest.candidateSha ?? "", /^[a-f0-9]{40}$/);
+  assert.ok(["24.16.0", "26.1.0"].includes(expected.nodeVersion));
+  assert.ok(PHASES.includes(expected.phase) || (expected.controlsOnly === true && expected.phase === "controls-only"));
+  for (const field of ["candidateSha", "nodeVersion", "phase"]) assert.equal(manifest[field], expected[field], `Expected ${field} mismatch`);
+  assert.ok(Number.isSafeInteger(manifest.scriptExitCode) && manifest.scriptExitCode >= 0);
+  if (expected.controlsOnly === true) { assert.equal(manifest.phase, "controls-only"); return; }
+  assert.equal(manifest.expectedHostVersion, HOST_VERSION); assert.equal(manifest.expectedNativeVersion, NATIVE_VERSION);
+  for (const [field, pinned] of [["hostVersion", HOST_VERSION], ["upstreamTagCommit", HOST_COMMIT], ["nativeVersion", NATIVE_VERSION]]) {
+    if (manifest[field] !== undefined || manifest.scriptExitCode === 0) assert.equal(manifest[field], pinned, `Applicable pinned ${field} mismatch`);
+  }
+  // Failed setup can export complete failure receipts without claiming that
+  // installation/runtime stages were reached. Successful runtime needs pins.
+  if (manifest.scriptExitCode === 0) {
+    for (const field of ["sourceArchiveHash", "hostEntryHash", "hostPackageHash", "nativeExecutableHash", "packageHash", "installedEntryHash", "acceptanceScriptHash", "evidenceHelperHash", "commandReceiptHelperHash"]) assert.match(manifest[field] ?? "", /^[a-f0-9]{64}$/, `Required ${field} provenance missing`);
+    assert.equal(manifest.officialCli?.nodeVersion, `v${expected.nodeVersion}`);
+    assert.equal(manifest.officialCli?.entryHash, manifest.hostEntryHash);
+    assert.match(manifest.officialCli?.nodeHash ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(manifest.parentModel, "oca501/gpt-6-luna");
+    assert.equal(manifest.cleanup?.classification, "PASS", "Zero-exit export requires completed owned cleanup");
+  } else {
+    assert.ok((typeof manifest.primaryFailure === "string" && manifest.primaryFailure) || manifest.cleanup?.classification === "BLOCKED" || manifest.independentErrors?.length, "Blocked transport must preserve its failure reason");
+  }
+}
 
 export function buildEvidence(root, entries, metadata, secrets) {
   assert.ok(entries.length <= LIMITS.files);
@@ -38,12 +69,13 @@ export function frameEvidence(bundle) {
   return [JSON.stringify({ type: "begin", format: "oca501-evidence-v1" }), ...bundle.files.map((file) => JSON.stringify({ type: "file", file })), JSON.stringify({ type: "manifest", manifest: bundle.manifest }), JSON.stringify({ type: "end", digest: bundle.digest })].map((line) => `${PREFIX}${line}`).join("\n") + "\n";
 }
 
-export function decodeEvidence(stdout) {
+export function decodeEvidence(stdout, expected) {
   const lines = stdout.split("\n").filter((line) => line.startsWith(PREFIX)).map((line) => JSON.parse(line.slice(PREFIX.length)));
   assert.equal(lines[0]?.type, "begin"); assert.equal(lines[0].format, "oca501-evidence-v1");
   assert.equal(lines.at(-1)?.type, "end", "Missing final evidence marker");
   assert.equal(lines.at(-2)?.type, "manifest");
   const manifest = lines.at(-2).manifest;
+  validateIdentity(manifest, expected);
   assert.equal(manifest.complete, true, "Incomplete export is blocked"); assert.equal(manifest.format, "oca501-evidence-v1");
   assert.deepEqual(manifest.limits, LIMITS);
   const files = lines.slice(1, -2).map((line) => { assert.equal(line.type, "file"); return line.file; });
@@ -66,12 +98,20 @@ export function decodeEvidence(stdout) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [, , mode, source, flag, output] = process.argv;
-  assert.equal(mode, "--decode"); assert.equal(flag, "--out"); assert.ok(isAbsolute(source) && isAbsolute(output));
-  const decoded = decodeEvidence(readFileSync(source, "utf8"));
+  const options = {};
+  const args = process.argv.slice(2);
+  assert.equal(args.length, 10, "Provide exactly decode/out/expected-sha/node-version/phase options");
+  for (let index = 0; index < args.length; index += 2) {
+    const name = args[index];
+    assert.ok(["--decode", "--out", "--expected-sha", "--node-version", "--phase"].includes(name) && !Object.hasOwn(options, name), "Unknown/duplicate decoder option");
+    assert.ok(args[index + 1]); options[name] = args[index + 1];
+  }
+  const source = options["--decode"]; const output = options["--out"];
+  assert.ok(isAbsolute(source) && isAbsolute(output));
+  const decoded = decodeEvidence(readFileSync(source, "utf8"), { candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], phase: options["--phase"] });
   // Exclusive writes prevent replacing another run's receipts.
   mkdirSync(output, { mode: 0o700 });
   for (const file of decoded.files) writeFileSync(join(output, file.name), file.content, { flag: "wx", mode: 0o600 });
   writeFileSync(join(output, "export-manifest.json"), JSON.stringify({ ...decoded.manifest, digest: decoded.digest }, null, 2), { flag: "wx", mode: 0o600 });
-  console.log(JSON.stringify({ complete: true, files: decoded.files.length, bytes: decoded.manifest.totalSanitizedBytes, candidateSha: decoded.manifest.candidateSha, digest: decoded.digest }));
+  console.log(JSON.stringify({ complete: true, acceptance: decoded.manifest.scriptExitCode === 0 ? "MILESTONE_COMPLETE" : "BLOCKED", files: decoded.files.length, bytes: decoded.manifest.totalSanitizedBytes, candidateSha: decoded.manifest.candidateSha, nodeVersion: decoded.manifest.nodeVersion, phase: decoded.manifest.phase, digest: decoded.digest }));
 }

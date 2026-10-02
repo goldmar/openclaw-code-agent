@@ -11,6 +11,7 @@ import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildEvidence, frameEvidence } from "./oca501-evidence.mjs";
+import { captureCommand } from "./oca501-command-receipt.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const HOST_VERSION = "2026.9.7";
@@ -232,7 +233,7 @@ class AcceptanceRun {
     this.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(this.directory, "sessions.json");
     this.workspace = join(this.directory, "workspace"); mkdirSync(this.workspace, { mode: 0o700 });
     this.receiptWorkdirs.add(this.workspace);
-    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")) };
+    this.provenance = { candidateSha: options["expected-sha"], nodeVersion: process.versions.node, expectedHostVersion: HOST_VERSION, expectedNativeVersion: NATIVE_VERSION, fixtureBoundary: LABEL, acceptanceScriptHash: fileHash(fileURLToPath(import.meta.url)), evidenceHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-evidence.mjs")), commandReceiptHelperHash: fileHash(join(ROOT, "scripts/e2e/oca501-command-receipt.mjs")) };
   }
   redact(value) { let text = String(value); for (const secret of this.secrets) text = text.replaceAll(secret, "[fixture credential]"); return text; }
   artifact(name, value) {
@@ -241,20 +242,15 @@ class AcceptanceRun {
     this.artifactFiles.add(name);
   }
   async command(command, args, { cwd = ROOT, env = this.env, timeoutMs = 180_000 } = {}) {
-    const child = spawn(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    this.children.add(child);
-    let stdout = ""; let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += this.redact(chunk); });
-    child.stderr.on("data", (chunk) => { stderr += this.redact(chunk); });
-    const timer = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, timeoutMs);
-    try {
-      const exit = await new Promise((done) => { child.once("error", (error) => done({ code: null, signal: null, spawnError: this.redact(error.stack ?? error) })); child.once("exit", (code, signal) => done({ code, signal })); });
-      const identity = `command-${++this.commandCounter}`;
-      this.artifact(`${identity}.stdout.log`, stdout); this.artifact(`${identity}.stderr.log`, stderr);
-      this.artifact(`${identity}.json`, { command, args, cwd, exit, stdout, stderr, stdoutFile: `${identity}.stdout.log`, stderrFile: `${identity}.stderr.log` });
-      assert.equal(exit.code, 0, `${command} ${args.join(" ")} failed (${exit.signal ?? exit.code}): ${exit.spawnError ?? (stdout + stderr).slice(-6000)}`);
-      return stdout;
-    } finally { clearTimeout(timer); this.children.delete(child); }
+    const receipt = await captureCommand(command, args, { cwd, env, timeoutMs, track: (child) => this.children.add(child), untrack: (child) => this.children.delete(child) });
+    const stdout = this.redact(receipt.stdout); const stderr = this.redact(receipt.stderr);
+    const identity = `command-${++this.commandCounter}`;
+    this.artifact(`${identity}.stdout.log`, stdout); this.artifact(`${identity}.stderr.log`, stderr);
+    this.artifact(`${identity}.json`, { command, args, cwd, ...receipt, stdout, stderr, stdoutFile: `${identity}.stdout.log`, stderrFile: `${identity}.stderr.log` });
+    assert.equal(receipt.streamsComplete, true, `Incomplete command streams are BLOCKED: ${receipt.errors.join("; ")}`);
+    assert.equal(receipt.timedOut, false, `Command exceeded its existing timeout: ${command}`);
+    assert.equal(receipt.exit.code, 0, `${command} ${args.join(" ")} failed (${receipt.exit.signal ?? receipt.exit.code}): ${receipt.exit.spawnError ?? (stdout + stderr).slice(-6000)}`);
+    return stdout;
   }
   async serve(handler) {
     const server = createServer((request, response) => {
@@ -519,7 +515,7 @@ class AcceptanceRun {
     assert.ok(this.sessionKey, "Use an actual host-created session");
     const body = JSON.stringify({ name, args, sessionKey: this.sessionKey });
     const response = await fetch(`${this.gatewayUrl}/tools/invoke`, { method: "POST", headers: { authorization: `Bearer ${this.secrets[0]}`, "content-type": "application/json", "x-openclaw-message-channel": channel, "x-openclaw-message-to": target, "x-openclaw-account-id": "default" }, body, signal: AbortSignal.timeout(90_000) });
-    const output = await response.json(); this.artifact(`invoke-${hash(body).slice(0, 12)}.json`, { method: "POST /tools/invoke", requestHash: hash(body), status: response.status, output });
+    const output = await response.json(); this.artifact(`invoke-${hash(body).slice(0, 12)}.json`, { method: "POST /tools/invoke", request: { name, args }, requestHash: hash(body), status: response.status, output });
     return { status: response.status, output };
   }
   async setup() {
@@ -976,9 +972,13 @@ class AcceptanceRun {
       admission = await this.invoke("agent_goal", this.goalArgs(id, workdir, { verifier_commands: verifierCommands, ...extra }));
       if (expectedHostDeny) { assert.equal(admission.status, 404); assert.equal(admission.output.ok, false); assert.equal(admission.output.error.type, "not_found"); }
       else assert.ok(admission.status >= 400 || admission.output.result?.isError === true || admission.output.result?.content?.some((part) => /Error:/i.test(part.text ?? "")), "Real host schema or OCA policy must reject selection");
+      if (verifierCommands === null) {
+        assert.notEqual(admission.status, 404, "Missing tool availability cannot prove present-null selection refusal");
+        assert.match(JSON.stringify(admission.output), /verifier|commands|schema|invalid.*arg|parameter/i, "Present-null refusal identifies actual validation/policy failure");
+      }
     }
     const after = this.effects(); assertNoWorkEffects(before, after);
-    this.recordCase(id, { admission, before, after, layer: expectedHostDeny ? "host effective tools policy" : admission.status >= 400 ? "host validation" : "OCA atomic policy admission", assertions: ["actual ingress rejected", "no goal/session insertion", "no native/provider/check effects", "no mandatory verifier confirmation"] });
+    this.recordCase(id, { admission, selection: { present: true, value: verifierCommands }, before, after, layer: expectedHostDeny ? "host effective tools policy" : admission.status >= 400 ? "host validation" : "OCA atomic policy admission", assertions: ["actual ingress rejected", "no goal/session insertion", "no native/provider/check effects", "no mandatory verifier confirmation"] });
   }
   async slash(text) {
     await waitFor("genuine Telegram polling", () => this.botRequests.some((request) => request.method === "getUpdates"));
@@ -1036,7 +1036,7 @@ class AcceptanceRun {
     await this.launchCase("H02-ralph-free", { extra: { goal_mode: "ralph" }, text: "<promise>DONE</promise>", expected: { receipt: "" } });
 
     this.currentScenario = "H03"; await this.suite(["bash ci.sh"]);
-    for (const [suffix, selection] of [["true", ["true"]], ["false", ["false"]], ["path", ["bash ./ci.sh"]], ["suffix", ["bash ci.sh; true"]], ["case", ["BASH ci.sh"]], ["space", ["bash  ci.sh"]], ["newline", ["bash\nci.sh"]], ["empty", []], ["blank", [""]], ["white", [" "]], ["mixed", ["bash ci.sh", 1]], ["nonarray", "bash ci.sh"]]) await this.deniedCase(`H03-${suffix}`, selection);
+    for (const [suffix, selection] of [["true", ["true"]], ["false", ["false"]], ["path", ["bash ./ci.sh"]], ["suffix", ["bash ci.sh; true"]], ["case", ["BASH ci.sh"]], ["space", ["bash  ci.sh"]], ["newline", ["bash\nci.sh"]], ["empty", []], ["null", null], ["blank", [""]], ["white", [" "]], ["mixed", ["bash ci.sh", 1]], ["nonarray", "bash ci.sh"]]) await this.deniedCase(`H03-${suffix}`, selection);
     await this.deniedCase("H03-plan-weak", ["true"], { extra: { permission_mode: "plan" } });
     await this.deniedCase("H03-ralph-weak", ["true"], { extra: { goal_mode: "ralph", completion_promise: "DONE" } });
     await this.deniedCase("H03-harness-weak", ["true"], { extra: { harness: "claude-code" } });
