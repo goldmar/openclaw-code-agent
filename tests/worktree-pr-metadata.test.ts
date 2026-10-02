@@ -164,6 +164,31 @@ describe("PR metadata fallback diagnostics", () => {
     });
   }
 
+  const uninspectableFailures: Array<{ name: string; thrown: unknown }> = [
+    {
+      name: "throwing code getter",
+      thrown: Object.defineProperty({}, "code", { get() { throw new Error(`${secret} ${privatePath} ${privatePrompt}`); } }),
+    },
+    {
+      name: "Error with a throwing message getter",
+      thrown: Object.defineProperty(new Error(), "message", { get() { throw new Error(`${secret} ${privatePath} ${privatePrompt}`); } }),
+    },
+  ];
+  const revokedFailure = Proxy.revocable({}, {});
+  revokedFailure.revoke();
+  uninspectableFailures.push({ name: "revoked Proxy", thrown: revokedFailure.proxy });
+  for (const { name, thrown } of uninspectableFailures) {
+    it(`preserves sanitized fallback for a ${name}`, async () => {
+      const logs = captureRuntime();
+      const result = await buildPrMetadata({
+        ...evidenceArgs,
+        provider: { async generatePrMetadata() { throw thrown; } },
+      });
+      assertFallback(result, { stage: "completion", reason: "completion-failed" }, "provider-failed", logs);
+      assert.ok(!logs[0].includes("code="));
+    });
+  }
+
   it("identifies absence of a provider while keeping the no-provider marker", async () => {
     const logs = captureRuntime();
     const result = await buildPrMetadata(evidenceArgs);

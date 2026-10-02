@@ -85,13 +85,17 @@ function logPrMetadataDiagnostic(diagnostic: PrMetadataDiagnostic): void {
 }
 
 function completionFailureDiagnostic(err: unknown): PrMetadataDiagnostic {
-  if (err instanceof Error && err.message === "Async work scope is closed") {
-    return { stage: "completion", reason: "work-scope-closed" };
-  }
-  const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
-  if (typeof code === "string" && Object.hasOwn(COMPLETION_FAILURE_REASONS, code)) {
-    const knownCode = code as keyof typeof COMPLETION_FAILURE_REASONS;
-    return { stage: "completion", reason: COMPLETION_FAILURE_REASONS[knownCode], code: knownCode };
+  try {
+    if (err instanceof Error && err.message === "Async work scope is closed") {
+      return { stage: "completion", reason: "work-scope-closed" };
+    }
+    const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+    if (typeof code === "string" && Object.hasOwn(COMPLETION_FAILURE_REASONS, code)) {
+      const knownCode = code as keyof typeof COMPLETION_FAILURE_REASONS;
+      return { stage: "completion", reason: COMPLETION_FAILURE_REASONS[knownCode], code: knownCode };
+    }
+  } catch {
+    // Arbitrary thrown values may have getters or proxies that reject inspection.
   }
   return { stage: "completion", reason: "completion-failed" };
 }
