@@ -206,6 +206,8 @@ export class Session extends EventEmitter {
   readonly multiTurn: boolean;
   readonly goalTaskId?: string;
   private readonly goalTaskAuthorizer?: () => void;
+  /** Set when an explicit action continued this session after its goal ended. */
+  private goalOwnerDetached = false;
   private messageStream?: MessageStream;
   /** A finished turn kept open only because a pulled prompt had not started its turn yet. */
   private turnHeldForOutstandingPrompt = false;
@@ -875,8 +877,17 @@ export class Session extends EventEmitter {
     return true;
   }
 
+  get goalDetached(): boolean {
+    return this.goalOwnerDetached;
+  }
+
+  /** Continue as an ordinary session: the goal ended and can no longer be driven. */
+  detachGoal(): void {
+    this.goalOwnerDetached = true;
+  }
+
   private assertCurrentModelAllowed(): void {
-    if (this.goalTaskId) {
+    if (this.goalTaskId && !this.goalOwnerDetached) {
       if (!this.goalTaskAuthorizer) throw new Error("Goal controller authorization is unavailable for this session.");
       this.goalTaskAuthorizer();
     }

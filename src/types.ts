@@ -425,6 +425,12 @@ export interface SessionConfig {
   multiTurn?: boolean;
   /** Internal live authorization installed by SessionManager; never persisted or caller selectable. */
   assertGoalTaskAuthorized?: () => void;
+  /**
+   * Internal, settled once per launch: "attached" keeps the goal owner and its
+   * live guard; "detached" continues a finished or missing goal's session as
+   * an ordinary session. Unset lets SessionManager decide from the owner state.
+   */
+  goalOwnership?: "attached" | "detached";
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */

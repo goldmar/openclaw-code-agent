@@ -578,10 +578,44 @@ export class SessionManager {
   }
 
   private goalTaskAuthorizer?: (id: string) => void;
+  private goalTaskIsActive?: (id: string) => boolean;
 
-  /** Internal owner callback; session callers cannot provide an authorization snapshot. */
-  setGoalTaskAuthorizer(authorizer: (id: string) => void): void {
+  /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
+  setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
     this.goalTaskAuthorizer = authorizer;
+    this.goalTaskIsActive = isActive;
+  }
+
+  /** A goal that finished or whose record is gone can no longer be driven or succeed. */
+  private goalTaskEnded(id: string): boolean {
+    return this.goalTaskIsActive ? !this.goalTaskIsActive(id) : false;
+  }
+
+  /**
+   * Entry-point decision for an explicit continuation (reply, plan decision) of
+   * a goal-owned session. An active goal keeps the strict live guard. A goal that
+   * had already ended continues as an ordinary session. Work already in flight
+   * keeps its strict guard and fails when it discovers a policy change; only a
+   * later explicit action detaches. Goal-controller work never detaches.
+   */
+  continueGoalSession(
+    target: { goalTaskId?: string },
+    session?: Session,
+    options: { fromGoalController?: boolean } = {},
+  ): SessionConfig["goalOwnership"] {
+    const id = target.goalTaskId;
+    if (!id) return undefined;
+    if (session?.goalDetached) return "detached";
+    if (!options.fromGoalController && this.goalTaskEnded(id)) {
+      session?.detachGoal();
+      return "detached";
+    }
+    this.assertGoalTaskAuthorized(id);
+    return "attached";
+  }
+
+  private assertSessionGoalAuthorized(session: Session): void {
+    if (!session.goalDetached) this.assertGoalTaskAuthorized(session.goalTaskId);
   }
 
   assertGoalTaskAuthorized(id?: string): void {
@@ -629,8 +663,13 @@ export class SessionManager {
     const original = [...owners][0];
     if (original && config.goalTaskId && config.goalTaskId !== original) throw new Error("A resumed session cannot change its goal owner.");
     const goalTaskId = original ?? config.goalTaskId;
+    // Decided at the first check of a launch: once attached, a later goal end
+    // found during preparation fails the launch instead of detaching it.
+    if (goalTaskId && config.goalOwnership !== "attached" && this.goalTaskEnded(goalTaskId)) {
+      return { ...config, goalTaskId: undefined, goalOwnership: "detached", assertGoalTaskAuthorized: undefined };
+    }
     this.assertGoalTaskAuthorized(goalTaskId);
-    return { ...config, goalTaskId, assertGoalTaskAuthorized: goalTaskId
+    return { ...config, goalTaskId, goalOwnership: goalTaskId ? "attached" : undefined, assertGoalTaskAuthorized: goalTaskId
       ? () => this.assertGoalTaskAuthorized(goalTaskId) : undefined };
   }
 
@@ -2363,9 +2402,9 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    this.assertGoalTaskAuthorized(session.goalTaskId);
+    this.assertSessionGoalAuthorized(session);
     const answer = await this.questions.handleAskUserQuestion(session, input, context);
-    this.assertGoalTaskAuthorized(session.goalTaskId);
+    this.assertSessionGoalAuthorized(session);
     return answer;
   }
 
@@ -2379,7 +2418,7 @@ export class SessionManager {
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
-      this.assertGoalTaskAuthorized(session.goalTaskId);
+      this.assertSessionGoalAuthorized(session);
       assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
     }
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);

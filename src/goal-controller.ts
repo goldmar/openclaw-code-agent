@@ -511,7 +511,7 @@ export class GoalController {
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
     this.store = new GoalTaskStore();
-    this.sessionManager.setGoalTaskAuthorizer?.((id) => this.assertTaskAuthorized(id));
+    this.sessionManager.setGoalTaskAuthorizer?.((id) => this.assertTaskAuthorized(id), (id) => this.isTaskActive(id));
   }
 
   start(): void {
@@ -729,6 +729,7 @@ export class GoalController {
       permissionMode: goalSessionPermissionMode(task),
       multiTurn: true,
       goalTaskId: task.id,
+      goalOwnership: "attached",
       harness: task.harness,
       resumeSessionId,
       resumeWorktreeFrom: requestedResumeSessionId,
@@ -892,6 +893,16 @@ export class GoalController {
     const task = this.store.get(id);
     if (!task || task.id !== id) throw new Error("Goal owner is missing; start a new goal before resuming this session.");
     this.authorizeTask(task);
+  }
+
+  /**
+   * Whether a goal can still be driven. A retired controller answers true so
+   * callers take the strict path, which then reports the retirement.
+   */
+  isTaskActive(id: string): boolean {
+    if (!this.isCurrent(this.generation)) return true;
+    const task = this.store.get(id);
+    return !!task && task.id === id && !isTerminalGoalTaskStatus(task.status);
   }
 
   private authorizeTask(task: GoalTaskState): void {
@@ -1152,6 +1163,7 @@ export class GoalController {
         session: session.id,
         message: autoReply,
         userInitiated: false,
+        fromGoalController: true,
       });
     } catch (err) {
       if (!this.isCurrent(generation)) return;
@@ -1352,7 +1364,7 @@ export class GoalController {
       try {
         const resumed = await this.resumeTaskSession(task, prompt, session, generation);
         if (this.discardRetiredSession(task, resumed, generation)) return;
-      this.setTaskRunningWithSession(task, resumed);
+        this.setTaskRunningWithSession(task, resumed);
         this.notifyIterationStatus(task, `🔁 [${task.name}] Continued`, undefined, iterationSummary);
         this.scheduleTaskEvaluation(task.id, "ralph-continue", resumed.id);
       } catch (err: unknown) {

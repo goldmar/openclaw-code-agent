@@ -32,10 +32,11 @@ function fixture() {
   let launches = 0;
   let confirmations = 0;
   let authorizer: ((id: string) => void) | undefined;
+  let activeCheck: ((id: string) => boolean) | undefined;
   const manager = {
     emitGoalTaskUpdate: () => {},
     sendGoalVerifierConfirmation: () => { confirmations += 1; },
-    setGoalTaskAuthorizer: (callback: (id: string) => void) => { authorizer = callback; },
+    setGoalTaskAuthorizer: (callback: (id: string) => void, isActive?: (id: string) => boolean) => { authorizer = callback; activeCheck = isActive; },
     kill: () => {},
     resolve: (): undefined => undefined,
     resolveBackendConversationId: (ref: string) => ref,
@@ -43,7 +44,7 @@ function fixture() {
   };
   const controller = new GoalController(manager as any);
   (controller as any).store = store;
-  return { controller, store, dir, manager, counters: () => ({ launches, confirmations }), authorize: (id: string) => authorizer!(id) };
+  return { controller, store, dir, manager, counters: () => ({ launches, confirmations }), authorize: (id: string) => authorizer!(id), isActive: (id: string) => activeCheck!(id) };
 }
 function task(commands: string[], overrides: Partial<GoalTaskState> = {}): GoalTaskState {
   return { id: "goal", name: "goal", goal: "Ship", workdir: "/tmp", status: "running", createdAt: 1,
@@ -466,6 +467,83 @@ describe("goal-owned session execution boundaries", () => {
     assert.deepEqual(harness.planDecisions, []);
     assert.equal(harness.lastSetPermissionMode, undefined);
     session.kill("user"); harness.endMessages();
+  });
+
+  it("in-flight work rejects a goal end it discovers; a later explicit reply continues as an ordinary session", async () => {
+    const f = fixture();
+    const current = task(["true"]);
+    f.store.upsert(current);
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    const harness = createFakeHarness("goal-detach-after-end");
+    registerHarness(harness);
+    const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true,
+      goalTaskId: "goal", assertGoalTaskAuthorized: () => f.authorize("goal") }, "detach");
+    await session.start(); session.transition("running"); await tick(5);
+    const manager = new SessionManager(5);
+    manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+    (manager as any).sessions.set(session.id, session);
+    const before = harness.consumedPrompts.length;
+    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    await assert.rejects(session.sendMessage("in flight"), /policy changed/);
+    assert.equal(current.status, "failed");
+    // Direct session work stays strict after the goal ended.
+    await assert.rejects(session.sendMessage("still in flight"), /already failed/);
+    assert.equal(harness.consumedPrompts.length, before);
+    // The goal controller's own reply never detaches the session.
+    const controllerReply = await executeRespond(manager, { session: session.id, message: "auto", userInitiated: false, fromGoalController: true });
+    assert.equal(controllerReply.isError, true);
+    assert.equal(session.goalDetached, false);
+    const evidence = JSON.stringify(f.store.get("goal"));
+    const reply = await executeRespond(manager, { session: session.id, message: "One more tweak", userInitiated: true });
+    assert.equal(reply.isError, undefined, reply.text);
+    assert.equal(session.goalDetached, true);
+    await tick(5);
+    assert.equal(harness.consumedPrompts.length, before + 1);
+    assert.equal(JSON.stringify(f.store.get("goal")), evidence, "a continued session cannot change the ended goal");
+    assert.equal(f.counters().launches, 0);
+    session.kill("user"); harness.endMessages();
+    (manager as any).sessions.clear();
+  });
+
+  for (const ending of ["failed", "succeeded", "stopped", "missing"] as const) {
+    it(`a nonfork resume after the goal ${ending === "missing" ? "record is gone" : `${ending}`} launches as an ordinary session`, () => {
+      const f = fixture();
+      const owner = ending === "missing" ? "gone" : "goal";
+      // An active task named like the missing owner must not stand in for it.
+      const current = task(["true"], ending === "missing" ? { id: "actual", name: "gone" } : { status: ending });
+      f.store.upsert(current);
+      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const manager = new SessionManager(5);
+      manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+      manager.getPersistedSession = (ref: string) => ref === "thread" ? { sessionId: "owner", goalTaskId: owner } as any : undefined;
+      const evidence = JSON.stringify(f.store.list());
+      const launch = { prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" };
+      const resumed = (manager as any).goalOwnedLaunch(launch);
+      assert.equal(resumed.goalTaskId, undefined);
+      assert.equal(resumed.goalOwnership, "detached");
+      assert.equal(resumed.assertGoalTaskAuthorized, undefined);
+      assert.equal((manager as any).goalOwnedLaunch(resumed).goalOwnership, "detached", "the decision is stable across launch checks");
+      // An attached launch (goal controller work, or a launch that began attached) stays strict.
+      assert.throws(() => (manager as any).goalOwnedLaunch({ ...launch, goalOwnership: "attached" }), ending === "missing" ? /owner is missing/ : /already/);
+      assert.equal(JSON.stringify(f.store.list()), evidence);
+    });
+  }
+
+  it("a launch that began attached fails when the goal ends during preparation", () => {
+    const f = fixture();
+    const current = task(["true"]);
+    f.store.upsert(current);
+    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    const manager = new SessionManager(5);
+    manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+    manager.getPersistedSession = (ref: string) => ref === "thread" ? { sessionId: "owner", goalTaskId: "goal" } as any : undefined;
+    const attached = (manager as any).goalOwnedLaunch({ prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" });
+    assert.equal(attached.goalOwnership, "attached");
+    assert.equal(attached.goalTaskId, "goal");
+    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    assert.throws(() => (manager as any).goalOwnedLaunch(attached), /policy changed/);
+    assert.equal(current.status, "failed");
+    assert.throws(() => (manager as any).goalOwnedLaunch(attached), /already failed/);
   });
 
   for (const boundary of ["steer", "native-plan", "permission-mode"] as const) {

@@ -1134,7 +1134,8 @@ describe("GoalController", () => {
         pendingInputState: { kind: "question" }, getOutput: () => ["Should I continue?"],
         sendMessage: async () => { await new Promise<void>(resolve => { release = resolve; }); if (rejects) throw new Error("late input failure"); return { disposition: "sent" }; },
       });
-      const controller = new GoalController({ resolve: () => session, assertGoalTaskAuthorized: (id: string) => controller.assertTaskAuthorized(id) } as any);
+      const controller = new GoalController({ resolve: () => session, assertGoalTaskAuthorized: (id: string) => controller.assertTaskAuthorized(id),
+        continueGoalSession: (target: { goalTaskId?: string }) => { controller.assertTaskAuthorized(target.goalTaskId!); return "attached"; } } as any);
       const store = createStore(); (controller as any).store = store;
       const task = buildTask({ sessionId: session.id, harnessSessionId: "thread", verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
       const pending: Promise<void> = (controller as any).reconcileTask(task);
