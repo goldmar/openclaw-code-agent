@@ -89,4 +89,3 @@ finally {
   if (cleanupErrors.length) { console.error(JSON.stringify({ classification: "COMPONENT_CLEANUP_FAILURE", errors: cleanupErrors })); controlFailure ??= new Error("OWNED_COMPONENT_CLEANUP_UNPROVEN"); }
 }
 if (controlFailure) throw controlFailure;
-
