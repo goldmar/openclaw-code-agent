@@ -357,7 +357,9 @@ export function isCommandInRouteChat(
   const chat = (value?: string) => value?.trim().replace(/^telegram:/, "");
   return Boolean(route && own.channel === "telegram" && route.provider === "telegram"
     && chat(own.to) && chat(own.to) === chat(route.target)
-    && !(own.accountId && route.accountId && own.accountId !== route.accountId)
+    // A command's bot account must be the route's: a route without one is
+    // delivered through the default bot, which need not be the command's.
+    && !(own.accountId && own.accountId !== route.accountId)
     && String(own.threadId ?? "") === String(route.threadId ?? ""));
 }
 

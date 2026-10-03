@@ -787,6 +787,16 @@ describe("isCommandInRouteChat", () => {
     const route = { ...dmRoute, accountId: "bot1" };
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot1" }, { route }), true);
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot2" }, { route }), false);
+    // A route without an account (a session launched with `/agent`) is sent through
+    // the default bot: a command that names its account never matches it.
+    assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot2" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot1" }, { route: dmRoute }), false);
+    assert.equal(
+      isCommandInRouteChat({ deliveryContext: { channel: "telegram", to: "1234", accountId: "bot1" } }, { route: dmRoute }),
+      false,
+    );
+    // Neither side names an account.
+    assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: undefined }, { route: dmRoute }), true);
     assert.equal(
       isCommandInRouteChat({ deliveryContext: { channel: "telegram", to: "1234", accountId: "bot2" } }, { route }),
       false,
