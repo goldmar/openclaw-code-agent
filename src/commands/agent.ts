@@ -89,7 +89,7 @@ export function registerAgentCommand(api: CommandApi): void {
           sessionManager,
         );
         if (resolution.kind !== "resolved") {
-          return { text: resolution.kind === "blocked" ? resolution.userText : resolution.text };
+          return { text: resolution.kind === "blocked" ? resolution.userText : resolution.text.replace(/^Error:/u, "❌") };
         }
 
         const session = await sessionManager.launchSession({

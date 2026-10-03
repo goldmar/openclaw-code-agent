@@ -183,8 +183,9 @@ interface OriginContextLike {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
-  /** Raw "To" of a chat command (`<provider>:<chat id>`). */
+  /** Raw "To" of a chat command; the chat itself only on Telegram (`telegram:<chat id>`). */
   to?: string;
+  accountId?: string;
   messageChannel?: string;
   agentAccountId?: string;
   sessionKey?: string;
@@ -336,27 +337,28 @@ export function resolveSessionRoute(
 }
 
 /**
- * A chat command was typed in the chat (and thread) that receives the session's
+ * A chat command was typed in the chat (and topic) that receives the session's
  * or goal task's notices. Only then may the command's reply replace a notice.
  * Compared on the address the host gives the command (`channel`, `to`,
- * `messageThreadId`), never on the session key: with the default DM scope every
- * DM on every channel shares `agent:<id>:main`. An unknown command chat is
- * never "the same chat".
+ * `accountId`, `messageThreadId`), never on the session key: with the default
+ * DM scope every DM on every channel shares `agent:<id>:main`. Telegram only:
+ * there `to` is the chat (`telegram:<chat id>`). Elsewhere it is not (WhatsApp:
+ * the bot's own number; Discord and Slack: `slash:<user>`), so every other
+ * provider and every unknown chat is never "the same chat".
  */
 export function isCommandInRouteChat(
   ctx: OriginContextLike | undefined,
   target: { route?: SessionRoute } | undefined,
 ): boolean {
   const route = target?.route;
-  const own = ctx?.deliveryContext ?? { channel: ctx?.channel, to: ctx?.to, threadId: ctx?.messageThreadId };
-  const provider = own.channel?.trim().toLowerCase();
-  // The host addresses a chat as `<provider>:<id>`; stored targets are bare.
-  const chat = (value?: string) => {
-    const id = value?.trim();
-    return id?.startsWith(`${provider}:`) ? id.slice(provider!.length + 1) : id;
-  };
-  return Boolean(route && provider && provider !== "system" && chat(own.to) && provider === route.provider
-    && chat(own.to) === chat(route.target) && String(own.threadId ?? "") === String(route.threadId ?? ""));
+  const own = ctx?.deliveryContext
+    ?? { channel: ctx?.channel, to: ctx?.to, accountId: ctx?.accountId, threadId: ctx?.messageThreadId };
+  // The host addresses the chat as `telegram:<id>`; stored targets are bare.
+  const chat = (value?: string) => value?.trim().replace(/^telegram:/, "");
+  return Boolean(route && own.channel === "telegram" && route.provider === "telegram"
+    && chat(own.to) && chat(own.to) === chat(route.target)
+    && !(own.accountId && route.accountId && own.accountId !== route.accountId)
+    && String(own.threadId ?? "") === String(route.threadId ?? ""));
 }
 
 /** Extract agentId from "channel|account|target" string. */

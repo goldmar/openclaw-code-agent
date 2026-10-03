@@ -763,10 +763,41 @@ describe("isCommandInRouteChat", () => {
   });
 
   it("is false for the shared main session key from another provider or DM", () => {
-    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: "discord", to: "user:1234" }, { route: dmRoute }), false);
-    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: "discord", to: "discord:1234" }, { route: dmRoute }), false);
+    // Discord and Slack commands carry `to: "slash:<user id>"`, not the chat.
+    for (const channel of ["discord", "slack"]) {
+      assert.equal(isCommandInRouteChat({ ...dmCommand, channel, to: "slash:1234" }, { route: dmRoute }), false);
+      assert.equal(
+        isCommandInRouteChat({ ...dmCommand, channel, to: "slash:1234" }, { route: { provider: channel, target: "slash:1234" } }),
+        false,
+      );
+    }
     assert.equal(isCommandInRouteChat({ ...dmCommand, senderId: "4321", to: "telegram:4321" }, { route: dmRoute }), false);
     assert.equal(isCommandInRouteChat({ ...dmCommand, messageThreadId: 3 }, { route: dmRoute }), false);
+  });
+
+  it("is false on WhatsApp, where `to` is the bot's own number in every chat", () => {
+    // A session routed to the self-chat: any other WhatsApp chat carries the same `to`.
+    const selfChat = { provider: "whatsapp", target: "+15550001111", sessionKey: "agent:main:main" };
+    const command = { channel: "whatsapp", senderId: "+15550002222", sessionKey: "agent:main:main", to: "+15550001111" };
+    assert.equal(isCommandInRouteChat(command, { route: selfChat }), false);
+    assert.equal(isCommandInRouteChat({ deliveryContext: { channel: "whatsapp", to: "+15550001111" } }, { route: selfChat }), false);
+  });
+
+  it("is false for the same user's DM with another Telegram bot account", () => {
+    const route = { ...dmRoute, accountId: "bot1" };
+    assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot1" }, { route }), true);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot2" }, { route }), false);
+    assert.equal(
+      isCommandInRouteChat({ deliveryContext: { channel: "telegram", to: "1234", accountId: "bot2" } }, { route }),
+      false,
+    );
+  });
+
+  it("is false for a forum-topic address inside `to` (text-command path)", () => {
+    assert.equal(
+      isCommandInRouteChat({ ...topicCommand, to: "telegram:-1001234567890:topic:42" }, { route: topicRoute }),
+      false,
+    );
   });
 
   it("is false when the command's chat or the route is unknown", () => {
