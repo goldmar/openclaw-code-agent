@@ -126,6 +126,19 @@ for (const name of BACKEND_NAMES) {
       const stale = await clickButton(buttonNamed(buttons, "Merge"));
       assert.match(stale.replies.join("\n"), /already resolved \(discarded\)/);
       assert.equal(existsSync(join(repo, "feature.txt")), false, "nothing was merged");
+
+      // A repeated discard (a second Discard button, or the tool) is answered
+      // with the standard reply: no ``branch `unknown` `` notice, nothing changed.
+      const discardedAt = f.sm.getPersistedSession(f.session.id)?.worktreeDismissedAt;
+      for (let press = 0; press < 2; press += 1) {
+        assert.equal(
+          await f.sm.dismissWorktree(f.session.id),
+          `⚠️ [${f.session.name}] This decision was already resolved (discarded). Nothing was changed.`,
+        );
+      }
+      assert.ok(discardedAt, "the first discard was recorded");
+      assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeDismissedAt, discardedAt, "nothing was changed");
+      assert.equal(f.notifications.some((entry) => /branch `unknown`/.test(entry.request.userMessage ?? "")), false);
     });
 
     it("does not discard a dirty worktree while Commit changes resumes the session in it", async () => {
@@ -144,7 +157,11 @@ for (const name of BACKEND_NAMES) {
         clickButton(buttonNamed(buttons, "Discard")),
       ]);
       assert.doesNotMatch(commit.replies.join("\n"), /still being processed/);
-      assert.match(discard.replies.join("\n"), /still being processed|is running in this worktree/);
+      // Refused either by the lock (a reply) or by the running session (the re-offered decision).
+      assert.match(
+        [...discard.replies, ...created.notifications.map((entry) => entry.request.userMessage ?? "")].join("\n"),
+        /still being processed|is running in this worktree/,
+      );
       assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
     });
 

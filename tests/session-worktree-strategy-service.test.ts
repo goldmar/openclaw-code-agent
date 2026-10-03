@@ -2366,7 +2366,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-auto-pr-failed");
-      assert.match(String(notifications[0].userMessage), /Completed — auto-PR failed\. The worktree is preserved/);
+      assert.match(String(notifications[0].userMessage), /^⚠️ \[[\w-]+\] Completed — auto-PR failed( \|[^\n]*)?\nThe worktree is kept; choose below\.$/);
       assert.deepEqual(policyAllowedActions, { merge: false, pr: true });
       assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), false);
       assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), true);
@@ -2439,17 +2439,188 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       },
       session.id,
       { merge: true, pr: false },
+      true,
     );
 
     assert.equal(session.worktreeState, "pending_decision");
     assert.equal(session.worktreeLifecycle?.state, "pending_decision");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "worktree-merge-error");
+    // A follow-up of the cycle that already said `Completed — merge conflict`.
+    assert.match(String(notifications[0].userMessage), /^⚠️ \[resolver-retry-failure\] Merge failed\nff-only merge failed\n/);
+    assert.doesNotMatch(String(notifications[0].userMessage), /Completed —/);
     assert.match(String(notifications[0].userMessage), /auto-merge retry did not complete/i);
     assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to check out main during recovery/);
     assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
     assert.ok(Array.isArray(notifications[0].buttons));
     assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
     assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
+  });
+});
+
+describe("SessionWorktreeStrategyService retry after the conflict resolver", () => {
+  // The cycle already sent `⚠️ [name] Completed — merge conflict`: the retry
+  // must not send a second `Completed —` line (✅ or ⚠️) and defers no `✅`.
+  async function retryFixture(name: string, completionState: "has-commits" | "dirty-uncommitted" | "no-change" | "merged" | "released" | "base-advanced") {
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree(name);
+    const notifications: SessionNotificationRequest[] = [];
+    const patches: Array<Record<string, unknown>> = [];
+    const session: any = {
+      id: `s-${name}`,
+      name,
+      harnessSessionId: `h-${name}`,
+      status: "completed",
+      startedAt: 1700000009000,
+      worktreeState: "merge_conflict_resolving",
+      worktreeStrategy: "auto-merge",
+      worktreePath,
+      worktreeBranch: branchName,
+      originalWorkdir: repoDir,
+      workdir: worktreePath,
+      worktreeBaseBranch: "main",
+      prompt: "resolve",
+      costUsd: 0.5,
+    };
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => completionState,
+      updatePersistedSession: (_ref, patch) => { patches.push(patch); Object.assign(session, patch); return true; },
+      dispatchSessionNotification: (_session, request) => { notifications.push(request); },
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
+    });
+    const texts = () => notifications.map((request) => String(request.userMessage));
+    return { repoDir, worktreePath, branchName, session, service, notifications, patches, texts };
+  }
+
+  it("reports leftover uncommitted files as a plain follow-up that does not claim missing commits", async () => {
+    const f = await retryFixture("retry-dirty", "dirty-uncommitted");
+    try {
+      writeFileSync(join(f.worktreePath, "leftover.txt"), "left by the resolver\n", "utf-8");
+      await f.service.handleWorktreeStrategy(f.session, { retryAfterConflict: true });
+      assert.equal(f.notifications.length, 1);
+      const [first, second] = f.texts()[0]!.split("\n");
+      assert.equal(first, `⚠️ [retry-dirty] Uncommitted changes on \`${f.branchName}\``);
+      // The branch has a commit of its own: "no commits" would be false.
+      assert.equal(second, "Commit or discard them before the branch is merged.");
+      assert.doesNotMatch(f.texts()[0]!, /Completed —|no commits/);
+      assert.doesNotMatch(String(f.notifications[0]!.wakeMessageOnNotifyFailed), /no commits/);
+
+      // The first pass of a cycle keeps the `Completed —` form with the footer.
+      const firstPass = await retryFixture("first-dirty", "dirty-uncommitted");
+      try {
+        writeFileSync(join(firstPass.worktreePath, "leftover.txt"), "x\n", "utf-8");
+        await firstPass.service.handleWorktreeStrategy(firstPass.session);
+        assert.ok(firstPass.texts()[0]!.split("\n")[0]!.startsWith(`⚠️ [first-dirty] Completed — uncommitted changes on \`${firstPass.branchName}\` | $0.50`), firstPass.texts()[0]);
+      } finally {
+        rmSync(firstPass.repoDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(f.repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a retry with nothing left to merge as a milestone, not a second completion", async () => {
+    const f = await retryFixture("retry-no-change", "no-change");
+    try {
+      const result = await f.service.handleWorktreeStrategy(f.session, { retryAfterConflict: true });
+      assert.equal(result.notificationSent, true);
+      assert.equal(f.texts().length, 1);
+      assert.match(f.texts()[0]!, /^ℹ️ \[retry-no-change\] No changes left to merge after conflict resolution \| \$0\.50[^\n]*$/);
+    } finally {
+      rmSync(f.repoDir, { recursive: true, force: true });
+    }
+    for (const state of ["merged", "released"] as const) {
+      const g = await retryFixture(`retry-${state}`, state);
+      try {
+        // Without the retry these paths stay silent and the generic terminal notice follows.
+        const silent = await retryFixture(`first-${state}`, state);
+        try {
+          assert.equal((await silent.service.handleWorktreeStrategy(silent.session)).notificationSent, false);
+          assert.deepEqual(silent.texts(), []);
+        } finally {
+          rmSync(silent.repoDir, { recursive: true, force: true });
+        }
+        const result = await g.service.handleWorktreeStrategy(g.session, { retryAfterConflict: true });
+        assert.equal(result.notificationSent, true, "the user was told the merge would be retried");
+        assert.equal(g.texts().length, 1);
+        assert.ok(g.texts()[0]!.startsWith(state === "merged"
+          ? `ℹ️ [retry-merged] Merged: \`${g.branchName}\` → \`main\` | $0.50`
+          : "ℹ️ [retry-released] No changes left to merge after conflict resolution | $0.50"), g.texts()[0]);
+        assert.doesNotMatch(g.texts()[0]!, /\n/);
+        assert.equal(g.session.worktreeState, state);
+      } finally {
+        rmSync(g.repoDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("defers no completion marker when the retry ends in the decision prompt", async () => {
+    for (const retry of [true, false]) {
+      const f = await retryFixture(`retry-ask-${retry}`, "has-commits");
+      try {
+        mkdirSync(join(f.worktreePath, ".husky"), { recursive: true });
+        writeFileSync(join(f.worktreePath, ".husky", "pre-commit"), "echo hook\n", "utf-8");
+        git(f.worktreePath, "add", ".husky/pre-commit");
+        git(f.worktreePath, "commit", "-m", "add hook");
+        await f.service.handleWorktreeStrategy(f.session, retry ? { retryAfterConflict: true } : {});
+        assert.equal(f.notifications.at(-1)?.label, "worktree-merge-ask");
+        // Without the marker a later Merge / PR is an `ℹ️` milestone (see owedCompletionCycle).
+        assert.equal(
+          f.patches.some((patch) => patch.deferredCompletionCycle !== undefined),
+          !retry,
+          retry ? "the retry must not defer a second completion" : "the first prompt defers the ✅",
+        );
+        assert.equal(f.session.deferredCompletionCycle, retry ? undefined : 1700000009000);
+      } finally {
+        rmSync(f.repoDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("repeats no Completed line for a retried merge, a moved base, or a blocking policy", async () => {
+    const merged = await retryFixture("retry-merge", "has-commits");
+    try {
+      // No hook change and a policy that allows the merge.
+      merged.session.repoIntegrationPolicy = "never-pr";
+      await merged.service.handleWorktreeStrategy(merged.session, { retryAfterConflict: true });
+      assert.equal(merged.notifications.at(-1)?.label, "worktree-merge-success");
+      assert.match(merged.texts().at(-1)!, /^ℹ️ \[retry-merge\] Merged: /);
+    } finally {
+      rmSync(merged.repoDir, { recursive: true, force: true });
+    }
+    const moved = await retryFixture("retry-moved", "base-advanced");
+    try {
+      await moved.service.handleWorktreeStrategy(moved.session, { retryAfterConflict: true });
+      assert.equal(moved.texts()[0]!.split("\n")[0], `⚠️ [retry-moved] No commits on \`${moved.branchName}\`, but \`main\` moved`);
+    } finally {
+      rmSync(moved.repoDir, { recursive: true, force: true });
+    }
+    const blocked = await retryFixture("retry-blocked", "has-commits");
+    try {
+      // No repo policy is known: automatic follow-through is blocked.
+      await blocked.service.handleWorktreeStrategy(blocked.session, { retryAfterConflict: true });
+      assert.deepEqual(blocked.texts()[0]!.split("\n"), ["⚠️ [retry-blocked] Blocked by repo policy", "Repo integration policy is unknown."]);
+      const first = await retryFixture("first-blocked", "has-commits");
+      try {
+        await first.service.handleWorktreeStrategy(first.session);
+        const [heading, reason] = first.texts()[0]!.split("\n");
+        assert.ok(heading!.startsWith("⚠️ [first-blocked] Completed — blocked by repo policy | $0.50"), heading);
+        assert.equal(reason, "Repo integration policy is unknown.");
+      } finally {
+        rmSync(first.repoDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(blocked.repoDir, { recursive: true, force: true });
+    }
   });
 });

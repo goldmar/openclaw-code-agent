@@ -204,7 +204,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
-        return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
+        return { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
       }
 
       const branchAheadCount = existsSync(worktreePath)
@@ -249,7 +249,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         let current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
         if (current.changed) { refuseChanged(); return; }
         if (current.merged) {
-          toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
+          toolResult = { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
           return;
         }
 
@@ -283,7 +283,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
         if (current.changed) { refuseChanged(); return; }
         if (current.merged) {
-          toolResult = { content: [{ type: "text", text: `ℹ️ Session was already merged while preparing the merge.` }] };
+          toolResult = { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
           return;
         }
         const freshPersisted = current.persisted;

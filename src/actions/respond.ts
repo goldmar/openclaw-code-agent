@@ -3,6 +3,7 @@ import { FollowUpDeliveryUnconfirmedError } from "../harness/follow-up-delivery-
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { truncateText } from "../format";
+import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import {
@@ -325,7 +326,8 @@ export function rejectPlanDecision(
     // the generic `⛔ [name] Stopped by user` would say the same again.
     if (options.repliedToUser) active.stopNoticeReplaced = true;
     sm.kill(active.id, "user");
-    return { text: `[${active.name}] Plan rejected. Session stopped.` };
+    // The button's reply is this stop's terminal line, so it carries the footer on line 1.
+    return { text: `[${active.name}] Plan rejected. Session stopped.${options.repliedToUser ? formatSessionStatsSuffix(sessionStats(active)) : ""}` };
   }
 
   sm.updatePersistedSession?.(sessionId, patch);

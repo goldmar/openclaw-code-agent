@@ -412,7 +412,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.match(state.replies[0] ?? "", /OpenClaw Code Agent update failed: package install exited 1/);
+    assert.match(state.replies[0] ?? "", /^❌ Code Agent update failed: package install exited 1/);
   });
 
   it("does not relabel a verified install as failed when its Telegram confirmation reply fails", async (t) => {
@@ -1431,7 +1431,8 @@ describe("createCallbackHandler()", () => {
     assert.match(approve.replies[0], /button cleanup failed/);
     assert.equal(reject.buttonMarkupEdits, 1);
     assert.equal(reject.buttonsCleared, 1);
-    assert.equal(reject.replies[0], "⛔ [test-session] Plan rejected. Session stopped.");
+    // The reply is the stop's terminal line: it carries the stats footer when the session has stats.
+    assert.match(reject.replies[0] ?? "", /^⛔ \[test-session\] Plan rejected\. Session stopped\.( \| [^\n]+)?$/);
   });
 
   it("serializes concurrent revise and reject plan decision callbacks", async () => {
@@ -1594,7 +1595,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(acknowledged, 1);
-    assert.equal(replies[0], "⛔ [reject-me] Plan rejected. Session stopped.");
+    // The reply is the stop's terminal line: it carries the stats footer when the session has stats.
+    assert.match(replies[0] ?? "", /^⛔ \[reject-me\] Plan rejected\. Session stopped\.( \| [^\n]+)?$/);
   });
 
   it("warns when Discord clearComponents fails and no acknowledge fallback is available", async () => {
@@ -1641,7 +1643,8 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.deepEqual(killed, { id: "test-id", reason: "user" });
-      assert.equal(replies[0], "⛔ [warn-me] Plan rejected. Session stopped.");
+      // The reply is the stop's terminal line: it carries the stats footer when the session has stats.
+    assert.match(replies[0] ?? "", /^⛔ \[warn-me\] Plan rejected\. Session stopped\.( \| [^\n]+)?$/);
       assert.match(warnings[0], /no acknowledge fallback available/i);
     } finally {
       console.warn = originalWarn;
@@ -1836,7 +1839,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "⛔ [restored-plan] Plan rejected. Session stopped.");
+    // The reply is the stop's terminal line: it carries the stats footer when the session has stats.
+    assert.match(state.replies[0] ?? "", /^⛔ \[restored-plan\] Plan rejected\. Session stopped\.( \| [^\n]+)?$/);
   });
 
   it("uses the newer current delivery version when approval prompt metadata diverges", async () => {
@@ -1908,7 +1912,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "⛔ [canonical-plan] Plan rejected. Session stopped.");
+    // The reply is the stop's terminal line: it carries the stats footer when the session has stats.
+    assert.match(state.replies[0] ?? "", /^⛔ \[canonical-plan\] Plan rejected\. Session stopped\.( \| [^\n]+)?$/);
   });
 
   it("rejects stale plan approval callbacks from an older plan-decision version", async () => {
@@ -2096,7 +2101,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(consumed, 0);
     assert.equal(state.buttonsCleared, 0);
-    assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
+    assert.match(state.replies[0] ?? "", /^❌ \[[^\]]+\] Could not submit that answer\. The question prompt is still active; try again or reply with the answer\.$/);
   });
 
   it("resumes a persisted suspended runtime and forwards the clicked answer", async () => {
@@ -2226,7 +2231,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(consumed, 0);
     assert.equal(state.buttonsCleared, 0);
-    assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
+    assert.match(state.replies[0] ?? "", /^❌ \[[^\]]+\] Could not submit that answer\. The question prompt is still active; try again or reply with the answer\.$/);
     assert.match(warnings[0], /backend submit failed/);
   });
 
@@ -2388,7 +2393,13 @@ describe("createCallbackHandler()", () => {
     const cases = [
       { kind: "worktree-create-pr" as const, text: "ℹ️ [ux-fix] PR was already merged: https://github.com/example/repo/pull/42" },
       { kind: "worktree-update-pr" as const, text: "ℹ️ [ux-fix] PR is up to date: https://github.com/example/repo/pull/42" },
-      { kind: "worktree-merge" as const, text: "ℹ️ Session was already merged while preparing the merge." },
+      { kind: "worktree-merge" as const, text: "ℹ️ [ux-fix] Already merged." },
+      // Only the first line is for the user: the rest instructs the orchestrator.
+      {
+        kind: "worktree-create-pr" as const,
+        text: "ℹ️ [ux-fix] PR was already merged: https://github.com/example/repo/pull/43\n\nThe worktree branch `agent/ux-fix` can be cleaned up with agent_merge(delete_branch=true).",
+        reply: "ℹ️ [ux-fix] PR was already merged: https://github.com/example/repo/pull/43",
+      },
     ];
     for (const testCase of cases) {
       setSessionManager({
@@ -2403,7 +2414,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(await handler.handler(state.ctx as any), { handled: true }, testCase.kind);
       assert.equal(state.buttonsCleared, 1, testCase.kind);
-      assert.deepEqual(state.replies, [testCase.text], testCase.kind);
+      assert.deepEqual(state.replies, ["reply" in testCase ? testCase.reply : testCase.text], testCase.kind);
     }
   });
 
@@ -2411,16 +2422,17 @@ describe("createCallbackHandler()", () => {
     const cases = [
       {
         kind: "worktree-merge" as const,
-        text: "❌ Merge failed.",
+        // One line for the user: no orchestrator instruction, no session id.
+        text: "❌ [ux-fix] Merge failed: repo policy requires a pull request for /repo.",
         dependencies: {
           makeAgentMergeTool: () => ({
-            execute: async () => createToolResult("❌ Merge failed.", false),
+            execute: async () => createToolResult("❌ Merge blocked: repo policy requires a pull request for /repo. Use agent_pr if PR automation is available.\nSession ux-fix [sess-42]", false),
           }) as any,
         },
       },
       {
         kind: "worktree-create-pr" as const,
-        text: "Error: GitHub CLI is not authenticated.",
+        text: "❌ [ux-fix] PR failed: GitHub CLI is not authenticated.",
         dependencies: {
           makeAgentPrTool: () => ({
             execute: async () => createToolResult("Error: GitHub CLI is not authenticated.", false),
@@ -2429,10 +2441,10 @@ describe("createCallbackHandler()", () => {
       },
       {
         kind: "worktree-update-pr" as const,
-        text: "⚠️  A PR exists but was closed without merging.",
+        text: "❌ [ux-fix] PR failed: A PR exists but was closed without merging: https://github.com/example/repo/pull/42",
         dependencies: {
           makeAgentPrTool: () => ({
-            execute: async () => createToolResult("⚠️  A PR exists but was closed without merging.", false),
+            execute: async () => createToolResult("⚠️ A PR exists but was closed without merging: https://github.com/example/repo/pull/42\n\nWhat would you like to do?", false),
           }) as any,
         },
       },
@@ -2506,17 +2518,17 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(state.editedMessages, []);
     assert.equal(state.buttonsCleared, 0);
-    assert.equal(state.replies[0], "Error: session no longer has a pending worktree decision.");
+    assert.equal(state.replies[0], "❌ [ux-fix] session no longer has a pending worktree decision.");
     assert.deepEqual(state.events, ["acknowledge", "reply"]);
     assert.deepEqual(queued, []);
   });
 
   it("uses the same text-result predicate for snooze prompt cleanup and replies", async () => {
     const cases = [
-      { result: "Error: session no longer has a pending worktree decision.", success: false, reply: "Error: session no longer has a pending worktree decision." },
-      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "Error without colon still comes from an internal failure path." },
-      { result: "❌ Snooze failed because persisted state is unavailable.", success: false, reply: "❌ Snooze failed because persisted state is unavailable." },
-      { result: "⚠️ Snooze skipped because reminders are disabled.", success: false, reply: "⚠️ Snooze skipped because reminders are disabled." },
+      { result: "Error: session no longer has a pending worktree decision.", success: false, reply: "❌ [ux-fix] session no longer has a pending worktree decision." },
+      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "❌ [ux-fix] Error without colon still comes from an internal failure path." },
+      { result: "❌ Snooze failed because persisted state is unavailable.", success: false, reply: "❌ [ux-fix] Snooze failed because persisted state is unavailable." },
+      { result: "⚠️ Snooze skipped because reminders are disabled.", success: false, reply: "❌ [ux-fix] Snooze skipped because reminders are disabled." },
     ];
 
     for (const testCase of cases) {
@@ -2569,15 +2581,34 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(failureResult, { handled: true });
     assert.deepEqual(failure.editedMessages, []);
     assert.equal(failure.buttonsCleared, 0);
-    assert.equal(failure.replies[0], "Error: branch deletion failed.");
+    assert.deepEqual(failure.replies, ["❌ [ux-fix] Discard failed: branch deletion failed."]);
+  });
+
+  it("answers a second Discard button with the already-resolved reply and re-offers nothing", async () => {
+    let reoffers = 0;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      dismissWorktree: async () => "⚠️ [ux-fix] This decision was already resolved (discarded). Nothing was changed.",
+      reofferWorktreeDecision: async () => { reoffers += 1; return true; },
+    } as any);
+
+    const state = createCtx("token-dismiss");
+    assert.deepEqual(await createCallbackHandler().handler(state.ctx as any), { handled: true });
+
+    assert.deepEqual(state.replies, ["⚠️ [ux-fix] This decision was already resolved (discarded). Nothing was changed."]);
+    assert.equal(state.buttonsCleared, 1, "the spent Discard button is removed");
+    assert.equal(reoffers, 0);
   });
 
   it("uses the same text-result predicate for discard prompt cleanup and replies", async () => {
     const cases = [
-      { result: "Error: branch deletion failed.", success: false, reply: "Error: branch deletion failed." },
-      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "Error without colon still comes from an internal failure path." },
-      { result: "❌ Branch deletion failed.", success: false, reply: "❌ Branch deletion failed." },
-      { result: "⚠️ Discard skipped because worktree state changed.", success: false, reply: "⚠️ Discard skipped because worktree state changed." },
+      { result: "Error: branch deletion failed.", success: false, reply: "❌ [ux-fix] Discard failed: branch deletion failed." },
+      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "❌ [ux-fix] Discard failed: Error without colon still comes from an internal failure path." },
+      { result: "❌ Branch deletion failed.", success: false, reply: "❌ [ux-fix] Discard failed: Branch deletion failed." },
+      { result: "⚠️ Discard skipped because worktree state changed.", success: false, reply: "❌ [ux-fix] Discard failed: Discard skipped because worktree state changed." },
     ];
 
     for (const testCase of cases) {
@@ -3071,8 +3102,9 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.deepEqual(state.editedMessages, []);
-    assert.match(state.replies[0], /Repo policy saved: Require PR/);
-    assert.match(state.replies[0], /Session launched successfully/);
+    // The `🚀 [name] Launched` notice follows: no launch summary in the reply.
+    assert.equal(state.replies[0], "🧭 Repo policy saved: Require PR.");
+    assert.equal(state.replies.length, 1);
   });
 
   it("invalidates sibling repo policy tokens after one policy choice succeeds", async () => {
@@ -3279,7 +3311,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.deepEqual(state.editedMessages, []);
-    assert.match(state.replies[0], /Repo policy saved, but launch failed: spawn unavailable/);
+    assert.match(state.replies[0], /^❌ (\[[^\]]+\] )?Repo policy saved, but the launch failed: spawn unavailable$/);
   });
 
   it("edits Telegram message markup as a fallback when plan-offer editButtons is unavailable", async () => {
@@ -3399,7 +3431,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "⚠️ Failed to start planning session: workdir is unavailable");
+    assert.match(state.replies[0] ?? "", /^❌ (\[[^\]]+\] )?Planning session did not start: workdir is unavailable$/);
     assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 

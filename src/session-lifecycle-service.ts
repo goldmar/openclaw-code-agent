@@ -770,13 +770,9 @@ export class SessionLifecycleService {
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
-      onUserNotifyFailed: () => {
-        log.warn(
-          `[SessionManager] turn-complete delivery failed for session ${session.id} — firing terminal notification as fallback`,
-        );
-        if (!this.deps.shouldEmitTerminalWake(session)) return;
-        this.emitCompleted(session);
-      },
+      // No `✅ Completed` fallback when this line cannot be delivered: the session
+      // is idle, not completed. The orchestrator still gets the wake above, and
+      // the one `✅` is sent when the session completes.
     });
   }
 

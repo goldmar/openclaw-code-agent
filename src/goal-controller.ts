@@ -834,7 +834,7 @@ export class GoalController {
         task.status = "running";
         task.updatedAt = Date.now();
         this.store.upsert(task);
-        this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after gateway restart`, resumed);
+        this.notifyIterationStatus(task, `▶️ [${task.name}] Goal task resumed after gateway restart`, resumed);
         this.scheduleTaskEvaluation(task.id, "restore", resumed.id);
       } catch (err: unknown) {
         if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task after gateway restart: ${errorMessage(err)}`);
@@ -936,10 +936,9 @@ export class GoalController {
   }
 
   private notifyIterationStatus(task: GoalTaskState, heading: string, _session?: Session, iterationSummary?: string): void {
-    const iterationLabel = task.loopMode === "ralph" ? "iteration" : "repair iteration";
-    const progressHeading = /\b(?:repair\s+)?iteration\s+\d+\/\d+\b/i.test(heading)
+    const progressHeading = /\biteration\s+\d+\/\d+\b/i.test(heading)
       ? heading
-      : `${heading} ${iterationLabel} ${task.iteration}/${task.maxIterations}`;
+      : `${heading} (iteration ${task.iteration}/${task.maxIterations})`;
     const compactSummary = formatIterationSummaryForNotification(iterationSummary);
     const text = compactSummary ? `${progressHeading}\n\n${compactSummary}` : progressHeading;
     this.notify(task, text, "goal-task-progress");
@@ -982,7 +981,7 @@ export class GoalController {
       }
       this.store.upsert(current);
 
-      this.notifyIterationStatus(current, `🔄 [${current.name}] Coding turn complete`, session);
+      this.notifyIterationStatus(current, `🔁 [${current.name}] Coding turn complete`, session);
       this.scheduleTaskEvaluation(task.id, "turnEnd", session.id);
     };
 
@@ -1191,7 +1190,7 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session, generation);
       if (this.discardRetiredSession(task, resumed, generation)) return;
       this.setTaskRunningWithSession(task, resumed);
-      this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
+      this.notifyIterationStatus(task, `▶️ [${task.name}] Goal task resumed after idle timeout`, resumed);
       this.scheduleTaskEvaluation(task.id, "idle-timeout-resume", resumed.id);
     } catch (err: unknown) {
       if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task after idle timeout: ${errorMessage(err)}`);
@@ -1408,7 +1407,7 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session, generation);
       if (this.discardRetiredSession(task, resumed, generation)) return;
       this.setTaskRunningWithSession(task, resumed);
-      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair iteration started after verifier failure`, undefined, iterationSummary);
+      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair started after verifier failure`, undefined, iterationSummary);
       this.scheduleTaskEvaluation(task.id, "repair-resume", resumed.id);
     } catch (err: unknown) {
       if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task: ${errorMessage(err)}`);

@@ -677,71 +677,62 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
           const commented = await commentOnPR(originalWorkdir, prStatus.number!, commentBody, targetRepo);
 
-          if (commented) {
-            // Update persisted metadata
-            const resolvesDeferredCompletion = owedCompletionCycle(sm, target.generation) !== undefined;
-            persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
-            const updateOutcomeLine = formatWorktreeOutcomeLine({
-              kind: "pr-updated",
-              sessionCompleted: isTerminalCompletion() || resolvesDeferredCompletion,
-              sessionName,
-              branch: branchName,
-              prUrl: prStatus.url,
-              filesChanged: diffSummary.filesChanged,
-              insertions: diffSummary.insertions,
-              deletions: diffSummary.deletions,
-            });
-            sm.notifyWorktreeOutcome(
-              target.notificationTarget!,
-              withOutcomeSummary(updateOutcomeLine, params.summary),
-              {
-                ...summaryOwnership(params.summary),
-                completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
-                  action: "updated",
-                  branchName,
-                  prUrl: prStatus.url,
-                  prNumber: prStatus.number,
-                  targetRepo,
-                  diffSummary,
-                }),
-                detailLines: buildPrOutcomeDetailLines({
-                  action: "updated",
-                  branchName,
-                  baseBranch,
-                  prUrl: prStatus.url,
-                  prNumber: prStatus.number,
-                  targetRepo,
-                  commits: diffSummary.commits,
-                  insertions: diffSummary.insertions,
-                  deletions: diffSummary.deletions,
-                }),
-              },
-            );
-            return {
-              content: [{
-                type: "text",
-                text: [
-                  `${updateOutcomeLine}`,
-                  ``,
-                  `📝 Added comment detailing ${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})`,
-                  formatMetadataRefreshLine(metadataRefresh),
-                  summaryShownNote(params.summary).trim(),
-                ].filter(Boolean).join("\n"),
-              }],
-              meta: { success: true, state: "pr_updated", outcomeNotified: true },
-            } satisfies AgentPrExecuteResult;
-          } else {
-            const metadataRefreshLine = formatMetadataRefreshLine(metadataRefresh);
-            return {
-              content: [{
-                type: "text",
-                text: `⚠️ Pushed to ${prStatus.url} but failed to add comment.\n\n` +
-                      `${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})` +
-                      `${metadataRefreshLine ? `\n${metadataRefreshLine}` : ""}`
-              }],
-              meta: { success: true, state: "pr_open" },
-            } satisfies AgentPrExecuteResult;
-          }
+          // The push succeeded and the PR exists, with or without the comment:
+          // record it as open so state, buttons and the owed `✅` agree.
+          const commentFailedLine = commented ? "" : "\n⚠️ The PR comment could not be added.";
+          const resolvesDeferredCompletion = owedCompletionCycle(sm, target.generation) !== undefined;
+          persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
+          const updateOutcomeLine = formatWorktreeOutcomeLine({
+            kind: "pr-updated",
+            sessionCompleted: isTerminalCompletion() || resolvesDeferredCompletion,
+            sessionName,
+            branch: branchName,
+            prUrl: prStatus.url,
+            filesChanged: diffSummary.filesChanged,
+            insertions: diffSummary.insertions,
+            deletions: diffSummary.deletions,
+          });
+          sm.notifyWorktreeOutcome(
+            target.notificationTarget!,
+            withOutcomeSummary(`${updateOutcomeLine}${commentFailedLine}`, params.summary),
+            {
+              ...summaryOwnership(params.summary),
+              completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
+                action: "updated",
+                branchName,
+                prUrl: prStatus.url,
+                prNumber: prStatus.number,
+                targetRepo,
+                diffSummary,
+              }),
+              detailLines: buildPrOutcomeDetailLines({
+                action: "updated",
+                branchName,
+                baseBranch,
+                prUrl: prStatus.url,
+                prNumber: prStatus.number,
+                targetRepo,
+                commits: diffSummary.commits,
+                insertions: diffSummary.insertions,
+                deletions: diffSummary.deletions,
+              }),
+            },
+          );
+          return {
+            content: [{
+              type: "text",
+              text: [
+                `${updateOutcomeLine}${commentFailedLine}`,
+                ``,
+                commented
+                  ? `📝 Added comment detailing ${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})`
+                  : `${formatCount(diffSummary.commits, "new commit")} pushed (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+                formatMetadataRefreshLine(metadataRefresh),
+                summaryShownNote(params.summary).trim(),
+              ].filter(Boolean).join("\n"),
+            }],
+            meta: { success: true, state: "pr_updated", outcomeNotified: true },
+          } satisfies AgentPrExecuteResult;
         } else {
           // No new commits
           const owedCycle = owedCompletionCycle(sm, target.generation);

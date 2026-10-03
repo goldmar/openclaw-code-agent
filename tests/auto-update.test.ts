@@ -446,7 +446,8 @@ describe("AutoUpdateService", () => {
     assert.deepEqual(harness.commands, []);
 
     const updateText = await harness.service.installConfirmed("4.6.1", { route: ROUTE });
-    assert.match(updateText, /Restart confirmation was sent/);
+    // The restart prompt is the one answer: no extra reply text for the button.
+    assert.equal(updateText, "");
     assert.deepEqual(harness.commands, [
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
       ["openclaw", "plugins", "install", "openclaw-code-agent@4.6.1", "--force"],
@@ -477,7 +478,9 @@ describe("AutoUpdateService", () => {
     // confirmation must still install the version that the user saw.
     const updateText = await harness.service.installConfirmed("4.6.1", { route: ROUTE });
 
-    assert.match(updateText, /installation was verified/);
+    // Verified, and answered by the restart prompt (no extra reply text).
+    assert.equal(updateText, "");
+    assert.match(harness.sends.at(-1)?.text ?? "", /^⬆️ Code Agent 4\.6\.1 is installed\. Restart the Gateway/);
     assert.deepEqual(harness.commands, [
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
       ["openclaw", "plugins", "install", "openclaw-code-agent@4.6.1", "--force"],
@@ -566,7 +569,7 @@ describe("AutoUpdateService", () => {
 
     const updateText = await harness.service.installConfirmed("latest", { route: ROUTE });
 
-    assert.match(updateText, /stable OpenClaw Code Agent version/);
+    assert.match(updateText, /stable Code Agent version/);
     assert.deepEqual(harness.commands, []);
   });
 

@@ -26,7 +26,8 @@ export function registerAgentKillCommand(api: CommandApi): void {
       const ref = ctx.args?.trim();
       if (!ref) return { text: "Usage: /agent_kill <name-or-id>" };
 
-      return { text: getKillSessionText(sessionManager, ref, "killed") };
+      // The reply is the stop notice itself: one message for the user.
+      return { text: getKillSessionText(sessionManager, ref, "killed", { replyIsStopNotice: true }) };
     },
   });
 }

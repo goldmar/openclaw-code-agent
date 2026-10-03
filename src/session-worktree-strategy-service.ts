@@ -6,7 +6,7 @@ import type { RepoPolicyResolution } from "./repo-policy";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PRStatus } from "./worktree-pr";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
-import { SessionWorktreeMessageService } from "./session-worktree-message-service";
+import { NO_CHANGES_AFTER_RESOLUTION, SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { SessionWorktreeActionService } from "./session-worktree-action-service";
 import {
@@ -68,15 +68,17 @@ function buildWorktreeCycleKey(session: Pick<Session, "startedAt" | "worktreeBra
 /**
  * The first user-visible line of a completed session's terminal cycle when it
  * needs attention: `⚠️ [name] Completed — <problem>` with the completion
- * footer. Later follow-ups of the same cycle are plain `⚠️ [name] …` lines.
+ * footer, and the detail on the following lines. On the retry after this
+ * cycle's conflict resolver (`retry`) the cycle already has its `Completed —`
+ * line, so the same problem is a plain `⚠️ [name] <Problem>` follow-up.
  */
-function completedAttention(session: Session, problem: string): string {
-  return appendSessionStatsSuffix(`⚠️ [${session.name}] Completed — ${problem}`, sessionStats(session));
-}
-
-/** `Repo policy …` -> `repo policy …`, to continue a `Completed — ` line. */
-function lowerFirst(text: string): string {
-  return text.charAt(0).toLowerCase() + text.slice(1);
+function completedAttention(session: Session, problem: string, retry = false, detail: Array<string | undefined> = []): string {
+  return [
+    retry
+      ? `⚠️ [${session.name}] ${problem.charAt(0).toUpperCase()}${problem.slice(1)}`
+      : appendSessionStatsSuffix(`⚠️ [${session.name}] Completed — ${problem}`, sessionStats(session)),
+    ...detail.filter(Boolean),
+  ].join("\n");
 }
 
 /**
@@ -131,7 +133,8 @@ export class SessionWorktreeStrategyService {
         baseBranch: string;
         prompt: string;
       }) => Promise<SpawnedResolverSession>;
-      runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean; notificationSent: boolean; error?: string }>;
+      /** `retry`: after this cycle's conflict resolver, so a PR outcome is a milestone, not the `✅`. */
+      runAutoPr: (session: Session, baseBranch: string, retry?: boolean) => Promise<{ success: boolean; notificationSent: boolean; error?: string }>;
       /**
        * Execution status of the session that currently owns this OCA id (the
        * live session first, then its stored row). A merge can wait in the
@@ -271,7 +274,16 @@ export class SessionWorktreeStrategyService {
     });
   }
 
-  async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
+  /**
+   * `retryAfterConflict`: the run after this terminal cycle's conflict resolver
+   * finished. The cycle already has its `⚠️ … Completed — merge conflict` line,
+   * so nothing here says `Completed —` again and no `✅` is deferred.
+   */
+  async handleWorktreeStrategy(
+    session: Session,
+    options: { retryAfterConflict?: boolean } = {},
+  ): Promise<WorktreeStrategyResult> {
+    const retry = options.retryAfterConflict === true;
     const action = await this.actions.plan(session);
 
     if (action.kind === "skip") {
@@ -289,7 +301,7 @@ export class SessionWorktreeStrategyService {
           session.worktreeBranch ?? "unknown",
           session.worktreePath ?? "unknown",
         ].join(":"),
-        userMessage: completedAttention(session, action.problem),
+        userMessage: completedAttention(session, action.problem, retry, action.detail),
       });
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -300,6 +312,8 @@ export class SessionWorktreeStrategyService {
         action.worktreePath,
         action.branchName,
         action.baseBranch,
+        action.noCommits,
+        retry,
       );
     }
 
@@ -309,21 +323,29 @@ export class SessionWorktreeStrategyService {
         action.repoDir,
         action.worktreePath,
         action.branchName,
+        retry,
       );
     }
 
-    if (action.kind === "merged") {
+    if (action.kind === "merged" || action.kind === "released") {
       const removed = await removeWorktree(action.repoDir, action.worktreePath);
       await deleteBranch(action.repoDir, action.branchName);
-      this.markMerged(session);
-      return { notificationSent: false, worktreeRemoved: removed };
-    }
-
-    if (action.kind === "released") {
-      const removed = await removeWorktree(action.repoDir, action.worktreePath);
-      await deleteBranch(action.repoDir, action.branchName);
-      this.markReleased(session, action.reasons);
-      return { notificationSent: false, worktreeRemoved: removed };
+      if (action.kind === "merged") this.markMerged(session);
+      else this.markReleased(session, action.reasons);
+      if (!retry) return { notificationSent: false, worktreeRemoved: removed };
+      // The user was told the merge "will retry automatically": report how it ended.
+      this.deps.dispatchSessionNotification(session, {
+        label: `worktree-retry-${action.kind}`,
+        idempotencyKey: `worktree-retry-${action.kind}:${session.id}:${action.branchName}:${buildWorktreeCycleKey(session)}`,
+        userMessage: appendSessionStatsSuffix(
+          action.kind === "merged"
+            ? formatWorktreeOutcomeLine({ kind: "merge", sessionName: session.name, branch: action.branchName, base: action.baseBranch })
+            : `ℹ️ [${session.name}] ${NO_CHANGES_AFTER_RESOLUTION}`,
+          sessionStats(session),
+        ),
+        notifyUser: "always",
+      });
+      return { notificationSent: true, worktreeRemoved: removed };
     }
 
     // Hook or worktree-setup changes run code on later git operations: never
@@ -334,7 +356,7 @@ export class SessionWorktreeStrategyService {
       if (action.strategy === "delegate" && !action.policyBlocked) {
         return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning);
       }
-      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning, retry);
     }
 
     if (action.policyBlocked) {
@@ -346,13 +368,15 @@ export class SessionWorktreeStrategyService {
           action.branchName,
           action.baseBranch,
           { merge: false, pr: true },
+          retry,
         );
       }
       this.markPendingDecision(session, { notes: action.policyReason ? [action.policyReason] : undefined });
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-policy-blocked",
         idempotencyKey: `worktree-policy-blocked:${session.id}:${action.branchName}:${action.baseBranch}:${buildWorktreeCycleKey(session)}`,
-        userMessage: completedAttention(session, lowerFirst(action.policyReason ?? "Repo policy blocked automatic follow-through.")),
+        // The reason keeps its own wording on the second line (no case change).
+        userMessage: completedAttention(session, "blocked by repo policy", retry, [action.policyReason ?? "Repo policy blocked automatic follow-through."]),
         buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, action.allowedActions, { allowDelegate: true }),
       });
       return { notificationSent: true, worktreeRemoved: false };
@@ -369,9 +393,10 @@ export class SessionWorktreeStrategyService {
           action.branchName,
           action.baseBranch,
           action.allowedActions,
+          retry,
         );
       }
-      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, undefined, retry);
     }
     if (action.strategy === "delegate") {
       return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
@@ -386,6 +411,7 @@ export class SessionWorktreeStrategyService {
         action.diffSummary,
         action.sessionRef,
         action.allowedActions,
+        retry,
       );
     }
     if (action.strategy === "auto-pr") {
@@ -396,6 +422,7 @@ export class SessionWorktreeStrategyService {
         action.branchName,
         action.baseBranch,
         action.allowedActions,
+        retry,
       );
     }
     return { notificationSent: false, worktreeRemoved: false };
@@ -406,6 +433,7 @@ export class SessionWorktreeStrategyService {
     repoDir: string,
     worktreePath: string,
     branchName: string,
+    retry = false,
   ): Promise<WorktreeStrategyResult> {
     if (await this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)) {
       const updatedAt = new Date().toISOString();
@@ -434,6 +462,7 @@ export class SessionWorktreeStrategyService {
         originThreadLine: this.deps.originThreadLine(session),
         preservedSummary: "existing PR worktree preserved until merge",
         prUrl: session.worktreePrUrl,
+        retry,
       }));
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -464,6 +493,7 @@ export class SessionWorktreeStrategyService {
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
         remoteOutcome,
+        retry,
       }));
     } else {
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
@@ -474,6 +504,7 @@ export class SessionWorktreeStrategyService {
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
         remoteOutcome,
+        retry,
       }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
@@ -545,6 +576,7 @@ export class SessionWorktreeStrategyService {
     allowedActions: AllowedWorktreeActions,
     policyReason?: string,
     hookWarning?: string,
+    retry = false,
   ): Promise<WorktreeStrategyResult> {
     const summary = await buildWorktreeDecisionWorkSummary({
       sessionName: session.name,
@@ -566,9 +598,11 @@ export class SessionWorktreeStrategyService {
     }));
     this.markPendingDecision(session);
     // This prompt replaces the completion notice, whatever strategy led here
-    // (ask, or auto-merge / auto-pr / delegate with a hook warning): the merge
-    // or PR that resolves the decision sends the session's `✅` once.
-    this.updatePersistedSessionFor(session, { deferredCompletionCycle: session.startedAt });
+    // (ask; auto-merge or auto-pr with a hook warning; delegate blocked by repo
+    // policy with a hook warning): the merge or PR that resolves the decision
+    // sends the session's `✅` once. Not on the retry after a conflict resolver:
+    // that cycle already has its `⚠️ … Completed — merge conflict` line.
+    if (!retry) this.updatePersistedSessionFor(session, { deferredCompletionCycle: session.startedAt });
     return { notificationSent: true, worktreeRemoved: false };
   }
 
@@ -614,6 +648,8 @@ export class SessionWorktreeStrategyService {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
+    noCommits = false,
+    retry = false,
   ): Promise<WorktreeStrategyResult> {
     this.markPendingDecision(session, {
       notes: ["dirty_uncommitted_completion"],
@@ -625,7 +661,11 @@ export class SessionWorktreeStrategyService {
       label: "worktree-dirty-uncommitted",
       idempotencyKey: `worktree-dirty-uncommitted:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
-        completedAttention(session, `uncommitted changes and no commits on \`${branchName}\`, so there is nothing to merge yet.`),
+        completedAttention(session, `uncommitted changes on \`${branchName}\``, retry, [
+          noCommits
+            ? "The branch has no commits, so there is nothing to merge yet."
+            : "Commit or discard them before the branch is merged.",
+        ]),
         `Worktree: ${worktreePath}`,
         ...(dirtyPreview.length > 0 ? [``, ...dirtyPreview, ...moreLine] : []),
         ``,
@@ -635,7 +675,7 @@ export class SessionWorktreeStrategyService {
       buttons: this.deps.makeDirtyWorktreeButtons?.(session.id),
       // The buttons could not be shown: the orchestrator asks the user instead.
       wakeMessageOnNotifyFailed: [
-        `[${session.name}] Finished with uncommitted changes and no commits on \`${branchName}\`; the Commit changes / Discard buttons could not be shown. ID: ${session.id}`,
+        `[${session.name}] Finished with uncommitted changes${noCommits ? " and no commits" : ""} on \`${branchName}\`; the Commit changes / Discard buttons could not be shown. ID: ${session.id}`,
         ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
         `Ask the user whether to commit the changes (agent_respond(session='${session.id}', message='Commit the task's real changes with a clear message.', userInitiated=true)) or discard them (agent_worktree_cleanup(session='${session.name}', dismiss_session=true)).`,
       ].join("\n"),
@@ -651,11 +691,10 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     diffSummary: DiffSummary,
     mergeResult: Awaited<ReturnType<typeof mergeBranch>>,
+    // A merge retried after this cycle's conflict follows its
+    // `⚠️ … Completed — merge conflict` line, so it is a milestone.
+    retriedAfterConflict = false,
   ): Promise<boolean> {
-    // Read before the merged patch: a merge retried after this cycle's conflict
-    // follows its `⚠️ … Completed — merge conflict` line, so it is a milestone.
-    const retriedAfterConflict = session.worktreeState === "merge_conflict_resolving"
-      || session.worktreeLifecycle?.state === "merge_conflict_resolving";
     const removed = !worktreeExists(worktreePath)
       || await removeWorktree(repoDir, worktreePath);
     if (removed) {
@@ -785,7 +824,9 @@ export class SessionWorktreeStrategyService {
         label: "worktree-merge-conflict-resolving",
         idempotencyKey: `worktree-merge-conflict-resolving:${session.id}:${branchName}:${resolverSession.id}`,
         userMessage: [
-          completedAttention(session, `merge conflict; resolver session ${resolverSession.name} started and will retry automatically if it succeeds.`),
+          completedAttention(session, "merge conflict", false, [
+            `Resolver session ${resolverSession.name} started and will retry automatically if it succeeds.`,
+          ]),
           ...warningLines.map((line) => `⚠️ ${line}`),
         ].join("\n"),
       });
@@ -797,7 +838,7 @@ export class SessionWorktreeStrategyService {
         label: "worktree-merge-conflict-spawn-failed",
         idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
         userMessage: [
-          completedAttention(session, `merge conflict, and the resolver failed to start: ${err instanceof Error ? err.message : String(err)}`),
+          completedAttention(session, "merge conflict; the resolver failed to start", false, [err instanceof Error ? err.message : String(err)]),
           ...warningLines.map((line) => `⚠️ ${line}`),
         ].join("\n"),
         buttons: await this.getPolicyAwareWorktreeDecisionButtons(
@@ -848,6 +889,7 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
+    retry = false,
   ): Promise<WorktreeStrategyResult> {
     // Nothing is sent on these paths, so the caller's terminal notice must still fire.
     if (this.deps.isAlreadyMerged(sessionRef)) return { notificationSent: false, worktreeRemoved: false };
@@ -876,6 +918,7 @@ export class SessionWorktreeStrategyService {
             baseBranch,
             diffSummary,
             mergeResult,
+            retry,
           );
           return;
         }
@@ -894,20 +937,18 @@ export class SessionWorktreeStrategyService {
           return;
         }
 
-        const problem = mergeResult.dirtyError
-          ? `merge blocked: ${mergeResult.error}`
-          : `merge failed: ${mergeResult.error ?? "unknown error"}`;
-        const retryFailedAfterConflictResolution =
-          session.worktreeState === "merge_conflict_resolving"
-          || session.worktreeLifecycle?.state === "merge_conflict_resolving";
-        if (retryFailedAfterConflictResolution) {
-          // A follow-up of the cycle that already said `Completed — merge conflict`.
-          const retryMsg = appendMergeWarnings(`⚠️ [${session.name}] M${problem.slice(1)}`, mergeResult);
-          await this.handleAutoMergeRetryFailure(session, branchName, worktreePath, retryMsg, allowedActions);
+        // The session completed; its merge needs attention (not a failed session:
+        // no ❌). After a conflict resolver it is a follow-up of that cycle.
+        const errorMsg = appendMergeWarnings(completedAttention(
+          session,
+          mergeResult.dirtyError ? "merge blocked" : "merge failed",
+          retry,
+          [mergeResult.error ?? "unknown error"],
+        ), mergeResult);
+        if (retry) {
+          await this.handleAutoMergeRetryFailure(session, branchName, worktreePath, errorMsg, allowedActions);
           return;
         }
-        // The session completed; its merge needs attention (not a failed session: no ❌).
-        const errorMsg = appendMergeWarnings(completedAttention(session, problem), mergeResult);
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-error",
           idempotencyKey: `worktree-merge-error:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
@@ -932,6 +973,7 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
+    retry = false,
   ): Promise<WorktreeStrategyResult> {
     const representedRelease = await this.releaseIfRepresentedByTargetPrBranch(session, repoDir, worktreePath, branchName, baseBranch);
     if (representedRelease) return representedRelease;
@@ -940,15 +982,19 @@ export class SessionWorktreeStrategyService {
       lifecycle: "terminal",
       worktreeState: "pr_in_progress",
     });
-    const result = await this.deps.runAutoPr(session, baseBranch);
+    const result = await this.deps.runAutoPr(session, baseBranch, retry);
     if (!result.success) {
       const releasedAfterFailure = await this.releaseIfRepresentedByTargetPrBranch(session, repoDir, worktreePath, branchName, baseBranch);
       if (releasedAfterFailure) return releasedAfterFailure;
       this.markPendingDecision(session);
+      const reason = result.error?.replace(/[.\s]+$/u, "");
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-auto-pr-failed",
         idempotencyKey: `worktree-auto-pr-failed:${session.id}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
-        userMessage: completedAttention(session, `auto-PR failed${result.error ? `: ${result.error.replace(/[.\s]+$/u, "")}` : ""}. The worktree is preserved for an explicit merge or PR decision.`),
+        // A reason that ends in a URL keeps it clean: no period, next sentence on its own line.
+        userMessage: completedAttention(session, "auto-PR failed", retry, [
+          `${reason ? `Reason: ${reason}${/https?:\/\/\S+$/u.test(reason) ? "\n" : ". "}` : ""}The worktree is kept; choose below.`,
+        ]),
         buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
       });
     }

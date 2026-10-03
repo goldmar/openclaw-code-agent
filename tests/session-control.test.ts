@@ -7,7 +7,7 @@ describe("session-control app layer", () => {
   it("returns not found text for unknown session", () => {
     const sm: any = { resolve: (): undefined => undefined, getPersistedSession: (): undefined => undefined };
     const text = getKillSessionText(sm, "missing");
-    assert.equal(text, 'Error: Session "missing" not found.');
+    assert.equal(text, '❌ Session "missing" not found.');
   });
 
   it("dismisses recovered persisted-only sessions instead of reporting not found", () => {
@@ -37,8 +37,7 @@ describe("session-control app layer", () => {
     assert.equal(patch?.runtimeState, "stopped");
     assert.equal(patch?.resumable, false);
     assert.equal(patch?.killReason, "user");
-    assert.match(text, /dismissed/);
-    assert.match(text, /No live process was running/);
+    assert.equal(text, "⛔ [recovered] Stopped (it was not running).");
   });
 
   it("marks recovered persisted-only sessions completed when requested", () => {
@@ -61,7 +60,7 @@ describe("session-control app layer", () => {
 
     assert.equal(patch?.status, "completed");
     assert.equal(patch?.killReason, "done");
-    assert.match(text, /marked as completed/);
+    assert.equal(text, "ℹ️ [recovered] Marked as completed (it was not running).");
   });
 
   it("marks session completed when requested", () => {
@@ -75,7 +74,7 @@ describe("session-control app layer", () => {
     const sm: any = { resolve: () => session };
     const text = getKillSessionText(sm, "s", "completed");
     assert.equal(completed, true);
-    assert.match(text, /marked as completed/);
+    assert.equal(text, "ℹ️ [s] Marked as completed; the user gets the ✅ Completed notice.");
   });
 
   it("kills session via SessionManager when reason is killed", () => {
@@ -88,5 +87,16 @@ describe("session-control app layer", () => {
     const text = getKillSessionText(sm, "s", "killed");
     assert.equal(killedId, "1");
     assert.match(text, /^⛔ \[.+\] Stopped\.$/);
+    assert.equal("stopNoticeReplaced" in session, false, "the tool keeps the lifecycle notice");
+  });
+
+  it("answers /agent_kill with the one stop notice and suppresses the lifecycle copy", () => {
+    const session: Record<string, unknown> = { name: "s", id: "1", status: "running", costUsd: 0.25, duration: 61_000 };
+    const sm: any = {
+      resolve: () => session,
+      kill: () => { assert.equal(session.stopNoticeReplaced, true, "set before the kill emits the terminal event"); },
+    };
+    const text = getKillSessionText(sm, "s", "killed", { replyIsStopNotice: true });
+    assert.equal(text, "⛔ [s] Stopped by user | $0.25 | 1m1s");
   });
 });

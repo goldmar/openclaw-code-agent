@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
-import { detectDefaultBranch, getDiffSummary } from "./worktree";
+import { detectDefaultBranch, getCommitsAheadCount, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { RepoIntegrationPolicy } from "./types";
@@ -21,13 +21,15 @@ const RESOLVED_WORKTREE_STATES = new Set([
 
 export type PlannedWorktreeAction =
   | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean } }
-  /** `problem` completes `⚠️ [name] Completed — `. */
-  | { kind: "notify"; label: string; problem: string }
+  /** `problem` completes `⚠️ [name] Completed — `; `detail` lines follow it. */
+  | { kind: "notify"; label: string; problem: string; detail: string[] }
   | {
       kind: "dirty-uncommitted";
       worktreePath: string;
       branchName: string;
       baseBranch: string;
+      /** True when the branch has no commits of its own (only then is there "nothing to merge"). */
+      noCommits: boolean;
     }
   | {
       kind: "no-change";
@@ -40,12 +42,14 @@ export type PlannedWorktreeAction =
       repoDir: string;
       worktreePath: string;
       branchName: string;
+      baseBranch: string;
     }
   | {
       kind: "released";
       repoDir: string;
       worktreePath: string;
       branchName: string;
+      baseBranch: string;
       reasons: string[];
     }
   | {
@@ -123,14 +127,16 @@ export class SessionWorktreeActionService {
       return {
         kind: "notify",
         label: "worktree-missing-repo-dir",
-        problem: `cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
+        problem: "original repository not found",
+        detail: [`Worktree: ${worktreePath}`, "Manual inspection is required."],
       };
     }
     if (!branchName) {
       return {
         kind: "notify",
         label: "worktree-no-branch-name",
-        problem: `cannot determine the branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
+        problem: "branch name unknown",
+        detail: [`Worktree: ${worktreePath}`, "The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed."],
       };
     }
 
@@ -151,6 +157,7 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
+        baseBranch,
       };
     }
     if (completionState === "released") {
@@ -159,6 +166,7 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
+        baseBranch,
         reasons: ["merge_noop_content_already_on_base"],
       };
     }
@@ -166,7 +174,11 @@ export class SessionWorktreeActionService {
       return {
         kind: "notify",
         label: "worktree-no-commits-ahead",
-        problem: `${strategy === "auto-merge" ? "nothing to auto-merge: " : ""}branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, but \`${baseBranch}\` has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to \`${baseBranch}\` instead of the worktree branch. Worktree: ${worktreePath}`,
+        problem: `no commits on \`${branchName}\`, but \`${baseBranch}\` moved`,
+        detail: [
+          `Commits likely landed outside the worktree branch. Check that they were not made directly on \`${baseBranch}\`.`,
+          `Worktree: ${worktreePath}`,
+        ],
       };
     }
     if (completionState === "dirty-uncommitted") {
@@ -175,6 +187,7 @@ export class SessionWorktreeActionService {
         worktreePath,
         branchName,
         baseBranch,
+        noCommits: (await getCommitsAheadCount(repoDir, branchName, baseBranch)) === 0,
       };
     }
 

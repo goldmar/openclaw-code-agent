@@ -463,17 +463,24 @@ describe("agent_pr execute(): existing open PRs", () => {
     assert.equal(f.host.llmCalls.length, 0);
   });
 
-  it("reports an open PR as current when a comment cannot be posted", async () => {
+  it("records a pushed open PR as updated when only the comment cannot be posted", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     const seeded = f.gh.seedPr({ headRefName: f.branch, title: "Human title", body: "Written by a human." });
     f.gh.updateState((state) => { state.failures.comment = true; });
 
     const result = await f.run();
 
-    assert.deepEqual(result.meta, { success: true, state: "pr_open" });
-    assert.match(textOf(result), new RegExp(`⚠️ Pushed to ${seeded.url} but failed to add comment\\.`));
-    assert.equal(f.outcomes.length, 0);
-    assert.equal(f.persisted()?.worktreePrUrl, undefined, "a failed update does not claim the PR");
+    // The push succeeded and the PR exists: state, buttons and the outcome line agree.
+    assert.deepEqual(result.meta, { success: true, state: "pr_updated", outcomeNotified: true });
+    assert.equal(f.outcomes.length, 1);
+    const [outcomeLine, commentLine, ...rest] = (f.outcomes[0]?.line ?? "").split("\n");
+    assert.ok(outcomeLine?.startsWith(`ℹ️ [pr-flow] PR updated: ${seeded.url}`), outcomeLine);
+    assert.equal(commentLine, "⚠️ The PR comment could not be added.");
+    assert.deepEqual(rest, []);
+    assert.deepEqual(textOf(result).split("\n").slice(0, 2), [outcomeLine, commentLine]);
+    assert.doesNotMatch(textOf(result), /Added comment/);
+    assert.equal(f.persisted()?.worktreePrUrl, seeded.url, "the pushed PR is recorded as open");
+    assert.equal(f.persisted()?.worktreeLifecycle?.state, "pr_open");
   });
 
   it("reports an open PR without new commits as up to date", async () => {
@@ -966,7 +973,7 @@ describe("worktree outcome completion", () => {
   });
 
   for (const state of ["up-to-date", "merged", "comment-failed"] as const) {
-    it(`preserves terminal fallback when managed PR handling succeeds without a notice: ${state}`, async () => {
+    it(`sends one completion line when managed PR handling succeeds (${state}: ${state === "comment-failed" ? "the PR outcome" : "the terminal fallback"})`, async () => {
       const f = await setup({ commit: state !== "up-to-date" });
       f.gh.seedPr({ headRefName: f.branch, title: "Human title", body: "Human body", state: state === "merged" ? "MERGED" : "OPEN" });
       if (state === "comment-failed") f.gh.updateState((next) => { next.failures.comment = true; });
@@ -977,6 +984,18 @@ describe("worktree outcome completion", () => {
         worktreeStrategy: "auto-pr", getOutput: () => ["Finished."],
       });
       const result = await f.sm["worktreeStrategy"]["deps"].runAutoPr(session, "main");
+      if (state === "comment-failed") {
+        // The push landed and the PR exists: the PR outcome is the one completion
+        // line, with the failed comment under it, and no generic `✅` follows.
+        assert.deepEqual(result, { success: true, notificationSent: true });
+        assert.equal(f.outcomes.length, 1);
+        assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR updated: [^\n]+\n⚠️ The PR comment could not be added\.$/);
+        f.sm["worktreeStrategy"]["deps"].runAutoPr = async () => result;
+        f.sm["worktrees"].getCompletionState = async () => "has-commits";
+        await f.sm["onSessionTerminal"](session);
+        assert.equal(f.dispatches.length, 0);
+        return;
+      }
       assert.deepEqual(result, { success: true, notificationSent: false });
       assert.equal(f.outcomes.length, 0);
       // Reuse the actual result to exercise terminal strategy suppression/fallback.

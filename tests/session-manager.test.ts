@@ -235,7 +235,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
         name: "paper-harness-preopen-hardening",
         sessionId: "bdTo6WBy",
       } as any,
-      "🔄 [paper-harness-preopen-hardening] Goal task resumed",
+      "▶️ [paper-harness-preopen-hardening] Goal task resumed",
       "goal-task-progress",
     );
 
@@ -1599,7 +1599,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       buildRoutingProxy: (value: unknown) => value,
     } as any);
     const later = decisions.snoozeWorktreeDecision("backoff", { notifyUser: false });
-    assert.match(later, /^⏭️ Kept for later: `agent\/backoff` \(session: backoff\)\. No more reminders; \/agent_status lists it\.$/);
+    assert.equal(later, "⏭️ [backoff] Kept for later: `agent/backoff`. No more reminders; /agent_status lists it.");
     assert.doesNotMatch(later, /24h/);
     assert.equal(await reminders.getNextReminderAt(pending), undefined);
   });
@@ -3871,6 +3871,35 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "completed");
     assert.doesNotMatch(request.userMessage, /⏸️/);
     assert.equal(request.userMessage, "✅ [terminal-race] Completed | $0.00 | 5s");
+  });
+
+  it("sends one ✅ when the ⏸️ line could not be delivered and the session is completed later", async () => {
+    const s = fakeSession({
+      id: "s-idle-then-done",
+      name: "idle-then-done",
+      status: "running",
+      duration: 5_000,
+      result: { session_id: "thread-idle", num_turns: 1, duration_ms: 5_000 },
+      getOutput: () => ["Turn finished."],
+    });
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1].label, "turn-complete");
+    // A failed delivery of the idle line must not send `✅ Completed` for a
+    // session that is still running: the orchestrator wake is unconditional.
+    assert.equal(calls[0][1].onUserNotifyFailed, undefined);
+    assert.equal(typeof calls[0][1].wakeMessage, "string");
+
+    // agent_kill(reason='completed') closes the idle session.
+    Object.assign(s, { status: "completed", killReason: "done", completedAt: Date.now() });
+    await (sm as any).onSessionTerminal(s);
+
+    const completed = calls.filter(([, request]: [unknown, { label: string }]) => request.label === "completed");
+    assert.equal(completed.length, 1);
+    assert.match(completed[0][1].userMessage, /^✅ \[idle-then-done\] Completed/);
+    assert.equal(calls.length, 2);
   });
 });
 

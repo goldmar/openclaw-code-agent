@@ -40,8 +40,10 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
       let retriedSession: unknown;
       (sm as any).persistSession = () => {};
       (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
-      (sm as any).worktreeStrategy.handleWorktreeStrategy = async (session: unknown) => {
+      (sm as any).worktreeStrategy.handleWorktreeStrategy = async (session: unknown, options?: unknown) => {
         retriedSession = session;
+        // The retry belongs to the cycle that already said `Completed — merge conflict`.
+        assert.deepEqual(options, { retryAfterConflict: true });
         assert.equal((session as any).autoMergeResolverSessionId, undefined);
         return { notificationSent: true, worktreeRemoved: false };
       };

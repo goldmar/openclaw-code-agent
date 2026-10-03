@@ -19,6 +19,9 @@ type DiffSummary = {
 
 type RemoteWorktreeOutcome = "pr-updated" | "pr-opened";
 
+/** The retried merge found nothing left to land (after `… Completed — merge conflict`). */
+export const NO_CHANGES_AFTER_RESOLUTION = "No changes left to merge after conflict resolution";
+
 /**
  * Builds worktree-related notification payloads so strategy decisions stay separate
  * from message formatting.
@@ -53,6 +56,8 @@ export class SessionWorktreeMessageService {
     /** The open PR whose worktree is preserved (with `preservedSummary`). */
     prUrl?: string;
     remoteOutcome?: RemoteWorktreeOutcome;
+    /** After this cycle's conflict resolver: the cycle already has its `Completed —` line. */
+    retry?: boolean;
   }): SessionNotificationRequest {
     const {
       session,
@@ -64,6 +69,7 @@ export class SessionWorktreeMessageService {
       preservedSummary,
       prUrl,
       remoteOutcome,
+      retry,
     } = args;
     const cleanupState = preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed";
     const terminalCycleKey = [
@@ -99,10 +105,10 @@ export class SessionWorktreeMessageService {
       // This is the completed session's one `✅`, also after an earlier PR
       // outcome (`remoteOutcome`): that was a milestone of an earlier turn.
       userMessage: preservedSummary
-        ? `✅ [${session.name}] Completed — no new changes; PR already open${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
+        ? `${retry ? "ℹ️" : "✅"} [${session.name}] ${retry ? "" : "Completed — "}PR is up to date${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
         : cleanupSucceeded
-        ? `✅ [${session.name}] Completed — no changes to merge${statSuffix}`
-        : `⚠️ [${session.name}] Completed — no changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
+        ? `${retry ? `ℹ️ [${session.name}] ${NO_CHANGES_AFTER_RESOLUTION}` : `✅ [${session.name}] Completed — no changes to merge`}${statSuffix}`
+        : `⚠️ [${session.name}] ${retry ? `${NO_CHANGES_AFTER_RESOLUTION}; worktree cleanup failed` : `Completed — no changes to merge; worktree cleanup failed${statSuffix}`}\nWorktree still exists at ${worktreePath}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,

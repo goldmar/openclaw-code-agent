@@ -83,9 +83,11 @@ describe("failed worktree actions", () => {
       const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
 
       const failed = await s.click(merge);
-      assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+      // One message: the failure and the still-open decision with fresh buttons.
+      assert.deepEqual(failed.replies, []);
       assert.ok(failed.cleared > 0, "the spent controls are cleared");
       const retry = await s.waitForMessage(/still open/, prompt.index + 1);
+      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: Rebase conflicts — manual resolution required\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
       assert.equal(retry.to, surface.to);
       assert.equal(String(retry.threadId), String(surface.threadId));
       assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
@@ -121,7 +123,7 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     const merge = await s.waitForButton("Merge");
     const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
     const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: Rebase conflicts — manual resolution required\.$/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
     assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
@@ -167,7 +169,7 @@ describe("auto-merge conflicts", () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const turnsBefore = s.backend.turns.length;
     const { repo, session } = await finishConflictingSession(s, "auto-merge");
-    await s.waitForMessage(/Completed — merge conflict; resolver session/);
+    await s.waitForMessage(/Completed — merge conflict[^\n]*\nResolver session [\w-]+ started and will retry automatically/);
     await waitUntil(() => s.backend.turns.length > turnsBefore + 1, "the resolver's first turn");
     const resolver = s.sm.list("all").find((candidate) => candidate.autoMergeParentSessionId === session.id);
     assert.ok(resolver, "a resolver session linked to the parent");
@@ -381,8 +383,11 @@ describe("goal loop", () => {
     assert.equal(s.backend.turns.length, turnsBefore, "nothing runs before the confirmation");
     const run = prompt.buttons.find((button) => button.label === "Run these checks");
     assert.ok(run, "the confirmation prompt has a Run button");
+    const sentBeforeRun = s.messages().length;
     const click = await s.click(run);
-    assert.match(click.replies.join("\n"), /started with the confirmed verifier commands/);
+    // The `🎯 [task] Goal task started` notice is the one answer to the button.
+    assert.deepEqual(click.replies, []);
+    await s.waitForMessage(/^🎯 \[[\w-]+\] Goal task started/, sentBeforeRun);
     await s.backend.waitForTurns(turnsBefore + 1);
     await waitUntil(() => s.gc.listTasks().length === 1, "goal task stored");
     return s.gc.listTasks()[0]!;
@@ -397,7 +402,7 @@ describe("goal loop", () => {
     await waitUntil(() => s.backend.turns.length > turnsBefore, "repair turn");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /The external verifier did not pass/);
     assert.equal(s.gc.getTask(task.id)?.iteration, 1);
-    await s.waitForMessage(/Repair iteration started after verifier failure/);
+    await s.waitForMessage(/^🔁 \[[\w-]+\] Repair started after verifier failure \(iteration 1\/\d+\)/);
 
     writeFileSync(join(workdir, "done.txt"), "done\n");
     await s.backend.endTurn("Created done.txt.");
@@ -424,8 +429,12 @@ describe("goal loop", () => {
     const prompt = await s.waitForMessage(/\$ rm -rf \/tmp\/x/);
     const cancel = prompt.buttons.find((button) => button.label === "Cancel");
     assert.ok(cancel);
+    const sentBeforeCancel = s.messages().length;
     const click = await s.click(cancel);
-    assert.match(click.replies.join("\n"), /cancelled; its verifier commands were not run/);
+    // The `⛔ [task] Goal task stopped` notice with its reason is the one answer.
+    assert.deepEqual(click.replies, []);
+    const stopped = await s.waitForMessage(/^⛔ \[[\w-]+\] Goal task stopped/, sentBeforeCancel);
+    assert.match(stopped.text, /The user did not confirm the verifier commands\./);
     assert.equal(s.gc.listTasks()[0]?.status, "stopped");
     assert.equal(s.backend.turns.length, turnsBefore);
   });

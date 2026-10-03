@@ -5,6 +5,7 @@ import { assertModelAllowedForHarness } from "./harness-models";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
 import { formatHarnessModelLabel } from "./session-display";
+import { formatSessionStatsSuffix } from "./session-notification-stats";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
   getBackendConversationId,
@@ -410,9 +411,9 @@ export class SessionManager {
       getCurrentSessionStatus: (session) => (
         manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
       )?.status,
-      runAutoPr: async (session, baseBranch) => {
+      runAutoPr: async (session, baseBranch, retry) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
-        const result = await makeAgentPrTool(undefined, { terminalCompletion: true }).execute("auto-pr", {
+        const result = await makeAgentPrTool(undefined, { terminalCompletion: !retry }).execute("auto-pr", {
           session: session.id,
           base_branch: baseBranch,
         }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean } };
@@ -420,9 +421,9 @@ export class SessionManager {
         return {
           success,
           notificationSent: result?.meta?.outcomeNotified === true,
-          // The reason shown in `⚠️ [name] Completed — auto-PR failed: …`.
+          // The `Reason: …` line under `⚠️ [name] Completed — auto-PR failed`.
           ...(success ? {} : {
-            error: result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").trim() || undefined,
+            error: result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").replace(/^Failed to /u, "could not ").trim() || undefined,
           }),
         };
       },
@@ -1822,7 +1823,7 @@ export class SessionManager {
    * the older ones stay usable. Resolves true only when the new controls were
    * delivered, so the caller may clear the spent ones.
    */
-  async reofferWorktreeDecision(ref: string): Promise<boolean> {
+  async reofferWorktreeDecision(ref: string, failure?: string): Promise<boolean> {
     const decisionIsOpen = (): boolean => {
       const persisted = this.getPersistedSession(ref);
       if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
@@ -1878,10 +1879,10 @@ export class SessionManager {
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
-      userMessage: [
-        `⚠️ [${name}] The last action did not complete; the decision${branch ? ` for \`${branch}\`` : ""} is still open.`,
-        `Choose again below.`,
-      ].join("\n"),
+      // After a failed button: `❌ [name] Merge failed: <reason>. The decision for `b` is still open.`
+      userMessage: failure
+        ? `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.`
+        : `⚠️ [${name}] The last action did not complete; the decision${branch ? ` for \`${branch}\`` : ""} is still open.\nChoose again below.`,
       notifyUser: "always",
       requireDirectUserNotification: true,
       buttons,
@@ -1905,8 +1906,8 @@ export class SessionManager {
    * Handle worktree merge-back strategy when a session with a worktree terminates.
    * Called from onSessionTerminal BEFORE worktree cleanup.
    */
-  private async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
-    return this.worktreeStrategy.handleWorktreeStrategy(session);
+  private async handleWorktreeStrategy(session: Session, options?: { retryAfterConflict?: boolean }): Promise<WorktreeStrategyResult> {
+    return this.worktreeStrategy.handleWorktreeStrategy(session, options);
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
@@ -1949,7 +1950,8 @@ export class SessionManager {
 
     if (session.status === "completed" && parentSession) {
       this.updatePersistedSession(parentRef, { autoMergeResolverSessionId: undefined });
-      await this.handleWorktreeStrategy(parentSession);
+      // The parent's terminal cycle already said `⚠️ … Completed — merge conflict`.
+      await this.handleWorktreeStrategy(parentSession, { retryAfterConflict: true });
       return;
     }
 
@@ -2121,7 +2123,7 @@ export class SessionManager {
     task: Pick<
       GoalTaskState,
       "id" | "name" | "sessionId" | "sessionName" | "route" | "originChannel" | "originThreadId" | "originSessionKey" | "harness" | "model" | "reasoningEffort"
-    >,
+    > & Partial<Pick<GoalTaskState, "totalCostUsd" | "createdAt" | "updatedAt">>,
     text: string,
     label: string = "goal-task",
   ): void {
@@ -2147,8 +2149,21 @@ export class SessionManager {
     routingProxy.originThreadId = task.originThreadId;
     routingProxy.originSessionKey = task.originSessionKey;
     const requiresGoalSuccessFollowup = label === "goal-task-succeeded";
+    // Terminal goal lines carry the footer: the task's total cost and duration
+    // (else the session's cost); the dispatcher adds harness, model and reasoning.
+    const goalFooter = requiresGoalSuccessFollowup || label === "goal-task-failed" || label === "goal-task-stopped"
+      ? formatSessionStatsSuffix({
+          costUsd: task.totalCostUsd ?? (active ?? saved)?.costUsd,
+          createdAt: task.createdAt,
+          completedAt: task.updatedAt,
+        })
+      : "";
+    const newline = text.indexOf("\n");
+    const userText = goalFooter && !requiresGoalSuccessFollowup
+      ? (newline < 0 ? `${text}${goalFooter}` : `${text.slice(0, newline)}${goalFooter}${text.slice(newline)}`)
+      : text;
     const goalSuccessUserMessage = [
-      `✅ [${task.name}] Completed — goal succeeded`,
+      `✅ [${task.name}] Completed — goal succeeded${goalFooter}`,
       task.sessionId ? `Session: ${task.sessionName ?? task.name} [${task.sessionId}]` : undefined,
     ]
       .filter((line): line is string => Boolean(line))
@@ -2164,7 +2179,7 @@ export class SessionManager {
     this.dispatchSessionNotification(routingProxy, {
       label,
       idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
-      userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : text,
+      userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : userText,
       notifyUser: "always",
       completionSummary: requiresGoalSuccessFollowup
         ? {

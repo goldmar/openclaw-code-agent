@@ -167,8 +167,12 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
 
 /**
  * Defined (the cycle key) when this terminal cycle's completion notice was deferred to a `🔀`
- * decision prompt (any strategy that ended in that prompt) and the session is
- * still completed, so the outcome that resolves the decision is its `✅`.
+ * decision prompt and the session is still completed, so the outcome that
+ * resolves the decision is its `✅`. The prompt defers it under `ask`, under
+ * `auto-merge` / `auto-pr` with hook or worktree-setup changes, and under a
+ * policy-blocked `delegate` with such changes; an unblocked `delegate` sends
+ * its wake and the generic `✅ Completed` instead, and the retry after a
+ * conflict resolver defers nothing.
  * Read it immediately before the patch that resolves the decision and clear
  * `deferredCompletionCycle` in that patch: the `✅` is then sent exactly once,
  * a failed attempt leaves it owed, and it survives a Gateway restart.

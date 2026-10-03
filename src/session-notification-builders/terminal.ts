@@ -233,7 +233,7 @@ export function buildFailedPayload(args: {
   return {
     userMessage: [
       `❌ [${session.name}] Failed${formatSessionStatsSuffix(session)}`,
-      `   ⚠️ ${errorSummary}`,
+      errorSummary,
     ].join("\n"),
     wakeMessage: [
       `[${session.name}] Failed. ID: ${session.id}`,
