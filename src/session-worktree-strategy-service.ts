@@ -652,6 +652,10 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     mergeResult: Awaited<ReturnType<typeof mergeBranch>>,
   ): Promise<boolean> {
+    // Read before the merged patch: a merge retried after this cycle's conflict
+    // follows its `⚠️ … Completed — merge conflict` line, so it is a milestone.
+    const retriedAfterConflict = session.worktreeState === "merge_conflict_resolving"
+      || session.worktreeLifecycle?.state === "merge_conflict_resolving";
     const removed = !worktreeExists(worktreePath)
       || await removeWorktree(repoDir, worktreePath);
     if (removed) {
@@ -666,9 +670,7 @@ export class SessionWorktreeStrategyService {
       kind: "merge",
       // Read the status now: this merge may have waited in the queue while
       // the session id was resumed, and then it is a milestone, not completion.
-      // A merge retried after a conflict follows the `⚠️ … Completed — merge
-      // conflict` line of this cycle, so it is a milestone as well.
-      sessionCompleted: !session.autoMergeConflictResolutionAttemptCount
+      sessionCompleted: !retriedAfterConflict
         && (this.deps.getCurrentSessionStatus?.(session) ?? session.status) === "completed",
       sessionName: session.name,
       branch: branchName,
