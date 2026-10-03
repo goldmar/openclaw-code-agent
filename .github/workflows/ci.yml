@@ -66,6 +66,10 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
+      - name: Verify target OpenClaw runtime compatibility
+        timeout-minutes: 10
+        run: pnpm verify:openclaw-compat -- --gateway
+
       - name: Measure bundle size
         if: matrix.node-version == env.REPORT_NODE_VERSION
         run: |

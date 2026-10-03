@@ -33,7 +33,15 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 ## Compatibility And Upgrades
 
-The current `openclaw-code-agent` package requires, is built against, and is validated against OpenClaw `2026.9.7`. Package installation therefore requires `2026.9.7` and Node `>=24.16.0 <25 || >=26.1.0`, and the plugin API, Gateway, and peer dependency metadata keep the verified `2026.9.7` compatibility floor (raised from `2026.9.6` in 5.0.1). OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
+The unreleased compatibility update targets the OpenClaw `2026.9.8` package and public SDK. Its installation minimum is `2026.9.8`, while the plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7` (raised from `2026.9.6` in 5.0.1). Node `>=24.16.0 <25 || >=26.1.0` is required. Published OCA 5.1.0 targets `2026.9.7`; this preparation keeps the OCA version unchanged pending a separate release. OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
+
+### OpenClaw 2026.9.8 compatibility preparation
+
+No new plugin configuration migration is required. Keep existing plan approval, worktree strategies, model restrictions, and saved account/chat/topic routes. OpenClaw's `sessions_send` delivery result no longer includes `mode: "announce"`. OCA never read that field: completion wakes already go through `chat.send` and are confirmed by the matching `agent.wait` terminal receipt, so the change needs no OCA update. A queued Start Plan offer, wake admission, or `NO_REPLY` alone is not proof of visible delivery. Cron workflows using private wakes should retain their explicit delivery policy rather than enabling announce delivery to compensate.
+
+Enabling `planOfferTool` registers `agent_send_plan_offer`; it does not grant the tool to an agent. Global, provider, agent, group, sandbox, inherited, and runtime tool restrictions still apply. Enable the delivery channel separately; OCA's Codex harness does not require OpenClaw's bundled Codex plugin to be enabled.
+
+Compatibility preparation does not publish a new OCA version, upgrade OpenClaw, or close release-monitor follow-up events. Those require the later release and deployment evidence.
 
 ### Upgrading from 5.0.0
 
