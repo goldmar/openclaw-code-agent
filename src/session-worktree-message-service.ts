@@ -83,6 +83,9 @@ export class SessionWorktreeMessageService {
       : remoteOutcome === "pr-opened"
       ? "PR opened; no local worktree changes remained to merge"
       : "Session completed with no worktree changes to merge";
+    const completedLead = remoteOutcome
+      ? `ℹ️ [${session.name}] ${completedSummary}`
+      : `✅ [${session.name}] Completed — no worktree changes to merge`;
     const failedSummary = remoteOutcome === "pr-updated"
       ? "PR updated; no local worktree changes remained to merge"
       : remoteOutcome === "pr-opened"
@@ -99,10 +102,13 @@ export class SessionWorktreeMessageService {
         ? "worktree-no-changes-preserved"
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
       idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
+      // Without a remote outcome this line is the session's only completion
+      // notice, so it carries the completion marker. After a PR outcome it is a
+      // follow-up note: that outcome already announced the result.
       userMessage: preservedSummary
-        ? `ℹ️ [${session.name}] ${completedSummary} — ${preservedSummary}${statSuffix}`
+        ? `${completedLead} — ${preservedSummary}${statSuffix}`
         : cleanupSucceeded
-        ? `ℹ️ [${session.name}] ${completedSummary} — worktree cleaned up${statSuffix}`
+        ? `${completedLead} — worktree cleaned up${statSuffix}`
         : `⚠️ [${session.name}] ${failedSummary}, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,

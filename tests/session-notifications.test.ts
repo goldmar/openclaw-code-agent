@@ -635,7 +635,7 @@ describe("SessionNotificationService", () => {
 
     assert.equal(
       request.userMessage,
-      "ℹ️ [no-change-stats] Session completed with no worktree changes to merge — worktree cleaned up | $0.25 | 1m1s | codex | gpt-5.5",
+      "✅ [no-change-stats] Completed — no worktree changes to merge — worktree cleaned up | $0.25 | 1m1s | codex | gpt-5.5",
     );
   });
 

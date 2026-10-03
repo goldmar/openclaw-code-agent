@@ -578,7 +578,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no worktree changes to merge — worktree cleaned up");
+      assert.equal(request.userMessage, "✅ [plan-report] Completed — no worktree changes to merge — worktree cleaned up");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);
@@ -637,7 +637,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no worktree changes to merge — worktree cleaned up");
+      assert.equal(request.userMessage, "✅ [investigation-report] Completed — no worktree changes to merge — worktree cleaned up");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);

@@ -914,7 +914,7 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Plan approved | `👍 [name] Plan approved`, with `Why: <rationale>` on the next line when the orchestrator approved with `approval_rationale` |
 | Resumed | `▶️ [name] Resumed` |
 | Turn completed | `⏸️ [name]` paused after a turn |
-| Completed | `✅ [name] Completed` with cost and duration. Sent for every completed session that has no automatic merge / PR outcome and no `ask` prompt, including `delegate` sessions |
+| Completed | `✅ [name] Completed` with cost and duration. Sent for every completed session that has no automatic merge / PR outcome and no `ask` prompt, including `delegate` sessions. A worktree session that finished without commits gets `✅ [name] Completed — no worktree changes to merge — worktree cleaned up`. A completion that needs attention (uncommitted changes, a blocked or failed automatic merge / PR, failed cleanup) is reported with its `⚠️` / `❌` line instead |
 | Completed with an automatic merge / PR (`auto-merge`, `auto-pr`), or the merge / PR that resolves a completed session's pending `ask` decision | `✅ [name] Completed — Merged: <branch> → <base>`, `✅ [name] Completed — PR opened: <url>` or `✅ [name] Completed — PR updated: <url>` |
 | Manual merge / PR milestone (`agent_merge`, `agent_pr`, buttons) in every other case | `ℹ️ [name] Merged: <branch> → <base>`, `ℹ️ [name] PR opened: <url>` or `ℹ️ [name] PR updated: <url>`, with the orchestrator's `summary` under it when given. Not a completion marker |
 | Worktree discarded | `🗑️ [name] Branch … dismissed and permanently deleted.`; the **Discard** button answers `🗑️ Discarded`. No `✅` |
