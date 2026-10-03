@@ -714,7 +714,12 @@ A merge never switches the user's checkout to another branch. `merge` rebases th
 
 `agent_merge` does not start a conflict resolver: with `strategy: merge`, rebase conflicts are reported with manual resolution steps, and a conflicting `strategy: squash` merge is reported as a merge failure. Only the `auto-merge` worktree strategy starts a conflict-resolver session for rebase conflicts.
 
-Merge outcome lines name the session (`✅ [fix-auth] Merged: agent/fix-auth → main (3 files, +40/-2)`). With `summary`, the summary is shown under that line and the outcome counts as summarized: no follow-up wake is sent and no pending-summary flag is stored. Without it (a **Merge** button press, or an auto-merge), the plugin sends the outcome line and then wakes the orchestrator with `completionWakeSummaryRequired=true`, the outcome facts, and the session's origin route; the orchestrator sends one short factual summary to that route. The persisted `completionWakeSummaryRequired` bit is cleared only after the saved run has a matching terminal source-delivery receipt for a routed wake, or a visible non-empty terminal reply for plain WebChat. `NO_REPLY` alone does not prove delivery. A failed `push=true` is reported as such and always wakes the orchestrator. PR outcomes carry the raw PR URL only in the outcome line; follow-ups refer to the PR by number.
+Merge outcome lines name the session and come in two forms. `✅` always means the session completed; `ℹ️` is a milestone that says nothing about completion.
+
+- `ℹ️ [fix-auth] Merged: agent/fix-auth → main (3 files, +40/-2)`: a manual merge (`agent_merge` or the **Merge** button). The session may still be running, or its completion was already announced. After a `delegate` completion the user already has `✅ [fix-auth] Completed`, so the orchestrator's later merge is `ℹ️`.
+- `✅ [fix-auth] Completed — Merged: agent/fix-auth → main (3 files, +40/-2)`: the merge is the session's completion notice. This is an `auto-merge`, or the merge that resolves the pending `ask` decision of a completed session (button or `agent_merge`): under `ask` the `🔀 [name] Finished on …` prompt is sent at completion without a `✅`, and the action that resolves it carries the marker once. A later outcome for the same session, or one for a session that is running again, is `ℹ️`. **Later** keeps the decision pending and sends no `✅`; **Discard** ends the session with `🗑️`, never `✅`.
+
+Both forms end with the same footer as the `✅ [name] Completed` notice (cost, duration, harness, model, reasoning). With `summary`, the summary is shown under that line and the outcome counts as summarized: no follow-up wake is sent and no pending-summary flag is stored. Without it (a **Merge** button press, or an auto-merge), the plugin sends the outcome line and then wakes the orchestrator with `completionWakeSummaryRequired=true`, the outcome facts, and the session's origin route; the orchestrator sends one short factual summary to that route. The persisted `completionWakeSummaryRequired` bit is cleared only after the saved run has a matching terminal source-delivery receipt for a routed wake, or a visible non-empty terminal reply for plain WebChat. `NO_REPLY` alone does not prove delivery. A failed `push=true` is reported as such and always wakes the orchestrator. PR outcomes carry the raw PR URL only in the outcome line; follow-ups refer to the PR by number.
 
 ### `agent_pr`
 
@@ -735,7 +740,7 @@ The PR path pushes the worktree branch on demand, then handles open, merged, and
 
 When `title` or `body` is omitted, `agent_pr` prefers LLM-generated PR metadata from the host's `api.runtime.llm.complete(...)`. It also reads a bounded, redacted preview of active or persisted coding-session output. If no metadata provider is configured, or if the provider fails or returns invalid/unsafe output, structured `Root cause`, `Fix`/`Changes`, and `Validation` sections from the completed session report provide task-specific metadata; the commit subject supplies the title. If neither source is usable while creating a new PR, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete. Existing generated PR metadata refreshes are non-destructive: unavailable task-specific evidence preserves the current generated PR title/body and reports the refresh failure instead of replacing richer metadata with generic fallback text.
 
-PR opened and PR updated outcomes follow the same rules as merge outcomes: with `summary` the user gets one message; otherwise the outcome line comes first and the orchestrator is woken for one concise summary in the session's origin route.
+PR opened and PR updated outcomes follow the same rules as merge outcomes. A manual PR is `ℹ️ [name] PR opened: <url>` or `ℹ️ [name] PR updated: <url>`; `auto-pr`, and the PR that resolves a completed session's pending `ask` decision, report `✅ [name] Completed — PR opened: <url>` (or `PR updated`). A later update of that PR is `ℹ️`. With `summary` the user gets one message; otherwise the outcome line comes first and the orchestrator is woken for one concise summary in the session's origin route.
 
 ### `agent_worktree_status`
 
@@ -909,19 +914,23 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Plan approved | `👍 [name] Plan approved`, with `Why: <rationale>` on the next line when the orchestrator approved with `approval_rationale` |
 | Resumed | `▶️ [name] Resumed` |
 | Turn completed | `⏸️ [name]` paused after a turn |
-| Completed | `✅ [name] Completed` with cost and duration |
-| Merge / PR outcome | `✅ [name] Merged: <branch> → <base>` or `✅ [name] PR opened: <url>`, with the orchestrator's `summary` under it when given |
+| Completed | `✅ [name] Completed` with cost and duration. Sent for every completed session that has no automatic merge / PR outcome and no `ask` prompt, including `delegate` sessions |
+| Completed with an automatic merge / PR (`auto-merge`, `auto-pr`), or the merge / PR that resolves a completed session's pending `ask` decision | `✅ [name] Completed — Merged: <branch> → <base>`, `✅ [name] Completed — PR opened: <url>` or `✅ [name] Completed — PR updated: <url>` |
+| Manual merge / PR milestone (`agent_merge`, `agent_pr`, buttons) in every other case | `ℹ️ [name] Merged: <branch> → <base>`, `ℹ️ [name] PR opened: <url>` or `ℹ️ [name] PR updated: <url>`, with the orchestrator's `summary` under it when given. Not a completion marker |
+| Worktree discarded | `🗑️ [name] Branch … dismissed and permanently deleted.`; the **Discard** button answers `🗑️ Discarded`. No `✅` |
 | Failed | `❌ [name] Failed` with the error, plus **Resume** (when the session can resume) and **View output** buttons |
 | Uncommitted changes, nothing to merge | `⚠️ [name]` with **Commit changes**, **View output** and **Discard** buttons |
 | Idle timeout | `💤 [name] Suspended` with **Resume** / **View output** buttons |
 | Stopped | `⛔` stopped by user or shutdown |
 | Worktree decision in `ask` | `🔀 [name] Finished on <branch> → <base>` with Merge / Open PR / Later / Discard buttons |
-| Worktree decision in `delegate` | Orchestrator wake only, until the orchestrator escalates |
+| Worktree decision in `delegate` | The user gets `✅ [name] Completed`; the decision goes to the orchestrator as a wake (no buttons until it escalates). Its later merge or PR is an `ℹ️` milestone |
 | Stale worktree decision | `⏰ [name] Branch … still waits for your decision` (3h, then 24h, then a week later, then no more) |
 
 The user's own messages forwarded with `agent_respond` are not echoed back. **View output** buttons stay usable and do not remove the message's other buttons.
 
-`ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.
+`ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal. Under `delegate` the user also gets the `✅ [name] Completed` line at completion; it does not wake the orchestrator a second time. Under `ask` the `🔀` prompt is the completion-time message, and the `✅` comes with the merge or PR that resolves the decision.
+
+`✅` is reserved for completed sessions: failed, stopped, suspended and discarded sessions never get it, and each completion gets it once. Counts are written with their noun in the right number (`1 file`, `2 files`).
 
 ### Orchestrator wakes
 

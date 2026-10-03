@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import { describeHookPathChanges, listHookPathChanges } from "./git-hooks";
 import type { NotificationButton } from "./session-interactions";
-import type { PersistedSessionInfo } from "./types";
+import type { PersistedSessionInfo, SessionStatus } from "./types";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PRStatus } from "./worktree-pr";
@@ -38,12 +38,18 @@ import {
   worktreeExists,
 } from "./worktree";
 import { createLogger } from "./logger";
+import { appendSessionStatsSuffix } from "./session-notification-stats";
 
 const log = createLogger("session-worktree-strategy-service");
 
 export type WorktreeStrategyResult = {
   notificationSent: boolean;
   worktreeRemoved: boolean;
+  /**
+   * The notice went only to the orchestrator (`delegate`): the user still gets
+   * the generic `✅ Completed` line, without a second orchestrator wake.
+   */
+  userCompletionNoticeOwed?: boolean;
 };
 
 type DiffSummary = NonNullable<Awaited<ReturnType<typeof getDiffSummary>>>;
@@ -112,6 +118,13 @@ export class SessionWorktreeStrategyService {
         prompt: string;
       }) => Promise<SpawnedResolverSession>;
       runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean; notificationSent: boolean }>;
+      /**
+       * Execution status of the session that currently owns this OCA id (the
+       * live session first, then its stored row). A merge can wait in the
+       * repository queue while the id is resumed; the captured object then
+       * stays `completed`. Default: the captured session's status.
+       */
+      getCurrentSessionStatus?: (session: Session) => SessionStatus | undefined;
       /** Changed hook / worktree-setup files on the branch (default: `listHookPathChanges`). */
       listHookPathChanges?: (repoDir: string, branchName: string, baseBranch: string) => Awaitable<string[]>;
     },
@@ -347,7 +360,7 @@ export class SessionWorktreeStrategyService {
       return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "auto-merge") {
-      const worktreeRemoved = await this.handleAutoMergeStrategy(
+      return this.handleAutoMergeStrategy(
         session,
         action.repoDir,
         action.worktreePath,
@@ -357,7 +370,6 @@ export class SessionWorktreeStrategyService {
         action.sessionRef,
         action.allowedActions,
       );
-      return { notificationSent: true, worktreeRemoved };
     }
     if (action.strategy === "auto-pr") {
       return this.handleAutoPrStrategy(
@@ -557,7 +569,7 @@ export class SessionWorktreeStrategyService {
       originThreadLine: this.deps.originThreadLine(session),
     }));
     this.markPendingDecision(session);
-    return { notificationSent: true, worktreeRemoved: false };
+    return { notificationSent: true, worktreeRemoved: false, userCompletionNoticeOwed: true };
   }
 
   private async getPolicyAwareWorktreeDecisionButtons(
@@ -626,15 +638,25 @@ export class SessionWorktreeStrategyService {
     }
     this.markMerged(session);
 
-    const outcomeLine = formatWorktreeOutcomeLine({
+    // Same footer as manual outcomes and the generic completion notice.
+    const outcomeLine = appendSessionStatsSuffix(formatWorktreeOutcomeLine({
       kind: "merge",
-      sessionCompleted: session.status === "completed",
+      // Read the status now: this merge may have waited in the queue while
+      // the session id was resumed, and then it is a milestone, not completion.
+      sessionCompleted: (this.deps.getCurrentSessionStatus?.(session) ?? session.status) === "completed",
       sessionName: session.name,
       branch: branchName,
       base: baseBranch,
       filesChanged: diffSummary.filesChanged,
       insertions: diffSummary.insertions,
       deletions: diffSummary.deletions,
+    }), {
+      costUsd: session.costUsd,
+      duration: session.duration,
+      harnessName: session.harnessName,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      backendInfo: session.backendInfo,
     });
     let successMsg = outcomeLine;
     if (mergeResult.stashPopConflict) {
@@ -805,11 +827,15 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
-  ): Promise<boolean> {
-    if (this.deps.isAlreadyMerged(sessionRef)) return false;
-    if (session.autoMergeResolverSessionId) return false;
+  ): Promise<WorktreeStrategyResult> {
+    // Nothing is sent on these paths, so the caller's terminal notice must still fire.
+    if (this.deps.isAlreadyMerged(sessionRef)) return { notificationSent: false, worktreeRemoved: false };
+    if (session.autoMergeResolverSessionId) return { notificationSent: false, worktreeRemoved: false };
 
     let worktreeRemoved = false;
+    // True once a merge outcome (success, conflict, or error) was sent. The
+    // "Merge queued" note is not an outcome.
+    let notificationSent = false;
 
     await this.deps.enqueueMerge(
       repoDir,
@@ -817,6 +843,8 @@ export class SessionWorktreeStrategyService {
         if (this.deps.isAlreadyMerged(sessionRef)) return;
 
         const mergeResult = await this.deps.mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
+        // Every branch below sends exactly one outcome notice.
+        notificationSent = true;
 
         if (mergeResult.success) {
           worktreeRemoved = await this.handleAutoMergeSuccess(
@@ -869,7 +897,7 @@ export class SessionWorktreeStrategyService {
         });
       },
     );
-    return worktreeRemoved;
+    return { notificationSent, worktreeRemoved };
   }
 
   private async handleAutoPrStrategy(

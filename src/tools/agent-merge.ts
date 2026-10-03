@@ -21,7 +21,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, resolvesPendingAskCompletion, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -354,6 +354,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile Git and session state before retrying; the changed session was not patched." }] };
             return;
           }
+          // Read before the merged patch: it resolves the pending decision.
+          const sessionCompleted = resolvesPendingAskCompletion(sm, target.generation);
           {
             const mergedAt = new Date().toISOString();
             const patched = patchWorktreeTarget(sm, target, {
@@ -381,6 +383,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Send unified confirmation notification
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "merge",
+            sessionCompleted,
             sessionName: target.sessionName,
             branch: branchName,
             base: resolvedBaseBranch,
@@ -404,8 +407,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           );
 
           const mergeTypeMsg = mergeResult.fastForward
-            ? "⚡ Fast-forward"
-            : mergeResult.squash ? "🗜️ Squash commit" : "🔀 Merge commit";
+            ? "Fast-forward"
+            : mergeResult.squash ? "Squash commit" : "Merge commit";
           const pushMsg = shouldPush ? " Pushed." : "";
           let successText = `ℹ️ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
           if (mergeResult.stashPopConflict) {

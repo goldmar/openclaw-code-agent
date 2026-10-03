@@ -1,5 +1,6 @@
 import type { PersistedSessionInfo } from "../types";
 import { fenceAgentOutput } from "../untrusted-output";
+import { formatCount } from "../format";
 import { buildCompletionFollowupInstructionLines, formatApprovalExecutionContextLines } from "./terminal";
 
 export function buildDelegateWorktreeWakeMessage(args: {
@@ -40,7 +41,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
 
   const escalateCall = `agent_escalate(session='${sessionName}', kind='worktree', summary='<why>')`;
   return [
-    `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
+    `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
     `Task (start): ${promptSnippet}`,
     ...(commitLines.length > 0 ? [fenceAgentOutput([...commitLines, ...(moreNote ? [moreNote] : [])].join("\n"), "commit messages")] : []),

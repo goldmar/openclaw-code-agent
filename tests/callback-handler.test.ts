@@ -2535,7 +2535,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(success.editedMessages, []);
     assert.equal(success.buttonMarkupEdits, 1);
     assert.equal(success.buttonsCleared, 1);
-    assert.equal(success.replies[0], "✅ Discarded");
+    assert.equal(success.replies[0], "🗑️ Discarded");
 
     shouldFail = true;
     const failure = createCtx("token-dismiss");

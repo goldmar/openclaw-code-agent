@@ -407,6 +407,9 @@ export class SessionManager {
           originSessionKey: session.originSessionKey,
         }, { notifyLaunch: false });
       },
+      getCurrentSessionStatus: (session) => (
+        manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
+      )?.status,
       runAutoPr: async (session, baseBranch) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
         const result = await makeAgentPrTool(undefined, { terminalCompletion: true }).execute("auto-pr", {

@@ -10,7 +10,8 @@ import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefau
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
-import { patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { formatCount } from "../format";
+import { patchWorktreeTarget, resolvesPendingAskCompletion, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-pr");
@@ -240,7 +241,7 @@ export function buildPrOutcomeDetailLines(args: {
     ...(args.prNumber ? [`PR number: #${args.prNumber}.`] : []),
     ...(args.targetRepo ? [`Target repository: ${args.targetRepo}.`] : []),
     ...(args.commits !== undefined
-      ? [`Pushed ${args.commits} new commits (+${args.insertions ?? 0}/-${args.deletions ?? 0}).`]
+      ? [`Pushed ${formatCount(args.commits, "new commit")} (+${args.insertions ?? 0}/-${args.deletions ?? 0}).`]
       : []),
   ];
 }
@@ -641,12 +642,12 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             .slice(0, 5)
             .map((c) => `• ${c.hash} ${c.message} (${c.author})`)
             .join("\n");
-          const moreCommits = diffSummary.commits > 5 ? `\n...and ${diffSummary.commits - 5} more commits` : "";
+          const moreCommits = diffSummary.commits > 5 ? `\n...and ${formatCount(diffSummary.commits - 5, "more commit")}` : "";
 
           const commentBody = [
             `🔄 **New commits pushed**`,
             ``,
-            `${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+            `${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})`,
             ``,
             `### Latest commits:`,
             commitList + moreCommits,
@@ -659,10 +660,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
           if (commented) {
             // Update persisted metadata
+            const resolvesAskCompletion = resolvesPendingAskCompletion(sm, target.generation);
             persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
             const updateOutcomeLine = formatWorktreeOutcomeLine({
               kind: "pr-updated",
-              sessionCompleted: isTerminalCompletion(),
+              sessionCompleted: isTerminalCompletion() || resolvesAskCompletion,
               sessionName,
               branch: branchName,
               prUrl: prStatus.url,
@@ -702,7 +704,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                 text: [
                   `${updateOutcomeLine}`,
                   ``,
-                  `📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+                  `📝 Added comment detailing ${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})`,
                   formatMetadataRefreshLine(metadataRefresh),
                   summaryShownNote(params.summary).trim(),
                 ].filter(Boolean).join("\n"),
@@ -715,7 +717,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               content: [{
                 type: "text",
                 text: `⚠️  Pushed to ${prStatus.url} but failed to add comment.\n\n` +
-                      `${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})` +
+                      `${formatCount(diffSummary.commits, "new commit")} (+${diffSummary.insertions} / -${diffSummary.deletions})` +
                       `${metadataRefreshLine ? `\n${metadataRefreshLine}` : ""}`
               }],
               meta: { success: true, state: "pr_open" },
@@ -822,6 +824,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
           // Persist PR URL and number
+          const resolvesAskCompletion = resolvesPendingAskCompletion(sm, target.generation);
           persistPrOpen({
             prUrl: prResult.prUrl,
             prNumber: newPrStatus.number,
@@ -832,7 +835,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           // Notify via unified outcome pipeline
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "pr-opened",
-            sessionCompleted: isTerminalCompletion(),
+            sessionCompleted: isTerminalCompletion() || resolvesAskCompletion,
             sessionName,
             branch: branchName,
             targetRepo,

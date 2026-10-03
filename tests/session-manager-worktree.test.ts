@@ -798,7 +798,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      // The wake goes only to the orchestrator; terminal handling still owes the user `✅ Completed`.
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false, userCompletionNoticeOwed: true });
       const calls = (sm as any).__dispatchCalls;
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];

@@ -2,6 +2,7 @@ import { assertBranchName } from "./worktree-ref-validation";
 import { runGh, runGit, type CommandError } from "./git-exec";
 import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
 import { createLogger } from "./logger";
+import { formatCount } from "./format";
 
 const log = createLogger("worktree-pr");
 
@@ -67,7 +68,7 @@ export interface WorktreeOutcomeParams {
 
 function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" | "insertions" | "deletions">): string {
   return params.filesChanged !== undefined
-    ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
+    ? ` (${formatCount(params.filesChanged, "file")}, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
     : "";
 }
 

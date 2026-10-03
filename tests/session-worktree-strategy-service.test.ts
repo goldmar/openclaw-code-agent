@@ -1,5 +1,5 @@
 import "./test-env";
-import { describe, it, mock, before, after } from "node:test";
+import { describe, it, mock, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,6 +11,7 @@ import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy
 import { createWorktree, getBranchName, getDiffSummary, mergeBranch, type DiffSummary } from "../src/worktree";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
+import { buildCompletedPayload } from "../src/session-notification-builders/terminal";
 
 // PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
 // cold start used to hit the probe timeout and flip these tests).
@@ -1589,7 +1590,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+      const { worktreeRemoved, notificationSent } = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1609,6 +1610,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "merged");
       assert.equal(git(repoDir, "branch", "--show-current"), "main");
       assert.equal(worktreeRemoved, true);
+      assert.equal(notificationSent, true);
       assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
       assert.doesNotMatch(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
       assert.equal(session.worktreePath, undefined);
@@ -1653,7 +1655,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+      const { worktreeRemoved, notificationSent } = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1664,6 +1666,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       );
 
       assert.equal(worktreeRemoved, false);
+      assert.equal(notificationSent, true);
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreePath, worktreePath);
       assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
@@ -1741,6 +1744,137 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  describe("auto-merge outcome reporting", () => {
+    const repoDirs: string[] = [];
+    afterEach(() => {
+      for (const repoDir of repoDirs.splice(0)) rmSync(repoDir, { recursive: true, force: true });
+    });
+    const diffSummary: DiffSummary = {
+      commits: 1, filesChanged: 1, insertions: 2, deletions: 0, changedFiles: ["feature.txt"], commitMessages: [],
+    };
+    function createAutoMergeService(overrides: {
+      isAlreadyMerged?: () => boolean;
+      enqueueMerge?: (repoDir: string, fn: () => Promise<void>, onQueued?: () => void) => Promise<void>;
+      getCurrentSessionStatus?: () => "running" | "completed" | undefined;
+      mergeBranch?: () => Promise<{ success: boolean; fastForward?: boolean; error?: string; dirtyError?: boolean }>;
+    } = {}) {
+      const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-merge-outcome-"));
+      repoDirs.push(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "branch", "agent/auto-merge-outcome");
+      const notifications: SessionNotificationRequest[] = [];
+      let merges = 0;
+      const session: any = {
+        id: "s-auto-merge-outcome",
+        status: "completed",
+        name: "auto-merge-outcome",
+        harnessSessionId: "h-auto-merge-outcome",
+      };
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: overrides.isAlreadyMerged ?? (() => false),
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: overrides.enqueueMerge ?? (async (_repoDir, fn) => { await fn(); }),
+        mergeBranch: async () => {
+          merges += 1;
+          return overrides.mergeBranch ? overrides.mergeBranch() : { success: true, fastForward: true };
+        },
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
+        ...(overrides.getCurrentSessionStatus ? { getCurrentSessionStatus: overrides.getCurrentSessionStatus } : {}),
+      });
+      const run = () => (service as any).handleAutoMergeStrategy(
+        session, repoDir, join(repoDir, ".worktrees/auto-merge-outcome"), "agent/auto-merge-outcome", "main", diffSummary, session.id,
+      );
+      return { session, notifications, run, merges: () => merges };
+    }
+
+    it("reports no notice when the session is already merged before the merge is queued", async () => {
+      const f = createAutoMergeService({ isAlreadyMerged: () => true });
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.equal(f.notifications.length, 0);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("reports no notice while a conflict resolver owns the merge", async () => {
+      const f = createAutoMergeService();
+      f.session.autoMergeResolverSessionId = "resolver-1";
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.equal(f.notifications.length, 0);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("does not count the queued note as the outcome when the merge landed while waiting", async () => {
+      let merged = false;
+      const f = createAutoMergeService({
+        isAlreadyMerged: () => merged,
+        enqueueMerge: async (_repoDir, fn, onQueued) => {
+          onQueued?.();
+          merged = true;
+          await fn();
+        },
+      });
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.deepEqual(f.notifications.map((request) => request.label), ["worktree-merge-queued"]);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("reports a merge error as the sent outcome", async () => {
+      const f = createAutoMergeService({
+        mergeBranch: async () => ({ success: false, error: "base is dirty", dirtyError: true }),
+      });
+      assert.deepEqual(await f.run(), { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(f.notifications.map((request) => request.label), ["worktree-merge-error"]);
+    });
+
+    it("reports a queued merge as a milestone when the session id was resumed meanwhile", async () => {
+      const f = createAutoMergeService({ getCurrentSessionStatus: () => "running" });
+      const result = await f.run();
+      assert.equal(result.notificationSent, true);
+      assert.equal(f.session.status, "completed", "the captured session object is stale");
+      assert.equal(f.notifications.length, 1);
+      assert.match(String(f.notifications[0].userMessage), /^ℹ️ \[auto-merge-outcome\] Merged: agent\/auto-merge-outcome → main/);
+      assert.doesNotMatch(String(f.notifications[0].userMessage), /Completed/);
+    });
+
+    it("gives the automatic merge line the same stats footer as the generic completion notice", async () => {
+      const f = createAutoMergeService();
+      Object.assign(f.session, { costUsd: 0.11, duration: 8_000, harnessName: "claude-code", model: "sonnet", reasoningEffort: "low" });
+      await f.run();
+      const line = String(f.notifications[0].userMessage);
+      const completed = buildCompletedPayload({ session: f.session, originThreadLine: "", preview: "" }).userMessage;
+      const footer = completed.slice("✅ [auto-merge-outcome] Completed".length);
+      assert.match(footer, /^ \| \$0\.11 \| 8s \| /);
+      assert.equal(line, `✅ [auto-merge-outcome] Completed — Merged: agent/auto-merge-outcome → main (1 file, +2/-0)${footer}`);
+    });
+
+    it("keeps the completion form when the current status is still completed or unknown", async () => {
+      for (const status of ["completed", undefined] as const) {
+        const f = createAutoMergeService({ getCurrentSessionStatus: () => status });
+        await f.run();
+        assert.match(String(f.notifications[0].userMessage), /^✅ \[auto-merge-outcome\] Completed — Merged:/);
+      }
+    });
   });
 
   it("includes stash-pop-conflict warnings in the auto-merge follow-up wake", async () => {

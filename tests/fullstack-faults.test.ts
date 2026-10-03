@@ -67,7 +67,7 @@ type IndexFile = { sessions: IndexRow[]; actionTokens: IndexToken[] };
 const WORKTREE_DECISION_KINDS = new Set(["worktree-merge", "worktree-decide-later", "worktree-dismiss", "worktree-create-pr", "worktree-update-pr"]);
 const RESOLVED_LIFECYCLE = new Set(["merged", "released", "dismissed", "no_change"]);
 /** Replies of a click that acted. A consumed button must never produce one. */
-const ACTED = /Answer sent|Snoozed 24h|✅ Discarded|Repo policy saved|^▶️/m;
+const ACTED = /Answer sent|Snoozed 24h|🗑️ Discarded|Repo policy saved|^▶️/m;
 
 describe("restart from every saved store snapshot", () => {
   it("keeps pending prompts, never re-runs a used button, and leaves no orphan worktree state", async () => {

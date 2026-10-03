@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`✅` now means the session completed** ([#520](https://github.com/goldmar/openclaw-code-agent/pull/520)). A merge or PR made while a session is still running no longer looks like its completion: manual outcomes (`agent_merge`, `agent_pr`, the Merge / PR buttons) are milestones, `ℹ️ [name] Merged: …`, `ℹ️ [name] PR opened: …`, `ℹ️ [name] PR updated: …`. A completed session gets `✅` once: `✅ [name] Completed — Merged/PR opened/PR updated: …` for `auto-merge` and `auto-pr`, the generic `✅ [name] Completed` otherwise. `delegate` sessions now send the user that `✅ [name] Completed` line at completion (the orchestrator still gets its one delegate wake, and its later merge is `ℹ️`). Under `ask` the `🔀 [name] Finished on …` prompt stays the completion-time message, and the merge or PR that resolves it is `✅ [name] Completed — …`; **Later** sends no `✅`, and **Discard** now answers `🗑️ Discarded` instead of `✅ Discarded`. Failed, stopped, suspended and discarded sessions never get `✅`.
+- Automatic merge lines carry the same footer as every other outcome and the completion notice (cost, duration, harness, model, reasoning); cost and duration were missing. Counts use the right number (`1 file`, `1 new commit`) in outcome lines, worktree prompts, wakes and PR text.
 - Target the OpenClaw `2026.9.8` package and public plugin SDK, with `2026.9.8` as the installation and loading minimum. Retain the declared `2026.9.7` plugin API, Gateway, and npm peer contracts: this hotfix introduces no public SDK changes used by OCA. This is compatibility preparation; the OCA version bump and publication remain separate.
 
 ### Upgrade notes
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A session whose worktree was already resolved (PR open, merged, released, discarded) and that later stops, is suspended or fails now reports that to the user; these notices were dropped. An `auto-merge` that sends no outcome (the branch was merged meanwhile, or a conflict resolver owns it) falls back to `✅ [name] Completed` instead of staying silent, and a merge that waited in the queue while its session was resumed is reported as a milestone ([#520](https://github.com/goldmar/openclaw-code-agent/pull/520)).
 - Codex sessions turn off Codex's native thread goals (`features.goals = false` on every `thread/start`, `thread/resume` and `thread/fork`). Native goals are on by default in every supported Codex CLI (0.156.1 and later). With them on, the model could create a goal, and Codex then started continuation turns by itself that OCA neither requested nor accounted for: they bypassed idle timeouts, cost tracking and `agent_goal` iteration and cost limits, and a stored active goal re-armed on resume. Claude Code sessions remove the `ProposeGoal` tool, so the model can no longer propose a native session goal; a `/goal` typed into a session is not blocked.
 
 ## [5.1.0] - 2026-10-02

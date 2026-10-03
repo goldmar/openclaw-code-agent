@@ -6,6 +6,7 @@ import {
   buildNoChangeWakeMessage,
 } from "./session-notification-builder";
 import { formatSessionStatsSuffix } from "./session-notification-stats";
+import { formatCount } from "./format";
 
 type DiffSummary = {
   commits: number;
@@ -161,7 +162,7 @@ export class SessionWorktreeMessageService {
         diffSummary.commitMessages.map((commit) => commit.hash).join(","),
       ].join(":"),
       userMessage: [
-        `🔀 [${session.name}] Finished on ${branchLine}: ${diffSummary.commits} commit${diffSummary.commits === 1 ? "" : "s"}, ${diffSummary.filesChanged} file${diffSummary.filesChanged === 1 ? "" : "s"}, +${diffSummary.insertions}/-${diffSummary.deletions}`,
+        `🔀 [${session.name}] Finished on ${branchLine}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}`,
         ...(summaryLines.length > 0 ? ["", ...summaryLines.map((line) => `- ${line}`)] : []),
         ...(policyReason ? ["", `Policy: ${policyReason}`] : []),
         ...(hookWarning ? ["", hookWarning] : []),
@@ -177,7 +178,7 @@ export class SessionWorktreeMessageService {
       ].join("\n"),
       wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: [
-        `[${session.name}] Finished on ${branchLine} (${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
+        `[${session.name}] Finished on ${branchLine} (${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
         prOffered
           ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`
           : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,

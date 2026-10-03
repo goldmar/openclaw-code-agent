@@ -1274,7 +1274,8 @@ export function createCallbackHandler(
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               worktreeDecisionSucceeded = true;
             }
-            await replyText(ctx, succeeded ? "✅ Discarded" : result);
+            // Not ✅: that marker means the session completed, and a discard is not a completion.
+            await replyText(ctx, succeeded ? "🗑️ Discarded" : result);
             if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, undefined, callbackAcknowledged);
             break;
           }

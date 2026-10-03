@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeAgentPrTool } from "../src/tools/agent-pr";
+import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { setPluginRuntime } from "../src/runtime-store";
@@ -398,8 +399,8 @@ describe("agent_pr execute(): existing open PRs", () => {
 
     assert.deepEqual(result.meta, { success: true, state: "pr_updated" });
     const text = textOf(result);
-    assert.match(text, new RegExp(`^ℹ️ \\[pr-flow\\] PR updated: ${seeded.url} \\(1 files, \\+1/-0\\)`));
-    assert.match(text, /📝 Added comment detailing 1 new commits \(\+1 \/ -0\)/);
+    assert.match(text, new RegExp(`^ℹ️ \\[pr-flow\\] PR updated: ${seeded.url} \\(1 file, \\+1/-0\\)`));
+    assert.match(text, /📝 Added comment detailing 1 new commit \(\+1 \/ -0\)/);
     assert.match(text, /📝 Refreshed PR title\/body from current OpenClaw metadata\./);
 
     const state = f.gh.readState();
@@ -411,7 +412,7 @@ describe("agent_pr execute(): existing open PRs", () => {
     assert.equal(f.gh.ghCalls("create").length, 0);
     assert.equal(f.persisted()?.worktreePrUrl, seeded.url);
     assert.equal(f.persisted()?.worktreePrNumber, seeded.number);
-    assert.equal(f.outcomes[0]?.line, `ℹ️ [pr-flow] PR updated: ${seeded.url} (1 files, +1/-0)`);
+    assert.equal(f.outcomes[0]?.line, `ℹ️ [pr-flow] PR updated: ${seeded.url} (1 file, +1/-0)`);
     assert.equal(f.persisted()?.status, "running");
   });
 
@@ -612,6 +613,207 @@ describe("worktree outcome completion", () => {
     }
   }
 
+  for (const killReason of ["user", "idle-timeout"] as const) {
+    for (const resolved of ["pr_open", "merged"] as const) {
+      it(`reports a ${killReason} stop after an earlier PR milestone resolved the worktree as ${resolved}`, async () => {
+        const f = await setup({ persisted: { status: "running" } });
+        await f.run({ title: "Feature", body: "Adds a feature." });
+        assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ /);
+        const session = createStubSession({
+          ...f.persisted(), id: SESSION_ID, status: "killed", killReason, worktreeState: resolved,
+          worktreeLifecycle: { state: resolved }, worktreeMerged: resolved === "merged",
+          originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
+          startedAt: Date.now() - 60_000, duration: 60_000,
+          getOutput: () => ["Stopped before finishing."],
+        });
+        await f.sm["onSessionTerminal"](session);
+        assert.equal(f.dispatches.length, 1);
+        if (killReason === "idle-timeout") {
+          assert.equal(f.dispatches[0]?.label, "suspended");
+          assert.match(f.dispatches[0]?.userMessage ?? "", /^💤 \[pr-flow\] Suspended after idle timeout/);
+        } else {
+          assert.match(f.dispatches[0]?.userMessage ?? "", /^⛔ \[pr-flow\] Stopped by user/);
+        }
+        assert.equal(f.outcomes.length, 1, "no repeated worktree milestone");
+      });
+    }
+  }
+
+  /** Finish the fixture session through the real terminal path with the given strategy. */
+  async function completeSession(f: Fixture, strategy: "ask" | "delegate") {
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeStrategy: strategy });
+    const session = createStubSession({
+      ...f.persisted(), id: SESSION_ID, status: "completed", phase: "implementing",
+      originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
+      startedAt: Date.now() - 60_000, duration: 60_000,
+      getOutput: () => ["Finished."],
+    });
+    await f.sm["onSessionTerminal"](session);
+    await f.sm["onSessionTerminal"](session);
+    return session;
+  }
+  const checkmarks = (f: Fixture): string[] => [
+    ...f.dispatches.map((request) => request.userMessage ?? ""),
+    ...f.outcomes.map((outcome) => outcome.line),
+  ].filter((text) => text.startsWith("✅"));
+  /** A fake GitHub of its own: merging changes main. */
+  function isolateGitHub(): void {
+    const previousGitHub = github;
+    github = createFakeGitHub();
+    cleanups.push(() => { github.dispose(); github = previousGitHub; });
+  }
+  const runMerge = async (): Promise<string> => {
+    const result = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    return result.content.map((entry) => entry.text).join("\n");
+  };
+
+  it("sends a delegate completion to the user once, with the delegate wake as the only orchestrator wake", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    const session = await completeSession(f, "delegate");
+
+    const completed = f.dispatches.filter((request) => request.label === "completed");
+    assert.equal(completed.length, 1);
+    assert.match(completed[0]?.userMessage ?? "", /^✅ \[pr-flow\] Completed/);
+    assert.equal(completed[0]?.notifyUser, "always");
+    assert.equal(completed[0]?.wakeMessage, undefined);
+    assert.equal(completed[0]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(completed[0]?.wakeMessageOnNotifyFailed, undefined);
+    assert.equal(completed[0]?.completionWakeSummaryRequired, false);
+    const delegateWakes = f.dispatches.filter((request) => request.label === "worktree-delegate");
+    assert.ok(delegateWakes.length >= 1);
+    assert.equal(new Set(delegateWakes.map((request) => request.idempotencyKey)).size, 1, "one delegate wake identity");
+    assert.equal(delegateWakes[0]?.notifyUser, "never");
+    assert.ok(delegateWakes[0]?.wakeMessage);
+    assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-delegate", "completed"]);
+
+    // A manual PR afterwards is a milestone, and a PR update too.
+    const result = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] PR opened: /);
+    Object.assign(session, { worktreeState: "pr_open", worktreeLifecycle: { state: "pr_open" } });
+    await f.sm["onSessionTerminal"](session);
+    assert.equal(checkmarks(f).length, 1, "exactly one ✅ for the terminal cycle");
+  });
+
+  it("reports a manual merge after a delegate completion as a milestone", async () => {
+    isolateGitHub();
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+    await completeSession(f, "delegate");
+    assert.equal(checkmarks(f).length, 1);
+
+    const text = await runMerge();
+    assert.match(text, /^ℹ️ (Fast-forward|Merge commit): /);
+    assert.equal(f.outcomes.length, 1);
+    assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] Merged: /);
+    assert.equal(checkmarks(f).length, 1, "no second ✅");
+  });
+
+  it("announces an ask completion with the decision prompt and completes it with the PR that resolves it", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    await completeSession(f, "ask");
+    assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-merge-ask"]);
+    assert.match(f.dispatches[0]?.userMessage ?? f.dispatches[0]?.userMessages?.[0]?.text ?? "", /^🔀 \[pr-flow\] Finished on /);
+    assert.equal(checkmarks(f).length, 0, "the prompt is the completion-time message");
+
+    // Later keeps the decision pending: still no ✅.
+    assert.doesNotMatch(f.sm.snoozeWorktreeDecision(SESSION_ID, { notifyUser: false }), /^Error/);
+    assert.equal(checkmarks(f).length, 0);
+
+    const opened = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.deepEqual(opened.meta, { success: true, state: "created" });
+    assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
+
+    f.commit("more.txt", "more\n", "feat: add more");
+    const updated = await f.run();
+    assert.deepEqual(updated.meta, { success: true, state: "pr_updated" });
+    assert.match(f.outcomes[1]?.line ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
+    assert.equal(checkmarks(f).length, 1, "exactly one ✅ for the terminal cycle");
+  });
+
+  it("completes an ask session with the merge that resolves its pending decision", async () => {
+    isolateGitHub();
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+    await completeSession(f, "ask");
+    assert.equal(checkmarks(f).length, 0);
+
+    const text = await runMerge();
+    assert.match(text, /^ℹ️ (Fast-forward|Merge commit): /);
+    assert.equal(f.outcomes.length, 1);
+    assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — Merged: /);
+    assert.equal(checkmarks(f).length, 1);
+  });
+
+  it("keeps a pending ask decision a milestone when the session is running again", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    await completeSession(f, "ask");
+    f.sm.updatePersistedSession(SESSION_ID, { status: "running" });
+    assert.equal(f.persisted()?.worktreeState, "pending_decision");
+
+    const result = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] PR opened: /);
+    assert.equal(checkmarks(f).length, 0);
+  });
+
+  it("still completes a pending ask decision after a Gateway restart", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    await completeSession(f, "ask");
+    assert.equal(f.persisted()?.worktreeState, "pending_decision");
+
+    // A new manager on the same store: no in-memory terminal gate survives.
+    const restarted = new SessionManager(5, 50, { store: { env: {}, indexPath: join(f.storeDir, "sessions.json") } });
+    cleanups.push(() => restarted.shutdown());
+    const outcomes: string[] = [];
+    Object.assign(restarted["notifications"], {
+      dispatch: (): void => {},
+      notifyWorktreeOutcome: (_session: unknown, line: string) => { outcomes.push(line); },
+    });
+    setSessionManager(restarted);
+    const row = restarted.getPersistedSession(SESSION_ID);
+    assert.equal(row?.worktreeState, "pending_decision", "the pending decision was loaded from disk");
+    assert.equal(row?.status, "completed");
+
+    const opened = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.deepEqual(opened.meta, { success: true, state: "created" });
+    f.commit("more.txt", "more\n", "feat: add more");
+    await f.run();
+    assert.equal(outcomes.length, 2);
+    assert.match(outcomes[0] ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
+    assert.match(outcomes[1] ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
+  });
+
+  for (const scenario of ["merged-while-queued", "resolver-active"] as const) {
+    it(`falls back to the completion notice when auto-merge sends no outcome: ${scenario}`, async () => {
+      const f = await setup();
+      await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+      const deps = f.sm["worktreeStrategy"]["deps"];
+      let mergedElsewhere = false;
+      deps.isAlreadyMerged = () => mergedElsewhere;
+      deps.enqueueMerge = async (_repoDir, fn) => { mergedElsewhere = true; await fn(); };
+      const session = createStubSession({
+        ...f.persisted(), id: SESSION_ID, status: "completed", phase: "implementing",
+        originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
+        startedAt: Date.now() - 60_000, duration: 60_000,
+        worktreeStrategy: "auto-merge", getOutput: () => ["Finished."],
+        ...(scenario === "resolver-active" ? { autoMergeResolverSessionId: "resolver-1" } : {}),
+      });
+      const main = git(f.gh.repoDir, "rev-parse", "main");
+      await f.sm["onSessionTerminal"](session);
+      await f.sm["onSessionTerminal"](session);
+      assert.equal(mergedElsewhere, scenario === "merged-while-queued");
+      assert.equal(git(f.gh.repoDir, "rev-parse", "main"), main, "this run merged nothing");
+      assert.equal(f.dispatches.length, 1);
+      assert.equal(f.dispatches[0]?.label, "completed");
+      assert.match(f.dispatches[0]?.userMessage ?? "", /^✅ \[pr-flow\] Completed/);
+    });
+  }
+
   it("does not repeat completion after an authoritative automatic merge outcome", async () => {
     // Merging changes main, so isolate this case from the shared PR fixture.
     const previousGitHub = github;
@@ -647,6 +849,27 @@ describe("worktree outcome completion", () => {
     assert.equal(f.persisted()?.status, "running");
     assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ /);
     assert.doesNotMatch(f.outcomes[0]?.line ?? "", /Completed|continues/);
+  });
+
+  it("prefers the live session's status over a stale stored row for the completion form", async () => {
+    const f = await setup();
+    const live = createStubSession({
+      ...f.persisted(), id: SESSION_ID, status: "completed",
+      originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
+      startedAt: Date.now() - 60_000, getOutput: () => ["Finished."],
+    });
+    f.sm["sessions"].set(SESSION_ID, live);
+    cleanups.push(() => { f.sm["sessions"].delete(SESSION_ID); });
+    const result = await makeAgentPrTool(undefined, {
+      terminalCompletion: true,
+      // The same live session started another turn; its stored row still says completed.
+      metadataProvider: { generatePrMetadata: async () => { live.status = "running"; return JSON.parse(LLM_METADATA); } },
+    }).execute("auto-pr", { session: SESSION_ID });
+    assert.equal(result.meta.success, true);
+    assert.equal(f.persisted()?.status, "completed");
+    assert.equal(f.sm.get(SESSION_ID)?.status, "running");
+    assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ /);
+    assert.doesNotMatch(f.outcomes[0]?.line ?? "", /Completed/);
   });
 
   for (const state of ["up-to-date", "merged", "comment-failed"] as const) {

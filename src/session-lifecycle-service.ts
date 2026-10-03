@@ -34,6 +34,8 @@ const log = createLogger("session-lifecycle-service");
 type WorktreeStrategyResult = {
   notificationSent: boolean;
   worktreeRemoved: boolean;
+  /** Only the orchestrator was told (`delegate`): the user still gets `✅ Completed`. */
+  userCompletionNoticeOwed?: boolean;
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
@@ -421,7 +423,13 @@ export class SessionLifecycleService {
     if (worktreeResult.notificationSent) {
       // The authoritative worktree notice owns this terminal cycle. Record it
       // in the existing gate so a later resolved-worktree skip cannot repeat it.
-      this.deps.shouldEmitTerminalWake(session);
+      const firstForTerminalCycle = this.deps.shouldEmitTerminalWake(session);
+      if (worktreeResult.userCompletionNoticeOwed && firstForTerminalCycle && session.status === "completed") {
+        // `delegate` told only the orchestrator. The user gets the generic
+        // completion line; the delegate wake stays the only orchestrator wake.
+        this.emitCompleted(session, { userNoticeOnly: true });
+        return;
+      }
       log.info(
         `[SessionManager] Suppressing generic terminal notification for session ${session.id} ` +
         "because worktree strategy handling already sent the authoritative outcome notification.",
@@ -761,9 +769,10 @@ export class SessionLifecycleService {
     });
   }
 
-  emitCompleted(session: Session): void {
+  emitCompleted(session: Session, options: { userNoticeOnly?: boolean } = {}): void {
     const preview = this.deps.getOutputPreview(session);
-    const followupSummaryRequired = this.shouldRequestCompletionFollowup(session);
+    // `userNoticeOnly`: another notice already woke the orchestrator for this terminal cycle.
+    const followupSummaryRequired = !options.userNoticeOnly && this.shouldRequestCompletionFollowup(session);
     const payload = buildCompletedPayload({
       session,
       originThreadLine: this.deps.originThreadLine(session),

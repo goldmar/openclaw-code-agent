@@ -165,6 +165,24 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
   };
 }
 
+/**
+ * True when resolving this worktree decision is also the session's completion
+ * signal: an `ask` session announced its completion with the decision prompt
+ * instead of `✅ Completed`, that decision is still pending, and the session is
+ * still completed (not resumed since). Read it immediately before the patch
+ * that resolves the decision; afterwards the stored state says resolved, so
+ * later outcomes are milestones. Derived from stored state, so it survives a
+ * Gateway restart.
+ */
+export function resolvesPendingAskCompletion(sm: SessionManager, generation: SessionGeneration | undefined): boolean {
+  if (!generation) return false;
+  const row = sm.getSessionGeneration(generation);
+  if (row?.worktreeStrategy !== "ask") return false;
+  if (row.worktreeState !== "pending_decision" && row.worktreeLifecycle?.state !== "pending_decision") return false;
+  const activeId = generation.kind === "oca" ? generation.sessionId : generation.pinnedLiveSessionId;
+  return ((activeId ? sm.get(activeId) : undefined) ?? row).status === "completed";
+}
+
 export function patchWorktreeTarget(sm: SessionManager, target: ResolvedWorktreeToolTarget, patch: Partial<PersistedSessionInfo>): boolean {
   return !!target.generation && sm.updateSessionGeneration(target.generation, patch, { persisted: !!target.initiallyPersisted });
 }

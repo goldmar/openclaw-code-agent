@@ -39,6 +39,19 @@ export function formatSessionStatsSuffix(stats: SessionNotificationStats): strin
   return parts.length > 0 ? ` | ${parts.join(" | ")}` : "";
 }
 
+/**
+ * Add the stats footer (cost | duration | harness | model | reasoning) to a
+ * status line. Every merge / PR outcome line uses this, so automatic and manual
+ * outcomes carry the same footer as the generic `✅ Completed` notice. Stats go
+ * on the first line; later lines (for example an outcome summary) stay as they are.
+ */
+export function appendSessionStatsSuffix(line: string, stats: SessionNotificationStats): string {
+  const suffix = formatSessionStatsSuffix(stats);
+  if (!suffix) return line;
+  const newline = line.indexOf("\n");
+  return newline < 0 ? `${line}${suffix}` : `${line.slice(0, newline)}${suffix}${line.slice(newline)}`;
+}
+
 function resolveDuration(stats: SessionNotificationStats): number | undefined {
   if (typeof stats.duration === "number" && Number.isFinite(stats.duration) && stats.duration >= 0) {
     return stats.duration;
