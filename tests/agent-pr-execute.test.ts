@@ -582,6 +582,52 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.equal(f.gh.ghCalls("create").length, 1);
   });
 
+  it("clears a stale closed-PR marker when the PR was reopened: force_new refuses without pushing and the buttons return to Sync PR", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA, LLM_METADATA] });
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: pr.url, worktreePrNumber: pr.number });
+    const prLabels = async (): Promise<string[]> => {
+      const rows = await (f.sm as unknown as { getWorktreeDecisionButtons(id: string, options: { allowDelegate: boolean }): Promise<Array<Array<{ label: string }>>> })
+        .getWorktreeDecisionButtons(SESSION_ID, { allowDelegate: true });
+      return rows.flat().map((button) => button.label).filter((label) => /PR/.test(label));
+    };
+
+    assert.equal((await f.run()).meta.state, "closed");
+    assert.equal(f.persisted()?.worktreePrClosed, true);
+    assert.deepEqual(await prLabels(), ["New PR", "View PR"]);
+
+    // The user reopens the PR on GitHub (option 1 of the tool text).
+    f.gh.updateState((state) => { state.prs.find((candidate) => candidate.number === pr.number)!.state = "OPEN"; });
+    const headBefore = f.gh.remoteHead(f.branch);
+
+    // New PR / force_new cannot replace an open PR: refused before anything is pushed ...
+    const refused = await f.run({ force_new: true });
+    assert.deepEqual(refused.meta, { success: false, state: "error" });
+    assert.match(textOf(refused), /Cannot create new PR: A PR already exists for `[^`]+` \(open\)\./);
+    assert.equal(f.gh.remoteHead(f.branch), headBefore, "nothing was pushed");
+    assert.equal(f.gh.ghCalls("create").length, 0);
+    // ... and the stale marker is gone, so the next prompts offer Sync PR again.
+    assert.equal(f.persisted()?.worktreePrClosed, undefined);
+    assert.deepEqual(await prLabels(), ["Sync PR", "View PR"]);
+
+    // The plain PR action (what the New PR button falls back to) syncs the reopened PR.
+    const synced = await f.run();
+    assert.equal(synced.meta.success, true);
+    assert.equal(f.persisted()?.worktreePrUrl, pr.url);
+    assert.notEqual(f.gh.remoteHead(f.branch), "", "the branch was pushed for the sync");
+  });
+
+  it("does not push the branch when force_new meets an unrecorded open PR", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    f.gh.seedPr({ headRefName: f.branch });
+    const headBefore = f.gh.remoteHead(f.branch);
+
+    const result = await f.run({ force_new: true });
+
+    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.equal(f.gh.remoteHead(f.branch), headBefore, "nothing was pushed before the refusal");
+  });
+
   it("still refuses force_new when the session's recorded PR was merged", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });

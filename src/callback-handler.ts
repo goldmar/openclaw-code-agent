@@ -93,6 +93,9 @@ function failureReply(sessionName: string | undefined, reason: string): string {
   return `❌ ${prefix}${(prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text) || "The action failed."}`;
 }
 
+/** `agent_pr(force_new=true)` refused: the branch's PR is open or merged. */
+const FORCE_NEW_REFUSED_PATTERN = /^⚠️ Cannot create new PR: A PR already exists for .+ \((?:open|merged)\)\./u;
+
 /** `agent_pr`'s answer when the branch's PR was closed without merging. */
 const CLOSED_PR_PATTERN = /A PR exists but was closed without merging: (\S+)/u;
 
@@ -1368,11 +1371,16 @@ export function createCallbackHandler(
             // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
             // on success; if the PR creation fails the flag remains set so reminders
             // continue until the user tries again.
-            const result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
+            let result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
               session: sessionId,
               // The New PR button, offered after its PR was found closed without merging.
               ...(consumedToken.prForceNew ? { force_new: true } : {}),
             });
+            // The PR was reopened or merged since New PR was offered: the press
+            // is then a normal PR action (sync the open PR, or record the merge).
+            if (consumedToken.prForceNew && !toolResultSucceeded(result) && FORCE_NEW_REFUSED_PATTERN.test(toolResultText(result))) {
+              result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
+            }
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);

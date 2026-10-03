@@ -279,6 +279,13 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   /** How long a tool waits for a prompt's direct delivery result before reporting it as in progress. */
   userDeliveryResultWaitMs = 10_000;
+  /**
+   * After a re-offered prompt was reported as still in delivery: how long its
+   * outcome may stay out (a little over the direct-send timeout) before the
+   * press is answered with the plain failure line anyway.
+   */
+  reofferLateFallbackMs = 45_000;
+  private readonly reofferLateFallbackTimers = new Set<ReturnType<typeof setTimeout>>();
   /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
   private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
   private worktreeReofferGeneration = 0;
@@ -1928,6 +1935,22 @@ export class SessionManager {
     // The send ended without a known outcome (it timed out): the prompt may or
     // may not have arrived.
     let ambiguous = false;
+    // The outcome of a prompt reported as "pending" is passed on exactly once.
+    // When none arrives (the plugin stopped mid-send, or the decision closed
+    // while the send was in flight), a bounded timer settles the entry and
+    // reports "not delivered", so the press is never left without a message.
+    let lateFallback: ReturnType<typeof setTimeout> | undefined;
+    let lateReported = false;
+    const reportLate = (delivered: boolean): void => {
+      if (lateFallback) {
+        clearTimeout(lateFallback);
+        this.reofferLateFallbackTimers.delete(lateFallback);
+        lateFallback = undefined;
+      }
+      if (!waitEnded || lateReported) return;
+      lateReported = true;
+      options.onLateResult?.(delivered);
+    };
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
@@ -1941,12 +1964,12 @@ export class SessionManager {
         onNotifySucceeded: () => {
           settleEntry();
           retireOlder();
-          if (waitEnded) options.onLateResult?.(true);
+          reportLate(true);
         },
         onNotifyFailed: () => {
           settleEntry();
           dropFresh();
-          if (waitEnded) options.onLateResult?.(false);
+          reportLate(false);
         },
         // Unknown outcome: the fresh buttons stay valid in case the prompt did
         // arrive, the older ones stay too, and the caller sends its plain
@@ -1954,14 +1977,21 @@ export class SessionManager {
         onNotifyAmbiguous: () => {
           settleEntry();
           ambiguous = true;
-          if (waitEnded) options.onLateResult?.(false);
+          reportLate(false);
         },
       },
     });
     waitEnded = true;
     if (ambiguous) return false;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
-    return delivery === "pending" ? "pending" : delivery === "delivered";
+    if (delivery !== "pending") return delivery === "delivered";
+    lateFallback = setTimeout(() => {
+      settleEntry();
+      reportLate(false);
+    }, this.reofferLateFallbackMs);
+    lateFallback.unref?.();
+    this.reofferLateFallbackTimers.add(lateFallback);
+    return "pending";
   }
 
   /**
@@ -2436,10 +2466,11 @@ export class SessionManager {
    * still loaded is persisted and unloaded first, as runtime GC does, so the
    * stored row is the one record and a later re-persist cannot reopen it.
    * Returns the status the session was closed with (a session that was never
-   * persisted can only be stopped), or undefined when it is not suspended or
-   * has no record to close.
+   * persisted can only be stopped), undefined when it is not suspended or has
+   * no record to close, and `"unsaved"` when the session was unloaded but its
+   * row could not be updated (it is still dormant; the call can be repeated).
    */
-  closeSuspendedSession(ref: string, completed: boolean): "completed" | "killed" | undefined {
+  closeSuspendedSession(ref: string, completed: boolean): "completed" | "killed" | "unsaved" | undefined {
     const active = this.resolve(ref);
     const target = active ?? this.getPersistedSession(ref);
     // Suspended, or stopped by the idle timeout or a shutdown while its plan
@@ -2478,7 +2509,7 @@ export class SessionManager {
     this.clearWaitingTimestampsForSession(active.id);
     this.lastTurnCompleteMarkers.delete(active.id);
     this.lastTerminalWakeMarkers.delete(active.id);
-    return this.updatePersistedSession(active.id, closedPatch(completed)) ? (completed ? "completed" : "killed") : undefined;
+    return this.updatePersistedSession(active.id, closedPatch(completed)) ? (completed ? "completed" : "killed") : "unsaved";
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */
@@ -2653,6 +2684,8 @@ export class SessionManager {
   }
 
   dispose(): void {
+    for (const timer of this.reofferLateFallbackTimers) clearTimeout(timer);
+    this.reofferLateFallbackTimers.clear();
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();

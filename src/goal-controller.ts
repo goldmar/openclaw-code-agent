@@ -1484,7 +1484,12 @@ export class GoalController {
         return;
       }
       if (!session) {
-        this.markTaskFailed(task, "Underlying session could not be found.");
+        // The session is no longer loaded (for example a dormant session that
+        // was stopped): its stored row says how it ended.
+        const stored = task.sessionId ? this.sessionManager.getPersistedSession?.(task.sessionId) : undefined;
+        if (stored?.approvalState === "rejected") this.markTaskStopped(task, "The plan was rejected.");
+        else if (stored?.status === "killed" && stored.killReason === "user") this.markTaskStopped(task, "Stopped by user.");
+        else this.markTaskFailed(task, "Underlying session could not be found.");
         return;
       }
 

@@ -2661,6 +2661,38 @@ describe("createCallbackHandler()", () => {
     assert.equal(reoffers.length, 1, "a successful New PR re-offers nothing");
   });
 
+  it("turns a New PR press into a normal PR action when the PR was reopened or merged meanwhile", async () => {
+    const prCalls: Array<Record<string, unknown>> = [];
+    let reoffers = 0;
+    const token = { sessionId: "sess-42", kind: "worktree-create-pr", prForceNew: true };
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      queueOrchestratorContext: () => true,
+      reofferWorktreeDecision: async () => { reoffers += 1; return true; },
+    } as any);
+    const handler = createCallbackHandler("telegram", {
+      makeAgentPrTool: () => ({
+        execute: async (_id: string, params: Record<string, unknown>) => {
+          prCalls.push(params);
+          return params.force_new
+            ? createToolResult("⚠️ Cannot create new PR: A PR already exists for `agent/ux-fix` (open).\n\nExisting PR: https://github.com/example/repo/pull/42", false)
+            : createToolResult("ℹ️ [ux-fix] PR updated: https://github.com/example/repo/pull/42", true);
+        },
+      }) as any,
+    });
+
+    const state = createCtx("token-new-pr");
+    assert.deepEqual(await handler.handler(state.ctx as any), { handled: true });
+
+    assert.deepEqual(prCalls, [{ session: "sess-42", force_new: true }, { session: "sess-42" }]);
+    assert.equal(reoffers, 0, "the press ends as a sync, not as a failure");
+    assert.deepEqual(state.replies, [], "the PR outcome notice is the one message");
+    assert.equal(state.buttonsCleared, 1);
+  });
+
   it("sends nothing while a re-offered prompt is still being delivered, and reports a late failure once", async () => {
     let lateResult: ((delivered: boolean) => void) | undefined;
     setSessionManager({

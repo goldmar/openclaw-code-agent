@@ -609,6 +609,27 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
+      // force_new never replaces an open or merged PR: refuse before pushing
+      // anything. A flag left from an earlier "closed" finding is stale then
+      // (the PR was reopened or merged), so the next buttons are Sync PR / View PR.
+      const forceNewRefusal = (status: PRStatus): AgentPrExecuteResult => {
+        if (persistedSession?.worktreePrClosed && !patchWorktreeTarget(sm, target, { worktreePrClosed: undefined })) {
+          log.warn(`[agent_pr] Could not clear the closed-PR marker of session ${sessionName}`);
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️ Cannot create new PR: A PR already exists for \`${branchName}\` (${status.state}).\n\n` +
+                  `Existing PR: ${status.url}\n\n` +
+                  `To create a new PR, you must first close/merge the existing PR manually or use a different branch.`
+          }],
+          meta: { success: false, state: "error" },
+        };
+      };
+      if (params.force_new && existingPrBeforePush.exists && (existingPrBeforePush.state === "open" || existingPrBeforePush.state === "merged")) {
+        return forceNewRefusal(existingPrBeforePush);
+      }
+
       // Push branch first for open PR updates and new PR creation.
       const shouldPushBranch = !effectiveTargetPrStatus || effectiveTargetPrStatus.state === "open";
       if (shouldPushBranch && !targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
@@ -631,17 +652,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         : syncedPrStatus;
 
       // Handle force_new parameter
-      if (params.force_new && prStatus.exists) {
-        return {
-          content: [{
-            type: "text",
-            text: `⚠️ Cannot create new PR: A PR already exists for \`${branchName}\` (${prStatus.state}).\n\n` +
-                  `Existing PR: ${prStatus.url}\n\n` +
-                  `To create a new PR, you must first close/merge the existing PR manually or use a different branch.`
-          }],
-          meta: { success: false, state: "error" },
-        } satisfies AgentPrExecuteResult;
-      }
+      if (params.force_new && prStatus.exists) return forceNewRefusal(prStatus);
 
       // PR Lifecycle Handling
       if (prStatus.exists && prStatus.state === "open") {
@@ -791,7 +802,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       } else if (prStatus.exists && prStatus.state === "closed") {
         // Case: PR was closed without merging — ask user what to do. The row
         // remembers it, so every decision prompt offers New PR from now on.
-        patchWorktreeTarget(sm, target, { worktreePrClosed: true });
+        if (!patchWorktreeTarget(sm, target, { worktreePrClosed: true })) {
+          // Only the buttons of later prompts depend on it (they would offer Open PR / Sync PR again).
+          log.warn(`[agent_pr] Could not record the closed PR of session ${sessionName}`);
+        }
         return {
           content: [{
             type: "text",

@@ -194,6 +194,10 @@ describe("session-control app layer", () => {
     const stuck: any = { resolve: () => session, closeSuspendedSession: (): undefined => undefined };
     assert.equal(getKillSessionText(stuck, "s", "killed"), "ℹ️ [s] Already stopped; nothing to stop.");
 
+    // Unloaded, but the row could not be updated: the stop is not reported as done.
+    const unsaved: any = { resolve: () => session, closeSuspendedSession: () => "unsaved" };
+    assert.equal(getKillSessionText(unsaved, "s", "killed"), "❌ [s] Not stopped: the stop could not be saved. Try again.");
+
     // A session that was never persisted can only be stopped: the reply says what happened.
     const unpersisted: any = { resolve: () => session, closeSuspendedSession: () => "killed" };
     assert.equal(getKillSessionText(unpersisted, "s", "completed"), "⛔ [s] Stopped (it was not running).");

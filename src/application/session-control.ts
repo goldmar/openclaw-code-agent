@@ -84,6 +84,7 @@ export function getKillSessionText(
         ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
         : ""}`;
     }
+    if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;
     if (closed) return `⛔ [${target.name}] Stopped (it was not running).`;
   }
 
