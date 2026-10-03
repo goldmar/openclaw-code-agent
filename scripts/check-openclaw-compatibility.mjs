@@ -33,7 +33,7 @@ export function validateDiscoveryRejection(result, before, after, reason) {
     && diagnostic.message.includes("; skipping discovery")), "expected a preserved discovery diagnostic");
 }
 
-/** The older host enforces installation metadata during discovery too. */
+/** The older host enforces the installation minimum when it loads a configured plugin too. */
 export function validateHostMinimumRejection(result, before, after, minimum, hostVersion) {
   validateExcludedPlugin(result, before, after);
   assert.ok(result.diagnostics?.some((diagnostic) => diagnostic.pluginId === pluginId
