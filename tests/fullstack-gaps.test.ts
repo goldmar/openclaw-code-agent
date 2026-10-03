@@ -87,7 +87,7 @@ describe("failed worktree actions", () => {
       assert.deepEqual(failed.replies, []);
       assert.ok(failed.cleared > 0, "the spent controls are cleared");
       const retry = await s.waitForMessage(/still open/, prompt.index + 1);
-      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
+      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually in `[^`]+`\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
       assert.equal(retry.to, surface.to);
       assert.equal(String(retry.threadId), String(surface.threadId));
       assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
@@ -123,7 +123,7 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     const merge = await s.waitForButton("Merge");
     const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
     const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\.$/);
+    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually in `[^`]+`\.$/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
     assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);

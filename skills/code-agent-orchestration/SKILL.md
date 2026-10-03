@@ -68,6 +68,8 @@ You may approve, but only after you verify the plan: read it with `agent_output(
 - A merge or PR made with `summary` needs no follow-up.
 - A completed session that needs attention is announced as `⚠️ [name] Completed — <problem>` (conflict, blocked or failed merge, failed auto-PR, policy, uncommitted changes) and gets no `✅`; a merge or PR you make for it afterwards is `ℹ️`. `❌` means the session, goal or launch itself failed.
 - `agent_kill(session, reason='completed')` on a session that paused with `⏸️ [name] Turn completed — session idle, waiting for a follow-up` answers `ℹ️ [name] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`; do not announce it again.
+- `agent_kill` on a suspended session (idle timeout, or recovered after a restart) closes it without a user notice and answers `⛔ [name] Stopped (it was not running).` (`ℹ️ [name] Marked as completed (it was not running).` with `reason='completed'`); tell the user yourself if they asked for it.
+- `agent_pr` answering `⚠️ A PR exists but was closed without merging: <url>`: ask the user whether to reopen it or open a fresh one, then use `agent_pr(session, force_new=true)` for a fresh PR from the same branch.
 - In a tool result `❌` (or `Error:`) means that call failed; the session is unchanged. `⚠️` in a tool result means the call needs your attention (rebase conflict, push failed).
 - A failure: tell the user the cause and your next step (continue with `agent_respond`, or fix the launch).
 - A wake with an `originRoute`: reach the user with the message tool to that route (threadId only when the route has one), then answer `NO_REPLY`.

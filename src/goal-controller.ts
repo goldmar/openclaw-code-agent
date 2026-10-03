@@ -161,7 +161,13 @@ function classifyGoalAutoReply(text: string): string | undefined {
  * command did is put in `text`; when the command was typed in the task's own
  * chat (`sameChat`) it is not sent as well, so the user gets one message.
  */
-export type GoalReplyNotice = { sameChat: (task: GoalTaskState) => boolean; text?: string };
+/**
+ * A chat command's view of the controller's notice: `text` is the notice,
+ * `posted` whether it was sent to the task's chat (the command was typed
+ * elsewhere) instead of being left to the command as its reply, and
+ * `taskName` the task it is about.
+ */
+export type GoalReplyNotice = { sameChat: (task: GoalTaskState) => boolean; text?: string; posted?: boolean; taskName?: string };
 
 export type GoalTaskEditResult =
   | { action: "updated"; task: GoalTaskState; previousGoal: string }
@@ -680,9 +686,10 @@ export class GoalController {
     }
 
     if (task.sessionId) {
-      // In the task's own chat the reply is the one message: the session's
-      // `⛔ [name] Stopped by user` does not follow it.
-      const session = reply?.sameChat(task) ? this.sessionManager.resolve?.(task.sessionId) : undefined;
+      // One stop message: `⛔ [task] Goal task stopped` (the command's reply in
+      // the task's own chat, the notice in the task's chat otherwise). The
+      // session's `⛔ [name] Stopped by user` does not follow it.
+      const session = this.sessionManager.resolve?.(task.sessionId);
       if (session) session.stopNoticeReplaced = true;
       this.sessionManager.kill(task.sessionId, "user");
     }
@@ -943,8 +950,9 @@ export class GoalController {
   }
 
   private notify(task: GoalTaskState, text: string, label: string, reply?: GoalReplyNotice): void {
-    const notice = this.sessionManager.emitGoalTaskUpdate(task, text, label, reply?.sameChat(task) === true);
-    if (reply) reply.text = notice;
+    const replyOnly = reply?.sameChat(task) === true;
+    const notice = this.sessionManager.emitGoalTaskUpdate(task, text, label, replyOnly);
+    if (reply) Object.assign(reply, { text: notice, posted: !replyOnly, taskName: task.name });
   }
 
   private notifyIterationStatus(task: GoalTaskState, heading: string, _session?: Session, iterationSummary?: string): void {

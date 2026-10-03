@@ -24,6 +24,8 @@ export function renderGoalStatus(
   controller: GoalController,
   resolveSession: GoalSessionResolver,
   ref?: string,
+  /** `forUser`: the chat command's wording (see `formatGoalTask`). */
+  options: { forUser?: boolean } = {},
 ): string {
   const taskRef = ref?.trim();
   if (taskRef) {
@@ -32,7 +34,7 @@ export function renderGoalStatus(
       return `Error: Goal task "${taskRef}" not found.`;
     }
     const session = task.sessionId ? resolveSession(task.sessionId) : undefined;
-    return formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session));
+    return formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session), undefined, options);
   }
 
   const tasks = controller.listTasks();
@@ -42,7 +44,7 @@ export function renderGoalStatus(
 
   return tasks.map((task) => {
     const session = task.sessionId ? resolveSession(task.sessionId) : undefined;
-    return formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session));
+    return formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session), undefined, options);
   }).join("\n\n");
 }
 

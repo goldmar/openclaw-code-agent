@@ -1,10 +1,41 @@
 import type { SessionManager } from "../session-manager";
-import type { SessionRoute } from "../types";
+import type { GoalTaskStatus, SessionRoute } from "../types";
 import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
 /** A session status in the user's words: a killed session is "stopped". */
 export function userStatusWord(status: string): string {
   return status === "killed" ? "stopped" : status;
+}
+
+const GOAL_STATUS_WORDS: Record<GoalTaskStatus, string> = {
+  awaiting_verifier_confirmation: "waiting for your confirmation",
+  running: "running",
+  waiting_for_session: "waiting for the session",
+  waiting_for_plan_approval: "waiting for plan approval",
+  waiting_for_user: "waiting for your input",
+  succeeded: "succeeded",
+  failed: "failed",
+  stopped: "stopped",
+};
+
+/** A goal task status in the user's words; tool results keep the raw value. */
+export function userGoalStatusWord(status: GoalTaskStatus): string {
+  return GOAL_STATUS_WORDS[status] ?? String(status).replace(/_/gu, " ");
+}
+
+const PHASE_WORDS: Record<string, string> = {
+  starting: "starting",
+  active: "working",
+  awaiting_plan_decision: "waiting for a plan decision",
+  awaiting_user_input: "waiting for input",
+  awaiting_worktree_decision: "waiting for a merge / PR decision",
+  suspended: "suspended",
+  terminal: "ended",
+};
+
+/** A session phase (its lifecycle) in the user's words. */
+export function userPhaseWord(phase: string): string {
+  return PHASE_WORDS[phase] ?? phase.replace(/_/gu, " ");
 }
 
 /**
@@ -23,33 +54,23 @@ export function getKillSessionText(
 ): string {
   const already = userStatusWord;
   const session = sm.resolve(ref);
-  if (!session) {
-    const persisted = sm.getPersistedSession(ref);
-    if (!persisted) return `❌ Session "${ref}" not found.`;
-    if (persisted.status === "killed" && persisted.lifecycle === "suspended") {
-      const completed = reason === "completed";
-      const updated = sm.updatePersistedSession(ref, {
-        status: completed ? "completed" : "killed",
-        lifecycle: "terminal",
-        runtimeState: "stopped",
-        resumable: false,
-        killReason: completed ? "done" : "user",
-      });
-      if (updated) {
-        // No live process and no user notice: the row is only closed.
-        return completed
-          ? `ℹ️ [${persisted.name}] Marked as completed (it was not running).`
-          : `⛔ [${persisted.name}] Stopped (it was not running).`;
-      }
+  const target = session ?? sm.getPersistedSession(ref);
+  if (!target) return `❌ Session "${ref}" not found.`;
+
+  // A suspended session (idle timeout, or recovered after a restart) has no
+  // live process: closing it only closes the row, loaded or not, and sends no
+  // user notice.
+  if (target.status === "killed" && target.lifecycle === "suspended") {
+    const completed = reason === "completed";
+    if (sm.closeSuspendedSession(ref, completed)) {
+      return completed
+        ? `ℹ️ [${target.name}] Marked as completed (it was not running).`
+        : `⛔ [${target.name}] Stopped (it was not running).`;
     }
-    return `ℹ️ [${persisted.name}] Already ${already(persisted.status)}; nothing to stop.`;
   }
 
-  if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-    // A suspended session is left as it is (still resumable), so it is not called stopped.
-    return session.status === "killed" && session.lifecycle === "suspended"
-      ? `ℹ️ [${session.name}] Suspended, not running; nothing to stop.`
-      : `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
+  if (!session || session.status === "completed" || session.status === "failed" || session.status === "killed") {
+    return `ℹ️ [${target.name}] Already ${already(target.status)}; nothing to stop.`;
   }
 
   if (reason === "completed") {

@@ -769,6 +769,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     launchOriginAgentId: toOptionalString(raw.launchOriginAgentId),
     repoPolicy: toOptionalRepoIntegrationPolicy(raw.repoPolicy),
     repoPolicyWorkdir: toOptionalString(raw.repoPolicyWorkdir),
+    prForceNew: raw.prForceNew === true ? true : undefined,
   };
 }
 

@@ -19,6 +19,7 @@ import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } fr
 import { createLogger } from "./logger";
 import { pluginConfig } from "./config";
 import { SERVICE_NOT_RUNNING } from "./commands/args";
+import { userGoalStatusWord } from "./application/session-control";
 import { processShared } from "./process-runtime";
 import { callbackMatchesTokenRoute, type CallbackConversation } from "./callback-route-binding";
 import { alreadyResolvedReply } from "./session-worktree-decision-service";
@@ -92,11 +93,19 @@ function failureReply(sessionName: string | undefined, reason: string): string {
   return `❌ ${prefix}${(prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text) || "The action failed."}`;
 }
 
+/** `agent_pr`'s answer when the branch's PR was closed without merging. */
+const CLOSED_PR_PATTERN = /A PR exists but was closed without merging: (\S+)/u;
+
 /** The reason a merge / PR / discard button failed, for the user (see `plainReason`). */
 function userFacingFailureReason(toolText: string): string {
-  // The detail of a rebase conflict is on the following lines.
+  // The detail of a rebase conflict is on the following lines, with the checkout to resolve it in.
   const rebase = /Rebase of (\S+) onto (\S+) hit conflicts/u.exec(toolText);
-  if (rebase) return `rebase of \`${rebase[1]}\` onto \`${rebase[2]}\` hit conflicts; resolve them manually`;
+  if (rebase) {
+    const checkout = /^\s*cd (\S.*)$/mu.exec(toolText)?.[1]?.trim();
+    return `rebase of \`${rebase[1]}\` onto \`${rebase[2]}\` hit conflicts; resolve them manually${checkout ? ` in \`${checkout}\`` : ""}`;
+  }
+  const closedPr = CLOSED_PR_PATTERN.exec(toolText);
+  if (closedPr) return `the earlier PR was closed without merging: ${closedPr[1]}`;
   return plainReason(toolText)
     .replace(/^(?:Merge (?:blocked|failed)|Not merged|No PR opened|Failed to create PR)(?:: |\.?$)/u, "")
     .replace(/^Failed to /u, "could not ")
@@ -252,21 +261,35 @@ async function reofferWorktreeDecisionAfterFailure(
   action: "Merge" | "PR" | "Discard",
   toolText: string,
 ): Promise<void> {
+  // The PR action found its PR closed without merging: the prompt offers New PR.
+  const closedPr = action === "PR" && CLOSED_PR_PATTERN.test(toolText);
   // One message: the failure and the still-open decision with its fresh buttons.
   // A reason that ends in a URL gets no period after it.
   const reason = userFacingFailureReason(toolText);
   // A merge that was refused (policy, uncommitted changes) is blocked, not failed.
   const verb = /^\s*(?:❌\s*)?Merge blocked/u.test(toolText) ? "blocked" : "failed";
   const failure = `${action} ${verb}: ${reason}${/https?:\/\/\S+$/u.test(reason) ? "" : "."}`;
-  let reoffered = false;
+  const plainReply = `❌ [${sessionName}] ${failure}`;
+  let reoffered: boolean | "pending" = false;
   try {
-    reoffered = (await sessionManager?.reofferWorktreeDecision?.(sessionId, failure)) ?? false;
+    reoffered = (await sessionManager?.reofferWorktreeDecision?.(sessionId, failure, {
+      closedPr,
+      // A slow delivery ends after this handler answered: finish what it would have done.
+      onLateResult: (delivered) => {
+        void (delivered ? clearWorktreeDecisionButtons(ctx, callbackAcknowledged) : replyText(ctx, plainReply))
+          .catch((err: unknown) => {
+            log.warn(`[callback-handler] Could not finish a late worktree re-offer: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      },
+    })) ?? false;
   } catch (err) {
     log.warn(`[callback-handler] Could not re-offer the worktree decision after a failed action: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Still being delivered: that prompt is the answer, so nothing is sent now.
+  if (reoffered === "pending") return;
   if (reoffered) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
   // Nothing was re-offered (the decision is closed, or the prompt was not delivered).
-  else await replyText(ctx, `❌ [${sessionName}] ${failure}`);
+  else await replyText(ctx, plainReply);
 }
 
 function isPlanDecisionAction(kind: SessionActionKind): boolean {
@@ -907,6 +930,9 @@ export function createCallbackHandler(
                 session: sessionId,
                 message: recoveryMessage,
                 userInitiated: true,
+                // One message: the `💬 … Answer sent … The session resumed.`
+                // confirmation below replaces the `▶️ [name] Resumed` notice.
+                replyIsNotice: true,
               });
               submitted = !result.isError;
               forwardedToResumedSession = submitted;
@@ -1342,7 +1368,11 @@ export function createCallbackHandler(
             // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
             // on success; if the PR creation fails the flag remains set so reminders
             // continue until the user tries again.
-            const result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
+            const result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
+              session: sessionId,
+              // The New PR button, offered after its PR was found closed without merging.
+              ...(consumedToken.prForceNew ? { force_new: true } : {}),
+            });
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
@@ -1421,7 +1451,7 @@ export function createCallbackHandler(
                 : await goalController.confirmVerifierCommands(sessionId);
               if (!outcome) await replyText(ctx, "⚠️ That goal task no longer exists.");
               else if (outcome.action === "not_waiting") {
-                await replyText(ctx, `⚠️ [${outcome.task.name}] Goal task is no longer waiting for confirmation (${outcome.task.status}).`);
+                await replyText(ctx, `⚠️ [${outcome.task.name}] Goal task is no longer waiting for confirmation (${userGoalStatusWord(outcome.task.status)}).`);
               }
             } catch (err) {
               // A failed start is reported by `❌ [task] Goal task failed`.
@@ -1522,6 +1552,13 @@ export function createCallbackHandler(
           case "session-restart":
           case "session-resume": {
             await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            // A plain Resume on a session that already runs has nothing to do:
+            // no "Continue where you left off." is sent to the agent. A button
+            // with its own instruction (Commit changes) still delivers it.
+            if (!consumedToken.launchPrompt && sessionManager.resolve?.(sessionId)?.status === "running") {
+              await replyText(ctx, `ℹ️ [${actionSessionName}] Already running.`);
+              break;
+            }
             const result = await executeRespond(sessionManager, {
               session: sessionId,
               // A resume button may carry its own instruction (for example "commit your changes").
@@ -1530,7 +1567,8 @@ export function createCallbackHandler(
             });
             // A resume already posts its own notice (`▶️ [name] Resumed | …`, `Relaunched fresh`, `👍 Plan approved`).
             if (result.isError) await replyText(ctx, result.userText ?? failureReply(actionSessionName, result.text));
-            else if (!result.userNoticeSent) await replyText(ctx, `▶️ [${actionSessionName}] Resumed.`);
+            // Nothing resumed (the instruction went to a running session): say what happened.
+            else if (!result.userNoticeSent) await replyText(ctx, result.userText ?? `▶️ [${actionSessionName}] Resumed.`);
             break;
           }
 

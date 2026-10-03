@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { waitUntil } from "./harness-backends";
 import { startFullStack, TELEGRAM_TOPIC, type FullStack, type SentMessage } from "./fullstack-fixture";
+import { dmCommand, nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 /**
  * One user-visible message per chat command, through the real plugin entry on
@@ -16,26 +17,12 @@ import { startFullStack, TELEGRAM_TOPIC, type FullStack, type SentMessage } from
 
 type CommandReply = { text?: string; suppressReply?: boolean };
 
-const TOPIC_COMMAND = {
-  channel: "telegram",
-  to: `telegram:${TELEGRAM_TOPIC.to}`,
-  accountId: TELEGRAM_TOPIC.accountId,
-  messageThreadId: TELEGRAM_TOPIC.threadId,
-  senderId: "1234",
-  sessionKey: TELEGRAM_TOPIC.sessionKey,
-};
-const OTHER_TOPIC_COMMAND = {
-  ...TOPIC_COMMAND,
-  messageThreadId: 7,
-  sessionKey: `agent:main:telegram:group:${TELEGRAM_TOPIC.to}:topic:7`,
-};
-const DM_COMMAND = {
-  channel: "telegram",
-  to: "telegram:1234",
-  accountId: TELEGRAM_TOPIC.accountId,
-  senderId: "1234",
-  sessionKey: "agent:main:main",
-};
+const TOPIC = { chat: TELEGRAM_TOPIC.to, topic: Number(TELEGRAM_TOPIC.threadId), accountId: TELEGRAM_TOPIC.accountId };
+const TOPIC_COMMAND = nativeTopicCommand(TOPIC);
+/** The same topic through the text-command path: `channelId`, and the topic inside `to`. */
+const TEXT_TOPIC_COMMAND = textTopicCommand(TOPIC);
+const OTHER_TOPIC_COMMAND = nativeTopicCommand({ ...TOPIC, topic: 7 });
+const DM_COMMAND = dmCommand({ accountId: TELEGRAM_TOPIC.accountId });
 
 const PLUGIN_CONFIG = { defaultWorktreeStrategy: "off", permissionMode: "default" };
 
@@ -72,9 +59,9 @@ async function settle(s: FullStack, name: string): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
-async function launchFromTopic(s: FullStack, name: string): Promise<void> {
+async function launchFromTopic(s: FullStack, name: string, ctx: Record<string, unknown> = TOPIC_COMMAND): Promise<void> {
   const before = s.host.durableSends.length;
-  const reply = await command(s, "agent", { ...TOPIC_COMMAND, args: `--name ${name} --workdir ${workdir()} --harness codex Start the task` });
+  const reply = await command(s, "agent", { ...ctx, args: `--name ${name} --workdir ${workdir()} --harness codex Start the task` });
   assert.match(reply.text ?? "", new RegExp(`^🚀 \\[${name}\\] Launched \\| `), reply.text);
   await waitUntil(() => s.sm.resolve(name)?.status === "running", `${name} running`);
   // One message: the reply replaces the 🚀 launch notice.
@@ -157,5 +144,84 @@ describe("one message per chat command (Telegram topic)", () => {
     assert.equal(reply.text, "❌ [cmd-broken-elsewhere] Did not start: model_not_found\nFix the problem and run /agent again.");
     assert.equal(notice.to, TELEGRAM_TOPIC.to);
     assert.equal(visible(s, reply, before).notices.length, 1);
+  });
+
+  it("text commands in a forum topic: the same route, and /agent_kill there is one message", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    // `launchFromTopic` checks the route: chat, bot account and topic as on the native path.
+    await launchFromTopic(s, "cmd-text", TEXT_TOPIC_COMMAND);
+
+    const before = s.host.durableSends.length;
+    const reply = await command(s, "agent_kill", { ...TEXT_TOPIC_COMMAND, args: "cmd-text" });
+    await settle(s, "cmd-text");
+
+    const seen = visible(s, reply, before);
+    assert.match(seen.reply[0] ?? "", /^⛔ \[cmd-text\] Stopped by user/);
+    assert.deepEqual(seen.notices.map((message) => message.text), [], "no separate stop notice in the same topic");
+  });
+
+  it("text-path /agent failing at startup in its own topic: one short reply with the Failed notice, never an empty reply", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    (s.backend.harness as { launch: unknown }).launch = () => { throw new Error("model_not_found"); };
+
+    const before = s.host.durableSends.length;
+    const reply = await command(s, "agent", { ...TEXT_TOPIC_COMMAND, args: `--name cmd-text-broken --workdir ${workdir()} --harness codex Start the task` });
+    const notice = await s.waitForMessage(/^❌ \[cmd-text-broken\] Failed/, before);
+    await settle(s, "cmd-text-broken");
+
+    // The host's text path ignores `suppressReply` and would print "No response generated."
+    assert.deepEqual(reply, { text: "❌ [cmd-text-broken] Did not start." });
+    assert.deepEqual(visible(s, reply, before).notices.map((message) => message.text), [notice.text]);
+    assert.equal(String(notice.threadId), String(TELEGRAM_TOPIC.threadId));
+    assert.equal(notice.accountId, TELEGRAM_TOPIC.accountId);
+  });
+
+  it("/agent_kill on a suspended session that is still loaded closes it without a notice", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    await launchFromTopic(s, "cmd-suspended");
+    const id = s.sm.resolve("cmd-suspended")!.id;
+    assert.ok(s.sm.kill(id, "idle-timeout"));
+    await s.waitForMessage(/^💤 \[cmd-suspended\] Suspended after idle timeout/);
+    await s.sm.whenStorePersisted();
+    assert.equal(s.sm.resolve("cmd-suspended")?.lifecycle, "suspended", "still loaded");
+
+    const before = s.host.durableSends.length;
+    const reply = await command(s, "agent_kill", { ...TOPIC_COMMAND, args: "cmd-suspended" });
+    await s.sm.whenStorePersisted();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.equal(reply.text, "⛔ [cmd-suspended] Stopped (it was not running).");
+    assert.deepEqual(visible(s, reply, before).notices.map((message) => message.text), [], "nothing was running: no stop notice");
+    assert.equal(s.sm.resolve("cmd-suspended"), undefined, "the closed session is unloaded");
+    const row = s.sm.getPersistedSession(id);
+    assert.equal(row?.status, "killed");
+    assert.equal(row?.lifecycle, "terminal");
+    assert.equal(row?.killReason, "user");
+    assert.equal(row?.resumable, false);
+    // Closed: a second /agent_kill has nothing left to do, and the directory is free for a new /agent.
+    assert.equal((await command(s, "agent_kill", { ...TOPIC_COMMAND, args: "cmd-suspended" })).text, "ℹ️ [cmd-suspended] Already stopped; nothing to stop.");
+  });
+
+  it("a Resume button on a session that already runs answers Already running and sends the agent nothing", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    await launchFromTopic(s, "cmd-resume");
+    assert.ok(s.sm.kill(s.sm.resolve("cmd-resume")!.id, "idle-timeout"));
+    const suspended = await s.waitForMessage(/^💤 \[cmd-resume\] Suspended after idle timeout/);
+    const resume = suspended.buttons.find((button) => button.label === "Resume")!;
+
+    // Resumed by a typed message; the 💤 message's Resume button is still there.
+    const resumed = await command(s, "agent_respond", { ...TOPIC_COMMAND, args: "cmd-resume carry on" });
+    assert.match(resumed.text ?? "", /^▶️ \[cmd-resume\] Resumed/);
+    await waitUntil(() => s.sm.resolve("cmd-resume")?.status === "running", "cmd-resume running again");
+    await waitUntil(() => /carry on/.test(s.backend.turns.at(-1)?.text ?? ""), "the resumed turn");
+    const turns = s.backend.turns.length;
+
+    const before = s.host.durableSends.length;
+    const click = await s.click(resume);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.deepEqual(click.replies, ["ℹ️ [cmd-resume] Already running."]);
+    assert.equal(s.backend.turns.length, turns, "no \"Continue where you left off.\" turn");
+    assert.deepEqual(s.messages().filter((message) => message.index >= before).map((message) => message.text), []);
   });
 });

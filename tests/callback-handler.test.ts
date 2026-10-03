@@ -2131,6 +2131,7 @@ describe("createCallbackHandler()", () => {
     };
     let resumeConfig: any;
     let consumedRequestId: string | undefined;
+    const resumedNoticeSends: Array<boolean | undefined> = [];
     setSessionManager({
       getActionToken: () => token,
       resolve: (): undefined => undefined,
@@ -2155,7 +2156,8 @@ describe("createCallbackHandler()", () => {
         resumeConfig = config;
         return createStubSession({ id: "sess-42", name: "review-morning-audio-brief" });
       },
-      notifyResumedLaunch: () => {},
+      // One message: the answer confirmation replaces the `▶️ Resumed` notice.
+      notifyResumedLaunch: (_session: unknown, send?: boolean) => { resumedNoticeSends.push(send); },
       consumeQuestionAnswerTokens: (_sessionId: string, requestId: string) => {
         consumedRequestId = requestId;
         return [token];
@@ -2167,6 +2169,8 @@ describe("createCallbackHandler()", () => {
     const result = await createCallbackHandler().handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
+    assert.deepEqual(resumedNoticeSends, [false], "the Resumed notice is not sent as a second message");
+    assert.deepEqual(state.replies, ["💬 [review-morning-audio-brief] Answer sent: OpenAI model (Recommended). The session resumed."]);
     assert.equal(resumeConfig.resumeSessionId, "backend-42");
     assert.equal(resumeConfig.sessionIdOverride, "sess-42");
     assert.match(resumeConfig.prompt, /interrupted by an OpenClaw Gateway restart/);
@@ -2456,8 +2460,8 @@ describe("createCallbackHandler()", () => {
       },
       {
         kind: "worktree-merge" as const,
-        // The detail of a rebase conflict is kept, in one line.
-        text: "❌ [ux-fix] Merge failed: rebase of `agent/ux-fix` onto `main` hit conflicts; resolve them manually.",
+        // The detail of a rebase conflict is kept, in one line, with the checkout to resolve it in.
+        text: "❌ [ux-fix] Merge failed: rebase of `agent/ux-fix` onto `main` hit conflicts; resolve them manually in `/repo`.",
         dependencies: {
           makeAgentMergeTool: () => ({
             execute: async () => createToolResult("⚠️ Rebase conflicts — manual resolution required:\n\nRebase of agent/ux-fix onto main hit conflicts.\nTo resolve manually:\n  cd /repo", false),
@@ -2475,7 +2479,7 @@ describe("createCallbackHandler()", () => {
       },
       {
         kind: "worktree-update-pr" as const,
-        text: "❌ [ux-fix] PR failed: A PR exists but was closed without merging: https://github.com/example/repo/pull/42",
+        text: "❌ [ux-fix] PR failed: the earlier PR was closed without merging: https://github.com/example/repo/pull/42",
         dependencies: {
           makeAgentPrTool: () => ({
             execute: async () => createToolResult("⚠️ A PR exists but was closed without merging: https://github.com/example/repo/pull/42\n\nWhat would you like to do?", false),
@@ -2616,6 +2620,107 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(failure.editedMessages, []);
     assert.equal(failure.buttonsCleared, 0);
     assert.deepEqual(failure.replies, ["❌ [ux-fix] Discard failed: branch deletion failed."]);
+  });
+
+  it("offers New PR after a PR button found its PR closed, and the New PR button opens a fresh one", async () => {
+    const reoffers: Array<{ failure: string; closedPr?: boolean }> = [];
+    const prCalls: Array<Record<string, unknown>> = [];
+    let token: Record<string, unknown> = { sessionId: "sess-42", kind: "worktree-update-pr" };
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      queueOrchestratorContext: () => true,
+      reofferWorktreeDecision: async (_ref: string, failure: string, options: { closedPr?: boolean }) => {
+        reoffers.push({ failure, closedPr: options.closedPr });
+        return true;
+      },
+    } as any);
+    const closed = createToolResult("⚠️ A PR exists but was closed without merging: https://github.com/example/repo/pull/42\n\nWhat would you like to do?", false);
+    const handler = createCallbackHandler("telegram", {
+      makeAgentPrTool: () => ({
+        execute: async (_id: string, params: Record<string, unknown>) => {
+          prCalls.push(params);
+          return params.force_new ? createToolResult("ℹ️ [ux-fix] PR opened: https://github.com/example/repo/pull/43", true) : closed;
+        },
+      }) as any,
+    });
+
+    const sync = createCtx("token-sync-pr");
+    assert.deepEqual(await handler.handler(sync.ctx as any), { handled: true });
+    assert.deepEqual(reoffers, [{ failure: "PR failed: the earlier PR was closed without merging: https://github.com/example/repo/pull/42", closedPr: true }]);
+    assert.deepEqual(sync.replies, [], "the re-offered prompt is the one message");
+    assert.deepEqual(prCalls, [{ session: "sess-42" }]);
+
+    // The re-offered prompt's New PR button carries `prForceNew`.
+    token = { sessionId: "sess-42", kind: "worktree-create-pr", prForceNew: true };
+    const fresh = createCtx("token-new-pr");
+    assert.deepEqual(await handler.handler(fresh.ctx as any), { handled: true });
+    assert.deepEqual(prCalls[1], { session: "sess-42", force_new: true });
+    assert.equal(reoffers.length, 1, "a successful New PR re-offers nothing");
+  });
+
+  it("sends nothing while a re-offered prompt is still being delivered, and reports a late failure once", async () => {
+    let lateResult: ((delivered: boolean) => void) | undefined;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      queueOrchestratorContext: () => true,
+      reofferWorktreeDecision: async (_ref: string, _failure: string, options: { onLateResult?: (delivered: boolean) => void }) => {
+        lateResult = options.onLateResult;
+        return "pending";
+      },
+    } as any);
+    const handler = createCallbackHandler("telegram", {
+      makeAgentMergeTool: () => ({ execute: async () => createToolResult("❌ Merge failed: the base moved.", false) }) as any,
+    });
+
+    const state = createCtx("token-merge");
+    assert.deepEqual(await handler.handler(state.ctx as any), { handled: true });
+    assert.deepEqual(state.replies, [], "the prompt in flight is the answer");
+    assert.equal(state.buttonsCleared, 0);
+
+    // The delivery fails after the handler answered: the plain line is sent then.
+    assert.ok(lateResult);
+    lateResult(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(state.replies, ["❌ [ux-fix] Merge failed: the base moved."]);
+
+    // A late success clears the spent controls instead and sends nothing more.
+    const slow = createCtx("token-merge");
+    assert.deepEqual(await handler.handler(slow.ctx as any), { handled: true });
+    lateResult!(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(slow.replies, []);
+    assert.equal(slow.buttonsCleared, 1);
+  });
+
+  it("answers a Resume button on a session that already runs without sending it a message", async () => {
+    const sent: string[] = [];
+    const running = createStubSession({ id: "sess-42", name: "ux-fix", status: "running", sendMessage: async (text: string) => { sent.push(text); } });
+    let token: Record<string, unknown> = { sessionId: "sess-42", kind: "session-resume" };
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: () => running,
+      getPersistedSession: (): undefined => undefined,
+      notifySession: () => {},
+    } as any);
+
+    const plain = createCtx("token-resume");
+    assert.deepEqual(await createCallbackHandler().handler(plain.ctx as any), { handled: true });
+    assert.deepEqual(plain.replies, ["ℹ️ [ux-fix] Already running."]);
+    assert.deepEqual(sent, [], "no \"Continue where you left off.\" for a session that runs");
+
+    // A button with its own instruction (Commit changes) still delivers it.
+    token = { sessionId: "sess-42", kind: "session-resume", launchPrompt: "Commit your changes." };
+    const commit = createCtx("token-commit");
+    assert.deepEqual(await createCallbackHandler().handler(commit.ctx as any), { handled: true });
+    assert.deepEqual(sent, ["Commit your changes."]);
+    assert.deepEqual(commit.replies, ["💬 [ux-fix] Message sent."]);
   });
 
   it("answers a second Discard button with the already-resolved reply and re-offers nothing", async () => {

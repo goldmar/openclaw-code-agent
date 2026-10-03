@@ -1,6 +1,7 @@
 import { goalController, sessionManager } from "../singletons";
 import { resolveGoalLaunchRequest } from "../goal-launch-resolution";
 import { renderGoalStatus } from "../application/goal-view";
+import { userGoalStatusWord } from "../application/session-control";
 import { isCommandInRouteChat } from "../config";
 import type { GoalReplyNotice } from "../goal-controller";
 import type { GoalTaskState, OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
@@ -57,7 +58,7 @@ export function registerGoalCommand(api: CommandApi): void {
       const first = consumeFirstCommandArg(raw);
       const subcommand = first?.value.toLowerCase();
       if (subcommand === "status") {
-        return { text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), first!.rest).replace(/^Error:/u, "❌") };
+        return { text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), first!.rest, { forUser: true }).replace(/^Error:/u, "❌") };
       }
       if (subcommand === "stop") {
         const ref = first!.rest.trim();
@@ -66,7 +67,7 @@ export function registerGoalCommand(api: CommandApi): void {
         if (!result) return { text: notFound(ref) };
         return {
           text: result.action === "already_terminal"
-            ? `ℹ️ [${result.task.name}] Already ${result.task.status}; nothing to stop.`
+            ? `ℹ️ [${result.task.name}] Already ${userGoalStatusWord(result.task.status)}; nothing to stop.`
             : answer(result.task, `⛔ [${result.task.name}] Stopped.`, `⛔ [${result.task.name}] Goal task stopped`),
         };
       }
@@ -84,7 +85,7 @@ export function registerGoalCommand(api: CommandApi): void {
             return {
               text: result.task.status === "waiting_for_user"
                 ? `❌ [${result.task.name}] Cannot edit the goal while the task waits for your input.`
-                : `ℹ️ [${result.task.name}] Already ${result.task.status}; nothing to edit.`,
+                : `ℹ️ [${result.task.name}] Already ${userGoalStatusWord(result.task.status)}; nothing to edit.`,
             };
           }
           return { text: result.action === "not_found" ? notFound(ref) : "❌ The new goal must not be empty." };
@@ -207,8 +208,13 @@ export function registerGoalCommand(api: CommandApi): void {
         };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        // A task that failed while starting already has its `❌ [task] Goal task failed` notice.
-        return { text: reply.text?.startsWith("❌") ? reply.text : `❌ Goal task did not start: ${message}` };
+        // A task that failed while starting already has its `❌ [task] Goal task
+        // failed` notice: the reply in the task's own chat, and a short line
+        // when it was posted to the task's chat instead.
+        if (reply.text?.startsWith("❌")) {
+          return { text: reply.posted ? `❌ [${reply.taskName}] Goal task did not start.` : reply.text };
+        }
+        return { text: `❌ Goal task did not start: ${message}` };
       }
     },
   });

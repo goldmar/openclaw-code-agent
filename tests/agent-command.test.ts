@@ -5,19 +5,13 @@ import assert from "node:assert/strict";
 import { registerAgentCommand } from "../src/commands/agent";
 import { setPluginConfig } from "../src/config";
 import { setSessionManager } from "../src/singletons";
+import { directTopicCommand, nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 type AgentCommandHandler = (ctx: Record<string, unknown>) => Promise<{ text?: string; suppressReply?: boolean }>;
 
-// The host's PluginCommandContext: top-level `channel`, `to`, `accountId`,
-// `messageThreadId`, `senderId` and `sessionKey`; no `deliveryContext`.
-const TOPIC_COMMAND = {
-  channel: "telegram",
-  to: "telegram:-1001234567890",
-  accountId: "bot1",
-  messageThreadId: 42,
-  senderId: "1234",
-  sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-};
+// The host's PluginCommandContext shapes (see ./command-contexts).
+const TOPIC_COMMAND = nativeTopicCommand({ topic: 42 });
+const TEXT_TOPIC_COMMAND = textTopicCommand({ topic: 42 });
 const TOPIC_ROUTE = {
   provider: "telegram",
   accountId: "bot1",
@@ -54,8 +48,7 @@ describe("agent command", () => {
     const result = await captureAgentCommand()({
       args: "--name broken --model sonnet --harness claude-code Fix it",
       workspaceDir: "/tmp",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
-      deliveryContext: { channel: "telegram", to: "-1001234567890", accountId: "bot1", threadId: 13832 },
+      ...nativeTopicCommand({ topic: 13832 }),
     });
     assert.equal(result.text, "❌ [broken] Did not start: model_not_found\nFix the problem and run /agent again.");
   });
@@ -78,6 +71,25 @@ describe("agent command", () => {
     assert.equal(configs[0]?.originThreadId, 42);
     assert.deepEqual(configs[0]?.route, TOPIC_ROUTE);
 
+    // A text command in the same topic (`to` carries the topic): the same route.
+    await handler({ ...TEXT_TOPIC_COMMAND, args: "--name text-topic --workdir /tmp --model sonnet --harness claude-code Fix it" });
+    assert.equal(configs[1]?.originChannel, "telegram|bot1|-1001234567890");
+    assert.equal(configs[1]?.originThreadId, 42);
+    assert.deepEqual(configs[1]?.route, TOPIC_ROUTE);
+
+    // The General topic: `to` is bare on both paths and the thread is 1.
+    for (const general of [nativeTopicCommand({ topic: 1 }), textTopicCommand({ topic: 1 })]) {
+      configs.length = 0;
+      await handler({ ...general, args: "--name general --workdir /tmp --model sonnet --harness claude-code Fix it" });
+      assert.deepEqual(configs[0]?.route, { ...TOPIC_ROUTE, threadId: "1", sessionKey: general.sessionKey });
+    }
+
+    // A direct-messages topic is not a route thread: the chat is not taken from `to`.
+    configs.length = 0;
+    await handler({ ...directTopicCommand({ topic: 5 }), args: "--name direct-topic --workdir /tmp --model sonnet --harness claude-code Fix it" });
+    assert.notEqual(configs[0]?.originChannel, "telegram|bot1|1234");
+    configs.length = 0;
+
     // A DM with the default scope: every DM shares `agent:<id>:main`.
     await handler({
       channel: "telegram",
@@ -87,8 +99,8 @@ describe("agent command", () => {
       sessionKey: "agent:main:main",
       args: "--name dm --workdir /tmp --model sonnet --harness claude-code Fix it",
     });
-    assert.equal(configs[1]?.originChannel, "telegram|default|1234");
-    assert.deepEqual(configs[1]?.route, { provider: "telegram", accountId: "default", target: "1234", threadId: undefined, sessionKey: "agent:main:main" });
+    assert.equal(configs[0]?.originChannel, "telegram|default|1234");
+    assert.deepEqual(configs[0]?.route, { provider: "telegram", accountId: "default", target: "1234", threadId: undefined, sessionKey: "agent:main:main" });
   });
 
   it("sends no reply when a launch fails at startup in its own chat: the Failed notice is the one message", async () => {
@@ -103,6 +115,18 @@ describe("agent command", () => {
 
     setSessionManager(failed() as any);
     assert.deepEqual(await captureAgentCommand()({ ...TOPIC_COMMAND, args }), { suppressReply: true });
+
+    // The text-command path ignores `suppressReply` (the host would print
+    // "No response generated."): one short line goes with the notice.
+    setSessionManager(failed() as any);
+    assert.deepEqual(await captureAgentCommand()({ ...TEXT_TOPIC_COMMAND, args }), { text: "❌ [broken] Did not start." });
+    setSessionManager(failed({ status: "killed", error: undefined }) as any);
+    assert.deepEqual(await captureAgentCommand()({ ...TEXT_TOPIC_COMMAND, args }), { text: "❌ [broken] Did not start." });
+    // From another topic the text path keeps the full reply, like the native path.
+    setSessionManager(failed({ route: { ...TOPIC_ROUTE, threadId: "7" } }) as any);
+    assert.deepEqual(await captureAgentCommand()({ ...TEXT_TOPIC_COMMAND, args }), {
+      text: "❌ [broken] Did not start: model_not_found\nFix the problem and run /agent again.",
+    });
 
     // Stopped while starting: the `⛔ [name] Stopped by …` notice is the one message.
     setSessionManager(failed({ status: "killed", error: undefined }) as any);
@@ -171,13 +195,7 @@ describe("agent command", () => {
     const result = await handler({
       args: '--name "agent command" --model sonnet --harness claude-code Fix the auth bug',
       workspaceDir: "/tmp",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
-      deliveryContext: {
-        channel: "telegram",
-        to: "-1001234567890",
-        accountId: "bot1",
-        threadId: 13832,
-      },
+      ...nativeTopicCommand({ topic: 13832 }),
     });
 
     // One message (N45): the reply is the launch line, with no separate 🚀 notice.

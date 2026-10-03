@@ -296,8 +296,8 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
-  it("suppresses the session's stop notice only when the stop reply replaces it", () => {
-    for (const sameChat of [true, false]) {
+  it("suppresses the session's stop notice for every goal stop: the goal notice is the one stop message", () => {
+    for (const sameChat of [true, false, undefined]) {
       const session = createStubSession({ id: "session-1", name: "goal-task" });
       const killed: string[] = [];
       const controller = new GoalController({
@@ -311,12 +311,20 @@ describe("GoalController", () => {
       const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
       store.upsert(task);
 
-      const reply: { sameChat: () => boolean; text?: string } = { sameChat: () => sameChat };
+      // `undefined`: the agent_goal tool, which passes no reply.
+      const reply: { sameChat: () => boolean; text?: string; posted?: boolean; taskName?: string } | undefined =
+        sameChat === undefined ? undefined : { sameChat: () => sameChat };
       assert.equal(controller.stopTask(task.id, reply)?.action, "stopped");
 
-      assert.deepEqual(killed, [`session-1:${sameChat}`]);
-      assert.equal(session.stopNoticeReplaced === true, sameChat);
-      assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+      // In the task's chat the reply is the stop message; from another chat
+      // (or the tool) the goal notice in the task's chat is. Never both lines.
+      assert.deepEqual(killed, ["session-1:true"]);
+      assert.equal(session.stopNoticeReplaced, true);
+      if (reply) {
+        assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+        assert.equal(reply.posted, !sameChat);
+        assert.equal(reply.taskName, task.name);
+      }
     }
   });
 

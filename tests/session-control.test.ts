@@ -1,13 +1,15 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getKillSessionText } from "../src/application/session-control";
+import { getKillSessionText, userGoalStatusWord } from "../src/application/session-control";
+import { SessionManager } from "../src/session-manager";
 import { registerAgentKillCommand } from "../src/commands/agent-kill";
 import { setSessionManager } from "../src/singletons";
+import { directTopicCommand, dmCommand, nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 describe("/agent_kill command", () => {
   const route = { provider: "telegram", accountId: "bot", target: "12345", threadId: "42" };
-  function kill(ctx: Record<string, unknown>): { text: string; session: Record<string, unknown> } {
+  function kill(ctx: object): { text: string; session: Record<string, unknown> } {
     const session: Record<string, unknown> = { name: "s", id: "1", status: "running", costUsd: 0.25, duration: 61_000, route };
     setSessionManager({ resolve: () => session, kill: () => {} } as any);
     let handler: ((ctx: Record<string, unknown>) => { text: string }) | undefined;
@@ -19,16 +21,28 @@ describe("/agent_kill command", () => {
     }
   }
 
+  it("answers with the one stop notice for a text command in the session's topic", () => {
+    const { text, session } = kill(textTopicCommand({ chat: "12345", topic: 42, accountId: "bot" }));
+    assert.equal(text, "⛔ [s] Stopped by user | $0.25 | 1m1s");
+    assert.equal(session.stopNoticeReplaced, true);
+  });
+
   it("answers with the one stop notice when typed in the session's chat", () => {
-    const { text, session } = kill({ deliveryContext: { channel: "telegram", to: "12345", accountId: "bot", threadId: 42 } });
+    const { text, session } = kill(nativeTopicCommand({ chat: "12345", topic: 42, accountId: "bot" }));
     assert.equal(text, "⛔ [s] Stopped by user | $0.25 | 1m1s");
     assert.equal(session.stopNoticeReplaced, true, "the lifecycle notice would repeat the reply");
   });
 
   it("keeps the stop notice in the session's chat when typed in another chat", () => {
     for (const ctx of [
-      { deliveryContext: { channel: "telegram", to: "12345", accountId: "bot", threadId: 7 } },
-      { deliveryContext: { channel: "telegram", to: "99999", accountId: "bot" } },
+      nativeTopicCommand({ chat: "12345", topic: 7, accountId: "bot" }),
+      nativeTopicCommand({ chat: "99999", topic: 42, accountId: "bot" }),
+      nativeTopicCommand({ chat: "12345", topic: 42, accountId: "other-bot" }),
+      dmCommand({ chat: "12345", accountId: "bot" }),
+      // A `to` the plugin does not understand is never "the same chat".
+      { ...nativeTopicCommand({ chat: "12345", topic: 42, accountId: "bot" }), to: "12345" },
+      { ...textTopicCommand({ chat: "12345", topic: 42, accountId: "bot" }), messageThreadId: 7 },
+      directTopicCommand({ chat: "12345", topic: 42, accountId: "bot" }),
       {},
     ]) {
       const { text, session } = kill(ctx);
@@ -69,6 +83,7 @@ describe("session-control app layer", () => {
         patch = nextPatch;
         return true;
       },
+      closeSuspendedSession: SessionManager.prototype.closeSuspendedSession,
     };
 
     const text = getKillSessionText(sm, "recovered");
@@ -96,6 +111,7 @@ describe("session-control app layer", () => {
         patch = nextPatch;
         return true;
       },
+      closeSuspendedSession: SessionManager.prototype.closeSuspendedSession,
     };
 
     const text = getKillSessionText(sm, "recovered", "completed");
@@ -159,12 +175,30 @@ describe("session-control app layer", () => {
     assert.equal(getKillSessionText(done, "s"), "ℹ️ [s] Already completed; nothing to stop.");
   });
 
-  it("says suspended for a suspended session that is still loaded, and leaves it resumable", () => {
-    let killed = false;
+  it("closes a suspended session that is still loaded, like a stored one", () => {
+    const closed: Array<[string, boolean]> = [];
     const session = { name: "s", id: "1", status: "killed", lifecycle: "suspended" };
-    const sm: any = { resolve: () => session, kill: () => { killed = true; } };
-    assert.equal(getKillSessionText(sm, "s", "killed"), "ℹ️ [s] Suspended, not running; nothing to stop.");
-    assert.equal(killed, false);
-    assert.deepEqual(session, { name: "s", id: "1", status: "killed", lifecycle: "suspended" });
+    let killed = false;
+    const sm: any = {
+      resolve: () => session,
+      kill: () => { killed = true; },
+      closeSuspendedSession: (ref: string, completed: boolean) => { closed.push([ref, completed]); return true; },
+    };
+    assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped (it was not running).");
+    assert.equal(getKillSessionText(sm, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
+    assert.deepEqual(closed, [["s", false], ["s", true]]);
+    assert.equal(killed, false, "nothing is running: no kill and no stop notice");
+
+    // A session that could not be closed is reported as it is.
+    const stuck: any = { resolve: () => session, closeSuspendedSession: () => false };
+    assert.equal(getKillSessionText(stuck, "s", "killed"), "ℹ️ [s] Already stopped; nothing to stop.");
+  });
+
+  it("words every goal task status for the user", () => {
+    assert.deepEqual(
+      ["awaiting_verifier_confirmation", "running", "waiting_for_session", "waiting_for_plan_approval", "waiting_for_user", "succeeded", "failed", "stopped"]
+        .map((status) => userGoalStatusWord(status as Parameters<typeof userGoalStatusWord>[0])),
+      ["waiting for your confirmation", "running", "waiting for the session", "waiting for plan approval", "waiting for your input", "succeeded", "failed", "stopped"],
+    );
   });
 });

@@ -419,7 +419,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       body: Type.Optional(Type.String({ description: "Default: generated. On an open PR, replaces the body." })),
       update_metadata: Type.Optional(Type.Boolean({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
       base_branch: Type.Optional(Type.String({ description: "Default: detected" })),
-      force_new: Type.Optional(Type.Boolean({ description: "Fail instead of updating an existing PR" })),
+      force_new: Type.Optional(Type.Boolean({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
       target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
     }),
@@ -615,13 +615,19 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Sync PR state from GitHub
-      const prStatus = normalizeForceNewReplacementPrStatus(
+      const syncedPrStatus = normalizeForceNewReplacementPrStatus(
         resolvedTargetPrUrl
           ? await syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
           : await syncWorktreePR(originalWorkdir, branchName, targetRepo),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
+      // force_new replaces a PR that was closed without merging, whether the
+      // session recorded it or it was found by branch: GitHub accepts a new PR
+      // from the same branch.
+      const prStatus: PRStatus = params.force_new && syncedPrStatus.exists && syncedPrStatus.state === "closed"
+        ? { exists: false, state: "none" }
+        : syncedPrStatus;
 
       // Handle force_new parameter
       if (params.force_new && prStatus.exists) {
@@ -789,8 +795,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                   `What would you like to do?\n\n` +
                   `1. Reopen the closed PR manually on GitHub, then call agent_pr() again to update it\n` +
                   `2. Close and delete the branch with agent_merge(delete_branch=true), then start a new session/worktree\n` +
-                  `3. Manually delete the closed PR on GitHub, then call agent_pr(force_new=true) to create a fresh PR\n\n` +
-                  `(This tool cannot automatically reopen or recreate PRs to avoid unintended actions.)`
+                  `3. Call agent_pr(force_new=true) to open a fresh PR from the same branch (the user's New PR button does this)\n\n` +
+                  `(This tool does not reopen or replace a closed PR on its own, to avoid unintended actions.)`
           }],
           meta: { success: false, state: "closed" },
         } satisfies AgentPrExecuteResult;

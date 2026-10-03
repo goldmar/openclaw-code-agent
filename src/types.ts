@@ -320,6 +320,8 @@ export interface SessionActionToken {
   repoPolicy?: RepoIntegrationPolicy;
   repoPolicyWorkdir?: string;
   pluginUpdateVersion?: string;
+  /** A PR button that opens a fresh PR (`agent_pr(force_new=true)`): its earlier PR was closed without merging. */
+  prForceNew?: boolean;
 }
 
 export interface SessionNotificationDedupeRecord {

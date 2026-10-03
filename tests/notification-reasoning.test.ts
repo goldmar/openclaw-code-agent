@@ -287,6 +287,18 @@ describe("notification reasoning visibility", () => {
       manager.emitGoalTaskUpdate(task, "Goal update", label);
       assert.match(requests.at(-1)!.userMessage!, /reasoning: medium(?:\n|$)/);
     }
+
+    // A terminal line returned as a chat command's reply is not dispatched and
+    // carries the footer of the dispatched notice; other replies get no suffix.
+    for (const label of ["goal-task-failed", "goal-task-stopped"]) {
+      manager.emitGoalTaskUpdate(task, "Goal update\n\nReason.", label);
+      const dispatched = requests.at(-1)!.userMessage!;
+      const sent = requests.length;
+      assert.equal(manager.emitGoalTaskUpdate(task, "Goal update\n\nReason.", label, true), dispatched);
+      assert.match(dispatched, /^Goal update \| codex \| gpt-6-astra \| reasoning: medium\n\nReason\.$/);
+      assert.equal(requests.length, sent, "a reply is not sent as a notice too");
+    }
+    assert.equal(manager.emitGoalTaskUpdate(task, "Goal update", "goal-task-started", true), "Goal update");
   });
 
   it("passes explicit tool overrides to spawn and rejects invalid effort before launching", async () => {

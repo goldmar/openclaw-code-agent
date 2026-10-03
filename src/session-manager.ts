@@ -4,7 +4,7 @@ import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } f
 import { assertModelAllowedForHarness } from "./harness-models";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
-import { formatHarnessModelLabel } from "./session-display";
+import { appendStatusMetadata, formatHarnessModelLabel, formatReasoningMetadataSuffix } from "./session-display";
 import { formatSessionStatsSuffix } from "./session-notification-stats";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
@@ -1408,17 +1408,17 @@ export class SessionManager {
 
   private async getWorktreeDecisionButtons(
     sessionId: string,
-    options: { allowDelegate?: boolean } = {},
+    options: { allowDelegate?: boolean; newPr?: boolean } = {},
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
   ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
-    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions);
+    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions, { newPr: options.newPr });
   }
 
   private async getPolicyAwareWorktreeDecisionButtons(
     sessionId: string,
-    options: { allowDelegate?: boolean } = {},
+    options: { allowDelegate?: boolean; newPr?: boolean } = {},
     session?: Session,
     persistedSession?: PersistedSessionInfo,
   ): Promise<NotificationButton[][] | undefined> {
@@ -1821,9 +1821,17 @@ export class SessionManager {
    * buttons and, once that message is delivered, retires the older decision
    * buttons. If the new message cannot be delivered, its buttons are dropped and
    * the older ones stay usable. Resolves true only when the new controls were
-   * delivered, so the caller may clear the spent ones.
+   * delivered, so the caller may clear the spent ones, and `"pending"` when the
+   * delivery is still in flight after the bounded wait: the prompt is then the
+   * answer, and `onLateResult` reports how it ended. `closedPr` (the PR action
+   * found its PR closed without merging) replaces Open PR / Sync PR by a
+   * **New PR** button, which opens a fresh pull request.
    */
-  async reofferWorktreeDecision(ref: string, failure: string): Promise<boolean> {
+  async reofferWorktreeDecision(
+    ref: string,
+    failure: string,
+    options: { closedPr?: boolean; onLateResult?: (delivered: boolean) => void } = {},
+  ): Promise<boolean | "pending"> {
     const decisionIsOpen = (): boolean => {
       const persisted = this.getPersistedSession(ref);
       if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
@@ -1835,7 +1843,7 @@ export class SessionManager {
     if (!decisionIsOpen()) return false;
     const active = this.resolve(ref);
     const persisted = this.getPersistedSession(ref);
-    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
+    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true, newPr: options.closedPr }, active, persisted);
     const fresh = new Set((buttons ?? []).flat().filter((button) => !button.url).map((button) => button.callbackData));
     if (fresh.size === 0) return false;
     // Several re-offers of one decision can overlap (a second failed action
@@ -1876,11 +1884,13 @@ export class SessionManager {
       backendRef: persisted?.backendRef,
       route: persisted?.route,
     });
+    // Set once the bounded wait is over: a result after that is a late one.
+    let waitEnded = false;
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
       // After a failed button: `❌ [name] Merge failed: <reason>. The decision for `b` is still open.`
-      userMessage: `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.`,
+      userMessage: `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.${options.closedPr ? " New PR opens a fresh pull request." : ""}`,
       notifyUser: "always",
       requireDirectUserNotification: true,
       buttons,
@@ -1889,15 +1899,18 @@ export class SessionManager {
         onNotifySucceeded: () => {
           settleEntry();
           retireOlder();
+          if (waitEnded) options.onLateResult?.(true);
         },
         onNotifyFailed: () => {
           settleEntry();
           dropFresh();
+          if (waitEnded) options.onLateResult?.(false);
         },
       },
     });
+    waitEnded = true;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
-    return delivery === "delivered";
+    return delivery === "pending" ? "pending" : delivery === "delivered";
   }
 
   /**
@@ -2197,7 +2210,18 @@ export class SessionManager {
       canonicalStatusDelivered,
     });
     const userMessage = requiresGoalSuccessFollowup ? goalSuccessUserMessage : userText;
-    if (replyOnly && !requiresGoalSuccessFollowup) return userMessage;
+    if (replyOnly && !requiresGoalSuccessFollowup) {
+      // A dispatched notice gets harness, model and reasoning from the
+      // dispatcher. A terminal line returned as the command's reply carries
+      // the same footer; other replies have no short suffix.
+      return label === "goal-task-failed" || label === "goal-task-stopped"
+        ? appendStatusMetadata(userMessage, formatReasoningMetadataSuffix({
+            harness: routingProxy.harnessName ?? saved?.harness,
+            model: routingProxy.model ?? saved?.model,
+            reasoningEffort: routingProxy.reasoningEffort ?? saved?.reasoningEffort,
+          }))
+        : userMessage;
+    }
     this.dispatchSessionNotification(routingProxy, {
       label,
       idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
@@ -2366,6 +2390,42 @@ export class SessionManager {
     }
     session.kill(reason ?? "user");
     return true;
+  }
+
+  /**
+   * Close a suspended session (stopped by the idle timeout, or recovered after
+   * a Gateway restart): nothing is running, so only its record is closed and
+   * no user notice is sent. A session that is still loaded is persisted and
+   * unloaded first, as runtime GC does, so the stored row is the one record
+   * and a later re-persist cannot reopen it. Returns false when the session is
+   * not suspended or has no record to close.
+   */
+  closeSuspendedSession(ref: string, completed: boolean): boolean {
+    const isSuspended = (target?: Pick<PersistedSessionInfo, "status" | "lifecycle">): boolean =>
+      target?.status === "killed" && target.lifecycle === "suspended";
+    const patch: Partial<PersistedSessionInfo> = {
+      status: completed ? "completed" : "killed",
+      lifecycle: "terminal",
+      runtimeState: "stopped",
+      resumable: false,
+      killReason: completed ? "done" : "user",
+    };
+    const active = this.resolve(ref);
+    if (!active) return isSuspended(this.getPersistedSession(ref)) && this.updatePersistedSession(ref, patch);
+    if (!isSuspended(active)) return false;
+    this.persistSession(active, { scheduleRuntimeGc: false });
+    if (this.store.getPersistedSession(active.id)?.sessionId !== active.id) {
+      // Never persisted (no backend conversation yet): close it in memory.
+      active.killReason = completed ? "done" : "user";
+      active.applyControlPatch({ lifecycle: "terminal", runtimeState: "stopped" });
+      return true;
+    }
+    this.registry.remove(active.id, "closed-while-suspended");
+    this.maintenance.cancelRuntimeGc(active.id);
+    this.clearWaitingTimestampsForSession(active.id);
+    this.lastTurnCompleteMarkers.delete(active.id);
+    this.lastTerminalWakeMarkers.delete(active.id);
+    return this.updatePersistedSession(active.id, patch);
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */
