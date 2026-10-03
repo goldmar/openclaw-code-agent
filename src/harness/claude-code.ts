@@ -215,6 +215,13 @@ export function trustedPlanFilePath(path: string | undefined, projectDirs: Array
 const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
 /**
+ * Built-in tools removed from every OCA session. `ProposeGoal` sets a native
+ * session goal whose Stop-hook evaluator keeps starting turns; OCA owns
+ * continuation (goal loops, iteration and cost limits) itself.
+ */
+export const CLAUDE_DISALLOWED_TOOLS = ["ProposeGoal"] as const;
+
+/**
  * The trusted plan file a `Write` / `Edit` / `MultiEdit` tool call of this
  * session targets, if any. Used as the fallback when `ExitPlanMode` carries
  * neither `plan` nor `planFilePath`: only files this session itself wrote are
@@ -608,6 +615,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       allowDangerouslySkipPermissions: true,
       planModeInstructions: CLAUDE_PLAN_MODE_INSTRUCTIONS,
       allowedTools: options.allowedTools,
+      disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
       systemPrompt: options.systemPrompt === undefined
         ? undefined
         : { type: "custom", prompt: options.systemPrompt, snapshot: false },

@@ -145,6 +145,8 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(Object.hasOwn(sdkOptions ?? {}, "mcpServers"), false, "user MCP servers load through Claude settings");
     assert.equal(typeof sdkOptions?.canUseTool, "function");
     assert.equal(Object.hasOwn(sdkOptions ?? {}, "projectConfigRoot"), false);
+    // OCA owns continuation: the model cannot set a native session goal.
+    assert.deepEqual(sdkOptions?.disallowedTools, ["ProposeGoal"]);
   });
 
   it("loads project config from the original checkout for worktree sessions", async () => {

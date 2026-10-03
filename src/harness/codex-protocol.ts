@@ -344,7 +344,17 @@ function serviceTierField(fastMode: boolean | undefined, continuation: boolean):
   return continuation ? { serviceTier: CODEX_STANDARD_SERVICE_TIER } : {};
 }
 
-function commonThreadFields(options: CommonThreadOptions, continuation = false): Pick<ThreadStartParams, "model" | "serviceTier" | "developerInstructions" | "permissions" | "approvalPolicy" | "approvalsReviewer"> {
+/**
+ * Per-thread config overrides for every thread OCA starts, resumes, or forks.
+ * Codex's native thread goals (`features.goals`) let the model create a goal
+ * whose continuation turns start on their own while the thread is idle. OCA
+ * starts every turn itself and accounts for it (idle timeout, cost, goal
+ * iterations, pending input), so the model must not get goal tools and a
+ * stored active goal must not re-arm on resume.
+ */
+export const OCA_CODEX_THREAD_CONFIG = { "features.goals": false } as const;
+
+function commonThreadFields(options: CommonThreadOptions, continuation = false): Pick<ThreadStartParams, "model" | "serviceTier" | "developerInstructions" | "permissions" | "approvalPolicy" | "approvalsReviewer" | "config"> {
   const model = options.model?.trim();
   const developerInstructions = options.developerInstructions?.trim();
   return {
@@ -356,6 +366,7 @@ function commonThreadFields(options: CommonThreadOptions, continuation = false):
     // instructions still apply alongside them.
     ...(developerInstructions ? { developerInstructions } : {}),
     ...executionFields(options.execution),
+    config: { ...OCA_CODEX_THREAD_CONFIG },
   };
 }
 
