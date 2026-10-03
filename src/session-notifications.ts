@@ -6,7 +6,7 @@ import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
-import { formatSessionStatsSuffix, type SessionNotificationStats } from "./session-notification-stats";
+import { appendSessionStatsSuffix } from "./session-notification-stats";
 import { NotificationDedupeCoordinator } from "./notification-dedupe";
 import { resolveNotificationRoute, ROUTED_REPLY_RULE } from "./session-route";
 import { areButtonDiagnosticsEnabled } from "./button-diagnostics";
@@ -863,12 +863,4 @@ export class SessionNotificationService {
   private digest(value: string): string {
     return createHash("sha256").update(value).digest("hex").slice(0, 16);
   }
-}
-
-/** Stats go on the first line; later lines (for example an outcome summary) stay as they are. */
-function appendSessionStatsSuffix(line: string, stats: SessionNotificationStats): string {
-  const suffix = formatSessionStatsSuffix(stats);
-  if (!suffix) return line;
-  const newline = line.indexOf("\n");
-  return newline < 0 ? `${line}${suffix}` : `${line.slice(0, newline)}${suffix}${line.slice(newline)}`;
 }

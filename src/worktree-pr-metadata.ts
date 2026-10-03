@@ -1,6 +1,7 @@
 import type { DiffSummary } from "./worktree";
 import { completeRuntimeLlmText, getRuntimeLlmComplete, runtimeLlmTimeoutsMs, withRuntimeLlmTimeout } from "./runtime-llm";
 import { createLogger } from "./logger";
+import { formatCount } from "./format";
 
 const log = createLogger("worktree-pr-metadata");
 
@@ -411,7 +412,7 @@ function buildFallbackPrMetadata(
     `Session: ${safeName}.`,
     ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
     ...(evidence.stats
-      ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
+      ? [`Scope: ${formatCount(evidence.stats.commits, "commit")}, ${formatCount(evidence.stats.filesChanged, "file")} changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
       : ["Scope: Diff summary was unavailable when the PR body was generated."]),
   ];
   const baseChanges = evidence.sessionChanges.length > 0

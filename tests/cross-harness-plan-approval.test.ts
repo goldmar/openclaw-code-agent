@@ -168,7 +168,8 @@ for (const name of BACKEND_NAMES) {
       fixture = await start(name);
       const round = await proposePlan();
       const reject = await clickButton(buttonNamed(await planButtons(), "Reject"));
-      assert.match(reject.replies.join("\n"), /Plan rejected for \[.+\]\. Session stopped\./);
+      // One message: the reply carries the terminal footer on its first line.
+      assert.match(reject.replies.join("\n"), /^⛔ \[.+\] Plan rejected\. Session stopped\. \| \S/);
       await expectStopped(round);
       assert.equal(fixture.sm.getPersistedSession(fixture.session.id)?.approvalState, "rejected");
     });

@@ -636,6 +636,12 @@ export interface PersistedSessionInfo {
   worktreePrNumber?: number;
   /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge or PR. */
   pendingWorktreeDecisionSince?: string;
+  /**
+   * Set (to the run's start time, the row's `createdAt`) when a completed
+   * session's `✅` was deferred to the `🔀` decision prompt. The merge or PR
+   * that resolves the decision sends the `✅` and clears it; a resume makes it stale.
+   */
+  deferredCompletionCycle?: number;
   /** ISO timestamp of last stale-branch reminder sent. */
   lastWorktreeReminderAt?: string;
   /**

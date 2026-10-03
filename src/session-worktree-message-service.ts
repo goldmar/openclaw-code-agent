@@ -5,7 +5,8 @@ import {
   buildDelegateWorktreeWakeMessage,
   buildNoChangeWakeMessage,
 } from "./session-notification-builder";
-import { formatSessionStatsSuffix } from "./session-notification-stats";
+import { formatSessionStatsSuffix, type SessionNotificationStats } from "./session-notification-stats";
+import { formatCount } from "./format";
 
 type DiffSummary = {
   commits: number;
@@ -17,6 +18,9 @@ type DiffSummary = {
 };
 
 type RemoteWorktreeOutcome = "pr-updated" | "pr-opened";
+
+/** The retried merge found nothing left to land (after `… Completed — merge conflict`). */
+export const NO_CHANGES_AFTER_RESOLUTION = "No changes left to merge after conflict resolution";
 
 /**
  * Builds worktree-related notification payloads so strategy decisions stay separate
@@ -42,14 +46,18 @@ export class SessionWorktreeMessageService {
       | "harnessName"
       | "model"
       | "reasoningEffort"
-    >;
+    > & Partial<Pick<Session, "duration" | "backendInfo">>;
     cleanupSucceeded: boolean;
     worktreePath: string;
     worktreeBranch?: string;
     preview: string;
     originThreadLine?: string;
     preservedSummary?: string;
+    /** The open PR whose worktree is preserved (with `preservedSummary`). */
+    prUrl?: string;
     remoteOutcome?: RemoteWorktreeOutcome;
+    /** After this cycle's conflict resolver: the cycle already has its `Completed —` line. */
+    retry?: boolean;
   }): SessionNotificationRequest {
     const {
       session,
@@ -59,7 +67,9 @@ export class SessionWorktreeMessageService {
       preview,
       originThreadLine,
       preservedSummary,
+      prUrl,
       remoteOutcome,
+      retry,
     } = args;
     const cleanupState = preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed";
     const terminalCycleKey = [
@@ -70,23 +80,17 @@ export class SessionWorktreeMessageService {
     const cleanupSummary = preservedSummary ?? (cleanupSucceeded
       ? "worktree cleaned up"
       : `cleanup failed; worktree still exists at ${worktreePath}`);
+    // The same footer as `✅ Completed` (cost | duration | harness | model | reasoning).
     const statSuffix = formatSessionStatsSuffix({
       costUsd: session.costUsd,
-      duration: typeof session.completedAt === "number" ? session.completedAt - session.startedAt : undefined,
+      duration: session.duration,
+      createdAt: session.startedAt,
+      completedAt: session.completedAt,
       harnessName: session.harnessName,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
+      backendInfo: session.backendInfo,
     });
-    const completedSummary = remoteOutcome === "pr-updated"
-      ? "PR updated; no local worktree changes remained to merge"
-      : remoteOutcome === "pr-opened"
-      ? "PR opened; no local worktree changes remained to merge"
-      : "Session completed with no worktree changes to merge";
-    const failedSummary = remoteOutcome === "pr-updated"
-      ? "PR updated; no local worktree changes remained to merge"
-      : remoteOutcome === "pr-opened"
-      ? "PR opened; no local worktree changes remained to merge"
-      : "Session completed with no worktree changes to merge";
     const wakeHeadline = remoteOutcome === "pr-updated"
       ? "Updated a PR; no local branch changes remained to merge."
       : remoteOutcome === "pr-opened"
@@ -98,11 +102,13 @@ export class SessionWorktreeMessageService {
         ? "worktree-no-changes-preserved"
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
       idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
+      // This is the completed session's one `✅`, also after an earlier PR
+      // outcome (`remoteOutcome`): that was a milestone of an earlier turn.
       userMessage: preservedSummary
-        ? `ℹ️ [${session.name}] ${completedSummary} — ${preservedSummary}${statSuffix}`
+        ? `${retry ? "ℹ️" : "✅"} [${session.name}] ${retry ? "" : "Completed — "}PR is up to date${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
         : cleanupSucceeded
-        ? `ℹ️ [${session.name}] ${completedSummary} — worktree cleaned up${statSuffix}`
-        : `⚠️ [${session.name}] ${failedSummary}, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
+        ? `${retry ? `ℹ️ [${session.name}] ${NO_CHANGES_AFTER_RESOLUTION}` : `✅ [${session.name}] Completed — no changes to merge`}${statSuffix}`
+        : `⚠️ [${session.name}] ${retry ? `${NO_CHANGES_AFTER_RESOLUTION}; worktree cleanup failed` : `Completed — no changes to merge; worktree cleanup failed${statSuffix}`}\nWorktree still exists at ${worktreePath}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
@@ -133,6 +139,8 @@ export class SessionWorktreeMessageService {
     policyReason?: string;
     /** Names changed hook / worktree-setup files; such a branch never merges automatically. */
     hookWarning?: string;
+    /** Footer of the heading, as on `✅ Completed`. */
+    stats?: SessionNotificationStats;
   }): SessionNotificationRequest {
     const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
@@ -161,7 +169,7 @@ export class SessionWorktreeMessageService {
         diffSummary.commitMessages.map((commit) => commit.hash).join(","),
       ].join(":"),
       userMessage: [
-        `🔀 [${session.name}] Finished on ${branchLine}: ${diffSummary.commits} commit${diffSummary.commits === 1 ? "" : "s"}, ${diffSummary.filesChanged} file${diffSummary.filesChanged === 1 ? "" : "s"}, +${diffSummary.insertions}/-${diffSummary.deletions}`,
+        `🔀 [${session.name}] Finished on ${branchLine}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${args.stats ? formatSessionStatsSuffix(args.stats) : ""}`,
         ...(summaryLines.length > 0 ? ["", ...summaryLines.map((line) => `- ${line}`)] : []),
         ...(policyReason ? ["", `Policy: ${policyReason}`] : []),
         ...(hookWarning ? ["", hookWarning] : []),
@@ -177,7 +185,7 @@ export class SessionWorktreeMessageService {
       ].join("\n"),
       wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: [
-        `[${session.name}] Finished on ${branchLine} (${diffSummary.commits} commits, ${diffSummary.filesChanged} files, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
+        `[${session.name}] Finished on ${branchLine} (${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
         prOffered
           ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`
           : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,

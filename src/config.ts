@@ -183,6 +183,9 @@ interface OriginContextLike {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
+  /** Raw "To" of a chat command; the chat itself only on Telegram (`telegram:<chat id>`). */
+  to?: string;
+  accountId?: string;
   messageChannel?: string;
   agentAccountId?: string;
   sessionKey?: string;
@@ -286,6 +289,17 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   if (ctx?.channelId && String(ctx.channelId).includes("|")) {
     return String(ctx.channelId);
   }
+  // A Telegram chat command names its chat (`to: "telegram:<chat id>"`) and the
+  // bot account that received it. Keeping that account makes the session's
+  // notices leave through the bot the user typed to, and lets a later command
+  // in the same chat be recognised (`isCommandInRouteChat`). Other providers'
+  // `to` is not the chat, and a topic address inside `to` is left to the
+  // fallbacks below.
+  const commandChat = /^telegram:(-?\d+)$/.exec(toOptionalText(ctx?.to) ?? "")?.[1];
+  const commandAccount = toOptionalText(ctx?.accountId);
+  if (commandChat && commandAccount && toOptionalText(ctx?.channel)?.toLowerCase() === "telegram" && !ctx?.messageChannel) {
+    return `telegram|${commandAccount}|${commandChat}`;
+  }
   if (ctx?.messageChannel) {
     const messageChannel = String(ctx.messageChannel);
     if (messageChannel.includes("|")) {
@@ -331,6 +345,33 @@ export function resolveSessionRoute(
     resolveOriginThreadId(ctx),
     explicitSessionKey ?? ctx?.sessionKey,
   );
+}
+
+/**
+ * A chat command was typed in the chat (and topic) that receives the session's
+ * or goal task's notices. Only then may the command's reply replace a notice.
+ * Compared on the address the host gives the command (`channel`, `to`,
+ * `accountId`, `messageThreadId`), never on the session key: with the default
+ * DM scope every DM on every channel shares `agent:<id>:main`. Telegram only:
+ * there `to` is the chat (`telegram:<chat id>`). Elsewhere it is not (WhatsApp:
+ * the bot's own number; Discord and Slack: `slash:<user>`), so every other
+ * provider and every unknown chat is never "the same chat".
+ */
+export function isCommandInRouteChat(
+  ctx: OriginContextLike | undefined,
+  target: { route?: SessionRoute } | undefined,
+): boolean {
+  const route = target?.route;
+  const own = ctx?.deliveryContext
+    ?? { channel: ctx?.channel, to: ctx?.to, accountId: ctx?.accountId, threadId: ctx?.messageThreadId };
+  // The host addresses the chat as `telegram:<id>`; stored targets are bare.
+  const chat = (value?: string) => value?.trim().replace(/^telegram:/, "");
+  return Boolean(route && own.channel === "telegram" && route.provider === "telegram"
+    && chat(own.to) && chat(own.to) === chat(route.target)
+    // A command's bot account must be the route's: a route without one is
+    // delivered through the default bot, which need not be the command's.
+    && !(own.accountId && own.accountId !== route.accountId)
+    && String(own.threadId ?? "") === String(route.threadId ?? ""));
 }
 
 /** Extract agentId from "channel|account|target" string. */

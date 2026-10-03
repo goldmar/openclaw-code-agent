@@ -3,6 +3,7 @@ import { FollowUpDeliveryUnconfirmedError } from "../harness/follow-up-delivery-
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { truncateText } from "../format";
+import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import {
@@ -37,6 +38,12 @@ interface RespondParams {
   fromOrchestratorTurn?: boolean;
   /** Internal: the goal controller's own reply; it never detaches a goal session. */
   fromGoalController?: boolean;
+  /**
+   * Internal (`/agent_respond` typed in the session's own chat): the caller
+   * shows `userText` as its one reply, so the user notice of a resume, plan
+   * approval or plan rejection is returned there instead of being sent.
+   */
+  replyIsNotice?: boolean;
 }
 
 interface RespondResult {
@@ -45,6 +52,14 @@ interface RespondResult {
     status: "error"; code: "response_delivery_unconfirmed"; targetSelected: true; recovery: string;
   };
   isError?: boolean;
+  /** The resume posted its own user notice, so a button press needs no extra reply. */
+  userNoticeSent?: boolean;
+  /**
+   * The same outcome for the user (a chat command or button reply): marker and
+   * `[name]` first, no session ids, no tool syntax. `text` stays the
+   * orchestrator's tool result.
+   */
+  userText?: string;
 }
 
 type PlanReplyDecision = "approve" | "revise" | "reject";
@@ -56,6 +71,22 @@ function errorMessage(err: unknown): string {
 }
 
 type ResumableSession = ResumableSessionLike;
+
+/**
+ * Send a user notice, or (`asReply`) leave it to the caller, whose reply it
+ * becomes. Either way the notice is the result's `userText`.
+ */
+function userNotice(
+  sm: SessionManager,
+  session: Session,
+  text: string,
+  label: string,
+  idempotencyKey: string | undefined,
+  asReply: boolean | undefined,
+): Pick<RespondResult, "userText" | "userNoticeSent"> {
+  if (!asReply) sm.notifySession(session, text, label, idempotencyKey);
+  return { userText: text, userNoticeSent: !asReply };
+}
 
 type PlanApprovalTarget = Pick<
   ResumableSession,
@@ -115,6 +146,12 @@ function formatResumeUnavailable(
   return {
     text: `Resume unavailable for session ${session.name} [${getSessionRef(session)}] (${reason}).${detailLine} ${guidance}`,
     isError: true,
+    userText: `❌ [${session.name}] ${details
+      ? details.replace(/^Backend resume failed: /u, "Resume failed: ")
+      : session.status === "starting" ? "Still starting; try again in a moment." : `Cannot resume: ${reason === "completed"
+        ? "the session is closed"
+        : reason === "already_running" ? "the session is already running" : "nothing is left to resume from"}.${
+        reason === "already_running" ? "" : " Start a new one."}`}`,
   };
 }
 
@@ -123,6 +160,7 @@ async function spawnFreshRelaunch(
   session: ResumableSession,
   _message: string,
   goalOwnership?: SessionConfig["goalOwnership"],
+  replyIsNotice?: boolean,
 ): Promise<RespondResult> {
   try {
     const freshConfig: SessionConfig = {
@@ -150,17 +188,23 @@ async function spawnFreshRelaunch(
       goalOwnership,
     };
     const relaunched = await sm.launchAndAwaitRunning(freshConfig, { notifyLaunch: false });
-    sm.notifySession(
-      relaunched,
-      `▶️ [${relaunched.name}] Relaunched fresh`,
-      "notification",
-      `agent-respond-relaunched:${relaunched.id}:${relaunched.startedAt}`,
-    );
     return {
       text: `Session ${session.name} was relaunched fresh — it was killed during startup before the harness initialized. New session: ${relaunched.name} [${relaunched.id}].`,
+      ...userNotice(
+        sm,
+        relaunched,
+        `▶️ [${relaunched.name}] Relaunched fresh`,
+        "notification",
+        `agent-respond-relaunched:${relaunched.id}:${relaunched.startedAt}`,
+        replyIsNotice,
+      ),
     };
   } catch (err: unknown) {
-    return { text: `Error relaunching session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };
+    return {
+      text: `Error relaunching session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`,
+      isError: true,
+      userText: `❌ [${session.name}] Relaunch failed: ${errorMessage(err)}`,
+    };
   }
 }
 
@@ -298,7 +342,11 @@ function applyPlanDecisionPatchToSession(session: Session, patch: Partial<Persis
   Object.assign(session, patch);
 }
 
-export function rejectPlanDecision(sm: SessionManager, sessionId: string): RespondResult {
+export function rejectPlanDecision(
+  sm: SessionManager,
+  sessionId: string,
+  options: { repliedToUser?: boolean } = {},
+): RespondResult {
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
@@ -307,19 +355,24 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
   sm.clearPlanDecisionTokens?.(sessionId);
 
   if (!target) {
-    return { text: `Plan rejected for [${name}].`, isError: false };
+    return { text: `[${name}] Plan rejected.`, isError: false, userText: `⛔ [${name}] Plan rejected.` };
   }
 
   const patch = buildPlanDecisionClosedPatch(target, "rejected");
   if (active) {
     applyPlanDecisionPatchToSession(active, patch);
     sm.updatePersistedSession?.(sessionId, patch);
+    // The Reject button answers `⛔ [name] Plan rejected. Session stopped.`:
+    // the generic `⛔ [name] Stopped by user` would say the same again.
+    if (options.repliedToUser) active.stopNoticeReplaced = true;
     sm.kill(active.id, "user");
-    return { text: `Plan rejected for [${active.name}]. Session stopped.` };
+    // The button's reply is this stop's terminal line, so it carries the footer on line 1.
+    const text = `[${active.name}] Plan rejected. Session stopped.${options.repliedToUser ? formatSessionStatsSuffix(sessionStats(active)) : ""}`;
+    return { text, userText: `⛔ ${text}` };
   }
 
   sm.updatePersistedSession?.(sessionId, patch);
-  return { text: `Plan rejected for [${name}]. Session remains stopped.` };
+  return { text: `[${name}] Plan rejected. Session remains stopped.`, userText: `⛔ [${name}] Plan rejected. Session remains stopped.` };
 }
 
 export function requestPlanDecisionChanges(
@@ -330,10 +383,10 @@ export function requestPlanDecisionChanges(
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
-  try { if (target?.goalTaskId) sm.continueGoalSession(target, active); } catch (err) {
-    return { text: `Error: ${errorMessage(err)}`, isError: true };
-  }
   const name = target?.name ?? sessionId;
+  try { if (target?.goalTaskId) sm.continueGoalSession(target, active); } catch (err) {
+    return { text: `Error: ${errorMessage(err)}`, isError: true, userText: `❌ [${name}] ${errorMessage(err)}` };
+  }
 
   sm.clearPlanDecisionTokens?.(sessionId);
 
@@ -362,14 +415,15 @@ export function requestPlanDecisionChanges(
     `plan-revise-requested:${ref}:v${reviewedVersion ?? "?"}`,
   );
 
-  return { text: `[${name}] Reply with the changes you want; they go to the agent.` };
+  const text = `[${name}] Reply with the changes you want; they go to the agent.`;
+  return { text, userText: `✏️ ${text}` };
 }
 
 async function tryAutoResume(
   sm: SessionManager,
   session: ResumableSession,
   message: string,
-  options: { approve?: boolean; approvalRationale?: string; goalOwnership?: SessionConfig["goalOwnership"] } = {},
+  options: { approve?: boolean; approvalRationale?: string; goalOwnership?: SessionConfig["goalOwnership"]; replyIsNotice?: boolean } = {},
 ): Promise<RespondResult | undefined> {
   const assessment = assessResumeCandidate(session);
   const resumable = assessment.kind === "resume" || canAutoResumeStoppedPlanDecision(session);
@@ -387,7 +441,7 @@ async function tryAutoResume(
   try {
     if (assessment.kind !== "resume") {
       return assessment.kind === "relaunch"
-        ? spawnFreshRelaunch(sm, session, message, options.goalOwnership)
+        ? spawnFreshRelaunch(sm, session, message, options.goalOwnership, options.replyIsNotice)
         : formatResumeUnavailable(session, assessment.reason);
     }
 
@@ -452,18 +506,25 @@ async function tryAutoResume(
     };
     const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
-      sm.notifySession(
-        resumed,
-        formatPlanApprovedLine(resumed.name, approvalRationale, true),
-        "plan-approved",
-        `agent-respond-plan-approved-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}:v${session.planDecisionVersion ?? "unknown"}`,
-      );
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
+        ...userNotice(
+          sm,
+          resumed,
+          formatPlanApprovedLine(resumed.name, approvalRationale, true),
+          "plan-approved",
+          `agent-respond-plan-approved-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}:v${session.planDecisionVersion ?? "unknown"}`,
+          options.replyIsNotice,
+        ),
       };
     }
-    await sm.notifyResumedLaunch(resumed);
-    return { text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
+    // Posts only for a session that carries its resume id; `replyIsNotice` gets the text back instead.
+    const resumedNotice = await sm.notifyResumedLaunch(resumed, !options.replyIsNotice);
+    return {
+      text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.`,
+      userNoticeSent: Boolean(resumed.resumeSessionId) && !options.replyIsNotice,
+      userText: resumedNotice ?? `▶️ [${resumed.name}] Resumed.`,
+    };
   } catch (err: unknown) {
     return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);
   }
@@ -509,10 +570,16 @@ export async function executeRespond(
 
   if (!session && !persisted) {
     const failure = unknownSessionError(params.session);
-    return { text: failure.content[0].text, isError: true, details: failure.details };
+    return { text: failure.content[0].text, isError: true, details: failure.details, userText: `❌ Session "${params.session}" not found.` };
   }
 
   const target = session ?? persisted!;
+  const fail = (reason: string): string => `❌ [${target.name}] ${reason}`;
+  const notRunning = (status: string): RespondResult => ({
+    text: `Error: Session ${target.name} [${session?.id ?? getSessionRef(persisted!)}] is not running (status: ${status}). Cannot send a message to a non-running session.`,
+    isError: true,
+    userText: fail("Not running; start a new session."),
+  });
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 
   // A session suspended (idle timeout) while its plan waited is still waiting
@@ -534,7 +601,7 @@ export async function executeRespond(
     try {
       if (target.goalTaskId) goalOwnership = sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController });
     } catch (err) {
-      return { text: `Error: ${errorMessage(err)}`, isError: true };
+      return { text: `Error: ${errorMessage(err)}`, isError: true, userText: fail(errorMessage(err)) };
     }
   }
   if (textPlanDecision === "approve") {
@@ -551,13 +618,13 @@ export async function executeRespond(
     });
   }
   if (textPlanDecision === "reject") {
-    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session);
+    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session, { repliedToUser: params.replyIsNotice });
   }
 
   if (params.approve) {
     const blockedReason = approvalBlockedReason(target) ?? userOnlyApprovalReason(target, params);
     if (blockedReason) {
-      return { text: blockedReason, isError: true };
+      return { text: blockedReason, isError: true, userText: fail(blockedReason.replace(` for session ${target.name}`, "").split(" Wait for the user's")[0]!) };
     }
   }
 
@@ -566,13 +633,14 @@ export async function executeRespond(
       approve: params.approve,
       approvalRationale: params.approvalRationale,
       goalOwnership,
+      replyIsNotice: params.replyIsNotice,
     });
     if (autoResumeResult) {
       return autoResumeResult;
     }
   } else {
     if (resumeAssessment.kind === "relaunch") {
-      return spawnFreshRelaunch(sm, target, params.message, goalOwnership);
+      return spawnFreshRelaunch(sm, target, params.message, goalOwnership, params.replyIsNotice);
     }
     if (resumeAssessment.kind === "unavailable") {
       return formatResumeUnavailable(target, resumeAssessment.reason);
@@ -582,19 +650,13 @@ export async function executeRespond(
   if (!session) {
     return isCompletedByDefault(persisted!)
       ? formatResumeUnavailable(persisted!, "completed")
-      : {
-          text: `Error: Session ${persisted!.name} [${getSessionRef(persisted!)}] is not running (status: ${persisted!.status}). Cannot send a message to a non-running session.`,
-          isError: true,
-        };
+      : notRunning(persisted!.status);
   }
 
   if (session.status !== "running") {
     return isCompletedByDefault(session)
       ? formatResumeUnavailable(session, "completed")
-      : {
-          text: `Error: Session ${session.name} [${session.id}] is not running (status: ${session.status}). Cannot send a message to a non-running session.`,
-          isError: true,
-        };
+      : notRunning(session.status);
   }
 
   // Auto-respond safety cap
@@ -612,14 +674,14 @@ export async function executeRespond(
     if (params.approve) {
       const blockedReason = approvalBlockedReason(session);
       if (blockedReason) {
-        return { text: blockedReason, isError: true };
+        return { text: blockedReason, isError: true, userText: fail(blockedReason.replace(` for session ${session.name}`, "")) };
       }
     }
 
     // An interrupt is an instruction, not an answer: it is never held back.
     const replyError = params.approve || params.interrupt ? undefined : pendingInputReplyError(session, params.message);
     if (replyError) {
-      return { text: replyError, isError: true };
+      return { text: replyError, isError: true, userText: fail(replyError.replace(/^.*?: /u, "Answer not sent: ")) };
     }
 
     const pendingQuestionIndex = session.pendingInputState?.activeQuestionIndex;
@@ -648,6 +710,7 @@ export async function executeRespond(
             ? `The next question is being delivered to the user.`
             : `Use agent_output to see the response.`,
         ].join("\n"),
+        userText: `💬 [${session.name}] Answer sent.${moreInputRequired ? " Next question below." : ""}`,
       };
     }
 
@@ -660,6 +723,8 @@ export async function executeRespond(
     const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
     const approvalRationale = isPlanApproval ? normalizeApprovalRationale(params.approvalRationale) : undefined;
     let approvalWarning = "";
+    // Read before the send, which moves the plan state on.
+    let sentAsPlanFeedback = false;
     if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
       session.approvalRationale = approvalRationale;
@@ -672,6 +737,7 @@ export async function executeRespond(
     } else if (params.approve) {
       approvalWarning = `\n⚠️ approve=true was set but session has no pending plan approval.`;
     } else if (session.pendingPlanApproval || session.approvalState === "changes_requested") {
+      sentAsPlanFeedback = true;
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
@@ -686,20 +752,17 @@ export async function executeRespond(
       persistPlanApprovalState(sm, session);
     }
 
-    // Plan approval is announced with the orchestrator's rationale (N36). Other
-    // messages are not echoed back to the user, who wrote them (N46).
-    if (isPlanApproval) {
-      sm.notifySession(session, formatPlanApprovedLine(session.name, approvalRationale), "plan-approved");
-    }
-
     if (!params.userInitiated) {
       session.incrementAutoRespond();
     }
 
     const msgSummary = truncateText(params.message, 80);
+    // Plan approval is announced with the orchestrator's rationale (N36). Other
+    // messages are not echoed back to the user, who wrote them (N46).
     if (isPlanApproval) {
       return {
         text: `Plan approved for session ${session.name} [${session.id}]. Use agent_output to see the response.`,
+        userText: userNotice(sm, session, formatPlanApprovedLine(session.name, approvalRationale), "plan-approved", undefined, params.replyIsNotice).userText,
       };
     }
 
@@ -714,17 +777,22 @@ export async function executeRespond(
         approvalWarning,
         `Use agent_output to see the response.`,
       ].filter(Boolean).join("\n"),
+      userText: `💬 [${session.name}] Message sent${sentAsPlanFeedback ? " as plan feedback" : ""}.`,
     };
   } catch (err: unknown) {
     if (err instanceof FollowUpDeliveryUnconfirmedError) {
       return {
-        text: `Error: ${err.message}`, isError: true,
+        text: `Error: ${err.message}`, isError: true, userText: fail(err.message),
         details: {
           status: "error", code: "response_delivery_unconfirmed", targetSelected: true,
           recovery: "Check the originally selected exact session with authorized agent_output before explicitly deciding whether to send again.",
         },
       };
     }
-    return { text: `Error sending message to session ${session.name} [${session.id}]: ${errorMessage(err)}`, isError: true };
+    return {
+      text: `Error sending message to session ${session.name} [${session.id}]: ${errorMessage(err)}`,
+      isError: true,
+      userText: fail(`Message not sent: ${errorMessage(err)}`),
+    };
   }
 }

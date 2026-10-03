@@ -64,6 +64,18 @@ async function finishSessionWithChange(
   return created;
 }
 
+/** Record the merge / PR outcome lines the user would see (the fixture drops them). */
+function captureOutcomeLines(f: InteractionFixture): string[] {
+  const lines: string[] = [];
+  (f.sm as unknown as { notifications: { notifyWorktreeOutcome: (session: unknown, line: string) => void } })
+    .notifications.notifyWorktreeOutcome = (_session, line) => { lines.push(line); };
+  return lines;
+}
+
+const userCheckmarks = (f: InteractionFixture): string[] => f.notifications
+  .map((entry) => entry.request.userMessage ?? "")
+  .filter((text) => text.startsWith("✅"));
+
 async function decisionButtons(label: string) {
   const f = fixture!;
   await waitUntil(() => f.buttons(label).length > 0, `${label} buttons`);
@@ -75,15 +87,23 @@ for (const name of BACKEND_NAMES) {
     it("asks the user and merges from the Merge button; later clicks on the same prompt are stale", async () => {
       const repo = createRepo();
       const f = await finishSessionWithChange(name, repo, "ask");
+      const outcomes = captureOutcomeLines(f);
       const buttons = await decisionButtons("worktree-merge-ask");
       assert.deepEqual(buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
+      // The prompt is the completion-time message: no ✅ yet.
+      assert.equal(userCheckmarks(f).length, 0);
 
       const later = await clickButton(buttonNamed(buttons, "Later"));
-      assert.match(later.replies.join("\n"), /Snoozed 24h/);
+      assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
+      assert.equal(userCheckmarks(f).length + outcomes.length, 0, "Later keeps the decision pending");
 
       await clickButton(buttonNamed(buttons, "Merge"));
       await waitUntil(() => existsSync(join(repo, "feature.txt")), "branch merged into main");
       assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "merged");
+      // The merge that resolves the pending decision carries the one completion marker.
+      assert.equal(outcomes.length, 1);
+      assert.match(outcomes[0], new RegExp(`^✅ \\[${name}-flow\\] Completed — Merged: `));
+      assert.equal(userCheckmarks(f).length, 0);
 
       for (const label of ["Merge", "Discard"]) {
         const stale = await clickButton(buttonNamed(buttons, label));
@@ -98,12 +118,27 @@ for (const name of BACKEND_NAMES) {
       const f = await finishSessionWithChange(name, repo, "ask");
       const buttons = await decisionButtons("worktree-merge-ask");
       const discard = await clickButton(buttonNamed(buttons, "Discard"));
-      assert.deepEqual(discard.replies, ["✅ Discarded"]);
+      assert.deepEqual(discard.replies, []);
       assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "dismissed");
+      // A discarded session ends without a ✅.
+      assert.equal(userCheckmarks(f).length, 0);
 
       const stale = await clickButton(buttonNamed(buttons, "Merge"));
       assert.match(stale.replies.join("\n"), /already resolved \(discarded\)/);
       assert.equal(existsSync(join(repo, "feature.txt")), false, "nothing was merged");
+
+      // A repeated discard (a second Discard button, or the tool) is answered
+      // with the standard reply: no ``branch `unknown` `` notice, nothing changed.
+      const discardedAt = f.sm.getPersistedSession(f.session.id)?.worktreeDismissedAt;
+      for (let press = 0; press < 2; press += 1) {
+        assert.equal(
+          await f.sm.dismissWorktree(f.session.id),
+          `⚠️ [${f.session.name}] This decision was already resolved (discarded). Nothing was changed.`,
+        );
+      }
+      assert.ok(discardedAt, "the first discard was recorded");
+      assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeDismissedAt, discardedAt, "nothing was changed");
+      assert.equal(f.notifications.some((entry) => /branch `unknown`/.test(entry.request.userMessage ?? "")), false);
     });
 
     it("does not discard a dirty worktree while Commit changes resumes the session in it", async () => {
@@ -122,7 +157,11 @@ for (const name of BACKEND_NAMES) {
         clickButton(buttonNamed(buttons, "Discard")),
       ]);
       assert.doesNotMatch(commit.replies.join("\n"), /still being processed/);
-      assert.match(discard.replies.join("\n"), /still being processed|is running in this worktree/);
+      // Refused either by the lock (a reply) or by the running session (the re-offered decision).
+      assert.match(
+        [...discard.replies, ...created.notifications.map((entry) => entry.request.userMessage ?? "")].join("\n"),
+        /still being processed|is still running in this worktree/,
+      );
       assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
     });
 
@@ -149,6 +188,12 @@ for (const name of BACKEND_NAMES) {
       const wake = await f.waitForNotification("worktree-delegate");
       assert.match(wake.request.wakeMessage ?? wake.request.wakeMessageOnNotifySuccess ?? "", /You decide what happens to the branch \(worktree: delegate\)/);
       assert.equal(f.buttons("worktree-delegate").length, 0, "the user gets no buttons until the orchestrator asks");
+      // The user gets the generic completion line; only the delegate notice wakes the orchestrator.
+      const completed = await f.waitForNotification("completed");
+      assert.match(completed.request.userMessage ?? "", new RegExp(`^✅ \\[${name}-flow\\] Completed`));
+      assert.equal(completed.request.wakeMessage ?? completed.request.wakeMessageOnNotifySuccess ?? completed.request.wakeMessageOnNotifyFailed, undefined);
+      assert.equal(f.notifications.filter((entry) => entry.request.label === "worktree-delegate").length, 1);
+      const outcomes = captureOutcomeLines(f);
 
       const before = f.notifications.length;
       const handedOver = await f.sm.requestWorktreeDecisionFromUser(f.session.id, "Adds feature.txt; low risk.");
@@ -157,6 +202,9 @@ for (const name of BACKEND_NAMES) {
       const buttons = f.notifications.slice(before).find((entry) => (entry.request.buttons?.length ?? 0) > 0)!.request.buttons!.flat();
       await clickButton(buttonNamed(buttons, "Merge"));
       await waitUntil(() => existsSync(join(repo, "feature.txt")), "branch merged into main");
+      await waitUntil(() => outcomes.length > 0, "the merge outcome line");
+      assert.match(outcomes[0], new RegExp(`^ℹ️ \\[${name}-flow\\] Merged: `));
+      assert.equal(userCheckmarks(f).length, 1, "exactly one ✅ for the delegate session");
     });
 
     it("asks for a repo policy before launch and continues the launch from the Manual button", async () => {

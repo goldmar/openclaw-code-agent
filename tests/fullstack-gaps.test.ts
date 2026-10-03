@@ -83,9 +83,11 @@ describe("failed worktree actions", () => {
       const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
 
       const failed = await s.click(merge);
-      assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+      // One message: the failure and the still-open decision with fresh buttons.
+      assert.deepEqual(failed.replies, []);
       assert.ok(failed.cleared > 0, "the spent controls are cleared");
       const retry = await s.waitForMessage(/still open/, prompt.index + 1);
+      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
       assert.equal(retry.to, surface.to);
       assert.equal(String(retry.threadId), String(surface.threadId));
       assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
@@ -103,7 +105,7 @@ describe("failed worktree actions", () => {
       await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
       assert.ok(existsSync(join(repo, "feature.txt")), "branch merged into main");
       // A settled decision is never re-offered.
-      assert.equal(await s.sm.reofferWorktreeDecision(session.id), false);
+      assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test."), false);
     });
   }
 });
@@ -121,10 +123,10 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     const merge = await s.waitForButton("Merge");
     const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
     const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /Rebase conflicts/);
+    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\.$/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
-    assert.match(later.replies.join("\n"), /Snoozed 24h/);
+    assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
     assert.ok(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil);
   });
 });
@@ -147,10 +149,10 @@ describe("overlapping worktree retries", () => {
     const { session } = await finishConflictingSession(s, "ask");
     const original = await s.waitForButton("Merge");
     await s.sm.whenStorePersisted();
-    const first = s.sm.reofferWorktreeDecision(session.id);
+    const first = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.");
     await waitUntil(() => retries === 1, "first retry prompt in flight");
     // A second failed action re-offers again while the first is still being delivered.
-    const second = s.sm.reofferWorktreeDecision(session.id);
+    const second = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.");
     held.resolve();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     const prompts = s.messages().filter((message) => /still open/.test(message.text));
@@ -167,7 +169,7 @@ describe("auto-merge conflicts", () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const turnsBefore = s.backend.turns.length;
     const { repo, session } = await finishConflictingSession(s, "auto-merge");
-    await s.waitForMessage(/Auto-merge hit a rebase conflict\. Started resolver session/);
+    await s.waitForMessage(/Completed — merge conflict[^\n]*\nResolver session [\w-]+ is fixing it; the merge is retried automatically when it succeeds\./);
     await waitUntil(() => s.backend.turns.length > turnsBefore + 1, "the resolver's first turn");
     const resolver = s.sm.list("all").find((candidate) => candidate.autoMergeParentSessionId === session.id);
     assert.ok(resolver, "a resolver session linked to the parent");
@@ -184,7 +186,7 @@ describe("auto-merge conflicts", () => {
       10_000,
     );
     assert.ok(existsSync(join(repo, "feature.txt")));
-    await s.waitForMessage(/Merged: agent\/codex-fullstack → main/);
+    await s.waitForMessage(/^ℹ️ \[[\w-]+\] Merged: `agent\/codex-fullstack` → `main`/);
   });
 
   it("only logs when a resolver finishes after its parent session is gone", async () => {
@@ -223,7 +225,7 @@ describe("snooze and reminders", () => {
     await s.backend.endTurn("Added feature.txt.");
     const later = await s.waitForButton("Later");
     const click = await s.click(later);
-    assert.match(click.replies.join("\n"), /Snoozed 24h/);
+    assert.match(click.replies.join("\n"), /Reminder snoozed 24h/);
     const snoozedUntil = Date.parse(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil ?? "");
     assert.ok(Math.abs(snoozedUntil - (Date.now() + 24 * 60 * 60 * 1000)) < 60_000, "snoozed for 24h");
 
@@ -266,7 +268,9 @@ describe("session buttons", () => {
     assert.doesNotMatch(outputAgain.replies.join("\n"), /expired/);
 
     const resume = await s.click(buttonIn(suspended, "Resume"));
-    assert.match(resume.replies.join("\n"), /^▶️/);
+    // One answer: the ▶️ Resumed notice, no extra reply.
+    assert.deepEqual(resume.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /Continue where you left off/);
     const again = await s.click(buttonIn(suspended, "Resume"));
@@ -291,7 +295,8 @@ describe("session buttons", () => {
     const suspended = await s.waitForMessage(/Suspended after idle timeout/);
     const turnsBefore = s.backend.turns.length;
     const clicked = await s.click(buttonIn(suspended, "Resume"));
-    assert.match(clicked.replies.join("\n"), /^▶️/, clicked.replies.join("\n"));
+    assert.deepEqual(clicked.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
     const resumed = s.sm.resolve(session.id)!;
     assert.equal(resumed.launchSystemPrompt, "Marker ZEBRA-42.");
@@ -320,7 +325,8 @@ describe("session buttons", () => {
     await s.host.startServices({});
     const turnsBefore = s.backend.turns.length;
     const restart = await s.click("legacy-restart-token");
-    assert.match(restart.replies.join("\n"), /^▶️/);
+    assert.deepEqual(restart.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] (Resumed|Relaunched fresh)/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "restarted turn");
   });
 
@@ -377,8 +383,11 @@ describe("goal loop", () => {
     assert.equal(s.backend.turns.length, turnsBefore, "nothing runs before the confirmation");
     const run = prompt.buttons.find((button) => button.label === "Run these checks");
     assert.ok(run, "the confirmation prompt has a Run button");
+    const sentBeforeRun = s.messages().length;
     const click = await s.click(run);
-    assert.match(click.replies.join("\n"), /started with the confirmed verifier commands/);
+    // The `🎯 [task] Goal task started` notice is the one answer to the button.
+    assert.deepEqual(click.replies, []);
+    await s.waitForMessage(/^🎯 \[[\w-]+\] Goal task started/, sentBeforeRun);
     await s.backend.waitForTurns(turnsBefore + 1);
     await waitUntil(() => s.gc.listTasks().length === 1, "goal task stored");
     return s.gc.listTasks()[0]!;
@@ -393,12 +402,12 @@ describe("goal loop", () => {
     await waitUntil(() => s.backend.turns.length > turnsBefore, "repair turn");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /The external verifier did not pass/);
     assert.equal(s.gc.getTask(task.id)?.iteration, 1);
-    await s.waitForMessage(/Repair iteration started after verifier failure/);
+    await s.waitForMessage(/^🔁 \[[\w-]+\] Repair started after verifier failure \(iteration 1\/\d+\)/);
 
     writeFileSync(join(workdir, "done.txt"), "done\n");
     await s.backend.endTurn("Created done.txt.");
     await waitUntil(() => s.gc.getTask(task.id)?.status === "succeeded", "goal succeeded");
-    await s.waitForMessage(/Goal task succeeded/);
+    await s.waitForMessage(/Completed — goal succeeded/);
   });
 
   it("resumes the goal after an idle timeout", async () => {
@@ -420,8 +429,12 @@ describe("goal loop", () => {
     const prompt = await s.waitForMessage(/\$ rm -rf \/tmp\/x/);
     const cancel = prompt.buttons.find((button) => button.label === "Cancel");
     assert.ok(cancel);
+    const sentBeforeCancel = s.messages().length;
     const click = await s.click(cancel);
-    assert.match(click.replies.join("\n"), /cancelled; its verifier commands were not run/);
+    // The `⛔ [task] Goal task stopped` notice with its reason is the one answer.
+    assert.deepEqual(click.replies, []);
+    const stopped = await s.waitForMessage(/^⛔ \[[\w-]+\] Goal task stopped/, sentBeforeCancel);
+    assert.match(stopped.text, /The user did not confirm the verifier commands\./);
     assert.equal(s.gc.listTasks()[0]?.status, "stopped");
     assert.equal(s.backend.turns.length, turnsBefore);
   });

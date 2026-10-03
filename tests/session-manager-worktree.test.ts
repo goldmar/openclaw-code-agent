@@ -194,8 +194,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.match(request.userMessage, /worktree cleaned up/);
-      assert.doesNotMatch(request.userMessage, /PR updated; no local worktree changes remained to merge/);
+      assert.match(request.userMessage, /^✅ \[no-change\] Completed — no changes to merge/);
       assert.equal(request.notifyUser, "always");
       assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
@@ -300,9 +299,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.match(request.userMessage, /PR updated; no local worktree changes remained to merge/);
-      assert.match(request.userMessage, /worktree cleaned up/);
-      assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
+      // A completed session gets its ✅ even after an earlier PR outcome (A7).
+      assert.match(request.userMessage, /^✅ \[pr-updated-clean\] Completed — no changes to merge/);
       assert.match(request.wakeMessage, /Updated a PR; no local branch changes remained to merge/);
       const persisted = (sm as any).store.persisted.get("h-pr-updated-clean");
       assert.equal(persisted.worktreePath, undefined);
@@ -398,8 +396,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.match(request.userMessage, /no worktree changes to merge/);
-      assert.match(request.userMessage, /worktree cleaned up/);
+      assert.match(request.userMessage, /Completed — no changes to merge/);
       assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.doesNotMatch(request.wakeMessage, /completed with no repository changes/);
       const persisted = (sm as any).store.persisted.get("h-pr-open-no-change");
@@ -578,7 +575,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no worktree changes to merge — worktree cleaned up");
+      assert.equal(request.userMessage, "✅ [plan-report] Completed — no changes to merge");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);
@@ -637,7 +634,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no worktree changes to merge — worktree cleaned up");
+      assert.equal(request.userMessage, "✅ [investigation-report] Completed — no changes to merge");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);
@@ -709,7 +706,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-dirty-uncommitted");
-      assert.match(request.userMessage, /Finished with uncommitted changes and no commits/);
+      assert.match(request.userMessage, /^⚠️ \[[\w-]+\] Completed — uncommitted changes on `[^`]+`[^\n]*\nThe branch has no commits, so there is nothing to merge yet\.\n/);
       // N44: the guidance comes with buttons to act on it.
       assert.deepEqual(request.buttons?.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Commit changes", "View output", "Discard"]]);
       assert.match(request.userMessage, /new-file\.txt/);
@@ -798,7 +795,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      // The wake goes only to the orchestrator; terminal handling still owes the user `✅ Completed`.
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false, userCompletionNoticeOwed: true });
       const calls = (sm as any).__dispatchCalls;
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];

@@ -25,7 +25,7 @@ function isAgentKillParams(value: unknown): value is AgentKillParams {
 export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_kill",
-    description: "Stop a session. reason='completed' marks it done (✅) instead of killed.",
+    description: "Stop a session. reason='completed' marks a running session done (the user gets the completion notice) instead of killed.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID" }),
       reason: Type.Optional(Type.StringEnum(["completed", "killed"], { description: "Default killed" })),

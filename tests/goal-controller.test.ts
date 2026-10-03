@@ -296,6 +296,30 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
+  it("suppresses the session's stop notice only when the stop reply replaces it", () => {
+    for (const sameChat of [true, false]) {
+      const session = createStubSession({ id: "session-1", name: "goal-task" });
+      const killed: string[] = [];
+      const controller = new GoalController({
+        resolve: (id: string) => (id === "session-1" ? session : undefined),
+        // The flag must be set before the kill lands.
+        kill: (id: string) => { killed.push(`${id}:${session.stopNoticeReplaced === true}`); },
+        emitGoalTaskUpdate: (_task: GoalTaskState, text: string) => text,
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+      const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+      store.upsert(task);
+
+      const reply: { sameChat: () => boolean; text?: string } = { sameChat: () => sameChat };
+      assert.equal(controller.stopTask(task.id, reply)?.action, "stopped");
+
+      assert.deepEqual(killed, [`session-1:${sameChat}`]);
+      assert.equal(session.stopNoticeReplaced === true, sameChat);
+      assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+    }
+  });
+
   it("edits and persists an active goal without changing session lifecycle fields", () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
@@ -498,7 +522,7 @@ describe("GoalController", () => {
     assert.equal(task.iteration, 0);
     assert.equal(resumed, false);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-succeeded"]);
-    assert.match(notifications[0]?.text ?? "", /Goal task succeeded/);
+    assert.match(notifications[0]?.text ?? "", /Completed — goal succeeded/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Ralph iteration continued/);
   });
 
@@ -555,10 +579,10 @@ describe("GoalController", () => {
       "goal-task-progress",
       "goal-task-succeeded",
     ]);
-    assert.match(notifications[0]?.text ?? "", /Continued iteration 1\/8/);
+    assert.match(notifications[0]?.text ?? "", /Continued \(iteration 1\/8\)/);
     assert.match(notifications[0]?.text ?? "", /First controller turn found more repo checks to run/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /iteration 2\/8/);
-    assert.match(notifications[1]?.text ?? "", /Goal task succeeded/);
+    assert.match(notifications[1]?.text ?? "", /Completed — goal succeeded/);
     assert.doesNotMatch(notifications[1]?.text ?? "", /Ralph iteration continued/);
   });
 
@@ -600,12 +624,12 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Continued iteration 1\/8/);
+    assert.match(notifications[0]?.text ?? "", /Continued \(iteration 1\/8\)/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Readiness check ran; broker gate is still closed/);
     assert.match(notifications[0]?.text ?? "", /No eligible paper intents appeared/);
     assert.match(notifications[0]?.text ?? "", /Next iteration will watch for market data readiness/);
-    assert.match(notifications[0]?.text ?? "", /Continued iteration 1\/8\n\nAgent:/);
+    assert.match(notifications[0]?.text ?? "", /Continued \(iteration 1\/8\)\n\nAgent:/);
     assert.match(notifications[0]?.text ?? "", /Agent: Readiness check ran; broker gate is still closed/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Status: running/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Workdir:/);
@@ -643,7 +667,7 @@ describe("GoalController", () => {
     await (controller as any).handleTerminalSession(task, session);
 
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Continued iteration 1\/8/);
+    assert.match(notifications[0]?.text ?? "", /Continued \(iteration 1\/8\)/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Status: running/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Workdir:/);
@@ -692,7 +716,7 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Completion claimed but verifiers still failed iteration 1\/8/);
+    assert.match(notifications[0]?.text ?? "", /Completion claimed but verifiers still failed \(iteration 1\/8\)/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Completion was claimed, but the loop is continuing after verification/);
     assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
@@ -740,7 +764,7 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Repair iteration started after verifier failure repair iteration 1\/8/);
+    assert.match(notifications[0]?.text ?? "", /^🔁 \[[^\]]+\] Repair started after verifier failure \(iteration 1\/8\)/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
     assert.match(notifications[0]?.text ?? "", /Verifier: broker gate stayed closed/);

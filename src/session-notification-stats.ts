@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from "./types";
+import type { Session } from "./session";
 import { formatDuration } from "./format";
 import { formatHarnessModelLabel } from "./session-display";
 
@@ -13,6 +14,18 @@ export type SessionNotificationStats = {
   reasoningEffort?: ReasoningEffort;
   backendInfo?: { reasoningEffortSupported?: boolean };
 };
+
+/** The footer input of a live session: the same for every status line it gets. */
+export function sessionStats(session: Session): SessionNotificationStats {
+  return {
+    costUsd: session.costUsd,
+    duration: session.duration,
+    harnessName: session.harnessName,
+    model: session.model,
+    reasoningEffort: session.reasoningEffort,
+    backendInfo: session.backendInfo,
+  };
+}
 
 export function formatSessionStatsSuffix(stats: SessionNotificationStats): string {
   const parts: string[] = [];
@@ -37,6 +50,19 @@ export function formatSessionStatsSuffix(stats: SessionNotificationStats): strin
   }
 
   return parts.length > 0 ? ` | ${parts.join(" | ")}` : "";
+}
+
+/**
+ * Add the stats footer (cost | duration | harness | model | reasoning) to a
+ * status line. Every merge / PR outcome line uses this, so automatic and manual
+ * outcomes carry the same footer as the generic `✅ Completed` notice. Stats go
+ * on the first line; later lines (for example an outcome summary) stay as they are.
+ */
+export function appendSessionStatsSuffix(line: string, stats: SessionNotificationStats): string {
+  const suffix = formatSessionStatsSuffix(stats);
+  if (!suffix) return line;
+  const newline = line.indexOf("\n");
+  return newline < 0 ? `${line}${suffix}` : `${line.slice(0, newline)}${suffix}${line.slice(newline)}`;
 }
 
 function resolveDuration(stats: SessionNotificationStats): number | undefined {

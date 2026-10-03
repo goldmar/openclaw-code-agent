@@ -55,3 +55,6 @@ export function quoteCommandArg(value: string): string | undefined {
   if (!value.includes("'")) return `'${value}'`;
   return undefined;
 }
+
+/** A chat command typed while the plugin service is not running (same text as the buttons). */
+export const SERVICE_NOT_RUNNING = "⚠️ The code agent is not running right now. Try again in a moment.";

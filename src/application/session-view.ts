@@ -92,6 +92,8 @@ interface SessionListingItem {
 
 export interface SessionListingOptions {
   full?: boolean;
+  /** `/agent_status`: next steps in chat-command terms, without tool syntax. */
+  forUser?: boolean;
 }
 
 const DEFAULT_SESSION_LIST_LIMIT = 5;
@@ -336,7 +338,7 @@ export function getSessionsListingText(
   }
   if (filter === "waiting") {
     if (sessions.length === 0) return "Nothing is waiting for a decision or an answer.";
-    return sessions.map((s) => formatSessionListing(s, { nextStep: describeWaiting(s) })).join("\n\n");
+    return sessions.map((s) => formatSessionListing(s, { nextStep: describeWaiting(s, options.forUser) })).join("\n\n");
   }
   if (options.full) {
     const cutoff = Date.now() - FULL_SESSION_LIST_WINDOW_MS;
@@ -354,20 +356,22 @@ const WORKTREE_DECISION_STATES = new Set(["pending_decision"]);
  * What a session is waiting for and the next step, or undefined when it needs
  * nothing. Covers pending plans, questions, and worktree decisions.
  */
-export function describeWaiting(session: SessionListingItem): string | undefined {
+export function describeWaiting(session: SessionListingItem, forUser = false): string | undefined {
   const escalated = session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered";
   // A plan pending when the Gateway restarted is recovered as suspended but still waits for its decision.
   if (session.phase === "awaiting_plan_decision" || (session.pendingPlanApproval === true && session.status !== "running")) {
     return session.planApproval === "ask" || escalated
       ? "Plan waiting for the user: Approve / Revise / Reject (buttons, or reply approve, reject, or the changes)"
-      : "Plan waiting for the orchestrator's review: approve it or agent_escalate(kind='plan')";
+      : `Plan waiting for the orchestrator's review${forUser ? "" : ": approve it or agent_escalate(kind='plan')"}`;
   }
   if (session.phase === "awaiting_user_input" && session.approvalState === "changes_requested") {
     // After Revise: the plan waits for the user's requested changes, not a question.
-    return "Plan revision requested: waiting for the user's changes (forward them with agent_respond, userInitiated=true)";
+    return `Plan revision requested: ${forUser ? "reply with the changes" : "waiting for the user's changes (forward them with agent_respond, userInitiated=true)"}`;
   }
   if (session.phase === "awaiting_user_input") {
-    return "Question waiting for an answer (agent_output shows it; answer with agent_respond)";
+    return forUser
+      ? `Question waiting for your answer: /agent_output ${session.name} shows it; answer with /agent_respond ${session.name} <answer>`
+      : "Question waiting for an answer (agent_output shows it; answer with agent_respond)";
   }
   const lifecycleState = session.worktreeLifecycle?.state ?? session.worktreeState;
   // The recorded lifecycle decides; an existing PR does not settle a branch that
@@ -378,7 +382,7 @@ export function describeWaiting(session: SessionListingItem): string | undefined
       || Boolean(session.pendingWorktreeDecisionSince && !session.worktreeMerged && !session.worktreePrUrl);
   if (pendingDecision) {
     return session.worktreeStrategy === "delegate"
-      ? "Branch waiting for the orchestrator: agent_merge, or agent_escalate(kind='worktree')"
+      ? `Branch waiting for the orchestrator${forUser ? "'s decision" : ": agent_merge, or agent_escalate(kind='worktree')"}`
       : `Branch waiting for the user: Merge / ${session.worktreePrUrl ? "Sync PR" : "Open PR"} / Later / Discard`;
   }
   return undefined;

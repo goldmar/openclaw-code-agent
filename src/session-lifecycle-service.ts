@@ -1,6 +1,7 @@
 import { fenceAgentOutput } from "./untrusted-output";
 import { removeWorktree, deleteBranch, getCommitsAheadCount } from "./worktree";
-import { formatDuration, truncateText } from "./format";
+import { truncateText } from "./format";
+import { formatSessionStatsSuffix, sessionStats } from "./session-notification-stats";
 import { getPersistedMutationRefs } from "./session-backend-ref";
 import {
   buildCompletedPayload,
@@ -18,7 +19,7 @@ import {
   isCurrentPendingPlanDecision,
 } from "./session-plan-approval-delivery";
 import { LAUNCH_OUTCOME_WINDOW_MS, type Session } from "./session";
-import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
+import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact, SessionStatus } from "./types";
 import type { PendingInputQuestion, PendingInputState } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
@@ -34,6 +35,8 @@ const log = createLogger("session-lifecycle-service");
 type WorktreeStrategyResult = {
   notificationSent: boolean;
   worktreeRemoved: boolean;
+  /** Only the orchestrator was told (`delegate`): the user still gets `✅ Completed`. */
+  userCompletionNoticeOwed?: boolean;
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
@@ -157,6 +160,12 @@ export class SessionLifecycleService {
       hasTurnCompleteWakeMarker: (sessionId: string) => boolean;
       shouldEmitTurnCompleteWake: (session: Session) => boolean;
       shouldEmitTerminalWake: (session: Session) => boolean;
+      /**
+       * Execution status of the session that currently owns this id. Worktree
+       * handling can wait (merge queue) while the id is resumed; the captured
+       * object then stays `completed`. Default: the captured session's status.
+       */
+      getCurrentSessionStatus?: (session: Session) => SessionStatus | undefined;
       resolvePlanApprovalMode: (session: Session | PersistedSessionInfo) => PlanApprovalMode;
       getPlanApprovalButtons: (sessionId: string, session?: {
         worktreePrUrl?: string;
@@ -418,7 +427,18 @@ export class SessionLifecycleService {
       }
     }
 
+    // Read after worktree handling: the id may have been resumed meanwhile.
+    const completedNow = (this.deps.getCurrentSessionStatus?.(session) ?? session.status) === "completed";
     if (worktreeResult.notificationSent) {
+      // The authoritative worktree notice owns this terminal cycle. Record it
+      // in the existing gate so a later resolved-worktree skip cannot repeat it.
+      const firstForTerminalCycle = this.deps.shouldEmitTerminalWake(session);
+      if (worktreeResult.userCompletionNoticeOwed && firstForTerminalCycle && completedNow) {
+        // `delegate` told only the orchestrator. The user gets the generic
+        // completion line; the delegate wake stays the only orchestrator wake.
+        this.emitCompleted(session, { userNoticeOnly: true });
+        return;
+      }
       log.info(
         `[SessionManager] Suppressing generic terminal notification for session ${session.id} ` +
         "because worktree strategy handling already sent the authoritative outcome notification.",
@@ -426,16 +446,16 @@ export class SessionLifecycleService {
       return;
     }
 
-    if (session.killReason === "done") {
-      if (this.deps.hasTurnCompleteWakeMarker(session.id)) return;
+    if (session.killReason === "done" || session.status === "completed") {
       if (!this.deps.shouldEmitTerminalWake(session)) return;
-      this.emitCompleted(session);
-      return;
-    }
-
-    if (session.status === "completed") {
-      if (!this.deps.shouldEmitTerminalWake(session)) return;
-      this.emitCompleted(session);
+      // Resumed while worktree handling waited: that run reports its own end.
+      if (!completedNow) return;
+      // After `⏸️ Turn completed` the orchestrator already has its wake (it
+      // usually closed the session itself, agent_kill reason='completed'); the
+      // user still gets the one `✅ Completed` of this terminal cycle.
+      this.emitCompleted(session, {
+        userNoticeOnly: session.killReason === "done" && this.deps.hasTurnCompleteWakeMarker(session.id),
+      });
       return;
     }
 
@@ -450,8 +470,8 @@ export class SessionLifecycleService {
       return;
     }
 
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const duration = session.duration;
+    // One footer for every terminal line (cost | duration | harness | model | reasoning).
+    const statsSuffix = formatSessionStatsSuffix(sessionStats(session));
     if (session.killReason === "idle-timeout") {
       if (session.pendingPlanApproval) {
         this.emitIdleTimeoutPlanApproval(session);
@@ -461,7 +481,7 @@ export class SessionLifecycleService {
       this.deps.dispatchSessionNotification(session, {
         label: "suspended",
         idempotencyKey: `suspended:${session.id}:${session.killReason ?? "idle-timeout"}:${session.completedAt ?? "unknown"}`,
-        userMessage: `💤 [${session.name}] Suspended after idle timeout | ${costStr} | ${formatDuration(duration)}`,
+        userMessage: `💤 [${session.name}] Suspended after idle timeout${statsSuffix}`,
         notifyUser: "always",
         buttons: this.deps.getResumeButtons(session.id, session),
       });
@@ -469,7 +489,9 @@ export class SessionLifecycleService {
       return;
     }
 
-    this.deps.notifySession(session, `⛔ [${session.name}] ${getStoppedStatusLabel(session.killReason)} | ${costStr} | ${formatDuration(duration)}`);
+    if (!session.stopNoticeReplaced) {
+      this.deps.notifySession(session, `⛔ [${session.name}] ${getStoppedStatusLabel(session.killReason)}${statsSuffix}`);
+    }
     this.deps.clearRetryTimersForSession(session.id);
   }
 
@@ -499,7 +521,7 @@ export class SessionLifecycleService {
       label: "plan-approval-timeout",
       idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
       userMessage: [
-        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still waiting for approval; the session is paused | $${(session.costUsd ?? 0).toFixed(2)} | ${formatDuration(session.duration)}`,
+        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still waiting for approval; the session is paused${formatSessionStatsSuffix(sessionStats(session))}`,
         `Approve resumes it and starts the work. Revise resumes it to update the plan. Reject keeps it stopped.`,
       ].join("\n"),
       notifyUser: "always",
@@ -748,19 +770,16 @@ export class SessionLifecycleService {
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
-      onUserNotifyFailed: () => {
-        log.warn(
-          `[SessionManager] turn-complete delivery failed for session ${session.id} — firing terminal notification as fallback`,
-        );
-        if (!this.deps.shouldEmitTerminalWake(session)) return;
-        this.emitCompleted(session);
-      },
+      // No `✅ Completed` fallback when this line cannot be delivered: the session
+      // is idle, not completed. The orchestrator still gets the wake above, and
+      // the one `✅` is sent when the session completes.
     });
   }
 
-  emitCompleted(session: Session): void {
+  emitCompleted(session: Session, options: { userNoticeOnly?: boolean } = {}): void {
     const preview = this.deps.getOutputPreview(session);
-    const followupSummaryRequired = this.shouldRequestCompletionFollowup(session);
+    // `userNoticeOnly`: another notice already woke the orchestrator for this terminal cycle.
+    const followupSummaryRequired = !options.userNoticeOnly && this.shouldRequestCompletionFollowup(session);
     const payload = buildCompletedPayload({
       session,
       originThreadLine: this.deps.originThreadLine(session),

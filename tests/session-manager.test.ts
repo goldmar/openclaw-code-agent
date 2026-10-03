@@ -194,7 +194,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
         },
       } as any,
       [
-        "✅ [paper-harness-preopen-hardening] Goal task succeeded",
+        "✅ [paper-harness-preopen-hardening] Completed — goal succeeded",
         "",
         'Completion promise "PAPER_HARNESS_PREOPEN_HARDENING_COMPLETE" detected in agent output.',
       ].join("\n"),
@@ -207,7 +207,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.label, "goal-task-succeeded");
     assert.equal(
       request.userMessage,
-      "✅ [paper-harness-preopen-hardening] Goal task succeeded\nSession: paper-harness-preopen-hardening [bdTo6WBy]",
+      "✅ [paper-harness-preopen-hardening] Completed — goal succeeded",
     );
     assert.doesNotMatch(request.userMessage, /Completion promise/);
     assert.equal(request.notifyUser, "always");
@@ -235,7 +235,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
         name: "paper-harness-preopen-hardening",
         sessionId: "bdTo6WBy",
       } as any,
-      "🔄 [paper-harness-preopen-hardening] Goal task resumed",
+      "▶️ [paper-harness-preopen-hardening] Goal task resumed",
       "goal-task-progress",
     );
 
@@ -246,6 +246,35 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.completionWakeSummaryRequired, false);
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.wakeMessageOnNotifyFailed, undefined);
+  });
+
+  it("gives a stopped or failed goal its cost and duration, with the run in flight, and none to a goal that never ran", () => {
+    const sm = new SessionManager(5);
+    stubDispatch(sm);
+    (sm as any).sessions.set("run-1", { id: "run-1", name: "goal-x", status: "killed", startedAt: 1_000, costUsd: 0.5 });
+    const task = { id: "goal-2", name: "goal-x", sessionId: "run-1", sessionName: "goal-x", totalCostUsd: 1, createdAt: 0, updatedAt: 61_000 };
+    const sent = (): string => (sm as any).__dispatchCalls.at(-1)[1].userMessage;
+
+    // Stopped while a run was in flight: that run's cost is not in the total yet.
+    sm.emitGoalTaskUpdate({ ...task, lastCostedRun: "run-0:500" } as any, "⛔ [goal-x] Goal task stopped\n\nStopped by user.", "goal-task-stopped");
+    assert.equal(sent(), "⛔ [goal-x] Goal task stopped | $1.50 | 1m1s\n\nStopped by user.");
+
+    // The last run was already added to the total: it is not counted twice.
+    sm.emitGoalTaskUpdate({ ...task, lastCostedRun: "run-1:1000" } as any, "❌ [goal-x] Goal task failed\n\nThe goal task reached its cost limit.", "goal-task-failed");
+    assert.equal(sent(), "❌ [goal-x] Goal task failed | $1.00 | 1m1s\n\nThe goal task reached its cost limit.");
+
+    // Declined at the verifier confirmation: it never ran, so `$0.00 | <wait time>` would mean nothing.
+    const declined = "⛔ [goal-x] Goal task stopped\n\nThe user did not confirm the verifier commands.";
+    sm.emitGoalTaskUpdate({ id: "goal-3", name: "goal-x", totalCostUsd: 0, createdAt: 0, updatedAt: 3_600_000 } as any, declined, "goal-task-stopped");
+    assert.equal(sent(), declined);
+
+    // A chat command takes the line as its own reply: nothing is sent.
+    const before = (sm as any).__dispatchCalls.length;
+    assert.equal(
+      sm.emitGoalTaskUpdate({ ...task, lastCostedRun: "run-1:1000" } as any, "⛔ [goal-x] Goal task stopped\n\nStopped by user.", "goal-task-stopped", true),
+      "⛔ [goal-x] Goal task stopped | $1.00 | 1m1s\n\nStopped by user.",
+    );
+    assert.equal((sm as any).__dispatchCalls.length, before);
   });
 
 });
@@ -1599,7 +1628,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       buildRoutingProxy: (value: unknown) => value,
     } as any);
     const later = decisions.snoozeWorktreeDecision("backoff", { notifyUser: false });
-    assert.match(later, /^⏭️ Kept for later: `agent\/backoff` \(session: backoff\)\. No more reminders; \/agent_status lists it\.$/);
+    assert.equal(later, "⏭️ [backoff] Kept for later: `agent/backoff`. No more reminders; /agent_status lists it.");
     assert.doesNotMatch(later, /24h/);
     assert.equal(await reminders.getNextReminderAt(pending), undefined);
   });
@@ -2141,7 +2170,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
       const result = service.snoozeWorktreeDecision(pending.sessionId, { notifyUser: false });
 
-      assert.equal(result, "⏭️ Reminder snoozed 24h for `agent/address-pr176-review-comments` (session: address-pr176-review-comments)");
+      assert.equal(result, "⏭️ [address-pr176-review-comments] Reminder snoozed 24h for `agent/address-pr176-review-comments`.");
       assert.deepEqual(
         updates.map((entry) => entry.ref),
         ["later-session", "later-thread"],
@@ -2823,7 +2852,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessage, /Name: deterministic/);
     assert.match(request.wakeMessage, /Status: running/);
     assert.match(request.wakeMessage, /Last output/);
-    assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed/);
+    assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed — session idle, waiting for a follow-up/);
   });
 
   it("routes explicit question turns to waiting wake path", async () => {
@@ -3871,6 +3900,46 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "completed");
     assert.doesNotMatch(request.userMessage, /⏸️/);
     assert.equal(request.userMessage, "✅ [terminal-race] Completed | $0.00 | 5s");
+  });
+
+  it("sends one ✅ when the ⏸️ line could not be delivered and the session is completed later", async () => {
+    const s = fakeSession({
+      id: "s-idle-then-done",
+      name: "idle-then-done",
+      status: "running",
+      duration: 5_000,
+      result: { session_id: "thread-idle", num_turns: 1, duration_ms: 5_000 },
+      getOutput: () => ["Turn finished."],
+    });
+    // The host refuses the `⏸️` line: the dispatcher then runs the request's
+    // failure callbacks, as WakeDispatcher does after a failed user delivery.
+    const record = (sm as any).notifications.dispatch;
+    (sm as any).notifications.dispatch = (session: unknown, request: any) => {
+      record(session, request);
+      if (request.label !== "turn-complete") return;
+      request.hooks?.onNotifyFailed?.();
+      request.onUserNotifyFailed?.();
+    };
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+
+    const calls = (sm as any).__dispatchCalls;
+    // The failed delivery sent nothing else: no `✅ Completed` stands in for the
+    // idle line of a session that is still running.
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1].label, "turn-complete");
+    assert.match(calls[0][1].userMessage, /^⏸️ \[idle-then-done\] Turn completed/);
+    assert.equal(calls[0][1].onUserNotifyFailed, undefined);
+    // The orchestrator wake is unconditional.
+    assert.equal(typeof calls[0][1].wakeMessage, "string");
+
+    // agent_kill(reason='completed') closes the idle session.
+    Object.assign(s, { status: "completed", killReason: "done", completedAt: Date.now() });
+    await (sm as any).onSessionTerminal(s);
+
+    const completed = calls.filter(([, request]: [unknown, { label: string }]) => request.label === "completed");
+    assert.equal(completed.length, 1);
+    assert.match(completed[0][1].userMessage, /^✅ \[idle-then-done\] Completed/);
+    assert.equal(calls.length, 2);
   });
 });
 

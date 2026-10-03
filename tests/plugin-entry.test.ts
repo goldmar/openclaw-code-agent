@@ -262,7 +262,7 @@ describe("plugin entry source", () => {
     const approveSection = skill.split('### `planApproval: "approve"`')[1]?.split("\n## ")[0] ?? "";
 
     assert.doesNotMatch(skill, /auto-approve/i);
-    assert.match(approveSection, /only after it verifies the plan/);
+    assert.match(approveSection, /only after you verify the plan/);
     assert.match(approveSection, /agent_output\(session, full=true\)/);
     assert.match(approveSection, /agent_escalate/);
   });

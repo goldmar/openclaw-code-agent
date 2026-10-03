@@ -2,6 +2,7 @@ import { assertBranchName } from "./worktree-ref-validation";
 import { runGh, runGit, type CommandError } from "./git-exec";
 import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
 import { createLogger } from "./logger";
+import { formatCount } from "./format";
 
 const log = createLogger("worktree-pr");
 
@@ -61,11 +62,13 @@ export interface WorktreeOutcomeParams {
   prUrl?: string;
   /** Session name shown as `[name]` after the status icon. */
   sessionName?: string;
+  /** This outcome is the successful terminal session notice, not a manual milestone. */
+  sessionCompleted?: boolean;
 }
 
 function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" | "insertions" | "deletions">): string {
   return params.filesChanged !== undefined
-    ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
+    ? ` (${formatCount(params.filesChanged, "file")}, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
     : "";
 }
 
@@ -102,7 +105,7 @@ async function recoverExistingPullRequest(repoDir: string, branch: string, targe
   if (existingPr.exists && existingPr.url) {
     return {
       success: false,
-      error: `A PR already exists for ${branch}, but it is ${existingPr.state}: ${existingPr.url}`,
+      error: `A PR already exists for \`${branch}\`, but it is ${existingPr.state}: ${existingPr.url}`,
     };
   }
   return undefined;
@@ -380,14 +383,15 @@ export async function commentOnPR(repoDir: string, prNumber: number, body: strin
 export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
   const stats = formatOutcomeStats(params);
   const tag = params.sessionName ? `[${params.sessionName}] ` : "";
+  const prefix = params.sessionCompleted ? `✅ ${tag}Completed — ` : `ℹ️ ${tag}`;
   if (params.kind === "merge") {
-    return `✅ ${tag}Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
+    return `${prefix}Merged: \`${params.branch}\` → \`${params.base ?? "main"}\`${stats}`;
   }
   if (params.kind === "pr-updated") {
-    return `✅ ${tag}PR updated: ${params.prUrl ?? ""}${stats}`;
+    return `${prefix}PR updated: ${params.prUrl ?? ""}${stats}`;
   }
   if (params.targetRepo) {
-    return `✅ ${tag}PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
+    return `${prefix}PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
   }
-  return `✅ ${tag}PR opened: ${params.prUrl ?? ""}${stats}`;
+  return `${prefix}PR opened: ${params.prUrl ?? ""}${stats}`;
 }

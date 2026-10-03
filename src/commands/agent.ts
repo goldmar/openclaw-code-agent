@@ -2,9 +2,11 @@ import { sessionManager } from "../singletons";
 import { formatHarnessModelLabel } from "../session-display";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
-import { tokenizeCommandArgs } from "./args";
+import { isCommandInRouteChat } from "../config";
+import { SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
-interface AgentCommandContext {
+/** The host's command context fields that identify the chat a command was typed in. */
+export interface AgentCommandContext {
   args?: string;
   workspaceDir?: string;
   messageChannel?: string;
@@ -24,7 +26,17 @@ interface AgentCommandContext {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
+  /** Raw "To" of the command; the chat itself only on Telegram (`telegram:<chat id>`). */
+  to?: string;
+  /** The bot account that received the command. */
+  accountId?: string;
 }
+
+/**
+ * A command's reply. `suppressReply` (host `PluginCommandResult`) sends nothing:
+ * the handler's notice in the same chat is already the one answer.
+ */
+export type AgentCommandReply = { text: string } | { suppressReply: true };
 
 interface CommandApi {
   registerCommand(config: {
@@ -32,7 +44,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: AgentCommandContext) => Promise<{ text: string }>;
+    handler: (ctx: AgentCommandContext) => Promise<AgentCommandReply>;
   }): void;
 }
 
@@ -72,7 +84,7 @@ export function registerAgentCommand(api: CommandApi): void {
     requireAuth: true,
     handler: async (ctx: AgentCommandContext) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const raw = (ctx.args ?? "").trim();
@@ -88,7 +100,7 @@ export function registerAgentCommand(api: CommandApi): void {
           sessionManager,
         );
         if (resolution.kind !== "resolved") {
-          return { text: resolution.text };
+          return { text: resolution.kind === "blocked" ? resolution.userText : resolution.text.replace(/^Error:/u, "❌") };
         }
 
         const session = await sessionManager.launchSession({
@@ -110,6 +122,12 @@ export function registerAgentCommand(api: CommandApi): void {
 
         // A harness that throws during startup has already failed the session.
         if (session.status === "failed" || session.status === "killed") {
+          // One message: in the session's own chat the lifecycle notice
+          // (`❌ [name] Failed` with Resume / View output, or `⛔ [name] Stopped
+          // by …`) is the answer and keeps its buttons. A stop whose notice an
+          // `/agent_kill` reply replaced sends none, so this reply stays.
+          const noticeFollows = session.status === "failed" || !session.stopNoticeReplaced;
+          if (noticeFollows && isCommandInRouteChat(ctx, session)) return { suppressReply: true };
           const reason = session.error?.trim();
           return { text: `❌ [${session.name}] Did not start${reason ? `: ${reason}` : "."}\nFix the problem and run /agent again.` };
         }
@@ -120,11 +138,11 @@ export function registerAgentCommand(api: CommandApi): void {
           model: session.model,
           reasoningEffort: session.reasoningEffort,
         }) ?? resolution.harness;
-        return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_status.` };
+        return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_sessions.` };
       } catch (err: unknown) {
         const message = errorMessage(err);
-        const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";
-        return { text: `Error launching session: ${message}${hint}` };
+        // The limit error names the orchestrator's tools; the user gets the command.
+        return { text: `❌ Launch failed: ${message.replace(/ Use agent_sessions .*$/u, "\nUse /agent_sessions to see active sessions.")}` };
       }
     },
   });

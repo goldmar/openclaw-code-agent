@@ -1,10 +1,10 @@
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
-import { consumeFirstCommandArg } from "./args";
+import { isCommandInRouteChat } from "../config";
+import type { AgentCommandContext } from "./agent";
+import { consumeFirstCommandArg, SERVICE_NOT_RUNNING } from "./args";
 
-interface AgentRespondCommandContext {
-  args?: string;
-}
+type AgentRespondCommandContext = AgentCommandContext;
 
 interface CommandApi {
   registerCommand(config: {
@@ -26,7 +26,7 @@ export function registerAgentRespondCommand(api: CommandApi): void {
     requireAuth: true,
     handler: async (ctx: AgentRespondCommandContext) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const args = (ctx.args ?? "").trim();
@@ -44,23 +44,28 @@ export function registerAgentRespondCommand(api: CommandApi): void {
 
       const refArg = consumeFirstCommandArg(remaining);
       if (!refArg) {
-        return { text: "Error: Missing message. Usage: /agent_respond <id-or-name> <message>" };
+        return { text: "❌ Missing message. Usage: /agent_respond <id-or-name> <message>" };
       }
 
       const ref = refArg.value;
       const message = refArg.rest;
       if (!message.trim()) {
-        return { text: "Error: Empty message. Usage: /agent_respond <id-or-name> <message>" };
+        return { text: "❌ Empty message. Usage: /agent_respond <id-or-name> <message>" };
       }
 
+      const target = sessionManager.resolve(ref) ?? sessionManager.getPersistedSession(ref);
       const result = await executeRespond(sessionManager, {
         session: ref,
         message,
         interrupt,
         userInitiated: true, // Command is always user-initiated
+        // In the session's own chat this reply is the one message: it replaces
+        // the notice of a resume, plan approval or plan rejection.
+        replyIsNotice: isCommandInRouteChat(ctx, target),
       });
 
-      return { text: result.text };
+      // The user-facing form: no session ids, no tool hints (those are for the orchestrator).
+      return { text: result.userText ?? result.text };
     },
   });
 }

@@ -2,7 +2,6 @@ import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { Type } from "../tool-parameter-schema";
 import { existsSync } from "fs";
-import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import {
@@ -21,7 +20,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, owedCompletionCycle, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -131,7 +130,7 @@ export function formatCleanupOutcome(args: {
 export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_merge",
-    description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user. Squash conflicts start a conflict-resolver session.",
+    description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID" }),
       base_branch: Type.Optional(Type.String({ description: "Default: the repository's detected default branch" })),
@@ -170,7 +169,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const { worktreePath, originalWorkdir, branchName } = target;
 
       if (!worktreePath || !originalWorkdir) {
-        return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }] };
+        return { content: [{ type: "text", text: `Error: The session has no worktree.` }] };
       }
 
       if (!branchName) {
@@ -205,7 +204,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
-        return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
+        return { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
       }
 
       const branchAheadCount = existsSync(worktreePath)
@@ -216,7 +215,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           content: [{
             type: "text",
             text: [
-              `❌ Merge blocked: session "${params.session}" has uncommitted worktree changes but branch ${branchName} has no commits ahead of ${baseBranch}.`,
+              `❌ Merge blocked: the worktree has uncommitted changes but branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`.`,
               `Worktree: ${worktreePath}`,
               `Resume or inspect the session, then commit real task changes or clean temporary files before retrying agent_merge.`,
             ].join("\n"),
@@ -239,7 +238,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       if (hookRefusal) return typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal;
 
       // Serialise against concurrent merges on the same repo directory
-      let toolResult: { isError?: boolean; details?: ReturnType<typeof sessionToolError>["details"]; content: Array<{ type: string; text: string }>; meta?: { success: boolean; conflictResolverSessionId?: string } } = {
+      let toolResult: { isError?: boolean; details?: ReturnType<typeof sessionToolError>["details"]; content: Array<{ type: string; text: string }>; meta?: { success: boolean; outcomeNotified?: boolean } } = {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
@@ -250,7 +249,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         let current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
         if (current.changed) { refuseChanged(); return; }
         if (current.merged) {
-          toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
+          toolResult = { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
           return;
         }
 
@@ -284,7 +283,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         current = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
         if (current.changed) { refuseChanged(); return; }
         if (current.merged) {
-          toolResult = { content: [{ type: "text", text: `ℹ️ Session was already merged while preparing the merge.` }] };
+          toolResult = { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
           return;
         }
         const freshPersisted = current.persisted;
@@ -307,7 +306,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Push base branch if requested
           if (shouldPush) {
             if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
-              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
+              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged \`${branchName}\` → \`${baseBranch}\` locally, but failed to push \`${baseBranch}\``;
               sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
                 pushFailedText,
@@ -354,6 +353,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile Git and session state before retrying; the changed session was not patched." }] };
             return;
           }
+          // Read before the merged patch: it resolves the decision and consumes the owed `✅`.
+          const sessionCompleted = owedCompletionCycle(sm, target.generation) !== undefined;
           {
             const mergedAt = new Date().toISOString();
             const patched = patchWorktreeTarget(sm, target, {
@@ -371,6 +372,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                   },
                 ),
                 worktreeDisposition: "merged",
+                deferredCompletionCycle: undefined,
               });
             if (!patched) {
               toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but its session state could not be updated. Reconcile before retrying." }] };
@@ -381,6 +383,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Send unified confirmation notification
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "merge",
+            sessionCompleted,
             sessionName: target.sessionName,
             branch: branchName,
             base: resolvedBaseBranch,
@@ -404,52 +407,21 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           );
 
           const mergeTypeMsg = mergeResult.fastForward
-            ? "⚡ Fast-forward"
-            : mergeResult.squash ? "🗜️ Squash commit" : "🔀 Merge commit";
+            ? "Fast-forward"
+            : mergeResult.squash ? "Squash commit" : "Merge commit";
           const pushMsg = shouldPush ? " Pushed." : "";
-          let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
+          // The line the user received first, then the detail.
+          let successText = `${outcomeLine}\nMerge type: ${mergeTypeMsg}.${pushMsg}${cleanupOutcome.summaryFragment}`;
           if (mergeResult.stashPopConflict) {
             successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {
-            successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
+            successText += `\n(Pre-existing changes on \`${baseBranch}\` were auto-stashed and restored.)`;
           }
           successText = appendMergeWarnings(successText, mergeResult) + summaryShownNote(params.summary);
-          toolResult = { content: [{ type: "text", text: successText }] };
+          toolResult = { content: [{ type: "text", text: successText }], meta: { success: true, outcomeNotified: true } };
         } else if (mergeResult.rebaseConflict) {
           // Rebase conflicts require manual resolution — surface instructions to the user
           toolResult = { content: [{ type: "text", text: appendMergeWarnings(`⚠️ Rebase conflicts — manual resolution required:\n\n${mergeResult.error}`, mergeResult) }] };
-        } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-          // Squash-merge conflict path (should be rare after rebase) — spawn conflict resolver
-          const conflictPrompt = [
-            `Resolve merge conflicts in the following files and commit the resolution:`,
-            ``,
-            ...mergeResult.conflictFiles.map((f) => `- ${f}`),
-            ``,
-            `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
-          ].join("\n");
-
-          try {
-            const conflictSession = await sm.launchSession({
-              prompt: conflictPrompt,
-              workdir: effectiveWorkdir,
-              name: `${params.session}-conflict-resolver`,
-              harness: getDefaultHarnessName(),
-              permissionMode: "bypassPermissions",
-              multiTurn: true,
-              route: targetSession?.route ?? persistedSession?.route,
-              originChannel: targetSession?.originChannel ?? persistedSession?.originChannel,
-              originThreadId: targetSession?.originThreadId ?? persistedSession?.originThreadId,
-              originAgentId: targetSession?.originAgentId ?? persistedSession?.originAgentId,
-              originSessionKey: targetSession?.originSessionKey ?? persistedSession?.originSessionKey,
-            });
-
-            toolResult = {
-              content: [{ type: "text", text: appendMergeWarnings(`⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}`, mergeResult) }],
-              meta: { success: false, conflictResolverSessionId: conflictSession.id },
-            };
-          } catch (err) {
-            toolResult = { content: [{ type: "text", text: appendMergeWarnings(`❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`, mergeResult) }] };
-          }
         } else {
           const errorText = mergeResult.dirtyError
             ? `❌ Merge blocked: ${mergeResult.error}`

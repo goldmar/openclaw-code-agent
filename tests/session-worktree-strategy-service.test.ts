@@ -1,5 +1,5 @@
 import "./test-env";
-import { describe, it, mock, before, after } from "node:test";
+import { describe, it, mock, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,6 +11,7 @@ import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy
 import { createWorktree, getBranchName, getDiffSummary, mergeBranch, type DiffSummary } from "../src/worktree";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
+import { buildCompletedPayload } from "../src/session-notification-builders/terminal";
 
 // PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
 // cold start used to hit the probe timeout and flip these tests).
@@ -156,7 +157,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: false };
+          return { success: false, notificationSent: false };
         },
       });
       const session: any = {
@@ -238,7 +239,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: false }),
+        runAutoPr: async () => ({ success: false, notificationSent: false }),
       });
       const session: any = {
         id: "s-unrelated-parent-pr",
@@ -290,7 +291,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     await service.handleWorktreeStrategy({
@@ -338,7 +339,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
     const session: any = {
       id: "s-worktree-generic-retry",
@@ -392,7 +393,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-pr-open", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
@@ -417,7 +418,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
     const result = await service.handleWorktreeStrategy(session);
 
-    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+    assert.deepEqual(result, { notificationSent: false, worktreeRemoved: false });
     assert.equal(notifications.length, 0);
   });
 
@@ -532,7 +533,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -587,7 +588,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
       const session: any = {
         id: "s-policy-blocked-completed-at",
@@ -650,7 +651,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         runAutoPr: async (_session, baseBranch) => {
           autoPrCalled = true;
           assert.equal(baseBranch, "main");
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -735,7 +736,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
             },
             worktreePrUrl: "https://github.com/example/repo/pull/310",
           });
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -830,7 +831,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
               resolutionSource: "agent_pr",
             },
           });
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -908,7 +909,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
       const session: any = {
@@ -974,7 +975,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -1174,7 +1175,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: false };
+          return { success: false, notificationSent: false };
         },
       });
       const session: any = {
@@ -1367,7 +1368,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         runAutoPr: async (_session, baseBranch) => {
           autoPrCalled = true;
           assert.equal(baseBranch, "main");
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -1522,7 +1523,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch: async () => { mergeCalls += 1; return { success: true, fastForward: true }; },
         spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
-        runAutoPr: async () => { mergeCalls += 1; return { success: true }; },
+        runAutoPr: async () => { mergeCalls += 1; return { success: true, notificationSent: true }; },
       });
       const session: any = {
         id: "s-hook-change",
@@ -1575,7 +1576,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-success", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1589,7 +1590,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+      const { worktreeRemoved, notificationSent } = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1609,6 +1610,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "merged");
       assert.equal(git(repoDir, "branch", "--show-current"), "main");
       assert.equal(worktreeRemoved, true);
+      assert.equal(notificationSent, true);
       assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
       assert.doesNotMatch(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
       assert.equal(session.worktreePath, undefined);
@@ -1642,7 +1644,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
       const session: any = {
         id: "s-summary-cleanup-fails",
@@ -1653,7 +1655,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+      const { worktreeRemoved, notificationSent } = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1664,6 +1666,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       );
 
       assert.equal(worktreeRemoved, false);
+      assert.equal(notificationSent, true);
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreePath, worktreePath);
       assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
@@ -1709,7 +1712,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1741,6 +1744,173 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  describe("auto-merge outcome reporting", () => {
+    const repoDirs: string[] = [];
+    afterEach(() => {
+      for (const repoDir of repoDirs.splice(0)) rmSync(repoDir, { recursive: true, force: true });
+    });
+    const diffSummary: DiffSummary = {
+      commits: 1, filesChanged: 1, insertions: 2, deletions: 0, changedFiles: ["feature.txt"], commitMessages: [],
+    };
+    function createAutoMergeService(overrides: {
+      isAlreadyMerged?: () => boolean;
+      enqueueMerge?: (repoDir: string, fn: () => Promise<void>, onQueued?: () => void) => Promise<void>;
+      getCurrentSessionStatus?: () => "running" | "completed" | undefined;
+      mergeBranch?: () => Promise<{ success: boolean; fastForward?: boolean; error?: string; dirtyError?: boolean; rebaseConflict?: boolean }>;
+    } = {}) {
+      const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-merge-outcome-"));
+      repoDirs.push(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "branch", "agent/auto-merge-outcome");
+      const notifications: SessionNotificationRequest[] = [];
+      let merges = 0;
+      const session: any = {
+        id: "s-auto-merge-outcome",
+        status: "completed",
+        name: "auto-merge-outcome",
+        harnessSessionId: "h-auto-merge-outcome",
+      };
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: overrides.isAlreadyMerged ?? (() => false),
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: overrides.enqueueMerge ?? (async (_repoDir, fn) => { await fn(); }),
+        mergeBranch: async () => {
+          merges += 1;
+          return overrides.mergeBranch ? overrides.mergeBranch() : { success: true, fastForward: true };
+        },
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
+        ...(overrides.getCurrentSessionStatus ? { getCurrentSessionStatus: overrides.getCurrentSessionStatus } : {}),
+      });
+      const run = (retry = false) => (service as any).handleAutoMergeStrategy(
+        session, repoDir, join(repoDir, ".worktrees/auto-merge-outcome"), "agent/auto-merge-outcome", "main", diffSummary, session.id, undefined, retry,
+      );
+      return { session, notifications, run, merges: () => merges };
+    }
+
+    it("reports no notice when the session is already merged before the merge is queued", async () => {
+      const f = createAutoMergeService({ isAlreadyMerged: () => true });
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.equal(f.notifications.length, 0);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("reports no notice while a conflict resolver owns the merge", async () => {
+      const f = createAutoMergeService();
+      f.session.autoMergeResolverSessionId = "resolver-1";
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.equal(f.notifications.length, 0);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("does not count the queued note as the outcome when the merge landed while waiting", async () => {
+      let merged = false;
+      const f = createAutoMergeService({
+        isAlreadyMerged: () => merged,
+        enqueueMerge: async (_repoDir, fn, onQueued) => {
+          onQueued?.();
+          merged = true;
+          await fn();
+        },
+      });
+      assert.deepEqual(await f.run(), { notificationSent: false, worktreeRemoved: false });
+      assert.deepEqual(f.notifications.map((request) => request.label), ["worktree-merge-queued"]);
+      assert.equal(f.merges(), 0);
+    });
+
+    it("reports a merge error as the sent outcome", async () => {
+      const f = createAutoMergeService({
+        mergeBranch: async () => ({ success: false, error: "base is dirty", dirtyError: true }),
+      });
+      assert.deepEqual(await f.run(), { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(f.notifications.map((request) => request.label), ["worktree-merge-error"]);
+      // The first line of the cycle, with the decision it leaves open.
+      assert.match(
+        String(f.notifications[0].userMessage),
+        /^⚠️ \[auto-merge-outcome\] Completed — merge blocked[^\n]*\nbase is dirty\nBranch `agent\/auto-merge-outcome` is kept; choose below\.$/,
+      );
+      assert.deepEqual(buttonLabels(f.notifications[0].buttons), ["Open PR"]);
+      assert.equal(f.session.worktreeState, "pending_decision");
+      assert.ok(f.session.pendingWorktreeDecisionSince, "reminders and /agent_status list the open decision");
+      // No `✅` is deferred: a merge or PR made after this line is an `ℹ️` milestone.
+      assert.equal(f.session.deferredCompletionCycle, undefined);
+    });
+
+    it("leads a new cycle's repeated conflict with Completed, and keeps the retry pass a follow-up", async () => {
+      const conflict = async () => ({ success: false, rebaseConflict: true, error: "still conflicts" });
+      // A resumed session completes again: the resolver attempt of the earlier cycle is used up.
+      const fresh = createAutoMergeService({ mergeBranch: conflict });
+      fresh.session.autoMergeConflictResolutionAttemptCount = 1;
+      assert.deepEqual(await fresh.run(), { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(fresh.notifications.map((request) => request.label), ["worktree-merge-conflict-escalated"]);
+      assert.match(
+        String(fresh.notifications[0].userMessage),
+        /^⚠️ \[auto-merge-outcome\] Completed — merge conflict[^\n]*\nThe automatic conflict resolution was already used for this branch\.\nThe rebased branch still conflicts with `main`\. /,
+      );
+      assert.deepEqual(buttonLabels(fresh.notifications[0].buttons), ["Open PR"]);
+      assert.equal(fresh.session.worktreeState, "pending_decision");
+
+      // The retry after this cycle's resolver: the cycle already has its `Completed —` line.
+      const retried = createAutoMergeService({ mergeBranch: conflict });
+      retried.session.autoMergeConflictResolutionAttemptCount = 1;
+      assert.deepEqual(await retried.run(true), { notificationSent: true, worktreeRemoved: false });
+      assert.match(
+        String(retried.notifications[0].userMessage),
+        /^⚠️ \[auto-merge-outcome\] Auto-merge could not finish after one conflict-resolution attempt\.\n/,
+      );
+      assert.doesNotMatch(String(retried.notifications[0].userMessage), /Completed —/);
+      assert.deepEqual(buttonLabels(retried.notifications[0].buttons), ["Open PR"]);
+    });
+
+    it("reports a queued merge as a milestone when the session id was resumed meanwhile", async () => {
+      const f = createAutoMergeService({ getCurrentSessionStatus: () => "running" });
+      const result = await f.run();
+      assert.equal(result.notificationSent, true);
+      assert.equal(f.session.status, "completed", "the captured session object is stale");
+      assert.equal(f.notifications.length, 1);
+      assert.match(String(f.notifications[0].userMessage), /^ℹ️ \[auto-merge-outcome\] Merged: `agent\/auto-merge-outcome` → `main`/);
+      assert.doesNotMatch(String(f.notifications[0].userMessage), /Completed/);
+    });
+
+    it("gives the automatic merge line the same stats footer as the generic completion notice", async () => {
+      const f = createAutoMergeService();
+      Object.assign(f.session, { costUsd: 0.11, duration: 8_000, harnessName: "claude-code", model: "sonnet", reasoningEffort: "low" });
+      await f.run();
+      const line = String(f.notifications[0].userMessage);
+      const completed = buildCompletedPayload({ session: f.session, originThreadLine: "", preview: "" }).userMessage;
+      const footer = completed.slice("✅ [auto-merge-outcome] Completed".length);
+      assert.match(footer, /^ \| \$0\.11 \| 8s \| /);
+      assert.equal(line, `✅ [auto-merge-outcome] Completed — Merged: \`agent/auto-merge-outcome\` → \`main\` (1 file, +2/-0)${footer}`);
+    });
+
+    it("keeps the completion form when the current status is still completed or unknown", async () => {
+      for (const status of ["completed", undefined] as const) {
+        const f = createAutoMergeService({ getCurrentSessionStatus: () => status });
+        await f.run();
+        assert.match(String(f.notifications[0].userMessage), /^✅ \[auto-merge-outcome\] Completed — Merged:/);
+      }
+    });
   });
 
   it("includes stash-pop-conflict warnings in the auto-merge follow-up wake", async () => {
@@ -1782,11 +1952,12 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         ],
       }),
       spawnConflictResolver: async () => ({ id: "resolver-stash", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
       id: "s-stash-conflict",
+      status: "completed",
       name: "stash-conflict",
       harnessSessionId: "h-stash-conflict",
       worktreePrTargetRepo: undefined,
@@ -1813,6 +1984,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       );
 
       assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].userMessage), /^✅ \[stash-conflict\] Completed — Merged:/);
       assert.match(String(notifications[0].userMessage), /Pre-merge stash pop conflicted/);
       assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to determine auto-stash ref/);
       assert.doesNotMatch(String(notifications[0].userMessage), /already covered/);
@@ -1856,7 +2028,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnCalls.push(args as unknown as Record<string, unknown>);
         return { id: "resolver-warning", name: "resolver-warning-session" };
       },
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
@@ -1920,7 +2092,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           spawnCalls.push(args as unknown as Record<string, unknown>);
           return { id: "resolver-1", name: "resolver-first-conflict-resolver" };
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1951,7 +2123,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "merge_conflict_resolving");
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-resolving");
-      assert.match(String(notifications[0].userMessage), /will retry automatically if it succeeds/i);
+      assert.match(String(notifications[0].userMessage), /is fixing it; the merge is retried automatically when it succeeds\./);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -1989,7 +2161,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => {
           throw new Error("spawn failed");
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2055,7 +2227,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => {
           throw new Error("spawn failed");
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2128,7 +2300,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           spawnCalled = true;
           return { id: "resolver-2", name: "resolver-exhausted-conflict-resolver" };
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2158,6 +2330,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "pending_decision");
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-escalated");
+      // The first line of this terminal cycle (the resolver ran in an earlier one).
+      assert.match(String(notifications[0].userMessage), /^⚠️ \[resolver-exhausted\] Completed — merge conflict/);
       assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to abort rebase during recovery/);
       assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
       assert.ok(Array.isArray(notifications[0].buttons));
@@ -2200,7 +2374,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-auto-pr", name: "unused" }),
-        runAutoPr: async () => ({ success: false }),
+        runAutoPr: async () => ({ success: false, notificationSent: false }),
       });
 
       const session: any = {
@@ -2230,7 +2404,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-auto-pr-failed");
-      assert.match(String(notifications[0].userMessage), /Auto-PR did not complete/i);
+      assert.match(String(notifications[0].userMessage), /^⚠️ \[[\w-]+\] Completed — auto-PR failed( \|[^\n]*)?\nThe worktree is kept; choose below\.$/);
       assert.deepEqual(policyAllowedActions, { merge: false, pr: true });
       assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), false);
       assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), true);
@@ -2270,7 +2444,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         warnings: ["Failed to check out main during recovery: checkout failed"],
       }),
       spawnConflictResolver: async () => ({ id: "resolver-3", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
@@ -2303,17 +2477,227 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       },
       session.id,
       { merge: true, pr: false },
+      true,
     );
 
     assert.equal(session.worktreeState, "pending_decision");
     assert.equal(session.worktreeLifecycle?.state, "pending_decision");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "worktree-merge-error");
+    // A follow-up of the cycle that already said `Completed — merge conflict`.
+    assert.match(String(notifications[0].userMessage), /^⚠️ \[resolver-retry-failure\] Merge failed\nff-only merge failed\n/);
+    assert.doesNotMatch(String(notifications[0].userMessage), /Completed —/);
     assert.match(String(notifications[0].userMessage), /auto-merge retry did not complete/i);
     assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to check out main during recovery/);
     assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
     assert.ok(Array.isArray(notifications[0].buttons));
     assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
     assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
+  });
+});
+
+describe("SessionWorktreeStrategyService retry after the conflict resolver", () => {
+  // The cycle already sent `⚠️ [name] Completed — merge conflict`: the retry
+  // must not send a second `Completed —` line (✅ or ⚠️) and defers no `✅`.
+  async function retryFixture(
+    name: string,
+    completionState: "has-commits" | "dirty-uncommitted" | "no-change" | "merged" | "released" | "base-advanced",
+    runAutoPr: (session: unknown, baseBranch: string, retry?: boolean) => Promise<{ success: boolean; notificationSent: boolean; error?: string }> =
+      async () => ({ success: true, notificationSent: true }),
+  ) {
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree(name);
+    const notifications: SessionNotificationRequest[] = [];
+    const patches: Array<Record<string, unknown>> = [];
+    const session: any = {
+      id: `s-${name}`,
+      name,
+      harnessSessionId: `h-${name}`,
+      status: "completed",
+      startedAt: 1700000009000,
+      worktreeState: "merge_conflict_resolving",
+      worktreeStrategy: "auto-merge",
+      worktreePath,
+      worktreeBranch: branchName,
+      originalWorkdir: repoDir,
+      workdir: worktreePath,
+      worktreeBaseBranch: "main",
+      prompt: "resolve",
+      costUsd: 0.5,
+    };
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => completionState,
+      updatePersistedSession: (_ref, patch) => { patches.push(patch); Object.assign(session, patch); return true; },
+      dispatchSessionNotification: (_session, request) => { notifications.push(request); },
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+      runAutoPr,
+    });
+    const texts = () => notifications.map((request) => String(request.userMessage));
+    return { repoDir, worktreePath, branchName, session, service, notifications, patches, texts };
+  }
+
+  it("runs auto-PR as a retry: a failure is a plain follow-up, an unchanged PR sends nothing here", async () => {
+    const retries: Array<boolean | undefined> = [];
+    const failed = await retryFixture("retry-auto-pr", "has-commits", async (_session, _base, retry) => {
+      retries.push(retry);
+      return { success: false, notificationSent: false, error: "push rejected." };
+    });
+    const upToDate = await retryFixture("retry-auto-pr-same", "has-commits", async (_session, _base, retry) => {
+      retries.push(retry);
+      return { success: true, notificationSent: false };
+    });
+    try {
+      for (const f of [failed, upToDate]) Object.assign(f.session, { worktreeStrategy: "auto-pr", repoIntegrationPolicy: "pr-required" });
+
+      assert.deepEqual(
+        await failed.service.handleWorktreeStrategy(failed.session, { retryAfterConflict: true }),
+        { notificationSent: true, worktreeRemoved: false },
+      );
+      // The cycle already has its `Completed —` line.
+      assert.equal(failed.texts()[0], "⚠️ [retry-auto-pr] Auto-PR failed\nReason: push rejected. The worktree is kept; choose below.");
+      assert.equal(failed.session.worktreeState, "pending_decision");
+
+      // PR already up to date: no notice from the strategy; SessionManager reports how the retry ended.
+      assert.deepEqual(
+        await upToDate.service.handleWorktreeStrategy(upToDate.session, { retryAfterConflict: true }),
+        { notificationSent: false, worktreeRemoved: false },
+      );
+      assert.deepEqual(upToDate.texts(), []);
+      assert.deepEqual(retries, [true, true], "auto-PR knows it runs after the conflict resolver");
+    } finally {
+      rmSync(failed.repoDir, { recursive: true, force: true });
+      rmSync(upToDate.repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports leftover uncommitted files as a plain follow-up that does not claim missing commits", async () => {
+    const f = await retryFixture("retry-dirty", "dirty-uncommitted");
+    try {
+      writeFileSync(join(f.worktreePath, "leftover.txt"), "left by the resolver\n", "utf-8");
+      await f.service.handleWorktreeStrategy(f.session, { retryAfterConflict: true });
+      assert.equal(f.notifications.length, 1);
+      const [first, second] = f.texts()[0]!.split("\n");
+      assert.equal(first, `⚠️ [retry-dirty] Uncommitted changes on \`${f.branchName}\``);
+      // The branch has a commit of its own: "no commits" would be false.
+      assert.equal(second, "Commit or discard them before the branch is merged.");
+      assert.doesNotMatch(f.texts()[0]!, /Completed —|no commits/);
+      assert.doesNotMatch(String(f.notifications[0]!.wakeMessageOnNotifyFailed), /no commits/);
+
+      // The first pass of a cycle keeps the `Completed —` form with the footer.
+      const firstPass = await retryFixture("first-dirty", "dirty-uncommitted");
+      try {
+        writeFileSync(join(firstPass.worktreePath, "leftover.txt"), "x\n", "utf-8");
+        await firstPass.service.handleWorktreeStrategy(firstPass.session);
+        assert.ok(firstPass.texts()[0]!.split("\n")[0]!.startsWith(`⚠️ [first-dirty] Completed — uncommitted changes on \`${firstPass.branchName}\` | $0.50`), firstPass.texts()[0]);
+      } finally {
+        rmSync(firstPass.repoDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(f.repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a retry with nothing left to merge as a milestone, not a second completion", async () => {
+    const f = await retryFixture("retry-no-change", "no-change");
+    try {
+      const result = await f.service.handleWorktreeStrategy(f.session, { retryAfterConflict: true });
+      assert.equal(result.notificationSent, true);
+      assert.equal(f.texts().length, 1);
+      assert.match(f.texts()[0]!, /^ℹ️ \[retry-no-change\] No changes left to merge after conflict resolution \| \$0\.50[^\n]*$/);
+    } finally {
+      rmSync(f.repoDir, { recursive: true, force: true });
+    }
+    for (const state of ["merged", "released"] as const) {
+      const g = await retryFixture(`retry-${state}`, state);
+      try {
+        // Without the retry these paths stay silent and the generic terminal notice follows.
+        const silent = await retryFixture(`first-${state}`, state);
+        try {
+          assert.equal((await silent.service.handleWorktreeStrategy(silent.session)).notificationSent, false);
+          assert.deepEqual(silent.texts(), []);
+        } finally {
+          rmSync(silent.repoDir, { recursive: true, force: true });
+        }
+        const result = await g.service.handleWorktreeStrategy(g.session, { retryAfterConflict: true });
+        assert.equal(result.notificationSent, true, "the user was told the merge would be retried");
+        assert.equal(g.texts().length, 1);
+        assert.ok(g.texts()[0]!.startsWith(state === "merged"
+          ? `ℹ️ [retry-merged] Merged: \`${g.branchName}\` → \`main\` | $0.50`
+          : "ℹ️ [retry-released] No changes left to merge after conflict resolution | $0.50"), g.texts()[0]);
+        assert.doesNotMatch(g.texts()[0]!, /\n/);
+        assert.equal(g.session.worktreeState, state);
+      } finally {
+        rmSync(g.repoDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("defers no completion marker when the retry ends in the decision prompt", async () => {
+    for (const retry of [true, false]) {
+      const f = await retryFixture(`retry-ask-${retry}`, "has-commits");
+      try {
+        mkdirSync(join(f.worktreePath, ".husky"), { recursive: true });
+        writeFileSync(join(f.worktreePath, ".husky", "pre-commit"), "echo hook\n", "utf-8");
+        git(f.worktreePath, "add", ".husky/pre-commit");
+        git(f.worktreePath, "commit", "-m", "add hook");
+        await f.service.handleWorktreeStrategy(f.session, retry ? { retryAfterConflict: true } : {});
+        assert.equal(f.notifications.at(-1)?.label, "worktree-merge-ask");
+        // Without the marker a later Merge / PR is an `ℹ️` milestone (see owedCompletionCycle).
+        assert.equal(
+          f.patches.some((patch) => patch.deferredCompletionCycle !== undefined),
+          !retry,
+          retry ? "the retry must not defer a second completion" : "the first prompt defers the ✅",
+        );
+        assert.equal(f.session.deferredCompletionCycle, retry ? undefined : 1700000009000);
+      } finally {
+        rmSync(f.repoDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("repeats no Completed line for a retried merge, a moved base, or a blocking policy", async () => {
+    const merged = await retryFixture("retry-merge", "has-commits");
+    try {
+      // No hook change and a policy that allows the merge.
+      merged.session.repoIntegrationPolicy = "never-pr";
+      await merged.service.handleWorktreeStrategy(merged.session, { retryAfterConflict: true });
+      assert.equal(merged.notifications.at(-1)?.label, "worktree-merge-success");
+      assert.match(merged.texts().at(-1)!, /^ℹ️ \[retry-merge\] Merged: /);
+    } finally {
+      rmSync(merged.repoDir, { recursive: true, force: true });
+    }
+    const moved = await retryFixture("retry-moved", "base-advanced");
+    try {
+      await moved.service.handleWorktreeStrategy(moved.session, { retryAfterConflict: true });
+      assert.equal(moved.texts()[0]!.split("\n")[0], `⚠️ [retry-moved] No commits on \`${moved.branchName}\`, but \`main\` moved`);
+    } finally {
+      rmSync(moved.repoDir, { recursive: true, force: true });
+    }
+    const blocked = await retryFixture("retry-blocked", "has-commits");
+    try {
+      // No repo policy is known: automatic follow-through is blocked.
+      await blocked.service.handleWorktreeStrategy(blocked.session, { retryAfterConflict: true });
+      assert.deepEqual(blocked.texts()[0]!.split("\n"), ["⚠️ [retry-blocked] Blocked by repo policy", "Repo integration policy is unknown."]);
+      const first = await retryFixture("first-blocked", "has-commits");
+      try {
+        await first.service.handleWorktreeStrategy(first.session);
+        const [heading, reason] = first.texts()[0]!.split("\n");
+        assert.ok(heading!.startsWith("⚠️ [first-blocked] Completed — blocked by repo policy | $0.50"), heading);
+        assert.equal(reason, "Repo integration policy is unknown.");
+      } finally {
+        rmSync(first.repoDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(blocked.repoDir, { recursive: true, force: true });
+    }
   });
 });
