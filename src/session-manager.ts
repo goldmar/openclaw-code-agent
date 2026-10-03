@@ -286,7 +286,7 @@ export class SessionManager {
    */
   reofferLateFallbackMs = 45_000;
   /** Pending re-offers: their fallback timer, and how to answer the press now. */
-  private readonly reofferLateFallbacks = new Map<ReturnType<typeof setTimeout>, () => void>();
+  private readonly reofferLateFallbacks = new Map<ReturnType<typeof setTimeout>, () => void | Promise<void>>();
   /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
   private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
   private worktreeReofferGeneration = 0;
@@ -629,11 +629,26 @@ export class SessionManager {
 
   private goalTaskAuthorizer?: (id: string) => void;
   private goalTaskIsActive?: (id: string) => boolean;
+  private goalDormantCloseHandler?: (goalTaskId: string, outcome: "completed" | "killed") => string | undefined;
 
   /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
   setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
     this.goalTaskAuthorizer = authorizer;
     this.goalTaskIsActive = isActive;
+  }
+
+  /** Internal owner callback: a goal's dormant session was closed; returns the name of the task it stopped. */
+  setGoalDormantCloseHandler(handler: (goalTaskId: string, outcome: "completed" | "killed") => string | undefined): void {
+    this.goalDormantCloseHandler = handler;
+  }
+
+  /**
+   * Tell the goal task that owned a dormant session how the session was
+   * closed. The task stops at once with its one `⛔ [task] Goal task stopped`
+   * notice. Returns the task's name, or undefined when no active task owned it.
+   */
+  stopGoalOfClosedSession(goalTaskId: string | undefined, outcome: "completed" | "killed"): string | undefined {
+    return goalTaskId ? this.goalDormantCloseHandler?.(goalTaskId, outcome) : undefined;
   }
 
   /** A goal that finished or whose record is gone can no longer be driven or succeed. */
@@ -1877,7 +1892,7 @@ export class SessionManager {
   async reofferWorktreeDecision(
     ref: string,
     failure: string,
-    options: { closedPr?: boolean; onLateResult?: (delivered: boolean) => void } = {},
+    options: { closedPr?: boolean; onLateResult?: (delivered: boolean) => void | Promise<void> } = {},
   ): Promise<boolean | "pending"> {
     const decisionIsOpen = (): boolean => {
       const persisted = this.getPersistedSession(ref);
@@ -1944,7 +1959,7 @@ export class SessionManager {
     // re-offer cannot retire them, in case the prompt still lands.
     let lateFallback: ReturnType<typeof setTimeout> | undefined;
     let lateReported = false;
-    const reportLate = (delivered: boolean): void => {
+    const reportLate = (delivered: boolean): void | Promise<void> => {
       if (lateFallback) {
         clearTimeout(lateFallback);
         this.reofferLateFallbacks.delete(lateFallback);
@@ -1952,7 +1967,7 @@ export class SessionManager {
       }
       if (!waitEnded || lateReported) return;
       lateReported = true;
-      options.onLateResult?.(delivered);
+      return options.onLateResult?.(delivered);
     };
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
@@ -1967,12 +1982,12 @@ export class SessionManager {
         onNotifySucceeded: () => {
           settleEntry();
           retireOlder();
-          reportLate(true);
+          void reportLate(true);
         },
         onNotifyFailed: () => {
           settleEntry();
           dropFresh();
-          reportLate(false);
+          void reportLate(false);
         },
         // Unknown outcome: the fresh buttons stay valid in case the prompt did
         // arrive, the older ones stay too, and the caller sends its plain
@@ -1980,7 +1995,7 @@ export class SessionManager {
         onNotifyAmbiguous: () => {
           settleEntry();
           ambiguous = true;
-          reportLate(false);
+          void reportLate(false);
         },
       },
     });
@@ -1988,7 +2003,7 @@ export class SessionManager {
     if (ambiguous) return false;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
     if (delivery !== "pending") return delivery === "delivered";
-    lateFallback = setTimeout(() => reportLate(false), this.reofferLateFallbackMs);
+    lateFallback = setTimeout(() => { void reportLate(false); }, this.reofferLateFallbackMs);
     lateFallback.unref?.();
     this.reofferLateFallbacks.set(lateFallback, () => reportLate(false));
     return "pending";
@@ -2684,11 +2699,8 @@ export class SessionManager {
   }
 
   dispose(): void {
-    // A press whose re-offered prompt is still in delivery gets its plain
-    // failure line now: after dispose no outcome is reported any more. The
-    // reply goes through the host's callback responder, not through this plugin.
-    for (const answerNow of [...this.reofferLateFallbacks.values()]) answerNow();
-    this.reofferLateFallbacks.clear();
+    // Normally empty: `shutdown()` answered pending presses first.
+    void this.answerPendingReoffers();
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
@@ -2701,9 +2713,31 @@ export class SessionManager {
     await this.runtimeBootstrap.drain();
   }
 
+  /**
+   * A press whose re-offered prompt is still in delivery gets its plain failure
+   * line now: once the plugin stops, no delivery outcome is reported any more.
+   * The line is a reply through the host's callback responder (the channel's
+   * own send), so it does not depend on this plugin's transports. Waits,
+   * bounded, until those replies were handed to the host.
+   */
+  async answerPendingReoffers(): Promise<void> {
+    const answers = [...this.reofferLateFallbacks.values()].map((answerNow) => answerNow());
+    this.reofferLateFallbacks.clear();
+    const pending = answers.filter((answer): answer is Promise<void> => answer instanceof Promise);
+    if (pending.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); timer.unref?.(); }),
+    ]);
+    clearTimeout(timer);
+  }
+
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     try {
+      // First, while the channels are still up: answer presses that still wait.
+      await this.answerPendingReoffers();
       this.disposeMaintenance();
       // Stop active sessions first: a launch still preparing (for example running
       // a worktree setup script) must not delay their termination.

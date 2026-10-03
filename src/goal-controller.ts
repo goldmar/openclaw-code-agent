@@ -525,6 +525,7 @@ export class GoalController {
     this.sessionManager = sessionManager;
     this.store = new GoalTaskStore();
     this.sessionManager.setGoalTaskAuthorizer?.((id) => this.assertTaskAuthorized(id), (id) => this.isTaskActive(id));
+    this.sessionManager.setGoalDormantCloseHandler?.((id, outcome) => this.sessionClosedWhileDormant(id, outcome));
   }
 
   start(): void {
@@ -650,6 +651,26 @@ export class GoalController {
       if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to start the goal task: ${errorMessage(err)}`);
       throw err;
     }
+  }
+
+  /**
+   * The task's dormant session (suspended, or waiting for its plan decision
+   * after an idle timeout) was closed without running again. Nothing more can
+   * happen in it, and nothing was done that verifiers could check, so the task
+   * stops now, with its one stop notice; later rechecks see a finished task.
+   */
+  sessionClosedWhileDormant(taskId: string, outcome: "completed" | "killed"): string | undefined {
+    if (!this.isCurrent(this.generation)) return undefined;
+    const task = this.store.get(taskId);
+    if (!task || isTerminalGoalTaskStatus(task.status)) return undefined;
+    if (task.sessionId) this.removeSessionObserver(task.sessionId);
+    const scheduled = this.scheduledEvaluations.get(task.id);
+    if (scheduled) clearTimeout(scheduled.timer);
+    this.scheduledEvaluations.delete(task.id);
+    this.markTaskStopped(task, outcome === "completed"
+      ? "The session was closed as completed without running."
+      : "Stopped by user.");
+    return task.name;
   }
 
   /** The user declined the verifier commands of a waiting task. */

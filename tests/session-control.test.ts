@@ -209,8 +209,21 @@ describe("session-control app layer", () => {
       getKillSessionText(withBranch, "s", "completed"),
       "ℹ️ [s] Marked as completed (it was not running). Its branch `agent/s` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).",
     );
-    const goal: any = { resolve: () => ({ ...session, goalTaskId: "goal-1" }), closeSuspendedSession: () => "completed" };
-    assert.equal(getKillSessionText(goal, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running). Its goal task stops: the session was closed without running.");
+    const goalStops: Array<[string | undefined, string]> = [];
+    const goal: any = {
+      resolve: () => ({ ...session, goalTaskId: "goal-1" }),
+      closeSuspendedSession: (_ref: string, completed: boolean) => (completed ? "completed" : "killed"),
+      stopGoalOfClosedSession: (taskId: string | undefined, outcome: string) => { goalStops.push([taskId, outcome]); return "ship-it"; },
+    };
+    assert.equal(
+      getKillSessionText(goal, "s", "completed"),
+      "ℹ️ [s] Marked as completed (it was not running). Its goal task \"ship-it\" is stopped: the session was closed without running, so its verifiers did not run.",
+    );
+    assert.equal(getKillSessionText(goal, "s", "killed"), "⛔ [s] Stopped (it was not running).");
+    assert.deepEqual(goalStops, [["goal-1", "completed"], ["goal-1", "killed"]], "the goal is told how its session was closed");
+    // An unsaved close stops no goal.
+    const unsavedGoal: any = { ...goal, closeSuspendedSession: () => "unsaved", stopGoalOfClosedSession: () => { throw new Error("must not stop the goal"); } };
+    assert.match(getKillSessionText(unsavedGoal, "s", "killed"), /^❌ \[s\] Not stopped/);
     const merged: any = { resolve: () => ({ ...branch, worktreeMerged: true }), closeSuspendedSession: () => "completed" };
     assert.equal(getKillSessionText(merged, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
   });

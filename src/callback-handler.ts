@@ -281,11 +281,13 @@ async function reofferWorktreeDecisionAfterFailure(
     reoffered = (await sessionManager?.reofferWorktreeDecision?.(sessionId, failure, {
       closedPr,
       // A slow delivery ends after this handler answered: finish what it would have done.
-      onLateResult: (delivered) => {
-        void (delivered ? clearWorktreeDecisionButtons(ctx, callbackAcknowledged) : replyText(ctx, plainReply))
-          .catch((err: unknown) => {
-            log.warn(`[callback-handler] Could not finish a late worktree re-offer: ${err instanceof Error ? err.message : String(err)}`);
-          });
+      // The promise lets a plugin shutdown wait until the line was handed to the host.
+      onLateResult: async (delivered) => {
+        try {
+          await (delivered ? clearWorktreeDecisionButtons(ctx, callbackAcknowledged) : replyText(ctx, plainReply));
+        } catch (err) {
+          log.warn(`[callback-handler] Could not finish a late worktree re-offer: ${err instanceof Error ? err.message : String(err)}`);
+        }
       },
     })) ?? false;
   } catch (err) {

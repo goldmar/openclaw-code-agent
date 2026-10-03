@@ -76,11 +76,13 @@ export function getKillSessionText(
   // (Also one stopped by the idle timeout while its plan waited: see `closeSuspendedSession`.)
   if (target.status === "killed") {
     const closed = sm.closeSuspendedSession(ref, reason === "completed");
+    // A goal task that owned the session stops with it (one goal notice).
+    const goalTask = closed === "completed" || closed === "killed" ? sm.stopGoalOfClosedSession?.(target.goalTaskId, closed) : undefined;
     if (closed === "completed") {
       // Only the orchestrator's tool can ask for this. No completion handling
       // runs for a session that was not running, so an open branch is named.
       const branch = openWorktreeBranch(target);
-      return `ℹ️ [${target.name}] Marked as completed (it was not running).${target.goalTaskId ? " Its goal task stops: the session was closed without running." : ""}${branch
+      return `ℹ️ [${target.name}] Marked as completed (it was not running).${goalTask ? ` Its goal task "${goalTask}" is stopped: the session was closed without running, so its verifiers did not run.` : ""}${branch
         ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
         : ""}`;
     }

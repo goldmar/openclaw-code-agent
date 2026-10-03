@@ -210,7 +210,7 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
   it("answers a pending prompt whose outcome never arrives with the late failure, once", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { session } = await finishConflictingSession(s, "ask");
-    await s.waitForButton("Merge");
+    const original = await s.waitForButton("Merge");
     await s.sm.whenStorePersisted();
     // The dispatch is swallowed: no success, failure or unknown outcome is ever
     // reported (the plugin stopped mid-send, or the decision closed meanwhile).
@@ -227,6 +227,7 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     // The prompt may still land: its entry stays in flight, so its buttons stay valid
     // and a newer re-offer cannot retire them.
     assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [true]);
+    assert.ok(s.sm.getActionToken(original.payload), "the older controls stay usable while the outcome is unknown");
     const fresh = freshTokens(retry.request()!);
     for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
     // An outcome that still arrives afterwards settles the entry and is not reported a second time.
@@ -234,6 +235,8 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     assert.deepEqual(lateResults, [false]);
     assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false]);
     for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "the delivered prompt keeps its buttons");
+    // The older controls were kept until then and are retired by the delivery.
+    assert.equal(s.sm.getActionToken(original.payload), undefined, "the original controls are retired once the prompt is delivered");
   });
 
   it("cancels the fallback when the outcome arrives, and answers a still-pending press on dispose", async () => {
@@ -291,6 +294,34 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
       for (const tokenId of entries[0]!.tokens) assert.ok(s.sm.getActionToken(tokenId), "the prompt's buttons stay valid in case it did arrive");
     } finally {
       wakeDeliveryExecutorInternals.promiseTimeoutMs = originalTimeout;
+      held.resolve();
+    }
+  });
+
+  it("answers a press whose prompt is still in delivery when the plugin stops", async () => {
+    const held = Promise.withResolvers<void>();
+    try {
+      const s = stack = await startFullStack({
+        backend: "codex",
+        sendResult: async (params) => {
+          if (params.payloads.some((payload) => /still open/.test(payload.text ?? ""))) await held.promise;
+          return { status: "sent", results: params.payloads.map((_, index) => ({ channel: params.channel, messageId: `m-${index}` })) } as never;
+        },
+      });
+      await finishConflictingSession(s, "ask");
+      const merge = await s.waitForButton("Merge");
+      await s.sm.whenStorePersisted();
+      s.sm.userDeliveryResultWaitMs = 30;
+
+      const click = await s.click(merge);
+      assert.deepEqual(click.replies, [], "the prompt is still in delivery");
+
+      // The Gateway stops the plugin: the press gets its plain line before anything is torn down.
+      await s.host.stopServices();
+      assert.equal(click.replies.length, 1);
+      assert.match(click.replies[0]!, /^❌ \[[\w-]+\] Merge failed: /);
+      await s.host.startServices({});
+    } finally {
       held.resolve();
     }
   });
@@ -641,8 +672,12 @@ describe("goal loop", () => {
     assert.equal(s.sm.resolve(session.id), undefined);
     await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");
     assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
-    assert.match(s.gc.getTask(task.id)?.failureReason ?? "", /plan was rejected/i);
+    assert.equal(s.gc.getTask(task.id)?.failureReason, "Stopped by user.");
     assert.equal(s.backend.turns.length, turnsBefore + 1, "nothing was resumed");
+    // Exactly one goal notice, also after the controller's own rechecks ran.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(s.messages().filter((message) => /Goal task (?:stopped|failed)/.test(message.text)).length, 1);
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped");
   });
 
   it("stops the goal when its dormant session is closed as completed", async () => {
@@ -661,12 +696,17 @@ describe("goal loop", () => {
     await s.sm.whenStorePersisted();
 
     const text = await s.runTool("agent_kill", { session: session.id, reason: "completed" });
-    assert.match(text, /Marked as completed \(it was not running\)\. Its goal task stops: the session was closed without running\./);
+    assert.match(text, /Marked as completed \(it was not running\)\. Its goal task "[\w-]+" is stopped: the session was closed without running, so its verifiers did not run\./);
 
     assert.equal(s.sm.getPersistedSession(session.id)?.status, "completed");
     await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");
     assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
     assert.equal(s.gc.getTask(task.id)?.failureReason, "The session was closed as completed without running.");
+    // The task stopped at once, with exactly one goal notice.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const notices = s.messages().filter((message) => /Goal task (?:stopped|failed)|goal succeeded/.test(message.text));
+    assert.equal(notices.length, 1, notices.map((message) => message.text).join(" | "));
+    assert.match(notices[0]!.text, /^⛔ \[[\w-]+\] Goal task stopped[^\n]*\n\nThe session was closed as completed without running\.$/);
   });
 
   it("fails the goal when the session waits for a user answer it cannot give itself", async () => {
