@@ -1,4 +1,5 @@
 import { sessionManager } from "../singletons";
+import { SERVICE_NOT_RUNNING } from "./args";
 import { getSessionsListingText } from "../application/session-view";
 
 interface CommandApi {
@@ -20,7 +21,7 @@ export function registerAgentSessionsCommand(api: CommandApi): void {
     requireAuth: true,
     handler: (ctx: { args?: string }) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const full = (ctx.args ?? "").split(/\s+/).includes("--full");

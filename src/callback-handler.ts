@@ -66,28 +66,39 @@ const retryableQuestionAnswerFailureMessage =
   "Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
 
 /**
- * A real failure of a button action: `❌ [name] <reason>`, the first line of
- * the reason without a leading `Error:` or marker. Benign answers (expired,
- * already answered or resolved, being processed) stay `⚠️`.
+ * The first line of a tool or action text for the user: without its marker or
+ * `Error:`, without sentences that instruct the orchestrator (`agent_…`
+ * calls) and without session ids.
  */
-function failureReply(sessionName: string | undefined, reason: string): string {
-  const text = reason.split("\n")[0]!.replace(/^\s*(?:Error:|❌|⚠️)\s*/u, "").trim();
-  return `❌ ${sessionName ? `[${sessionName}] ` : ""}${text}`;
-}
-
-/**
- * The reason a merge / PR / discard button failed, for the user: the first
- * line of the tool text without its marker, without sentences that instruct
- * the orchestrator (`agent_…` calls) and without session ids.
- */
-function userFacingFailureReason(toolText: string): string {
-  return toolText.split("\n")[0]!
+function plainReason(text: string): string {
+  return text.split("\n")[0]!
     .replace(/^\s*(?:Error:|❌|⚠️)\s*/u, "")
-    .replace(/^(?:Merge (?:blocked|failed)|Not merged|No PR opened|Failed to create PR)(?:: |\.?$)/u, "")
     .split(/(?<=[.!?])\s+/u)
     .filter((sentence) => !/\bagent_[a-z_]+/u.test(sentence))
     .join(" ")
     .replace(/ \[[\w-]+\]/gu, "")
+    .trim();
+}
+
+/**
+ * A real failure of a button action: `❌ [name] <reason>` (the name once).
+ * Benign answers (expired, already answered or resolved, being processed)
+ * stay `⚠️`.
+ */
+function failureReply(sessionName: string | undefined, reason: string): string {
+  const prefix = sessionName ? `[${sessionName}] ` : "";
+  const text = plainReason(reason);
+  return `❌ ${prefix}${(prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text) || "The action failed."}`;
+}
+
+/** The reason a merge / PR / discard button failed, for the user (see `plainReason`). */
+function userFacingFailureReason(toolText: string): string {
+  // The detail of a rebase conflict is on the following lines.
+  const rebase = /Rebase of (\S+) onto (\S+) hit conflicts/u.exec(toolText);
+  if (rebase) return `rebase of \`${rebase[1]}\` onto \`${rebase[2]}\` hit conflicts; resolve them manually`;
+  return plainReason(toolText)
+    .replace(/^(?:Merge (?:blocked|failed)|Not merged|No PR opened|Failed to create PR)(?:: |\.?$)/u, "")
+    .replace(/^Failed to /u, "could not ")
     .replace(/[.:\s]+$/u, "") || "unknown error";
 }
 const planDecisionInFlight = processShared(
@@ -243,7 +254,9 @@ async function reofferWorktreeDecisionAfterFailure(
   // One message: the failure and the still-open decision with its fresh buttons.
   // A reason that ends in a URL gets no period after it.
   const reason = userFacingFailureReason(toolText);
-  const failure = `${action} failed: ${reason}${/https?:\/\/\S+$/u.test(reason) ? "" : "."}`;
+  // A merge that was refused (policy, uncommitted changes) is blocked, not failed.
+  const verb = /^\s*(?:❌\s*)?Merge blocked/u.test(toolText) ? "blocked" : "failed";
+  const failure = `${action} ${verb}: ${reason}${/https?:\/\/\S+$/u.test(reason) ? "" : "."}`;
   let reoffered = false;
   try {
     reoffered = (await sessionManager?.reofferWorktreeDecision?.(sessionId, failure)) ?? false;
@@ -824,6 +837,8 @@ export function createCallbackHandler(
         await replyText(ctx, `👍 [${actionSessionName}] Plan v${token.planDecisionVersion} was already approved; the session is resuming or running.`);
         return { handled: true };
       }
+      // A benign reply about a known session names it.
+      const benign = (text: string): string => `⚠️ ${actionSession ? `[${actionSessionName}] ` : ""}${text}`;
       let invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
       logButtonDiagnostic("callback_plan_validation_completed", {
         channel: ctx.channel,
@@ -842,7 +857,7 @@ export function createCallbackHandler(
         } else {
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         }
-        await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
+        await replyText(ctx, benign(invalidPlanDecision));
         return { handled: true };
       }
 
@@ -865,13 +880,13 @@ export function createCallbackHandler(
           }
           sessionManager.consumeActionToken(tokenId);
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          await replyText(ctx, "⚠️ This question was already answered or replaced.");
+          await replyText(ctx, benign("This question was already answered or replaced."));
           return { handled: true };
         }
 
         const answerLockKey = questionAnswerLockKey(token);
         if (inFlightQuestionAnswers.has(answerLockKey)) {
-          await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
+          await replyText(ctx, benign("That answer is already being submitted. If the question remains active, try again."));
           return { handled: true };
         }
 
@@ -951,7 +966,7 @@ export function createCallbackHandler(
 
           if (inFlight.tokenId === tokenId) {
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, "⚠️ This plan decision is already being processed.");
+            await replyText(ctx, benign("This plan decision is already being processed."));
             return { handled: true };
           }
 
@@ -986,7 +1001,7 @@ export function createCallbackHandler(
 
           if (invalidPlanDecision) {
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
+            await replyText(ctx, benign(invalidPlanDecision));
             return { handled: true };
           }
 
@@ -1031,10 +1046,11 @@ export function createCallbackHandler(
             });
             await clearApprovalPrompt(true);
           }
+          const failure = result.userText ?? failureReply(actionSessionName, result.text);
           if (approvalApplied) {
-            await replyText(ctx, failureReply(actionSessionName, result.text));
+            await replyText(ctx, failure);
           } else {
-            await replyPlanApprovalRetry(ctx, failureReply(actionSessionName, result.text), sessionManager, planToken);
+            await replyPlanApprovalRetry(ctx, failure, sessionManager, planToken);
           }
           return { handled: true };
         }
@@ -1085,7 +1101,7 @@ export function createCallbackHandler(
 
           if (latestInvalidPlanDecision) {
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, `⚠️ ${latestInvalidPlanDecision}`);
+            await replyText(ctx, benign(latestInvalidPlanDecision));
             return { handled: true };
           }
 
@@ -1112,7 +1128,7 @@ export function createCallbackHandler(
           } else {
             // Also queues the orchestrator note that the next message is the change (N35).
             const result = requestPlanDecisionChanges(sessionManager, sessionId);
-            await replyText(ctx, result.isError ? failureReply(actionSessionName, result.text) : `✏️ ${result.text}`);
+            await replyText(ctx, result.userText ?? (result.isError ? failureReply(actionSessionName, result.text) : `✏️ ${result.text}`));
           }
           return { handled: true };
         });
@@ -1153,7 +1169,7 @@ export function createCallbackHandler(
         if (token.kind === "worktree-view-pr") {
           // Older builds sent View PR as a callback; current prompts use a link button.
           const url = token.targetUrl ?? sessionManager.getPersistedSession?.(sessionId)?.worktreePrUrl;
-          await replyText(ctx, url ? `PR: ${url}` : "⚠️ The PR link is no longer available.");
+          await replyText(ctx, url ? `ℹ️ PR: ${url}` : "⚠️ The PR link is no longer available.");
           return { handled: true };
         }
 
@@ -1303,7 +1319,11 @@ export function createCallbackHandler(
             const result = await sessionManager.dismissWorktree(sessionId);
             const succeeded = worktreeActionTextSucceeded(result);
             // Already discarded (a second Discard button): nothing is left to re-offer.
-            const alreadyDiscarded = result === alreadyResolvedReply(actionSessionName, "discarded");
+            // Read from the worktree state, not from the reply text.
+            const alreadyDiscarded = !succeeded && (
+              resolvedWorktreeDecision(sessionManager.getPersistedSession?.(sessionId)) === "discarded"
+              || sessionManager.resolve?.(sessionId)?.worktreeState === "dismissed"
+            );
             if (succeeded || alreadyDiscarded) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
             if (succeeded) worktreeDecisionSucceeded = true;
             // On success the `🗑️ [name] Discarded: …` notice is the one answer.
@@ -1405,7 +1425,7 @@ export function createCallbackHandler(
             } catch (err) {
               // A failed start is reported by `❌ [task] Goal task failed`.
               if (goalController.getTask?.(sessionId)?.status !== "failed") {
-                await replyText(ctx, failureReply(undefined, `Goal task did not start: ${err instanceof Error ? err.message : String(err)}`));
+                await replyText(ctx, failureReply(goalController.getTask?.(sessionId)?.name, `Goal task did not start: ${err instanceof Error ? err.message : String(err)}`));
               }
             }
             break;
@@ -1508,7 +1528,7 @@ export function createCallbackHandler(
               userInitiated: true,
             });
             // A resume already posts its own notice (`▶️ [name] Resumed | …`, `Relaunched fresh`, `👍 Plan approved`).
-            if (result.isError) await replyText(ctx, failureReply(actionSessionName, result.text));
+            if (result.isError) await replyText(ctx, result.userText ?? failureReply(actionSessionName, result.text));
             else if (!result.userNoticeSent) await replyText(ctx, `▶️ [${actionSessionName}] Resumed.`);
             break;
           }

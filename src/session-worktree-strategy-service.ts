@@ -781,6 +781,7 @@ export class SessionWorktreeStrategyService {
     allowedActions: AllowedWorktreeActions,
     mergeError?: string,
     mergeResult?: Awaited<ReturnType<typeof mergeBranch>>,
+    retry = false,
   ): Promise<void> {
     const warningLines = mergeResult ? buildMergeWarningLines(mergeResult) : [];
     const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
@@ -789,15 +790,32 @@ export class SessionWorktreeStrategyService {
         notes: ["auto_merge_conflict_retry_exhausted"],
         clearResolverSessionId: true,
       });
-      await this.notifyAutoMergeConflictEscalation(
-        session,
-        branchName,
-        allowedActions.pr
-          ? `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`
-          : `The rebased branch still conflicts with \`${baseBranch}\`. Resolve manually in ${worktreePath}.`,
-        allowedActions,
-        warningLines,
-      );
+      const reason = allowedActions.pr
+        ? `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`
+        : `The rebased branch still conflicts with \`${baseBranch}\`. Resolve manually in ${worktreePath}.`;
+      if (retry) {
+        await this.notifyAutoMergeConflictEscalation(session, branchName, reason, allowedActions, warningLines);
+        return;
+      }
+      // The attempt count survives resumes: a resumed session that completes and
+      // conflicts again starts a new terminal cycle, whose first line this is.
+      this.deps.dispatchSessionNotification(session, {
+        label: "worktree-merge-conflict-escalated",
+        idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
+        userMessage: [
+          completedAttention(session, "merge conflict", false, [
+            "The automatic conflict resolution was already used for this branch.",
+            reason,
+          ]),
+          ...warningLines.map((line) => `⚠️ ${line}`),
+        ].join("\n"),
+        buttons: await this.getPolicyAwareWorktreeDecisionButtons(
+          session.id,
+          allowedActions,
+          {},
+          [[this.deps.makeOpenPrButton(session.id)]],
+        ),
+      });
       return;
     }
 
@@ -825,7 +843,7 @@ export class SessionWorktreeStrategyService {
         idempotencyKey: `worktree-merge-conflict-resolving:${session.id}:${branchName}:${resolverSession.id}`,
         userMessage: [
           completedAttention(session, "merge conflict", false, [
-            `Resolver session ${resolverSession.name} started and will retry automatically if it succeeds.`,
+            `Resolver session ${resolverSession.name} is fixing it; the merge is retried automatically when it succeeds.`,
           ]),
           ...warningLines.map((line) => `⚠️ ${line}`),
         ].join("\n"),
@@ -933,6 +951,7 @@ export class SessionWorktreeStrategyService {
             allowedActions,
             mergeResult.error,
             mergeResult,
+            retry,
           );
           return;
         }
@@ -949,10 +968,19 @@ export class SessionWorktreeStrategyService {
           await this.handleAutoMergeRetryFailure(session, branchName, worktreePath, errorMsg, allowedActions);
           return;
         }
+        // The branch is kept and waits for a decision, as after a failed retry.
+        // No `✅` is deferred: a merge or PR made afterwards is an `ℹ️` milestone.
+        this.markPendingDecision(session, { notes: ["auto_merge_failed"] });
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-error",
           idempotencyKey: `worktree-merge-error:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
-          userMessage: errorMsg,
+          userMessage: `${errorMsg}\nBranch \`${branchName}\` is kept; choose below.`,
+          buttons: await this.getPolicyAwareWorktreeDecisionButtons(
+            session.id,
+            allowedActions,
+            {},
+            [[this.deps.makeOpenPrButton(session.id)]],
+          ),
         });
       },
       () => {

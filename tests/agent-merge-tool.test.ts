@@ -233,7 +233,7 @@ describe("agent_merge push behavior", () => {
       const result = await tool.execute("tool-id", { session: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /Merge blocked/i);
-      assert.match((result.content[0] as { text: string }).text, /uncommitted worktree changes/i);
+      assert.match((result.content[0] as { text: string }).text, /the worktree has uncommitted changes but branch/i);
       assert.equal(git(repoDir, "rev-parse", "main"), remoteHead(repoDir, "main"));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

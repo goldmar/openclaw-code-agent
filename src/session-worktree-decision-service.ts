@@ -44,7 +44,7 @@ export class SessionWorktreeDecisionService {
     if (!session) return `Error: Session "${ref}" not found.`;
     // A resumed session (for example after Commit changes) is working in this worktree.
     if (activeSession && (activeSession.status === "running" || activeSession.status === "starting")) {
-      return `Error: [${activeSession.name}] is running in this worktree. Discard it after the session ends, or stop the session first.`;
+      return `Error: The session is still running in this worktree. Stop it first, or discard after it ends.`;
     }
 
     const sessionName = activeSession?.name ?? persistedSession?.name ?? ref;
@@ -60,7 +60,7 @@ export class SessionWorktreeDecisionService {
     const repoDir = await this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);
     const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
 
-    if (!repoDir) return `Error: No workdir found for session "${ref}".`;
+    if (!repoDir) return `Error: The session's repository was not found.`;
 
     if (worktreePath && existsSync(worktreePath)) {
       await removeWorktree(repoDir, worktreePath, { destructive: true });
@@ -134,7 +134,7 @@ export class SessionWorktreeDecisionService {
       && (persistedSession.worktreeReminderCount ?? 1) >= SessionReminderService.MAX_REMINDERS;
     const msg = remindersDone
       ? `⏭️ [${persistedSession.name}] Kept for later: \`${branchName}\`. No more reminders; /agent_status lists it.`
-      : `⏭️ [${persistedSession.name}] Reminder snoozed 24h for \`${branchName}\``;
+      : `⏭️ [${persistedSession.name}] Reminder snoozed 24h for \`${branchName}\`.`;
 
     if (options.notifyUser !== false) {
       this.deps.dispatchNotification(

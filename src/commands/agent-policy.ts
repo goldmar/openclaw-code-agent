@@ -1,6 +1,6 @@
 import { sessionManager } from "../singletons";
 import type { RepoIntegrationPolicy } from "../types";
-import { consumeFirstCommandArg } from "./args";
+import { consumeFirstCommandArg, SERVICE_NOT_RUNNING } from "./args";
 import { formatStoredRepoPolicyLine, getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
 import { formatRepoPolicyReset, formatUnresolvedRepoPolicy } from "../tools/agent-repo-policy";
 
@@ -30,7 +30,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
-      if (!sessionManager) return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+      if (!sessionManager) return { text: SERVICE_NOT_RUNNING };
       const first = consumeFirstCommandArg((ctx.args ?? "").trim());
       const action = first?.value;
       if (action === "list") {

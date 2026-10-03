@@ -567,9 +567,8 @@ describe("AutoUpdateService", () => {
     setPluginConfig({});
     const harness = createService({});
 
-    const updateText = await harness.service.installConfirmed("latest", { route: ROUTE });
-
-    assert.match(updateText, /stable Code Agent version/);
+    // A failure, not an update message: the button answers `❌ Code Agent update failed: …`.
+    await assert.rejects(harness.service.installConfirmed("latest", { route: ROUTE }), /stable Code Agent version/);
     assert.deepEqual(harness.commands, []);
   });
 

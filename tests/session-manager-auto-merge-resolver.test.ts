@@ -74,6 +74,56 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
     }
   });
 
+  it("reports how the retry ended when the retry itself sent nothing", async () => {
+    const cases: Array<{ stored: Record<string, unknown>; text: string }> = [
+      { stored: { worktreeMerged: true }, text: "ℹ️ [parent-session] Already merged; nothing left to do." },
+      {
+        stored: { worktreePrUrl: "https://github.com/example/repo/pull/7" },
+        text: "ℹ️ [parent-session] PR is up to date: https://github.com/example/repo/pull/7",
+      },
+      { stored: {}, text: "ℹ️ [parent-session] Conflict resolved; nothing was merged automatically." },
+    ];
+    for (const testCase of cases) {
+      const { sm, cleanup } = createSessionManager();
+      try {
+        const notifications: Array<Record<string, unknown>> = [];
+        (sm as any).persistSession = () => {};
+        (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
+        (sm as any).notifications = {
+          dispatch: (_session: unknown, request: Record<string, unknown>) => { notifications.push(request); },
+          notifyWorktreeOutcome: () => {},
+          dispose: () => {},
+        };
+        // Already merged in the queue, PR up to date, or skipped by the planner.
+        (sm as any).worktreeStrategy.handleWorktreeStrategy = async () => ({ notificationSent: false, worktreeRemoved: false });
+        const parent: any = {
+          id: "parent-session",
+          name: "parent-session",
+          status: "completed",
+          worktreeBranch: "agent/parent-session",
+          route: ROUTE,
+          autoMergeResolverSessionId: "resolver-session",
+        };
+        (sm as any).sessions.set(parent.id, parent);
+        (sm as any).updatePersistedSession = () => true;
+        (sm as any).getPersistedSession = () => ({ name: "parent-session", ...testCase.stored });
+
+        await (sm as any).onSessionTerminal({
+          id: "resolver-session",
+          name: "parent-session-conflict-resolver",
+          status: "completed",
+          autoMergeParentSessionId: "parent-session",
+        });
+
+        // The user was told the merge is retried automatically: one closing line, no `✅`.
+        assert.deepEqual(notifications.map((request) => request.userMessage), [testCase.text]);
+        assert.equal(notifications[0]!.notifyUser, "always");
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
   it("preserves the branch and shows policy-aware buttons when the resolver fails", async () => {
     const { sm, cleanup } = createSessionManager();
     try {

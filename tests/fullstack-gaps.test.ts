@@ -87,7 +87,7 @@ describe("failed worktree actions", () => {
       assert.deepEqual(failed.replies, []);
       assert.ok(failed.cleared > 0, "the spent controls are cleared");
       const retry = await s.waitForMessage(/still open/, prompt.index + 1);
-      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: Rebase conflicts — manual resolution required\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
+      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
       assert.equal(retry.to, surface.to);
       assert.equal(String(retry.threadId), String(surface.threadId));
       assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
@@ -105,7 +105,7 @@ describe("failed worktree actions", () => {
       await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
       assert.ok(existsSync(join(repo, "feature.txt")), "branch merged into main");
       // A settled decision is never re-offered.
-      assert.equal(await s.sm.reofferWorktreeDecision(session.id), false);
+      assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test."), false);
     });
   }
 });
@@ -123,7 +123,7 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     const merge = await s.waitForButton("Merge");
     const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
     const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: Rebase conflicts — manual resolution required\.$/);
+    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\.$/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
     assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
@@ -149,10 +149,10 @@ describe("overlapping worktree retries", () => {
     const { session } = await finishConflictingSession(s, "ask");
     const original = await s.waitForButton("Merge");
     await s.sm.whenStorePersisted();
-    const first = s.sm.reofferWorktreeDecision(session.id);
+    const first = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.");
     await waitUntil(() => retries === 1, "first retry prompt in flight");
     // A second failed action re-offers again while the first is still being delivered.
-    const second = s.sm.reofferWorktreeDecision(session.id);
+    const second = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.");
     held.resolve();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     const prompts = s.messages().filter((message) => /still open/.test(message.text));
@@ -169,7 +169,7 @@ describe("auto-merge conflicts", () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const turnsBefore = s.backend.turns.length;
     const { repo, session } = await finishConflictingSession(s, "auto-merge");
-    await s.waitForMessage(/Completed — merge conflict[^\n]*\nResolver session [\w-]+ started and will retry automatically/);
+    await s.waitForMessage(/Completed — merge conflict[^\n]*\nResolver session [\w-]+ is fixing it; the merge is retried automatically when it succeeds\./);
     await waitUntil(() => s.backend.turns.length > turnsBefore + 1, "the resolver's first turn");
     const resolver = s.sm.list("all").find((candidate) => candidate.autoMergeParentSessionId === session.id);
     assert.ok(resolver, "a resolver session linked to the parent");

@@ -555,7 +555,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     // A legacy View PR callback is read-only: the other buttons stay (N47).
     assert.equal(state.buttonsCleared, 0);
-    assert.equal(state.replies[0], "PR: https://github.com/example/repo/pull/123");
+    assert.equal(state.replies[0], "ℹ️ PR: https://github.com/example/repo/pull/123");
   });
 
   it("emits callback diagnostics without logging full token payloads", async (t) => {
@@ -1256,7 +1256,7 @@ describe("createCallbackHandler()", () => {
     const second = createCtx("token-approve");
     const secondResultPromise = handler.handler(second.ctx as any);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(second.replies[0], "⚠️ This plan decision is already being processed.");
+    assert.equal(second.replies[0], "⚠️ [test-session] This plan decision is already being processed.");
     releaseSend?.();
 
     const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise]);
@@ -1271,7 +1271,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
-    assert.equal(second.replies[0], "⚠️ This plan decision is already being processed.");
+    assert.equal(second.replies[0], "⚠️ [test-session] This plan decision is already being processed.");
   });
 
   it("serializes sibling plan decision callbacks while approval is in flight", async () => {
@@ -1353,7 +1353,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(rejectConsumed, 0);
     assert.equal(killCount, 0);
     assert.deepEqual(approve.replies, []);
-    assert.equal(reject.replies[0], "⚠️ This plan is no longer awaiting approval.");
+    assert.equal(reject.replies[0], "⚠️ [test-session] This plan is no longer awaiting approval.");
   });
 
   it("revalidates sibling plan decision callbacks after a failed in-flight approval", async () => {
@@ -1511,7 +1511,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(session.pendingPlanApproval, false);
     assert.equal(session.approvalState, "changes_requested");
     assert.equal(revise.replies[0], "✏️ [test-session] Reply with the changes you want; they go to the agent.");
-    assert.equal(reject.replies[0], "⚠️ This plan decision is stale because a newer plan review state already exists.");
+    assert.equal(reject.replies[0], "⚠️ [test-session] This plan decision is stale because a newer plan review state already exists.");
   });
 
   it("accepts Discord interaction payloads and clears components", async () => {
@@ -2200,7 +2200,7 @@ describe("createCallbackHandler()", () => {
     const second = await createCallbackHandler().handler(secondState.ctx as any);
 
     assert.equal(resumeCalls, 1);
-    assert.equal(secondState.replies[0], "⚠️ That answer is already being submitted. If the question remains active, try again.");
+    assert.equal(secondState.replies[0], "⚠️ [restart-race] That answer is already being submitted. If the question remains active, try again.");
     releaseResume();
     assert.deepEqual(await first, { handled: true });
     assert.deepEqual(second, { handled: true });
@@ -2423,7 +2423,7 @@ describe("createCallbackHandler()", () => {
       {
         kind: "worktree-merge" as const,
         // One line for the user: no orchestrator instruction, no session id.
-        text: "❌ [ux-fix] Merge failed: repo policy requires a pull request for /repo.",
+        text: "❌ [ux-fix] Merge blocked: repo policy requires a pull request for /repo.",
         dependencies: {
           makeAgentMergeTool: () => ({
             execute: async () => createToolResult("❌ Merge blocked: repo policy requires a pull request for /repo. Use agent_pr if PR automation is available.\nSession ux-fix [sess-42]", false),
@@ -2436,6 +2436,25 @@ describe("createCallbackHandler()", () => {
         dependencies: {
           makeAgentPrTool: () => ({
             execute: async () => createToolResult("Error: GitHub CLI is not authenticated.", false),
+          }) as any,
+        },
+      },
+      {
+        kind: "worktree-merge" as const,
+        // The detail of a rebase conflict is kept, in one line.
+        text: "❌ [ux-fix] Merge failed: rebase of `agent/ux-fix` onto `main` hit conflicts; resolve them manually.",
+        dependencies: {
+          makeAgentMergeTool: () => ({
+            execute: async () => createToolResult("⚠️ Rebase conflicts — manual resolution required:\n\nRebase of agent/ux-fix onto main hit conflicts.\nTo resolve manually:\n  cd /repo", false),
+          }) as any,
+        },
+      },
+      {
+        kind: "worktree-create-pr" as const,
+        text: "❌ [ux-fix] PR failed: could not push `agent/ux-fix` — cannot create/update PR.",
+        dependencies: {
+          makeAgentPrTool: () => ({
+            execute: async () => createToolResult("❌ Failed to push `agent/ux-fix` — cannot create/update PR", false),
           }) as any,
         },
       },
@@ -2483,7 +2502,7 @@ describe("createCallbackHandler()", () => {
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: (sessionId: string, options?: { notifyUser?: boolean }) => {
         snoozeCalls.push({ sessionId, notifyUser: options?.notifyUser });
-        return "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`";
+        return "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.";
       },
     } as any);
 
@@ -2496,7 +2515,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.editedMessages, []);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
+    assert.deepEqual(state.replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."]);
     assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 
@@ -2546,7 +2565,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(state.buttonsCleared, testCase.success ? 1 : 0, testCase.result);
-      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"] : [], testCase.result);
+      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."] : [], testCase.result);
       assert.equal(state.replies[0], testCase.reply);
     }
   });
@@ -2586,12 +2605,17 @@ describe("createCallbackHandler()", () => {
 
   it("answers a second Discard button with the already-resolved reply and re-offers nothing", async () => {
     let reoffers = 0;
+    let discarded = false;
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       resolve: (): undefined => undefined,
-      getPersistedSession: () => ({ name: "ux-fix" }),
-      dismissWorktree: async () => "⚠️ [ux-fix] This decision was already resolved (discarded). Nothing was changed.",
+      // Discarded by another writer between the button's own check and the discard.
+      getPersistedSession: () => ({ name: "ux-fix", ...(discarded ? { worktreeLifecycle: { state: "dismissed" } } : {}) }),
+      dismissWorktree: async () => {
+        discarded = true;
+        return "⚠️ [ux-fix] This decision was already resolved (discarded). Nothing was changed.";
+      },
       reofferWorktreeDecision: async () => { reoffers += 1; return true; },
     } as any);
 
@@ -2637,7 +2661,7 @@ describe("createCallbackHandler()", () => {
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
-      snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
+      snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.",
     } as any);
 
     const clearedMessages: Array<{ text?: string }> = [];
@@ -2661,7 +2685,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(clearedMessages, [{ text: undefined }]);
-    assert.deepEqual(replies, [{ text: "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`", ephemeral: true }]);
+    assert.deepEqual(replies, [{ text: "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.", ephemeral: true }]);
   });
 
   it("clears Telegram worktree buttons without editing prompt text when markup edit is unavailable", async () => {
@@ -2675,7 +2699,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.",
       } as any);
 
       const replies: string[] = [];
@@ -2698,7 +2722,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -2716,7 +2740,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.",
       } as any);
 
       const replies: string[] = [];
@@ -2739,7 +2763,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."]);
       assert.match(warnings[0], /Failed to clear Discord worktree components: clearComponents failed/);
     } finally {
       console.warn = originalWarn;
@@ -2757,7 +2781,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.",
       } as any);
 
       const replies: string[] = [];
@@ -2780,7 +2804,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -2798,7 +2822,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`.",
       } as any);
 
       const replies: string[] = [];
@@ -2824,7 +2848,7 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.deepEqual(editedMessages, []);
       assert.equal(clearAttempts, 1);
-      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`."]);
       assert.match(warnings[0], /Failed to clear Discord worktree components: clear failed/);
     } finally {
       console.warn = originalWarn;
@@ -2853,7 +2877,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(handler.channel, "discord");
     assert.deepEqual(result, { handled: true });
     assert.equal(state.componentsCleared, 0);
-    assert.equal(state.replies[0], "PR: https://github.com/example/repo/pull/999");
+    assert.equal(state.replies[0], "ℹ️ PR: https://github.com/example/repo/pull/999");
   });
 
   it("launches a plan-only session from plan-offer actions", async () => {

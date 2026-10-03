@@ -103,7 +103,7 @@ const STATUS_ICONS: Record<string, string> = {
   awaiting_plan_decision: "📋",
   awaiting_user_input: "❓",
   awaiting_worktree_decision: "🌿",
-  suspended: "⏸️",
+  suspended: "💤",
   terminal: "🏁",
 };
 

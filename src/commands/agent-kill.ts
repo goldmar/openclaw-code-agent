@@ -1,5 +1,8 @@
 import { sessionManager } from "../singletons";
+import { SERVICE_NOT_RUNNING } from "./args";
 import { getKillSessionText } from "../application/session-control";
+import { isCommandInRouteChat } from "../config";
+import type { AgentCommandContext } from "./agent";
 
 interface CommandApi {
   registerCommand(config: {
@@ -7,7 +10,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: { args?: string }) => { text: string };
+    handler: (ctx: AgentCommandContext) => { text: string };
   }): void;
 }
 
@@ -18,16 +21,21 @@ export function registerAgentKillCommand(api: CommandApi): void {
     description: "Kill a coding agent session by name or ID",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: { args?: string }) => {
+    handler: (ctx: AgentCommandContext) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const ref = ctx.args?.trim();
       if (!ref) return { text: "Usage: /agent_kill <name-or-id>" };
 
-      // The reply is the stop notice itself: one message for the user.
-      return { text: getKillSessionText(sessionManager, ref, "killed", { replyIsStopNotice: true }) };
+      // In the session's own chat the reply is the stop notice itself: one
+      // message. From another chat the notice stays in the session's chat.
+      return {
+        text: getKillSessionText(sessionManager, ref, "killed", {
+          replyIsStopNotice: (session) => isCommandInRouteChat(ctx, session),
+        }),
+      };
     },
   });
 }

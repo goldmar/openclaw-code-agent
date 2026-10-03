@@ -67,7 +67,8 @@ You may approve, but only after it verifies the plan: read it with `agent_output
 - The plugin posts the status line (`✅ [name] Completed`, merge and PR outcomes). A wake then asks you for a short follow-up: tell the user in one or two sentences what was done, from the output. Do not repeat the status line or paste PR URLs.
 - A merge or PR made with `summary` needs no follow-up.
 - A completed session that needs attention is announced as `⚠️ [name] Completed — <problem>` (conflict, blocked or failed merge, failed auto-PR, policy, uncommitted changes) and gets no `✅`; a merge or PR you make for it afterwards is `ℹ️`. `❌` means the session, goal or launch itself failed.
-- `agent_kill(session, reason='completed')` on a session that paused with `⏸️ [name] Turn completed — session idle, waiting for a follow-up` sends the user `✅ [name] Completed`; do not announce it again.
+- `agent_kill(session, reason='completed')` on a session that paused with `⏸️ [name] Turn completed — session idle, waiting for a follow-up` answers `ℹ️ [name] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`; do not announce it again.
+- In a tool result `❌` (or `Error:`) means that call failed; the session is unchanged. `⚠️` in a tool result means the call needs your attention (rebase conflict, push failed).
 - A failure: tell the user the cause and your next step (continue with `agent_respond`, or fix the launch).
 - A wake with an `originRoute`: reach the user with the message tool to that route (threadId only when the route has one), then answer `NO_REPLY`.
 - If the session finished one phase of a larger job, start the next phase instead.

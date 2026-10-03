@@ -1,13 +1,10 @@
 import { goalController, sessionManager } from "../singletons";
-import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
-import {
-  GOAL_CONTROLLER_MISSING_MESSAGE,
-  renderGoalEditResult,
-  renderGoalStatus,
-  renderGoalStopResult,
-} from "../application/goal-view";
+import { resolveGoalLaunchRequest } from "../goal-launch-resolution";
+import { renderGoalStatus } from "../application/goal-view";
+import { isCommandInRouteChat } from "../config";
+import type { GoalReplyNotice } from "../goal-controller";
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
-import { consumeFirstCommandArg, tokenizeCommandArgs } from "./args";
+import { consumeFirstCommandArg, SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
 const GOAL_USAGE = [
   "Operator-required verifiers apply in both modes. Omit --verify to use the complete configured suite.",
@@ -40,7 +37,7 @@ export function registerGoalCommand(api: CommandApi): void {
     requireAuth: true,
     handler: async (ctx: GoalCommandContext) => {
       if (!goalController) {
-        return { text: GOAL_CONTROLLER_MISSING_MESSAGE };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       let raw = (ctx.args ?? "").trim();
@@ -48,6 +45,11 @@ export function registerGoalCommand(api: CommandApi): void {
         return { text: GOAL_USAGE };
       }
 
+      // The controller's notice (`🎯 … Goal task started`, `⛔ … Goal task stopped`,
+      // `✏️ … Goal task edited`, `❌ … Goal task failed`) is this command's one
+      // answer: in the task's own chat it is the reply instead of a second message.
+      const reply: GoalReplyNotice = { sameChat: (task) => isCommandInRouteChat(ctx, task) };
+      const notFound = (ref: string): string => `❌ Goal task "${ref}" not found.`;
       const first = consumeFirstCommandArg(raw);
       const subcommand = first?.value.toLowerCase();
       if (subcommand === "status") {
@@ -56,15 +58,32 @@ export function registerGoalCommand(api: CommandApi): void {
       if (subcommand === "stop") {
         const ref = first!.rest.trim();
         if (!ref) return { text: "Usage: /agent_goal stop <task>" };
-        return { text: renderGoalStopResult(goalController.stopTask(ref), ref) };
+        const result = goalController.stopTask(ref, reply);
+        if (!result) return { text: notFound(ref) };
+        return {
+          text: result.action === "already_terminal"
+            ? `ℹ️ [${result.task.name}] Already ${result.task.status}; nothing to stop.`
+            : reply.text ?? `⛔ [${result.task.name}] Goal task stopped`,
+        };
       }
       if (subcommand === "edit") {
         const target = consumeFirstCommandArg(first!.rest);
         const ref = target?.value.trim();
         const replacementGoal = target?.rest.trim();
         if (!ref || !replacementGoal) return { text: "Usage: /agent_goal edit <task> <new goal>" };
-        try { return { text: renderGoalEditResult(goalController.editTask(ref, replacementGoal), ref) }; } catch (err) {
-          return { text: `Error editing goal task: ${err instanceof Error ? err.message : String(err)}` };
+        try {
+          const result = goalController.editTask(ref, replacementGoal, reply);
+          if (result.action === "updated") return { text: reply.text ?? `✏️ [${result.task.name}] Goal task edited` };
+          if (result.action === "not_editable") {
+            return {
+              text: result.task.status === "waiting_for_user"
+                ? `❌ [${result.task.name}] Cannot edit the goal while the task waits for your input.`
+                : `ℹ️ [${result.task.name}] Already ${result.task.status}; nothing to edit.`,
+            };
+          }
+          return { text: result.action === "not_found" ? notFound(ref) : "❌ The new goal must not be empty." };
+        } catch (err) {
+          return { text: `❌ Goal task not edited: ${err instanceof Error ? err.message : String(err)}` };
         }
       }
       if (subcommand === "launch") {
@@ -175,12 +194,15 @@ export function registerGoalCommand(api: CommandApi): void {
           maxCostUsd: resolution.maxCostUsd,
           // The user typed these commands themselves: no extra confirmation.
           requireVerifierConfirmation: false,
-        });
+        }, reply);
 
-        return { text: formatGoalLaunchResult(task, { ...resolution, maxIterations }) };
+        return {
+          text: `${reply.text ?? `🎯 [${task.name}] Goal task started`}\n\nFollow it with /agent_goal status ${task.name}; stop it with /agent_goal stop ${task.name}.`,
+        };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        return { text: `Error launching goal task: ${message}` };
+        // A task that failed while starting already has its `❌ [task] Goal task failed` notice.
+        return { text: reply.text?.startsWith("❌") ? reply.text : `❌ Goal task did not start: ${message}` };
       }
     },
   });

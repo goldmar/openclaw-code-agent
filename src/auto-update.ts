@@ -355,7 +355,8 @@ export class AutoUpdateService {
   async installConfirmed(version: string | undefined, routeSource?: SessionRouteSource): Promise<string> {
     const normalizedVersion = normalizeVersion(version);
     if (!normalizedVersion || !parseStableSemver(normalizedVersion)) {
-      return "Could not determine which stable Code Agent version to update to.";
+      // A failure: the button answers `❌ Code Agent update failed: …`.
+      throw new Error("Could not determine which stable Code Agent version to update to.");
     }
 
     const before = parsePluginInspection(

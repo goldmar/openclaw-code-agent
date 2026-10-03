@@ -160,7 +160,7 @@ for (const name of BACKEND_NAMES) {
       // Refused either by the lock (a reply) or by the running session (the re-offered decision).
       assert.match(
         [...discard.replies, ...created.notifications.map((entry) => entry.request.userMessage ?? "")].join("\n"),
-        /still being processed|is running in this worktree/,
+        /still being processed|is still running in this worktree/,
       );
       assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
     });

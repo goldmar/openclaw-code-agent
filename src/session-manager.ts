@@ -1823,7 +1823,7 @@ export class SessionManager {
    * the older ones stay usable. Resolves true only when the new controls were
    * delivered, so the caller may clear the spent ones.
    */
-  async reofferWorktreeDecision(ref: string, failure?: string): Promise<boolean> {
+  async reofferWorktreeDecision(ref: string, failure: string): Promise<boolean> {
     const decisionIsOpen = (): boolean => {
       const persisted = this.getPersistedSession(ref);
       if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
@@ -1880,9 +1880,7 @@ export class SessionManager {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
       // After a failed button: `❌ [name] Merge failed: <reason>. The decision for `b` is still open.`
-      userMessage: failure
-        ? `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.`
-        : `⚠️ [${name}] The last action did not complete; the decision${branch ? ` for \`${branch}\`` : ""} is still open.\nChoose again below.`,
+      userMessage: `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.`,
       notifyUser: "always",
       requireDirectUserNotification: true,
       buttons,
@@ -1951,7 +1949,23 @@ export class SessionManager {
     if (session.status === "completed" && parentSession) {
       this.updatePersistedSession(parentRef, { autoMergeResolverSessionId: undefined });
       // The parent's terminal cycle already said `⚠️ … Completed — merge conflict`.
-      await this.handleWorktreeStrategy(parentSession, { retryAfterConflict: true });
+      const retried = await this.handleWorktreeStrategy(parentSession, { retryAfterConflict: true });
+      if (!retried.notificationSent) {
+        // The user was told the merge is retried: say how it ended when the
+        // retry itself sent nothing (already merged, PR up to date, or skipped
+        // because the session runs again or its worktree was settled meanwhile).
+        const landed = this.getPersistedSession(parentRef);
+        const prUrl = landed?.worktreePrUrl ?? parentSession.worktreePrUrl;
+        this.dispatchSessionNotification(parentSession, {
+          label: "worktree-retry-settled",
+          idempotencyKey: `worktree-retry-settled:${parentRef}:${session.id}`,
+          userMessage: `ℹ️ [${parentSession.name}] ${
+            landed?.worktreeMerged || landed?.worktreeLifecycle?.state === "merged"
+              ? "Already merged; nothing left to do."
+              : prUrl ? `PR is up to date: ${prUrl}` : "Conflict resolved; nothing was merged automatically."}`,
+          notifyUser: "always",
+        });
+      }
       return;
     }
 
@@ -1982,7 +1996,7 @@ export class SessionManager {
         `Branch \`${worktreeBranch}\` was preserved for manual follow-up in ${worktreePath}.`,
         session.status === "completed"
           ? `The resolver finished, but the original session could not be resumed for the merge retry.`
-          : `Resolver session ${session.name} ended with status=${session.status}.`,
+          : `Resolver session ${session.name} ${session.status === "failed" ? "failed" : "was stopped"}.`,
       ].join("\n"),
       buttons: await this.getPolicyAwareWorktreeDecisionButtons(
         parentRef,
@@ -2047,25 +2061,23 @@ export class SessionManager {
     return true;
   }
 
-  async notifyResumedLaunch(session: Session): Promise<void> {
-    if (!session.resumeSessionId) return;
+  /** Returns the `▶️ [name] Resumed | …` line; `send: false` leaves it to the caller's reply. */
+  async notifyResumedLaunch(session: Session, send = true): Promise<string | undefined> {
+    if (!session.resumeSessionId) return undefined;
     const workdirLabel = await this.formatLaunchWorkdirLabel(session);
     const harnessLabel = formatHarnessModelLabel({
       harness: session.harnessName,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
     }) ?? "default";
-    this.notifySession(
-      session,
-      formatResumedLaunchMessage({
-        sessionName: session.name,
-        resumedFromSessionName: session.resumedFromSessionName,
-        workdirLabel,
-        harnessLabel,
-      }),
-      "resumed-launch",
-      `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
-    );
+    const text = formatResumedLaunchMessage({
+      sessionName: session.name,
+      resumedFromSessionName: session.resumedFromSessionName,
+      workdirLabel,
+      harnessLabel,
+    });
+    if (send) this.notifySession(session, text, "resumed-launch", `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`);
+    return text;
   }
 
   sendPlanOffer(args: {
@@ -2123,10 +2135,12 @@ export class SessionManager {
     task: Pick<
       GoalTaskState,
       "id" | "name" | "sessionId" | "sessionName" | "route" | "originChannel" | "originThreadId" | "originSessionKey" | "harness" | "model" | "reasoningEffort"
-    > & Partial<Pick<GoalTaskState, "totalCostUsd" | "createdAt" | "updatedAt">>,
+    > & Partial<Pick<GoalTaskState, "totalCostUsd" | "createdAt" | "updatedAt" | "lastCostedRun">>,
     text: string,
     label: string = "goal-task",
-  ): void {
+    /** A chat command shows the returned line as its reply; nothing is sent. */
+    replyOnly = false,
+  ): string {
     const sessionId = task.sessionId ?? task.id;
     const routingProxy = this.buildRoutingProxy({
       id: sessionId,
@@ -2151,9 +2165,15 @@ export class SessionManager {
     const requiresGoalSuccessFollowup = label === "goal-task-succeeded";
     // Terminal goal lines carry the footer: the task's total cost and duration
     // (else the session's cost); the dispatcher adds harness, model and reasoning.
-    const goalFooter = requiresGoalSuccessFollowup || label === "goal-task-failed" || label === "goal-task-stopped"
+    // A task that never ran (declined at confirmation, failed before its
+    // launch) has none. A run that was stopped or failed in flight is not in
+    // the total yet.
+    const inFlightCostUsd = active && task.lastCostedRun !== `${active.id}:${active.startedAt}` && active.costUsd > 0
+      ? active.costUsd
+      : 0;
+    const goalFooter = task.sessionId && (requiresGoalSuccessFollowup || label === "goal-task-failed" || label === "goal-task-stopped")
       ? formatSessionStatsSuffix({
-          costUsd: task.totalCostUsd ?? (active ?? saved)?.costUsd,
+          costUsd: task.totalCostUsd !== undefined ? task.totalCostUsd + inFlightCostUsd : (active ?? saved)?.costUsd,
           createdAt: task.createdAt,
           completedAt: task.updatedAt,
         })
@@ -2164,7 +2184,7 @@ export class SessionManager {
       : text;
     const goalSuccessUserMessage = [
       `✅ [${task.name}] Completed — goal succeeded${goalFooter}`,
-      task.sessionId ? `Session: ${task.sessionName ?? task.name} [${task.sessionId}]` : undefined,
+      task.sessionName && task.sessionName !== task.name ? `Session: ${task.sessionName}` : undefined,
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
@@ -2176,10 +2196,12 @@ export class SessionManager {
       originThreadLine: formatOriginRouteWakeBlock(routingProxy),
       canonicalStatusDelivered,
     });
+    const userMessage = requiresGoalSuccessFollowup ? goalSuccessUserMessage : userText;
+    if (replyOnly && !requiresGoalSuccessFollowup) return userMessage;
     this.dispatchSessionNotification(routingProxy, {
       label,
       idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
-      userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : userText,
+      userMessage,
       notifyUser: "always",
       completionSummary: requiresGoalSuccessFollowup
         ? {
@@ -2193,6 +2215,7 @@ export class SessionManager {
       wakeMessageOnNotifySuccess: requiresGoalSuccessFollowup ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
     });
+    return userMessage;
   }
 
   launchPlanOffer(args: {

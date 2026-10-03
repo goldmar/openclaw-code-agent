@@ -333,6 +333,24 @@ export function resolveSessionRoute(
   );
 }
 
+/**
+ * A chat command was typed in the chat (and thread) that receives the session's
+ * or goal task's notices. Only then may the command's reply replace a notice;
+ * an unknown command chat is never "the same chat".
+ */
+export function isCommandInRouteChat(
+  ctx: OriginContextLike | undefined,
+  target: { route?: SessionRoute; originSessionKey?: string } | undefined,
+): boolean {
+  const route = target?.route;
+  if (!ctx || !route) return false;
+  const key = ctx.sessionKey?.trim();
+  if (key && (key === target.originSessionKey || key === route.sessionKey)) return true;
+  const own = resolveSessionRoute(ctx);
+  return Boolean(own?.target && own.provider !== "system" && own.provider === route.provider
+    && own.target === route.target && (own.threadId ?? "") === (route.threadId ?? ""));
+}
+
 /** Extract agentId from "channel|account|target" string. */
 export function extractAgentId(channelStr: string): string | undefined {
   const parts = channelStr.split("|");

@@ -1,18 +1,22 @@
 import type { SessionManager } from "../session-manager";
+import type { SessionRoute } from "../types";
 import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
 /**
  * Resolve and close a session, returning the result text.
- * `replyIsStopNotice` (the `/agent_kill` command): the returned text is the
- * user's one `⛔ [name] Stopped by user | <footer>` line, so the lifecycle
- * notice is not sent a second time.
+ * `replyIsStopNotice` (the `/agent_kill` command typed in the session's own
+ * chat): the returned text is the user's one `⛔ [name] Stopped by user |
+ * <footer>` line, so the lifecycle notice is not sent a second time. The
+ * predicate gets the resolved session; from another chat the notice stays in
+ * the session's chat and the reply is `⛔ [name] Stopped.`
  */
 export function getKillSessionText(
   sm: SessionManager,
   ref: string,
   reason?: "completed" | "killed",
-  options: { replyIsStopNotice?: boolean } = {},
+  options: { replyIsStopNotice?: (session: { route?: SessionRoute; originSessionKey?: string }) => boolean } = {},
 ): string {
+  const already = (status: string): string => status === "killed" ? "stopped" : status;
   const session = sm.resolve(ref);
   if (!session) {
     const persisted = sm.getPersistedSession(ref);
@@ -33,22 +37,23 @@ export function getKillSessionText(
           : `⛔ [${persisted.name}] Stopped (it was not running).`;
       }
     }
-    return `ℹ️ [${persisted.name}] Already ${persisted.status}; nothing to stop.`;
+    return `ℹ️ [${persisted.name}] Already ${already(persisted.status)}; nothing to stop.`;
   }
 
   if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-    return `ℹ️ [${session.name}] Already ${session.status}; nothing to stop.`;
+    return `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
   }
 
   if (reason === "completed") {
     // A real completion: the lifecycle sends the user `✅ [name] Completed`.
     session.complete();
-    return `ℹ️ [${session.name}] Marked as completed; the user gets the ✅ Completed notice.`;
+    return `ℹ️ [${session.name}] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`;
   }
 
-  if (options.replyIsStopNotice) session.stopNoticeReplaced = true;
+  const replyIsStopNotice = options.replyIsStopNotice?.(session) === true;
+  if (replyIsStopNotice) session.stopNoticeReplaced = true;
   sm.kill(session.id);
-  return options.replyIsStopNotice
+  return replyIsStopNotice
     ? `⛔ [${session.name}] Stopped by user${formatSessionStatsSuffix(sessionStats(session))}`
     : `⛔ [${session.name}] Stopped.`;
 }

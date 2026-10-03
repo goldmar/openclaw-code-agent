@@ -1,6 +1,6 @@
 import { sessionManager } from "../singletons";
 import { getSessionOutputText } from "../application/session-view";
-import { tokenizeCommandArgs } from "./args";
+import { SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
 const DEFAULT_OUTPUT_LINES = 50;
 
@@ -24,7 +24,7 @@ export function registerAgentOutputCommand(api: CommandApi): void {
     requireAuth: true,
     handler: (ctx: { args?: string }) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const raw = (ctx.args ?? "").trim();

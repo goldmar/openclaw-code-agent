@@ -169,7 +169,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const { worktreePath, originalWorkdir, branchName } = target;
 
       if (!worktreePath || !originalWorkdir) {
-        return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }] };
+        return { content: [{ type: "text", text: `Error: The session has no worktree.` }] };
       }
 
       if (!branchName) {
@@ -215,7 +215,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           content: [{
             type: "text",
             text: [
-              `❌ Merge blocked: session "${params.session}" has uncommitted worktree changes but branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`.`,
+              `❌ Merge blocked: the worktree has uncommitted changes but branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`.`,
               `Worktree: ${worktreePath}`,
               `Resume or inspect the session, then commit real task changes or clean temporary files before retrying agent_merge.`,
             ].join("\n"),

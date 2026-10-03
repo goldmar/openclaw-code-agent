@@ -177,7 +177,7 @@ for (const name of BACKEND_NAMES) {
 
       // The user answers in plain text, through the chat command.
       const reply = await s.host.runCommand("agent_respond", { args: `${session.id} approve` });
-      assert.doesNotMatch(reply.text ?? "", /^Error/, reply.text);
+      assert.doesNotMatch(reply.text ?? "", /^(?:Error|❌)/, reply.text);
       await expectImplementationStarted(s, decision, turnsBefore);
     });
 
@@ -208,7 +208,7 @@ for (const name of BACKEND_NAMES) {
         answered = s.backend.ask([COLOR]);
         await waitUntil(() => session.pendingInputState?.kind === "question", "pending question");
         const reply = await s.host.runCommand("agent_respond", { args: `${session.id} Blue` });
-        assert.doesNotMatch(reply.text ?? "", /^Error/, reply.text);
+        assert.doesNotMatch(reply.text ?? "", /^(?:Error|❌)/, reply.text);
       } finally {
         lock.release();
       }

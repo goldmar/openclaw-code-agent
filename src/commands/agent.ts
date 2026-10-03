@@ -2,9 +2,10 @@ import { sessionManager } from "../singletons";
 import { formatHarnessModelLabel } from "../session-display";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
-import { tokenizeCommandArgs } from "./args";
+import { SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
-interface AgentCommandContext {
+/** The host's command context fields that identify the chat a command was typed in. */
+export interface AgentCommandContext {
   args?: string;
   workspaceDir?: string;
   messageChannel?: string;
@@ -72,7 +73,7 @@ export function registerAgentCommand(api: CommandApi): void {
     requireAuth: true,
     handler: async (ctx: AgentCommandContext) => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const raw = (ctx.args ?? "").trim();
@@ -123,8 +124,9 @@ export function registerAgentCommand(api: CommandApi): void {
         return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_status.` };
       } catch (err: unknown) {
         const message = errorMessage(err);
-        const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";
-        return { text: `Error launching session: ${message}${hint}` };
+        // The limit error names the orchestrator's tools; the user gets the command.
+        const reason = message.replace(/ Use agent_sessions .*$/u, "");
+        return { text: `❌ Launch failed: ${reason}\nUse /agent_sessions to see active sessions.` };
       }
     },
   });

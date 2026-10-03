@@ -43,9 +43,12 @@ describe("goal command", () => {
         },
       },
     });
+    let sameChat: boolean | undefined;
     setGoalController({
-      async launchTask(config: Record<string, unknown>) {
+      async launchTask(config: Record<string, unknown>, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
         launchConfig = config;
+        sameChat = reply.sameChat(config);
+        reply.text = "🎯 [goal-command] Goal task started\n\nGoal:\nship the feature";
         return {
           id: "goal-command-1",
           name: "goal-command",
@@ -85,9 +88,34 @@ describe("goal command", () => {
     assert.equal(launchConfig?.loopMode, "verifier");
     assert.equal(launchConfig?.originChannel, "telegram|bot1|-1001234567890");
     assert.deepEqual(launchConfig?.verifierCommands, [{ label: "check-1", command: "pnpm test" }]);
-    assert.match(result?.text ?? "", /Goal task launched\./);
-    assert.match(result?.text ?? "", /Dir: \/tmp/);
-    assert.match(result?.text ?? "", /Verifiers:/);
+    // One message: the task's start notice is the reply, without ids.
+    assert.equal(sameChat, true, "typed in the chat the task reports to");
+    assert.equal(
+      result?.text,
+      "🎯 [goal-command] Goal task started\n\nGoal:\nship the feature\n\nFollow it with /agent_goal status goal-command; stop it with /agent_goal stop goal-command.",
+    );
+  });
+
+  it("reports a goal that failed to start once", async () => {
+    setPluginConfig({ defaultHarness: "codex", harnesses: { codex: { defaultModel: "gpt-5.5", allowedModels: ["gpt-5.5"] } } });
+    let handler: ((ctx: any) => Promise<{ text: string }> | { text: string }) | undefined;
+    registerGoalCommand({
+      registerCommand(command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    });
+    const ctx = { args: '--verify "pnpm test" ship the feature', workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "-1001234567890" } };
+
+    setGoalController({
+      async launchTask(_config: unknown, reply: { text?: string }) {
+        reply.text = "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness";
+        throw new Error("no harness");
+      },
+    } as any);
+    assert.equal((await handler?.(ctx))?.text, "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness");
+
+    setGoalController({ async launchTask() { throw new Error("no verifiers"); } } as any);
+    assert.equal((await handler?.(ctx))?.text, "❌ Goal task did not start: no verifiers");
   });
 
   it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {
@@ -106,9 +134,11 @@ describe("goal command", () => {
         },
       },
     });
+    let sameChat: boolean | undefined;
     setGoalController({
-      async launchTask(config: Record<string, unknown>) {
+      async launchTask(config: Record<string, unknown>, reply: { sameChat: (task: unknown) => boolean }) {
         launchConfig = config;
+        sameChat = reply.sameChat(config);
         return {
           id: "goal-command-2",
           name: "goal-command-agent-channel",
@@ -136,6 +166,8 @@ describe("goal command", () => {
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.originChannel, "telegram|bot1|-1001234567890");
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
-    assert.match(result?.text ?? "", /Goal task launched\./);
+    // The command's own chat is unknown, so the notice still goes to the configured channel.
+    assert.equal(sameChat, false);
+    assert.match(result?.text ?? "", /^🎯 \[goal-command-agent-channel\] Goal task started\n\nFollow it with \/agent_goal status goal-command-agent-channel;/);
   });
 });
