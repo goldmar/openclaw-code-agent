@@ -169,6 +169,8 @@ export class Session extends EventEmitter {
 
   // Resume/fork
   readonly resumeSessionId?: string;
+  /** The stop was already reported to the user by a more specific message (plan rejected by button). */
+  stopNoticeReplaced?: boolean;
   /**
    * True when this launch neither resumed a conversation nor reused a
    * persisted worktree, so any worktree it has was created for it.

@@ -1,7 +1,7 @@
 import { fenceAgentOutput } from "./untrusted-output";
 import { removeWorktree, deleteBranch, getCommitsAheadCount } from "./worktree";
 import { truncateText } from "./format";
-import { formatSessionStatsSuffix } from "./session-notification-stats";
+import { formatSessionStatsSuffix, sessionStats } from "./session-notification-stats";
 import { getPersistedMutationRefs } from "./session-backend-ref";
 import {
   buildCompletedPayload,
@@ -471,7 +471,7 @@ export class SessionLifecycleService {
     }
 
     // One footer for every terminal line (cost | duration | harness | model | reasoning).
-    const statsSuffix = formatSessionStatsSuffix(session);
+    const statsSuffix = formatSessionStatsSuffix(sessionStats(session));
     if (session.killReason === "idle-timeout") {
       if (session.pendingPlanApproval) {
         this.emitIdleTimeoutPlanApproval(session);
@@ -489,7 +489,9 @@ export class SessionLifecycleService {
       return;
     }
 
-    this.deps.notifySession(session, `⛔ [${session.name}] ${getStoppedStatusLabel(session.killReason)}${statsSuffix}`);
+    if (!session.stopNoticeReplaced) {
+      this.deps.notifySession(session, `⛔ [${session.name}] ${getStoppedStatusLabel(session.killReason)}${statsSuffix}`);
+    }
     this.deps.clearRetryTimersForSession(session.id);
   }
 
@@ -519,7 +521,7 @@ export class SessionLifecycleService {
       label: "plan-approval-timeout",
       idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
       userMessage: [
-        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still waiting for approval; the session is paused${formatSessionStatsSuffix(session)}`,
+        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still waiting for approval; the session is paused${formatSessionStatsSuffix(sessionStats(session))}`,
         `Approve resumes it and starts the work. Revise resumes it to update the plan. Reject keeps it stopped.`,
       ].join("\n"),
       notifyUser: "always",

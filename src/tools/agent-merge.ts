@@ -215,7 +215,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           content: [{
             type: "text",
             text: [
-              `❌ Merge blocked: session "${params.session}" has uncommitted worktree changes but branch ${branchName} has no commits ahead of ${baseBranch}.`,
+              `❌ Merge blocked: session "${params.session}" has uncommitted worktree changes but branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`.`,
               `Worktree: ${worktreePath}`,
               `Resume or inspect the session, then commit real task changes or clean temporary files before retrying agent_merge.`,
             ].join("\n"),
@@ -306,7 +306,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Push base branch if requested
           if (shouldPush) {
             if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
-              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
+              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged \`${branchName}\` → \`${baseBranch}\` locally, but failed to push \`${baseBranch}\``;
               sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
                 pushFailedText,
@@ -415,7 +415,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           if (mergeResult.stashPopConflict) {
             successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {
-            successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
+            successText += `\n(Pre-existing changes on \`${baseBranch}\` were auto-stashed and restored.)`;
           }
           successText = appendMergeWarnings(successText, mergeResult) + summaryShownNote(params.summary);
           toolResult = { content: [{ type: "text", text: successText }], meta: { success: true, outcomeNotified: true } };

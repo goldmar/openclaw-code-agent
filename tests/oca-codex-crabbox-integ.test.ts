@@ -364,7 +364,7 @@ describe("OCA Codex Crabbox integration harness", () => {
         insertions: 10,
         deletions: 1,
       }),
-      "ℹ️ Merged: agent/stat-proof → main (2 files, +10/-1)",
+      "ℹ️ Merged: `agent/stat-proof` → `main` (2 files, +10/-1)",
     );
     assert.equal(
       formatWorktreeOutcomeLine({
@@ -509,7 +509,7 @@ describe("OCA Codex Crabbox integration harness", () => {
     );
     assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /The user saw: ℹ️ PR updated: .* \(3 files, \+14\/-2\)/u);
     assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/331\./u);
-    assert.equal(requests[1]?.userMessage, "ℹ️ Merged: agent/notify-integ → main (3 files, +14/-2)");
+    assert.equal(requests[1]?.userMessage, "ℹ️ Merged: `agent/notify-integ` → `main` (3 files, +14/-2)");
     assert.equal(patches.some(({ patch }) => patch.completionWakeSummaryRequired === true), true);
   });
 

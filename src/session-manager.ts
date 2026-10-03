@@ -415,10 +415,15 @@ export class SessionManager {
         const result = await makeAgentPrTool(undefined, { terminalCompletion: true }).execute("auto-pr", {
           session: session.id,
           base_branch: baseBranch,
-        }) as { meta?: { success?: boolean; outcomeNotified?: boolean } };
+        }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean } };
+        const success = result?.meta?.success === true;
         return {
-          success: result?.meta?.success === true,
+          success,
           notificationSent: result?.meta?.outcomeNotified === true,
+          // The reason shown in `⚠️ [name] Completed — auto-PR failed: …`.
+          ...(success ? {} : {
+            error: result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").trim() || undefined,
+          }),
         };
       },
     });
@@ -1874,7 +1879,7 @@ export class SessionManager {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
       userMessage: [
-        `🔁 [${name}] The worktree decision${branch ? ` for \`${branch}\`` : ""} is still open: the last action did not complete.`,
+        `⚠️ [${name}] The last action did not complete; the decision${branch ? ` for \`${branch}\`` : ""} is still open.`,
         `Choose again below.`,
       ].join("\n"),
       notifyUser: "always",

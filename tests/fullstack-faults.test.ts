@@ -177,8 +177,9 @@ describe("saves that fail", () => {
     const resume = buttonIn(suspended, "Resume");
     const click = await s.click(resume);
     assert.equal(failures, 0, "the save after the click failed once");
-    assert.equal(click.replies.length, 1);
-    assert.doesNotMatch(click.replies[0]!, /expired|stale/);
+    // The click acted: the ▶️ Resumed notice is its one answer (no extra reply).
+    assert.deepEqual(click.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/);
     const disk = JSON.parse(readFileSync(sessionsIndexPath(), "utf-8")) as IndexFile;
     assert.equal(typeof disk.actionTokens.find((token) => token.id === resume.payload)?.consumedAt, "number", "the retried save persisted the consumption");
     const again = await s.click(resume);

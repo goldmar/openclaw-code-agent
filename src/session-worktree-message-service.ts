@@ -85,11 +85,6 @@ export class SessionWorktreeMessageService {
       reasoningEffort: session.reasoningEffort,
       backendInfo: session.backendInfo,
     });
-    const failedSummary = remoteOutcome === "pr-updated"
-      ? "PR updated; no local worktree changes remained to merge"
-      : remoteOutcome === "pr-opened"
-      ? "PR opened; no local worktree changes remained to merge"
-      : "Session completed with no worktree changes to merge";
     const wakeHeadline = remoteOutcome === "pr-updated"
       ? "Updated a PR; no local branch changes remained to merge."
       : remoteOutcome === "pr-opened"
@@ -107,7 +102,7 @@ export class SessionWorktreeMessageService {
         ? `✅ [${session.name}] Completed — no new changes; PR already open${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
         : cleanupSucceeded
         ? `✅ [${session.name}] Completed — no changes to merge${statSuffix}`
-        : `⚠️ [${session.name}] ${failedSummary}, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
+        : `⚠️ [${session.name}] Completed — no changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,

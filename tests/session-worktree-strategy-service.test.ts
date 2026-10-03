@@ -1853,7 +1853,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(result.notificationSent, true);
       assert.equal(f.session.status, "completed", "the captured session object is stale");
       assert.equal(f.notifications.length, 1);
-      assert.match(String(f.notifications[0].userMessage), /^ℹ️ \[auto-merge-outcome\] Merged: agent\/auto-merge-outcome → main/);
+      assert.match(String(f.notifications[0].userMessage), /^ℹ️ \[auto-merge-outcome\] Merged: `agent\/auto-merge-outcome` → `main`/);
       assert.doesNotMatch(String(f.notifications[0].userMessage), /Completed/);
     });
 
@@ -1865,7 +1865,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const completed = buildCompletedPayload({ session: f.session, originThreadLine: "", preview: "" }).userMessage;
       const footer = completed.slice("✅ [auto-merge-outcome] Completed".length);
       assert.match(footer, /^ \| \$0\.11 \| 8s \| /);
-      assert.equal(line, `✅ [auto-merge-outcome] Completed — Merged: agent/auto-merge-outcome → main (1 file, +2/-0)${footer}`);
+      assert.equal(line, `✅ [auto-merge-outcome] Completed — Merged: \`agent/auto-merge-outcome\` → \`main\` (1 file, +2/-0)${footer}`);
     });
 
     it("keeps the completion form when the current status is still completed or unknown", async () => {
@@ -2366,7 +2366,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-auto-pr-failed");
-      assert.match(String(notifications[0].userMessage), /Auto-PR did not complete/i);
+      assert.match(String(notifications[0].userMessage), /Completed — auto-PR failed\. The worktree is preserved/);
       assert.deepEqual(policyAllowedActions, { merge: false, pr: true });
       assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), false);
       assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), true);

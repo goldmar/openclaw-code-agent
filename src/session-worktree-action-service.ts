@@ -21,7 +21,8 @@ const RESOLVED_WORKTREE_STATES = new Set([
 
 export type PlannedWorktreeAction =
   | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean } }
-  | { kind: "notify"; label: string; message: string }
+  /** `problem` completes `⚠️ [name] Completed — `. */
+  | { kind: "notify"; label: string; problem: string }
   | {
       kind: "dirty-uncommitted";
       worktreePath: string;
@@ -122,14 +123,14 @@ export class SessionWorktreeActionService {
       return {
         kind: "notify",
         label: "worktree-missing-repo-dir",
-        message: `⚠️ [${session.name}] Cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
+        problem: `cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
       };
     }
     if (!branchName) {
       return {
         kind: "notify",
         label: "worktree-no-branch-name",
-        message: `⚠️ [${session.name}] Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
+        problem: `cannot determine the branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
       };
     }
 
@@ -165,7 +166,7 @@ export class SessionWorktreeActionService {
       return {
         kind: "notify",
         label: "worktree-no-commits-ahead",
-        message: `⚠️ [${session.name}] Auto-merge: branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, but \`${baseBranch}\` has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to \`${baseBranch}\` instead of the worktree branch. Worktree: ${worktreePath}`,
+        problem: `${strategy === "auto-merge" ? "nothing to auto-merge: " : ""}branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, but \`${baseBranch}\` has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to \`${baseBranch}\` instead of the worktree branch. Worktree: ${worktreePath}`,
       };
     }
     if (completionState === "dirty-uncommitted") {

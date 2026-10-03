@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from "./types";
+import type { Session } from "./session";
 import { formatDuration } from "./format";
 import { formatHarnessModelLabel } from "./session-display";
 
@@ -13,6 +14,18 @@ export type SessionNotificationStats = {
   reasoningEffort?: ReasoningEffort;
   backendInfo?: { reasoningEffortSupported?: boolean };
 };
+
+/** The footer input of a live session: the same for every status line it gets. */
+export function sessionStats(session: Session): SessionNotificationStats {
+  return {
+    costUsd: session.costUsd,
+    duration: session.duration,
+    harnessName: session.harnessName,
+    model: session.model,
+    reasoningEffort: session.reasoningEffort,
+    backendInfo: session.backendInfo,
+  };
+}
 
 export function formatSessionStatsSuffix(stats: SessionNotificationStats): string {
   const parts: string[] = [];

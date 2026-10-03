@@ -706,7 +706,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-dirty-uncommitted");
-      assert.match(request.userMessage, /Finished with uncommitted changes and no commits/);
+      assert.match(request.userMessage, /^⚠️ \[[\w-]+\] Completed — uncommitted changes and no commits/);
       // N44: the guidance comes with buttons to act on it.
       assert.deepEqual(request.buttons?.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Commit changes", "View output", "Discard"]]);
       assert.match(request.userMessage, /new-file\.txt/);

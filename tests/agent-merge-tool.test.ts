@@ -605,9 +605,9 @@ describe("agent_merge push behavior", () => {
       const tool = makeAgentMergeTool();
       const result = await tool.execute("tool-id", { session: sessionName, push: true, delete_branch: false });
 
-      assert.match((result.content[0] as { text: string }).text, /locally, but failed to push main/);
+      assert.match((result.content[0] as { text: string }).text, /locally, but failed to push `main`/);
       assert.equal(notifications.length, 1);
-      assert.match(notifications[0].outcomeLine, /Merged .* locally, but failed to push main/);
+      assert.match(notifications[0].outcomeLine, /Merged `.*` → `main` locally, but failed to push `main`/);
       assert.match(String(notifications[0].options?.detailLines?.join("\n")), /remote state may not include the merge/i);
       assert.equal(git(repoDir, "rev-parse", "main"), git(repoDir, "rev-parse", branchName));
     } finally {

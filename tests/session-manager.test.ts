@@ -2823,7 +2823,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessage, /Name: deterministic/);
     assert.match(request.wakeMessage, /Status: running/);
     assert.match(request.wakeMessage, /Last output/);
-    assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed/);
+    assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed — session idle, waiting for a follow-up/);
   });
 
   it("routes explicit question turns to waiting wake path", async () => {

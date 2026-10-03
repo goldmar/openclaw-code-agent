@@ -72,7 +72,7 @@ export class SessionQuestionService {
 
     const firstQuestion = questions[0];
     const options = firstQuestion.options ?? [];
-    const userMessage = `❓ [${session.name}] ${firstQuestion.question}`;
+    const userMessage = `❓ [${session.name}] The agent asks\n\n${firstQuestion.question}`;
     // The harness names the request it raised; the session may not show it yet.
     const questionId = context.requestId ? context.questionId : activePendingInputQuestionIdentity(session);
     const requestId = context.requestId

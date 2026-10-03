@@ -95,7 +95,7 @@ describe("formatWorktreeOutcomeLine", () => {
       base: "main",
     });
     assert.ok(result.includes("Merged"));
-    assert.ok(result.includes("agent/fix-auth → main"));
+    assert.ok(result.includes("`agent/fix-auth` → `main`"));
     assert.ok(!result.includes("files"));
   });
 
@@ -416,7 +416,7 @@ describe("createPR", () => {
 
       assert.deepEqual(result, {
         success: false,
-        error: "A PR already exists for agent/existing-pr, but it is closed: https://github.com/acme/repo/pull/9",
+        error: "A PR already exists for `agent/existing-pr`, but it is closed: https://github.com/acme/repo/pull/9",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);

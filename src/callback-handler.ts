@@ -690,7 +690,7 @@ export function createCallbackHandler(
 
       // Authorization check
       if (!ctx.auth.isAuthorizedSender) {
-        await replyText(ctx, "⛔ Unauthorized.");
+        await replyText(ctx, "🚫 Unauthorized.");
         return { handled: true };
       }
 
@@ -747,7 +747,7 @@ export function createCallbackHandler(
           sessionId: token.sessionId,
         });
         log.warn(`[callback-handler] Refused a ${token.kind} callback from a chat other than the one its button was sent to.`);
-        await replyText(ctx, "⛔ This button belongs to another chat.");
+        await replyText(ctx, "🚫 This button belongs to another chat.");
         return { handled: true };
       }
 
@@ -1072,7 +1072,7 @@ export function createCallbackHandler(
 
           await clearPlanDecisionButtons(ctx, callbackAcknowledged);
           if (consumedToken.kind === "plan-reject") {
-            const result = rejectPlanDecision(sessionManager, sessionId);
+            const result = rejectPlanDecision(sessionManager, sessionId, { repliedToUser: true });
             await replyText(ctx, `⛔ ${result.text}`);
             queueDecisionPressedNote(sessionManager, "plan-reject", sessionId, actionSessionName, tokenId);
           } else {
@@ -1210,7 +1210,7 @@ export function createCallbackHandler(
             }
             try {
               const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
-              await replyText(ctx, `▶️ ${text}`);
+              await replyText(ctx, `⬆️ ${text}`);
             } catch (err) {
               await replyText(ctx, `⚠️ Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`);
             }
@@ -1334,7 +1334,9 @@ export function createCallbackHandler(
               alreadyAcknowledged: callbackAcknowledged,
               forceTelegramMarkupEdit: true,
             });
-            await replyText(ctx, `▶️ [${session.name}] Planning session started`);
+            // The launch posts `🚀 [name] Launched | …` to the offer's route, the
+            // chat of this button. Without a route nothing is posted there.
+            if (!consumedToken.route) await replyText(ctx, `🚀 [${session.name}] Planning session started`);
             break;
           }
 

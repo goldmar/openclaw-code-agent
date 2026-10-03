@@ -452,6 +452,40 @@ describe("SessionLifecycleService", () => {
     assert.deepEqual(requests, []);
   });
 
+  it("reports a user stop once: not again after the Reject button already said so", async () => {
+    const notices: string[] = [];
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: () => {},
+      notifySession: (_session, text) => { notices.push(text); },
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+    const stopped = { status: "killed", killReason: "user", duration: 5_000, costUsd: 0.1 } as const;
+
+    await service.handleSessionTerminal(createStubSession({ id: "stop-1", name: "stopped-by-user", ...stopped }));
+    assert.equal(notices.length, 1);
+    assert.match(notices[0] ?? "", /^⛔ \[stopped-by-user\] Stopped by user \| \$0\.10 \| 5s/);
+
+    await service.handleSessionTerminal(createStubSession({ id: "stop-2", name: "plan-rejected", ...stopped, stopNoticeReplaced: true }));
+    assert.equal(notices.length, 1, "the Reject button's reply was the stop message");
+  });
+
   it("keeps completion follow-up summaries for degraded routes that still recover to a direct user route", () => {
     const requests: Array<Record<string, unknown>> = [];
 

@@ -551,7 +551,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         return {
           content: [{
             type: "text",
-            text: `Error: Session is associated with ${explicitTargetPrUrl}, but that PR could not be resolved. Refusing to create a sibling PR from ${branchName}.`,
+            text: `Error: Session is associated with ${explicitTargetPrUrl}, but that PR could not be resolved. Refusing to create a sibling PR from \`${branchName}\`.`,
           }],
           meta: { success: false, state: "error" },
         } satisfies AgentPrExecuteResult;
@@ -611,7 +611,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // Push branch first for open PR updates and new PR creation.
       const shouldPushBranch = !effectiveTargetPrStatus || effectiveTargetPrStatus.state === "open";
       if (shouldPushBranch && !targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
-        return { content: [{ type: "text", text: `❌ Failed to push ${branchName} — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { content: [{ type: "text", text: `❌ Failed to push \`${branchName}\` — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Sync PR state from GitHub
@@ -628,7 +628,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         return {
           content: [{
             type: "text",
-            text: `⚠️ Cannot create new PR: A PR already exists for ${branchName} (${prStatus.state}).\n\n` +
+            text: `⚠️ Cannot create new PR: A PR already exists for \`${branchName}\` (${prStatus.state}).\n\n` +
                   `Existing PR: ${prStatus.url}\n\n` +
                   `To create a new PR, you must first close/merge the existing PR manually or use a different branch.`
           }],
@@ -784,7 +784,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           content: [{
             type: "text",
             text: `${settledPrLine("PR was already merged", prStatus.url!, owedCycle)}\n\n` +
-                  `The worktree branch ${branchName} can be cleaned up with agent_merge(delete_branch=true).` +
+                  `The worktree branch \`${branchName}\` can be cleaned up with agent_merge(delete_branch=true).` +
                   (owedCycle === undefined ? "" : summaryShownNote(params.summary))
           }],
           meta: { success: true, state: "merged", ...(owedCycle === undefined ? {} : { outcomeNotified: true }) },

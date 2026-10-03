@@ -2875,7 +2875,8 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
     assert.equal(launches[0]?.workdir, "/home/alice/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /^▶️ \[plugin-readiness-v2026\.5\.18\] Planning session started$/);
+    // The 🚀 Launched notice in the offer's chat is the one answer.
+    assert.deepEqual(state.replies, []);
   });
 
   it("consumes Telegram forum-topic Start Plan callbacks without surfacing raw callback text", async () => {
@@ -2940,7 +2941,7 @@ describe("createCallbackHandler()", () => {
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /^▶️ \[plugin-readiness-v2026\.6\.1\] Planning session started$/);
+    assert.deepEqual(state.replies, []);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
   });
 
@@ -3347,8 +3348,8 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches.length, 1);
     assert.deepEqual(editedMessages, ["OpenClaw release monitor: v2026.6.1"]);
     assert.equal(buttonsCleared, 1);
-    assert.match(replies[0], /^▶️ \[plugin-readiness-v2026\.5\.28\] Planning session started$/);
-    assert.deepEqual(events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
+    assert.deepEqual(replies, []);
+    assert.deepEqual(events, ["acknowledge", "editMessage", "clearButtons"]);
   });
 
   it("clears Start Plan buttons when the plan-offer launch fails after consuming the token", async () => {
@@ -3507,7 +3508,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
     assert.deepEqual(result, { handled: true });
     assert.equal(consumes, 0);
-    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
+    assert.equal(state.replies[0], "🚫 This button belongs to another chat.");
   });
 
   it("refuses a Discord callback from another channel than the token's (N2)", async () => {
@@ -3530,7 +3531,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
     assert.deepEqual(result, { handled: true });
     assert.equal(consumes, 0);
-    assert.equal(state.replies[0], "⛔ This button belongs to another chat.");
+    assert.equal(state.replies[0], "🚫 This button belongs to another chat.");
   });
 
   it("blocks unauthorized Telegram topic callbacks before consuming the token", async () => {
@@ -3554,6 +3555,6 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(lookups, 0);
     assert.equal(consumes, 0);
-    assert.equal(state.replies[0], "⛔ Unauthorized.");
+    assert.equal(state.replies[0], "🚫 Unauthorized.");
   });
 });

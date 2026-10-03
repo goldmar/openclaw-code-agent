@@ -301,7 +301,11 @@ function applyPlanDecisionPatchToSession(session: Session, patch: Partial<Persis
   Object.assign(session, patch);
 }
 
-export function rejectPlanDecision(sm: SessionManager, sessionId: string): RespondResult {
+export function rejectPlanDecision(
+  sm: SessionManager,
+  sessionId: string,
+  options: { repliedToUser?: boolean } = {},
+): RespondResult {
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
@@ -317,6 +321,9 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
   if (active) {
     applyPlanDecisionPatchToSession(active, patch);
     sm.updatePersistedSession?.(sessionId, patch);
+    // The Reject button answers `⛔ [name] Plan rejected. Session stopped.`:
+    // the generic `⛔ [name] Stopped by user` would say the same again.
+    if (options.repliedToUser) active.stopNoticeReplaced = true;
     sm.kill(active.id, "user");
     return { text: `[${active.name}] Plan rejected. Session stopped.` };
   }

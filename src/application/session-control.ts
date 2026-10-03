@@ -39,5 +39,5 @@ export function getKillSessionText(
   }
 
   sm.kill(session.id);
-  return `Session ${session.name} [${session.id}] has been terminated.`;
+  return `⛔ [${session.name}] Stopped.`;
 }

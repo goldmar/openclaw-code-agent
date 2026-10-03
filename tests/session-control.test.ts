@@ -87,6 +87,6 @@ describe("session-control app layer", () => {
     };
     const text = getKillSessionText(sm, "s", "killed");
     assert.equal(killedId, "1");
-    assert.match(text, /has been terminated/);
+    assert.match(text, /^⛔ \[.+\] Stopped\.$/);
   });
 });

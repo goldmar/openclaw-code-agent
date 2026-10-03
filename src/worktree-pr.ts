@@ -105,7 +105,7 @@ async function recoverExistingPullRequest(repoDir: string, branch: string, targe
   if (existingPr.exists && existingPr.url) {
     return {
       success: false,
-      error: `A PR already exists for ${branch}, but it is ${existingPr.state}: ${existingPr.url}`,
+      error: `A PR already exists for \`${branch}\`, but it is ${existingPr.state}: ${existingPr.url}`,
     };
   }
   return undefined;
@@ -385,7 +385,7 @@ export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string
   const tag = params.sessionName ? `[${params.sessionName}] ` : "";
   const prefix = params.sessionCompleted ? `✅ ${tag}Completed — ` : `ℹ️ ${tag}`;
   if (params.kind === "merge") {
-    return `${prefix}Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
+    return `${prefix}Merged: \`${params.branch}\` → \`${params.base ?? "main"}\`${stats}`;
   }
   if (params.kind === "pr-updated") {
     return `${prefix}PR updated: ${params.prUrl ?? ""}${stats}`;

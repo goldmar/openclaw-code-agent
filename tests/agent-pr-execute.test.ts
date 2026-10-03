@@ -443,7 +443,7 @@ describe("agent_pr execute(): existing open PRs", () => {
     const result = await f.run();
 
     assert.equal(result.meta.state, "pr_updated");
-    assert.match(textOf(result), /⚠️ {2}PR metadata refresh failed: generated PR metadata was unavailable; preserved existing generated PR metadata/);
+    assert.match(textOf(result), /⚠️ PR metadata refresh failed: generated PR metadata was unavailable; preserved existing generated PR metadata/);
     assert.equal(f.gh.ghCalls("edit").length, 0);
     assert.equal(f.gh.readState().prs[0]?.body, body);
     assert.equal(f.gh.readState().comments.length, 1, "the new-commit comment is still added");
@@ -538,7 +538,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     const result = await f.run({ force_new: true });
 
     assert.deepEqual(result.meta, { success: false, state: "error" });
-    assert.match(textOf(result), new RegExp(`Cannot create new PR: A PR already exists for ${f.branch} \\(open\\)\\.\\n\\nExisting PR: ${seeded.url}`));
+    assert.match(textOf(result), new RegExp(`Cannot create new PR: A PR already exists for \`${f.branch}\` \\(open\\)\\.\\n\\nExisting PR: ${seeded.url}`));
     assert.equal(f.gh.ghCalls("create").length, 0);
   });
 
@@ -755,6 +755,7 @@ describe("worktree outcome completion", () => {
     isolateGitHub();
     const f = await setup();
     await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+    mkdirSync(join(f.worktreePath, ".openclaw"));
     f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
     await completeSession(f, "auto-merge");
     assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-merge-ask"]);
@@ -772,6 +773,7 @@ describe("worktree outcome completion", () => {
   it("completes an auto-pr session that ended in the decision prompt (hook change) with the PR button", async () => {
     const f = await setup();
     await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    mkdirSync(join(f.worktreePath, ".openclaw"));
     f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
     await completeSession(f, "auto-pr");
     assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-merge-ask"]);

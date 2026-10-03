@@ -167,7 +167,7 @@ describe("auto-merge conflicts", () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const turnsBefore = s.backend.turns.length;
     const { repo, session } = await finishConflictingSession(s, "auto-merge");
-    await s.waitForMessage(/Auto-merge hit a rebase conflict\. Started resolver session/);
+    await s.waitForMessage(/Completed — merge conflict; resolver session/);
     await waitUntil(() => s.backend.turns.length > turnsBefore + 1, "the resolver's first turn");
     const resolver = s.sm.list("all").find((candidate) => candidate.autoMergeParentSessionId === session.id);
     assert.ok(resolver, "a resolver session linked to the parent");
@@ -184,7 +184,7 @@ describe("auto-merge conflicts", () => {
       10_000,
     );
     assert.ok(existsSync(join(repo, "feature.txt")));
-    await s.waitForMessage(/Merged: agent\/codex-fullstack → main/);
+    await s.waitForMessage(/^ℹ️ \[[\w-]+\] Merged: `agent\/codex-fullstack` → `main`/);
   });
 
   it("only logs when a resolver finishes after its parent session is gone", async () => {
@@ -266,7 +266,9 @@ describe("session buttons", () => {
     assert.doesNotMatch(outputAgain.replies.join("\n"), /expired/);
 
     const resume = await s.click(buttonIn(suspended, "Resume"));
-    assert.match(resume.replies.join("\n"), /^▶️/);
+    // One answer: the ▶️ Resumed notice, no extra reply.
+    assert.deepEqual(resume.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /Continue where you left off/);
     const again = await s.click(buttonIn(suspended, "Resume"));
@@ -291,7 +293,8 @@ describe("session buttons", () => {
     const suspended = await s.waitForMessage(/Suspended after idle timeout/);
     const turnsBefore = s.backend.turns.length;
     const clicked = await s.click(buttonIn(suspended, "Resume"));
-    assert.match(clicked.replies.join("\n"), /^▶️/, clicked.replies.join("\n"));
+    assert.deepEqual(clicked.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "resumed turn");
     const resumed = s.sm.resolve(session.id)!;
     assert.equal(resumed.launchSystemPrompt, "Marker ZEBRA-42.");
@@ -320,7 +323,8 @@ describe("session buttons", () => {
     await s.host.startServices({});
     const turnsBefore = s.backend.turns.length;
     const restart = await s.click("legacy-restart-token");
-    assert.match(restart.replies.join("\n"), /^▶️/);
+    assert.deepEqual(restart.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] (Resumed|Relaunched fresh)/);
     await waitUntil(() => s.backend.turns.length > turnsBefore, "restarted turn");
   });
 

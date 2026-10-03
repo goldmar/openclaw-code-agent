@@ -257,7 +257,7 @@ export function buildTurnCompletePayload(args: {
 }): { userMessage: string; wakeMessage: string } {
   const { session, originThreadLine, preview } = args;
   return {
-    userMessage: `⏸️ [${session.name}] Turn completed${formatSessionStatsSuffix(session)}`,
+    userMessage: `⏸️ [${session.name}] Turn completed — session idle, waiting for a follow-up${formatSessionStatsSuffix(session)}`,
     wakeMessage: [
       `Coding agent session turn ended.`,
       `Name: ${session.name}`,
