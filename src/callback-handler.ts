@@ -18,6 +18,7 @@ import { assessResumeCandidate } from "./session-resume";
 import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } from "./plan-decision-state";
 import { createLogger } from "./logger";
 import { pluginConfig } from "./config";
+import { SERVICE_NOT_RUNNING } from "./commands/args";
 import { processShared } from "./process-runtime";
 import { callbackMatchesTokenRoute, type CallbackConversation } from "./callback-route-binding";
 import { alreadyResolvedReply } from "./session-worktree-decision-service";
@@ -756,7 +757,7 @@ export function createCallbackHandler(
 
       // Guard service initialization
       if (!sessionManager) {
-        await replyText(ctx, "⚠️ The code agent is not running right now. Try again in a moment.");
+        await replyText(ctx, SERVICE_NOT_RUNNING);
         return { handled: true };
       }
 
@@ -1169,7 +1170,7 @@ export function createCallbackHandler(
         if (token.kind === "worktree-view-pr") {
           // Older builds sent View PR as a callback; current prompts use a link button.
           const url = token.targetUrl ?? sessionManager.getPersistedSession?.(sessionId)?.worktreePrUrl;
-          await replyText(ctx, url ? `ℹ️ PR: ${url}` : "⚠️ The PR link is no longer available.");
+          await replyText(ctx, url ? `ℹ️ ${actionSession?.name ? `[${actionSession.name}] ` : ""}PR: ${url}` : "⚠️ The PR link is no longer available.");
           return { handled: true };
         }
 
@@ -1408,7 +1409,7 @@ export function createCallbackHandler(
               forceTelegramMarkupEdit: true,
             });
             if (!goalController) {
-              await replyText(ctx, "⚠️ Goal controller not running.");
+              await replyText(ctx, SERVICE_NOT_RUNNING);
               break;
             }
             // The controller's notice is the one answer (`🎯 [task] Goal task started`,

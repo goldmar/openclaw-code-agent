@@ -158,4 +158,13 @@ describe("session-control app layer", () => {
     const done: any = { resolve: () => ({ name: "s", id: "1", status: "completed" }) };
     assert.equal(getKillSessionText(done, "s"), "ℹ️ [s] Already completed; nothing to stop.");
   });
+
+  it("says suspended for a suspended session that is still loaded, and leaves it resumable", () => {
+    let killed = false;
+    const session = { name: "s", id: "1", status: "killed", lifecycle: "suspended" };
+    const sm: any = { resolve: () => session, kill: () => { killed = true; } };
+    assert.equal(getKillSessionText(sm, "s", "killed"), "ℹ️ [s] Suspended, not running; nothing to stop.");
+    assert.equal(killed, false);
+    assert.deepEqual(session, { name: "s", id: "1", status: "killed", lifecycle: "suspended" });
+  });
 });

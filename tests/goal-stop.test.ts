@@ -62,7 +62,8 @@ describe("agent_goal stop surfaces already-terminal tasks clearly", () => {
     // In the task's chat the notice is not sent as well; elsewhere it stays there.
     assert.deepEqual(sameChat, [true, false]);
     assert.equal(inChat?.text, "⛔ [goal-task] Goal task stopped | $0.25 | 1m1s\n\nStopped by user.");
-    assert.equal(elsewhere?.text, inChat?.text);
+    // From another chat: a short line, like /agent_kill; the full notice is in the task's chat.
+    assert.equal(elsewhere?.text, "⛔ [goal-task] Stopped.");
     assert.equal(missing?.text, '❌ Goal task "missing" not found.');
   });
 

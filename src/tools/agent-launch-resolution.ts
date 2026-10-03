@@ -20,6 +20,7 @@ import {
   isModelFormatSupportedForHarness,
 } from "../harness-models";
 import { resolveRequiredAsyncLaunchRoute } from "../async-launch-route";
+import { userStatusWord } from "../application/session-control";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 
@@ -329,7 +330,7 @@ export function resolveAgentLaunchRequest(
       const first = linked.active[0] ?? linked.resumable[0];
       return {
         kind: "blocked",
-        userText: `❌ [${first.name}] Not launched: this chat already has a session for this directory (${first.lifecycle === "suspended" ? first.lifecycle : first.status}).\nContinue it with /agent_respond ${first.name} <message>, or stop it with /agent_kill ${first.name}.`,
+        userText: `❌ [${first.name}] Not launched: this chat already has a session for this directory (${first.lifecycle === "suspended" ? first.lifecycle : userStatusWord(first.status)}).\nContinue it with /agent_respond ${first.name} <message>, or stop it with /agent_kill ${first.name}.`,
         text: [
           `Resume-first protection blocked a fresh launch.`,
           ``,

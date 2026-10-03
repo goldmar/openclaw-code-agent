@@ -2,6 +2,11 @@ import type { SessionManager } from "../session-manager";
 import type { SessionRoute } from "../types";
 import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
+/** A session status in the user's words: a killed session is "stopped". */
+export function userStatusWord(status: string): string {
+  return status === "killed" ? "stopped" : status;
+}
+
 /**
  * Resolve and close a session, returning the result text.
  * `replyIsStopNotice` (the `/agent_kill` command typed in the session's own
@@ -16,7 +21,7 @@ export function getKillSessionText(
   reason?: "completed" | "killed",
   options: { replyIsStopNotice?: (session: { route?: SessionRoute; originSessionKey?: string }) => boolean } = {},
 ): string {
-  const already = (status: string): string => status === "killed" ? "stopped" : status;
+  const already = userStatusWord;
   const session = sm.resolve(ref);
   if (!session) {
     const persisted = sm.getPersistedSession(ref);
@@ -41,7 +46,10 @@ export function getKillSessionText(
   }
 
   if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-    return `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
+    // A suspended session is left as it is (still resumable), so it is not called stopped.
+    return session.status === "killed" && session.lifecycle === "suspended"
+      ? `ℹ️ [${session.name}] Suspended, not running; nothing to stop.`
+      : `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
   }
 
   if (reason === "completed") {

@@ -13,7 +13,7 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "../src/config";
-import { parseThreadIdFromSessionKey } from "../src/session-route";
+import { canonicalizeSessionRoute, parseThreadIdFromSessionKey } from "../src/session-route";
 
 beforeEach(() => {
   setPluginConfig({});
@@ -728,6 +728,106 @@ describe("autoUpdate config", () => {
   });
 });
 
+describe("a Telegram chat command's origin and route", () => {
+  // The host's PluginCommandContext: top-level `channel`, `to`, `accountId`,
+  // `messageThreadId`, `senderId` and `sessionKey`; no `deliveryContext`.
+  const topicCommand = {
+    channel: "telegram",
+    to: "telegram:-1001234567890",
+    accountId: "bot1",
+    messageThreadId: 42,
+    senderId: "1234",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+  };
+  const dmCommand = { channel: "telegram", to: "telegram:1234", accountId: "default", senderId: "1234", sessionKey: "agent:main:main" };
+
+  beforeEach(() => setPluginConfig({}));
+
+  it("keeps the command's bot account for a topic, a group and a DM", () => {
+    assert.equal(resolveOriginChannel(topicCommand), "telegram|bot1|-1001234567890");
+    assert.deepEqual(resolveSessionRoute(topicCommand), {
+      provider: "telegram",
+      accountId: "bot1",
+      target: "-1001234567890",
+      threadId: "42",
+      sessionKey: topicCommand.sessionKey,
+    });
+
+    const groupCommand = { ...topicCommand, messageThreadId: undefined as number | undefined, sessionKey: "agent:main:telegram:group:-1001234567890" };
+    assert.deepEqual(resolveSessionRoute(groupCommand), {
+      provider: "telegram",
+      accountId: "bot1",
+      target: "-1001234567890",
+      threadId: undefined,
+      sessionKey: groupCommand.sessionKey,
+    });
+
+    assert.equal(resolveOriginChannel(dmCommand), "telegram|default|1234");
+    assert.deepEqual(resolveSessionRoute(dmCommand), {
+      provider: "telegram",
+      accountId: "default",
+      target: "1234",
+      threadId: undefined,
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("makes a later command in the same chat match the launched route, and only through the same bot", () => {
+    for (const command of [topicCommand, dmCommand]) {
+      const route = resolveSessionRoute(command);
+      assert.equal(isCommandInRouteChat(command, { route }), true);
+      assert.equal(isCommandInRouteChat({ ...command, accountId: "bot2" }, { route }), false);
+      // The stored route survives canonicalization unchanged, account included.
+      const canonical = canonicalizeSessionRoute({ route });
+      assert.deepEqual(canonical, route);
+      assert.deepEqual(canonicalizeSessionRoute({ route: canonical }), route);
+      assert.equal(isCommandInRouteChat(command, { route: canonical }), true);
+    }
+    assert.equal(isCommandInRouteChat({ ...topicCommand, messageThreadId: 7 }, { route: resolveSessionRoute(topicCommand) }), false);
+  });
+
+  it("keeps the session key's chat when it names another one, with the command's account", () => {
+    // `shouldPreferTelegramSessionKeyRoute`: the session key wins for the target.
+    const route = resolveSessionRoute({ ...topicCommand, to: "telegram:-1009876543210" });
+    assert.equal(route?.target, "-1001234567890");
+    assert.equal(route?.accountId, "bot1");
+    assert.equal(route?.threadId, "42");
+  });
+
+  it("leaves an explicit channel, a command without an account and other shapes as before", () => {
+    // `agentChannels` (passed as the explicit channel) still wins.
+    assert.equal(resolveOriginChannel(topicCommand, "telegram|ops|-1009876543210"), "telegram|ops|-1009876543210");
+    // No account: the old sender / session-key fallbacks.
+    assert.equal(resolveOriginChannel({ ...dmCommand, accountId: undefined }), "telegram|1234");
+    assert.equal(resolveOriginChannel({ ...topicCommand, accountId: undefined }), "unknown");
+    // A topic address inside `to` (text-command path, DM topics) is not a chat id.
+    assert.equal(resolveOriginChannel({ ...topicCommand, to: "telegram:-1001234567890:topic:42" }), "unknown");
+    assert.equal(resolveOriginChannel({ ...dmCommand, to: "telegram:1234:direct-topic:9" }), "telegram|1234");
+    // A tool context keeps its own resolution.
+    assert.equal(
+      resolveOriginChannel({ ...topicCommand, deliveryContext: { channel: "telegram", to: "-1001234567890", accountId: "tool-bot" } }),
+      "telegram|tool-bot|-1001234567890",
+    );
+    assert.equal(resolveOriginChannel({ ...dmCommand, messageChannel: "telegram" }), "telegram|1234");
+  });
+
+  it("does not add an account for other providers", () => {
+    // Discord and Slack commands carry `to: "slash:<user id>"`; WhatsApp the bot's own number.
+    assert.equal(
+      resolveOriginChannel({ channel: "discord", to: "slash:1234", accountId: "default", senderId: "1234", sessionKey: "agent:main:main" }),
+      "discord|1234",
+    );
+    assert.equal(
+      resolveOriginChannel({ channel: "slack", to: "slash:U1", accountId: "default", senderId: "U1", sessionKey: "agent:main:main" }),
+      "slack|U1",
+    );
+    assert.equal(
+      resolveOriginChannel({ channel: "whatsapp", to: "+15550001111", accountId: "default", senderId: "+15550002222", sessionKey: "agent:main:main" }),
+      "whatsapp|+15550002222",
+    );
+  });
+});
+
 describe("isCommandInRouteChat", () => {
   // The host's PluginCommandContext: `channel`, `senderId`, `sessionKey`, `to`
   // and `messageThreadId`, without a `deliveryContext`.
@@ -787,7 +887,8 @@ describe("isCommandInRouteChat", () => {
     const route = { ...dmRoute, accountId: "bot1" };
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot1" }, { route }), true);
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot2" }, { route }), false);
-    // A route without an account (a session launched with `/agent`) is sent through
+    // A route without an account (a stored session from before `/agent` kept the
+    // command's account, or an `agentChannels` entry without one) is sent through
     // the default bot: a command that names its account never matches it.
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot2" }, { route: dmRoute }), false);
     assert.equal(isCommandInRouteChat({ ...dmCommand, accountId: "bot1" }, { route: dmRoute }), false);

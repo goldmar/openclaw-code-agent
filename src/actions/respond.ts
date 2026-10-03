@@ -723,6 +723,8 @@ export async function executeRespond(
     const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
     const approvalRationale = isPlanApproval ? normalizeApprovalRationale(params.approvalRationale) : undefined;
     let approvalWarning = "";
+    // Read before the send, which moves the plan state on.
+    let sentAsPlanFeedback = false;
     if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
       session.approvalRationale = approvalRationale;
@@ -735,6 +737,7 @@ export async function executeRespond(
     } else if (params.approve) {
       approvalWarning = `\n⚠️ approve=true was set but session has no pending plan approval.`;
     } else if (session.pendingPlanApproval || session.approvalState === "changes_requested") {
+      sentAsPlanFeedback = true;
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
@@ -774,7 +777,7 @@ export async function executeRespond(
         approvalWarning,
         `Use agent_output to see the response.`,
       ].filter(Boolean).join("\n"),
-      userText: `💬 [${session.name}] Message sent.`,
+      userText: `💬 [${session.name}] Message sent${sentAsPlanFeedback ? " as plan feedback" : ""}.`,
     };
   } catch (err: unknown) {
     if (err instanceof FollowUpDeliveryUnconfirmedError) {

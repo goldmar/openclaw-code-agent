@@ -289,6 +289,17 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   if (ctx?.channelId && String(ctx.channelId).includes("|")) {
     return String(ctx.channelId);
   }
+  // A Telegram chat command names its chat (`to: "telegram:<chat id>"`) and the
+  // bot account that received it. Keeping that account makes the session's
+  // notices leave through the bot the user typed to, and lets a later command
+  // in the same chat be recognised (`isCommandInRouteChat`). Other providers'
+  // `to` is not the chat, and a topic address inside `to` is left to the
+  // fallbacks below.
+  const commandChat = /^telegram:(-?\d+)$/.exec(toOptionalText(ctx?.to) ?? "")?.[1];
+  const commandAccount = toOptionalText(ctx?.accountId);
+  if (commandChat && commandAccount && toOptionalText(ctx?.channel)?.toLowerCase() === "telegram" && !ctx?.messageChannel) {
+    return `telegram|${commandAccount}|${commandChat}`;
+  }
   if (ctx?.messageChannel) {
     const messageChannel = String(ctx.messageChannel);
     if (messageChannel.includes("|")) {

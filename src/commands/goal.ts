@@ -3,7 +3,7 @@ import { resolveGoalLaunchRequest } from "../goal-launch-resolution";
 import { renderGoalStatus } from "../application/goal-view";
 import { isCommandInRouteChat } from "../config";
 import type { GoalReplyNotice } from "../goal-controller";
-import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
+import type { GoalTaskState, OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
 import { consumeFirstCommandArg, SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
 const GOAL_USAGE = [
@@ -48,7 +48,11 @@ export function registerGoalCommand(api: CommandApi): void {
       // The controller's notice (`🎯 … Goal task started`, `⛔ … Goal task stopped`,
       // `✏️ … Goal task edited`, `❌ … Goal task failed`) is this command's one
       // answer: in the task's own chat it is the reply instead of a second message.
+      // From another chat the notice goes to the task's chat and the reply is
+      // a short line, like `/agent_kill`.
       const reply: GoalReplyNotice = { sameChat: (task) => isCommandInRouteChat(ctx, task) };
+      const answer = (task: GoalTaskState, short: string, notice: string): string =>
+        reply.sameChat(task) ? reply.text ?? notice : short;
       const notFound = (ref: string): string => `❌ Goal task "${ref}" not found.`;
       const first = consumeFirstCommandArg(raw);
       const subcommand = first?.value.toLowerCase();
@@ -63,7 +67,7 @@ export function registerGoalCommand(api: CommandApi): void {
         return {
           text: result.action === "already_terminal"
             ? `ℹ️ [${result.task.name}] Already ${result.task.status}; nothing to stop.`
-            : reply.text ?? `⛔ [${result.task.name}] Goal task stopped`,
+            : answer(result.task, `⛔ [${result.task.name}] Stopped.`, `⛔ [${result.task.name}] Goal task stopped`),
         };
       }
       if (subcommand === "edit") {
@@ -73,7 +77,9 @@ export function registerGoalCommand(api: CommandApi): void {
         if (!ref || !replacementGoal) return { text: "Usage: /agent_goal edit <task> <new goal>" };
         try {
           const result = goalController.editTask(ref, replacementGoal, reply);
-          if (result.action === "updated") return { text: reply.text ?? `✏️ [${result.task.name}] Goal task edited` };
+          if (result.action === "updated") {
+            return { text: answer(result.task, `✏️ [${result.task.name}] Goal task edited.`, `✏️ [${result.task.name}] Goal task edited`) };
+          }
           if (result.action === "not_editable") {
             return {
               text: result.task.status === "waiting_for_user"
@@ -197,7 +203,7 @@ export function registerGoalCommand(api: CommandApi): void {
         }, reply);
 
         return {
-          text: `${reply.text ?? `🎯 [${task.name}] Goal task started`}\n\nFollow it with /agent_goal status ${task.name}; stop it with /agent_goal stop ${task.name}.`,
+          text: `${answer(task, `🎯 [${task.name}] Goal task started.`, `🎯 [${task.name}] Goal task started`)}\n\nFollow it with /agent_goal status ${task.name}; stop it with /agent_goal stop ${task.name}.`,
         };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

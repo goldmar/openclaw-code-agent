@@ -533,6 +533,21 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0] ?? "", /remind later/i);
   });
 
+  it("answers a goal verifier button with the standard line while the goal controller is not running", async () => {
+    const token = { id: "token-goal", sessionId: "goal-1", kind: "goal-verifiers-confirm" };
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      getPersistedSession: (): undefined => undefined,
+    } as any);
+
+    const state = createCtx("token-goal");
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(state.replies, ["⚠️ The code agent is not running right now. Try again in a moment."]);
+  });
+
   it("surfaces PR URLs through explicit view-pr actions", async () => {
     setSessionManager({
       getActionToken: () => ({
@@ -545,7 +560,7 @@ describe("createCallbackHandler()", () => {
         kind: "worktree-view-pr",
         targetUrl: "https://github.com/example/repo/pull/123",
       }),
-      getPersistedSession: () => ({ worktreePrUrl: "https://github.com/example/repo/pull/123" }),
+      getPersistedSession: () => ({ name: "pr-session", worktreePrUrl: "https://github.com/example/repo/pull/123" }),
     } as any);
 
     const handler = createCallbackHandler();
@@ -555,7 +570,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     // A legacy View PR callback is read-only: the other buttons stay (N47).
     assert.equal(state.buttonsCleared, 0);
-    assert.equal(state.replies[0], "ℹ️ PR: https://github.com/example/repo/pull/123");
+    assert.equal(state.replies[0], "ℹ️ [pr-session] PR: https://github.com/example/repo/pull/123");
   });
 
   it("emits callback diagnostics without logging full token payloads", async (t) => {

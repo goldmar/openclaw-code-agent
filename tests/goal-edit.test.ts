@@ -66,8 +66,8 @@ describe("agent_goal edit", () => {
     const result = await handler?.({ args: 'edit goal-task New  goal   with spacing' });
 
     assert.deepEqual(editCall, { ref: "goal-task", goal: "New  goal   with spacing" });
-    // No task id for the user; the controller's notice is the reply when it provides one.
-    assert.equal(result?.text, "✏️ [goal-task] Goal task edited");
+    // No task id for the user. The command's chat is unknown here, so the reply is the short line.
+    assert.equal(result?.text, "✏️ [goal-task] Goal task edited.");
   });
 
   it("tool rejects invalid params before calling the controller", async () => {
