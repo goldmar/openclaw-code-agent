@@ -336,7 +336,7 @@ describe("SessionLifecycleService", () => {
       handleWorktreeStrategy: async () => {
         requests.push({
           label: "worktree-merge-success",
-          userMessage: "✅ Merged: agent/example → main (4 files, +531/-0)",
+          userMessage: "✅ [portfolio-move-summary] Completed — Merged: agent/example → main (4 files, +531/-0)",
           completionWakeSummaryRequired: true,
           wakeMessageOnNotifySuccess: "Worktree follow-through outcome recorded.",
         });
@@ -382,7 +382,7 @@ describe("SessionLifecycleService", () => {
     assert.equal(requests.length, 1);
     assert.equal(requests[0]?.label, "worktree-merge-success");
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
-    assert.equal(terminalWakeChecks, 0);
+    assert.equal(terminalWakeChecks, 1);
   });
 
   it("keeps completion follow-up summaries for degraded routes that still recover to a direct user route", () => {

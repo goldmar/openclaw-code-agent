@@ -111,7 +111,7 @@ export class SessionWorktreeStrategyService {
         baseBranch: string;
         prompt: string;
       }) => Promise<SpawnedResolverSession>;
-      runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean }>;
+      runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean; notificationSent: boolean }>;
       /** Changed hook / worktree-setup files on the branch (default: `listHookPathChanges`). */
       listHookPathChanges?: (repoDir: string, branchName: string, baseBranch: string) => Awaitable<string[]>;
     },
@@ -628,6 +628,7 @@ export class SessionWorktreeStrategyService {
 
     const outcomeLine = formatWorktreeOutcomeLine({
       kind: "merge",
+      sessionCompleted: session.status === "completed",
       sessionName: session.name,
       branch: branchName,
       base: baseBranch,
@@ -898,7 +899,7 @@ export class SessionWorktreeStrategyService {
         buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
       });
     }
-    return { notificationSent: true, worktreeRemoved: false };
+    return { notificationSent: result.success ? result.notificationSent : true, worktreeRemoved: false };
   }
 
   private async getPrStatusForUrl(repoDir: string, prUrl: string, targetRepo?: string): Promise<PRStatus> {

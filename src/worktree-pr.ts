@@ -61,6 +61,8 @@ export interface WorktreeOutcomeParams {
   prUrl?: string;
   /** Session name shown as `[name]` after the status icon. */
   sessionName?: string;
+  /** This outcome is the successful terminal session notice, not a manual milestone. */
+  sessionCompleted?: boolean;
 }
 
 function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" | "insertions" | "deletions">): string {
@@ -380,14 +382,15 @@ export async function commentOnPR(repoDir: string, prNumber: number, body: strin
 export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
   const stats = formatOutcomeStats(params);
   const tag = params.sessionName ? `[${params.sessionName}] ` : "";
+  const prefix = params.sessionCompleted ? `✅ ${tag}Completed — ` : `ℹ️ ${tag}`;
   if (params.kind === "merge") {
-    return `✅ ${tag}Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
+    return `${prefix}Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
   }
   if (params.kind === "pr-updated") {
-    return `✅ ${tag}PR updated: ${params.prUrl ?? ""}${stats}`;
+    return `${prefix}PR updated: ${params.prUrl ?? ""}${stats}`;
   }
   if (params.targetRepo) {
-    return `✅ ${tag}PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
+    return `${prefix}PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
   }
-  return `✅ ${tag}PR opened: ${params.prUrl ?? ""}${stats}`;
+  return `${prefix}PR opened: ${params.prUrl ?? ""}${stats}`;
 }

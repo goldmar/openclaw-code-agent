@@ -457,7 +457,7 @@ describe("agent_merge push behavior", () => {
       assert.match((result.content[0] as { text: string }).text, /The user saw this outcome with your summary; do not repeat it\.$/);
       assert.equal(capturedRequests.length, 1);
       const request = capturedRequests[0].request;
-      assert.match(request.userMessage, /^✅ \[merge-summary\] Merged: [^\n]+ \| \$0\.00\nAdds the sub\(\) helper with a unit test\.$/);
+      assert.match(request.userMessage, /^ℹ️ \[merge-summary\] Merged: [^\n]+ \| \$0\.00\nAdds the sub\(\) helper with a unit test\.$/);
       // 4.x had no summary parameter and always woke the orchestrator for a follow-up.
       assert.equal(request.wakeMessageOnNotifySuccess, undefined);
       // If the line cannot be delivered, the orchestrator is still told.
@@ -521,7 +521,7 @@ describe("agent_merge push behavior", () => {
       assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
       assert.equal(capturedRequests[0].request.completionWakeSummaryRequired, true);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /originRoute: \{/);
-      assert.match(capturedRequests[0].request.userMessage, /^✅ \[merge-wake-success\] Merged: /);
+      assert.match(capturedRequests[0].request.userMessage, /^ℹ️ \[merge-wake-success\] Merged: /);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1001234567890"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /message\(action='send', final=true\) to originRoute/);
@@ -764,7 +764,7 @@ describe("agent_merge captured generation through the repository queue", () => {
         const result = await makeAgentMergeTool().execute("model-call", { session: "shared", ...(scenario === "explicit-base" ? { base_branch: "main" } : {}) });
         const compatible = ["alias-retarget", "explicit-base", "initial-pr-open", "runtime-status"].includes(scenario);
         if (compatible) {
-          assert.match(result.content[0].text, /✅/);
+          assert.match(result.content[0].text, /ℹ️/);
           assert.notEqual(git(repoDir, "rev-parse", "main"), initialHead);
           assert.equal(patchCount, 1);
         } else {

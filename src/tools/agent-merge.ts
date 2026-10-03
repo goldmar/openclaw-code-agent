@@ -407,7 +407,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             ? "⚡ Fast-forward"
             : mergeResult.squash ? "🗜️ Squash commit" : "🔀 Merge commit";
           const pushMsg = shouldPush ? " Pushed." : "";
-          let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
+          let successText = `ℹ️ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
           if (mergeResult.stashPopConflict) {
             successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {

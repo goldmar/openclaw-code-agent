@@ -419,6 +419,9 @@ export class SessionLifecycleService {
     }
 
     if (worktreeResult.notificationSent) {
+      // The authoritative worktree notice owns this terminal cycle. Record it
+      // in the existing gate so a later resolved-worktree skip cannot repeat it.
+      this.deps.shouldEmitTerminalWake(session);
       log.info(
         `[SessionManager] Suppressing generic terminal notification for session ${session.id} ` +
         "because worktree strategy handling already sent the authoritative outcome notification.",

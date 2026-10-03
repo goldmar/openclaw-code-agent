@@ -90,7 +90,7 @@ export class SessionWorktreeActionService {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     if (this.deps.isAlreadyMerged(sessionRef)) {
       log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
-      return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
+      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
     const resolvedWorktreeState =
       RESOLVED_WORKTREE_STATES.has(session.worktreeState)
@@ -100,7 +100,7 @@ export class SessionWorktreeActionService {
           : undefined);
     if (resolvedWorktreeState && !(resolvedWorktreeState === "pr_open" && session.worktreeStrategy === "auto-pr")) {
       log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
-      return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
+      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
     if (session.status !== "completed") {
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };

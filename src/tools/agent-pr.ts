@@ -406,7 +406,7 @@ function formatMetadataRefreshLine(result: MetadataRefreshResult): string | unde
 }
 
 /** Register the `agent_pr` tool factory. */
-export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { metadataProvider?: PrMetadataProvider } = {}) {
+export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { metadataProvider?: PrMetadataProvider; terminalCompletion?: boolean } = {}) {
   return {
     name: "agent_pr",
     description: "Push a worktree branch and open a GitHub PR, or update the session's open PR (push plus a comment listing new commits). Posts the outcome to the user.",
@@ -450,6 +450,16 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const target = resolveWorktreeToolTarget(sm, params.session);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
+      // Only the managed terminal caller may combine completion with a PR outcome.
+      // Read current execution status by the captured identity after async PR work.
+      const isTerminalCompletion = (): boolean => {
+        if (!options.terminalCompletion || !target.generation) return false;
+        const activeId = target.generation.kind === "oca"
+          ? target.generation.sessionId : target.generation.pinnedLiveSessionId;
+        const current = (activeId ? sm.get(activeId) : undefined)
+          ?? sm.getSessionGeneration(target.generation);
+        return current?.status === "completed";
+      };
 
       if (!targetSession && !persistedSession) {
         return { content: [{ type: "text", text: `Error: Session "${params.session}" not found.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
@@ -652,6 +662,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
             const updateOutcomeLine = formatWorktreeOutcomeLine({
               kind: "pr-updated",
+              sessionCompleted: isTerminalCompletion(),
               sessionName,
               branch: branchName,
               prUrl: prStatus.url,
@@ -746,7 +757,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         return {
           content: [{
             type: "text",
-            text: `✅ PR was already merged: ${prStatus.url}\n\n` +
+            text: `ℹ️ PR was already merged: ${prStatus.url}\n\n` +
                   `The worktree branch ${branchName} can be cleaned up with agent_merge(delete_branch=true).`
           }],
           meta: { success: true, state: "merged" },
@@ -821,6 +832,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           // Notify via unified outcome pipeline
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "pr-opened",
+            sessionCompleted: isTerminalCompletion(),
             sessionName,
             branch: branchName,
             targetRepo,

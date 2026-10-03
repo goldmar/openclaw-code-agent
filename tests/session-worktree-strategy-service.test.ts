@@ -156,7 +156,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: false };
+          return { success: false, notificationSent: false };
         },
       });
       const session: any = {
@@ -238,7 +238,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: false }),
+        runAutoPr: async () => ({ success: false, notificationSent: false }),
       });
       const session: any = {
         id: "s-unrelated-parent-pr",
@@ -290,7 +290,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     await service.handleWorktreeStrategy({
@@ -338,7 +338,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
     const session: any = {
       id: "s-worktree-generic-retry",
@@ -392,7 +392,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
       mergeBranch,
       spawnConflictResolver: async () => ({ id: "resolver-pr-open", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
@@ -417,7 +417,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
     const result = await service.handleWorktreeStrategy(session);
 
-    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+    assert.deepEqual(result, { notificationSent: false, worktreeRemoved: false });
     assert.equal(notifications.length, 0);
   });
 
@@ -532,7 +532,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -587,7 +587,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
       const session: any = {
         id: "s-policy-blocked-completed-at",
@@ -650,7 +650,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         runAutoPr: async (_session, baseBranch) => {
           autoPrCalled = true;
           assert.equal(baseBranch, "main");
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -735,7 +735,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
             },
             worktreePrUrl: "https://github.com/example/repo/pull/310",
           });
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -830,7 +830,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
               resolutionSource: "agent_pr",
             },
           });
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -908,7 +908,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
       const session: any = {
@@ -974,7 +974,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -1174,7 +1174,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
         runAutoPr: async () => {
           autoPrCalled = true;
-          return { success: false };
+          return { success: false, notificationSent: false };
         },
       });
       const session: any = {
@@ -1367,7 +1367,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         runAutoPr: async (_session, baseBranch) => {
           autoPrCalled = true;
           assert.equal(baseBranch, "main");
-          return { success: true };
+          return { success: true, notificationSent: true };
         },
       });
 
@@ -1522,7 +1522,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch: async () => { mergeCalls += 1; return { success: true, fastForward: true }; },
         spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
-        runAutoPr: async () => { mergeCalls += 1; return { success: true }; },
+        runAutoPr: async () => { mergeCalls += 1; return { success: true, notificationSent: true }; },
       });
       const session: any = {
         id: "s-hook-change",
@@ -1575,7 +1575,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-success", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1642,7 +1642,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
       const session: any = {
         id: "s-summary-cleanup-fails",
@@ -1709,7 +1709,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1782,11 +1782,12 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         ],
       }),
       spawnConflictResolver: async () => ({ id: "resolver-stash", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
       id: "s-stash-conflict",
+      status: "completed",
       name: "stash-conflict",
       harnessSessionId: "h-stash-conflict",
       worktreePrTargetRepo: undefined,
@@ -1813,6 +1814,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       );
 
       assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].userMessage), /^✅ \[stash-conflict\] Completed — Merged:/);
       assert.match(String(notifications[0].userMessage), /Pre-merge stash pop conflicted/);
       assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to determine auto-stash ref/);
       assert.doesNotMatch(String(notifications[0].userMessage), /already covered/);
@@ -1856,7 +1858,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnCalls.push(args as unknown as Record<string, unknown>);
         return { id: "resolver-warning", name: "resolver-warning-session" };
       },
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {
@@ -1920,7 +1922,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           spawnCalls.push(args as unknown as Record<string, unknown>);
           return { id: "resolver-1", name: "resolver-first-conflict-resolver" };
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -1989,7 +1991,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => {
           throw new Error("spawn failed");
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2055,7 +2057,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         spawnConflictResolver: async () => {
           throw new Error("spawn failed");
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2128,7 +2130,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
           spawnCalled = true;
           return { id: "resolver-2", name: "resolver-exhausted-conflict-resolver" };
         },
-        runAutoPr: async () => ({ success: true }),
+        runAutoPr: async () => ({ success: true, notificationSent: true }),
       });
 
       const session: any = {
@@ -2200,7 +2202,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-auto-pr", name: "unused" }),
-        runAutoPr: async () => ({ success: false }),
+        runAutoPr: async () => ({ success: false, notificationSent: false }),
       });
 
       const session: any = {
@@ -2270,7 +2272,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         warnings: ["Failed to check out main during recovery: checkout failed"],
       }),
       spawnConflictResolver: async () => ({ id: "resolver-3", name: "unused" }),
-      runAutoPr: async () => ({ success: true }),
+      runAutoPr: async () => ({ success: true, notificationSent: true }),
     });
 
     const session: any = {

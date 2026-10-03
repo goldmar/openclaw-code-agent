@@ -409,11 +409,14 @@ export class SessionManager {
       },
       runAutoPr: async (session, baseBranch) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
-        const result = await makeAgentPrTool().execute("auto-pr", {
+        const result = await makeAgentPrTool(undefined, { terminalCompletion: true }).execute("auto-pr", {
           session: session.id,
           base_branch: baseBranch,
-        }) as { meta?: { success?: boolean } };
-        return { success: result?.meta?.success === true };
+        }) as { meta?: { success?: boolean; state?: string } };
+        return {
+          success: result?.meta?.success === true,
+          notificationSent: result?.meta?.state === "created" || result?.meta?.state === "pr_updated",
+        };
       },
     });
     const questions = new SessionQuestionService(

@@ -58,6 +58,18 @@ describe("sanitizeBranchName", () => {
 });
 
 describe("formatWorktreeOutcomeLine", () => {
+  it("reserves the checkmark for explicitly terminal outcomes", async () => {
+    const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
+    for (const kind of ["pr-opened", "pr-updated", "merge"] as const) {
+      const params = { kind, branch: "agent/example", sessionName: "example", targetRepo: "acme/repo", prUrl: "https://github.com/acme/repo/pull/1" };
+      const milestone = formatWorktreeOutcomeLine(params);
+      assert.match(milestone, /^ℹ️ \[example\] /);
+      assert.doesNotMatch(milestone, /✅|Completed|continues/);
+      assert.equal(formatWorktreeOutcomeLine({ ...params, sessionCompleted: true }),
+        `✅ [example] Completed — ${milestone.slice("ℹ️ [example] ".length)}`);
+    }
+  });
+
   it("formats merge outcome with stats", async () => {
     const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
     const result = formatWorktreeOutcomeLine({
@@ -139,7 +151,7 @@ describe("formatWorktreeOutcomeLine", () => {
       branch: "agent/fix-auth",
       prUrl: "https://github.com/myorg/myrepo/pull/42",
     });
-    assert.equal(result, "✅ PR updated: https://github.com/myorg/myrepo/pull/42");
+    assert.equal(result, "ℹ️ PR updated: https://github.com/myorg/myrepo/pull/42");
   });
 });
 
