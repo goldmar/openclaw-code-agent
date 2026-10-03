@@ -285,7 +285,8 @@ export class SessionManager {
    * press is answered with the plain failure line anyway.
    */
   reofferLateFallbackMs = 45_000;
-  private readonly reofferLateFallbackTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** Pending re-offers: their fallback timer, and how to answer the press now. */
+  private readonly reofferLateFallbacks = new Map<ReturnType<typeof setTimeout>, () => void>();
   /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
   private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
   private worktreeReofferGeneration = 0;
@@ -1937,14 +1938,16 @@ export class SessionManager {
     let ambiguous = false;
     // The outcome of a prompt reported as "pending" is passed on exactly once.
     // When none arrives (the plugin stopped mid-send, or the decision closed
-    // while the send was in flight), a bounded timer settles the entry and
+    // while the send was in flight), a bounded timer, or the plugin's dispose,
     // reports "not delivered", so the press is never left without a message.
+    // The entry stays in flight then: its buttons remain valid, and a newer
+    // re-offer cannot retire them, in case the prompt still lands.
     let lateFallback: ReturnType<typeof setTimeout> | undefined;
     let lateReported = false;
     const reportLate = (delivered: boolean): void => {
       if (lateFallback) {
         clearTimeout(lateFallback);
-        this.reofferLateFallbackTimers.delete(lateFallback);
+        this.reofferLateFallbacks.delete(lateFallback);
         lateFallback = undefined;
       }
       if (!waitEnded || lateReported) return;
@@ -1985,12 +1988,9 @@ export class SessionManager {
     if (ambiguous) return false;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
     if (delivery !== "pending") return delivery === "delivered";
-    lateFallback = setTimeout(() => {
-      settleEntry();
-      reportLate(false);
-    }, this.reofferLateFallbackMs);
+    lateFallback = setTimeout(() => reportLate(false), this.reofferLateFallbackMs);
     lateFallback.unref?.();
-    this.reofferLateFallbackTimers.add(lateFallback);
+    this.reofferLateFallbacks.set(lateFallback, () => reportLate(false));
     return "pending";
   }
 
@@ -2466,9 +2466,9 @@ export class SessionManager {
    * still loaded is persisted and unloaded first, as runtime GC does, so the
    * stored row is the one record and a later re-persist cannot reopen it.
    * Returns the status the session was closed with (a session that was never
-   * persisted can only be stopped), undefined when it is not suspended or has
-   * no record to close, and `"unsaved"` when the session was unloaded but its
-   * row could not be updated (it is still dormant; the call can be repeated).
+   * persisted can only be stopped), undefined when it is not suspended, and
+   * `"unsaved"` when its row could not be updated (it is still dormant; the
+   * call can be repeated).
    */
   closeSuspendedSession(ref: string, completed: boolean): "completed" | "killed" | "unsaved" | undefined {
     const active = this.resolve(ref);
@@ -2489,7 +2489,7 @@ export class SessionManager {
     });
     const planRef = active?.id ?? ("sessionId" in target ? target.sessionId : undefined) ?? ref;
     if (target.pendingPlanApproval) this.clearPlanDecisionTokens(planRef);
-    if (!active) return this.updatePersistedSession(ref, closedPatch(completed)) ? (completed ? "completed" : "killed") : undefined;
+    if (!active) return this.updatePersistedSession(ref, closedPatch(completed)) ? (completed ? "completed" : "killed") : "unsaved";
     this.persistSession(active, { scheduleRuntimeGc: false });
     if (this.store.getPersistedSession(active.id)?.sessionId !== active.id) {
       // Never persisted (no backend conversation yet): there is no row to mark
@@ -2684,8 +2684,11 @@ export class SessionManager {
   }
 
   dispose(): void {
-    for (const timer of this.reofferLateFallbackTimers) clearTimeout(timer);
-    this.reofferLateFallbackTimers.clear();
+    // A press whose re-offered prompt is still in delivery gets its plain
+    // failure line now: after dispose no outcome is reported any more. The
+    // reply goes through the host's callback responder, not through this plugin.
+    for (const answerNow of [...this.reofferLateFallbacks.values()]) answerNow();
+    this.reofferLateFallbacks.clear();
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();

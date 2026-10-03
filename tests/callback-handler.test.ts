@@ -2678,7 +2678,7 @@ describe("createCallbackHandler()", () => {
         execute: async (_id: string, params: Record<string, unknown>) => {
           prCalls.push(params);
           return params.force_new
-            ? createToolResult("⚠️ Cannot create new PR: A PR already exists for `agent/ux-fix` (open).\n\nExisting PR: https://github.com/example/repo/pull/42", false)
+            ? { content: [{ type: "text", text: "⚠️ Cannot create new PR: A PR already exists for `agent/ux-fix` (open).\n\nExisting PR: https://github.com/example/repo/pull/42" }], meta: { success: false, state: "force_new_refused", prState: "open" } }
             : createToolResult("ℹ️ [ux-fix] PR updated: https://github.com/example/repo/pull/42", true);
         },
       }) as any,

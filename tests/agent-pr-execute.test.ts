@@ -18,6 +18,8 @@ import { createFakeGitHub, git, type FakeGitHub } from "./fake-github";
 import { createFakeHost, type FakeHost } from "./fake-host";
 import { createFakeHarness, createStubSession } from "./helpers";
 import { waitUntil } from "./harness-backends";
+import { createCallbackHandler } from "../src/callback-handler";
+import { buildCallbackContext } from "./user-interaction-fixture";
 
 const GENERATED_FOOTER = "Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)";
 const SESSION_NAME = "pr-flow";
@@ -550,7 +552,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     const result = await f.run({ force_new: true });
 
-    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "open" });
     assert.match(textOf(result), new RegExp(`Cannot create new PR: A PR already exists for \`${f.branch}\` \\(open\\)\\.\\n\\nExisting PR: ${seeded.url}`));
     assert.equal(f.gh.ghCalls("create").length, 0);
   });
@@ -602,7 +604,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     // New PR / force_new cannot replace an open PR: refused before anything is pushed ...
     const refused = await f.run({ force_new: true });
-    assert.deepEqual(refused.meta, { success: false, state: "error" });
+    assert.deepEqual(refused.meta, { success: false, state: "force_new_refused", prState: "open" });
     assert.match(textOf(refused), /Cannot create new PR: A PR already exists for `[^`]+` \(open\)\./);
     assert.equal(f.gh.remoteHead(f.branch), headBefore, "nothing was pushed");
     assert.equal(f.gh.ghCalls("create").length, 0);
@@ -617,6 +619,64 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.notEqual(f.gh.remoteHead(f.branch), "", "the branch was pushed for the sync");
   });
 
+  for (const variant of ["open", "merged"] as const) {
+    it(`a New PR press adopts the ${variant} PR that replaced the recorded closed one, in one message`, async () => {
+      const f = await setup({ llmReplies: [LLM_METADATA, LLM_METADATA] });
+      const first = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: first.url, worktreePrNumber: first.number, pendingWorktreeDecisionSince: new Date().toISOString() });
+      const buttons = async (): Promise<Array<{ label: string; callbackData: string }>> => (await (f.sm as unknown as {
+        getWorktreeDecisionButtons(id: string, options: { allowDelegate: boolean }): Promise<Array<Array<{ label: string; callbackData: string }>>>;
+      }).getWorktreeDecisionButtons(SESSION_ID, { allowDelegate: true })).flat();
+      const prLabels = async (): Promise<string[]> => (await buttons()).map((button) => button.label).filter((label) => /PR/.test(label));
+
+      assert.equal((await f.run()).meta.state, "closed");
+      assert.deepEqual(await prLabels(), ["New PR", "View PR"]);
+
+      // On GitHub the user opens another PR from the same branch.
+      const second = f.gh.seedPr({ headRefName: f.branch, state: variant === "open" ? "OPEN" : "MERGED" });
+      assert.notEqual(second.url, first.url);
+
+      // The New PR press, through the real button handler and the real tool.
+      const newPr = (await buttons()).find((button) => button.label === "New PR")!;
+      const replies: string[] = [];
+      const outcomesBefore = f.outcomes.length;
+      const ctx = buildCallbackContext("telegram", newPr.callbackData, { target: "12345", onReply: (text) => { replies.push(text); }, onClear: () => {} });
+      assert.deepEqual(await createCallbackHandler().handler(ctx as never), { handled: true });
+
+      // One message about the second PR, and the session now targets it.
+      const lines = [...f.outcomes.slice(outcomesBefore).map((outcome) => outcome.line), ...replies];
+      assert.equal(lines.length, 1, lines.join(" | "));
+      assert.ok(lines[0]!.includes(second.url), lines[0]);
+      assert.doesNotMatch(lines[0]!, /❌|closed without merging/);
+      assert.equal(f.persisted()?.worktreePrUrl, second.url);
+      assert.equal(f.persisted()?.worktreePrNumber, second.number);
+      assert.equal(f.persisted()?.worktreePrClosed, undefined);
+      assert.equal(f.gh.ghCalls("create").length, 0, "no third PR");
+      if (variant === "open") {
+        assert.match(lines[0]!, /PR (?:updated|is up to date)/);
+        assert.deepEqual(await prLabels(), ["Sync PR", "View PR"]);
+      } else {
+        assert.match(lines[0]!, /PR was already merged: /);
+        assert.equal(f.persisted()?.worktreeDisposition, "merged");
+        assert.equal(f.persisted()?.worktreeLifecycle?.state, "merged");
+      }
+    });
+  }
+
+  it("never adopts a PR the session did not record unless it was found by the session's branch", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    // The recorded PR itself is open: force_new is refused and the record is unchanged.
+    const recorded = f.gh.seedPr({ headRefName: f.branch });
+    f.gh.seedPr({ headRefName: "someone-elses-branch" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: recorded.url, worktreePrNumber: recorded.number });
+
+    const result = await f.run({ force_new: true });
+
+    assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "open" });
+    assert.equal(f.persisted()?.worktreePrUrl, recorded.url);
+    assert.equal(f.persisted()?.worktreePrNumber, recorded.number);
+  });
+
   it("does not push the branch when force_new meets an unrecorded open PR", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     f.gh.seedPr({ headRefName: f.branch });
@@ -624,7 +684,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     const result = await f.run({ force_new: true });
 
-    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "open" });
     assert.equal(f.gh.remoteHead(f.branch), headBefore, "nothing was pushed before the refusal");
   });
 
@@ -635,7 +695,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     const result = await f.run({ force_new: true });
 
-    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "merged" });
     assert.match(textOf(result), /Cannot create new PR: A PR already exists for `[^`]+` \(merged\)\./);
     assert.equal(f.gh.ghCalls("create").length, 0, "a merged PR is never replaced");
     assert.equal(f.persisted()?.worktreePrUrl, merged.url);
@@ -647,7 +707,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     const result = await f.run({ force_new: true });
 
-    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "merged" });
     assert.match(textOf(result), new RegExp(`Cannot create new PR: A PR already exists for \`${f.branch}\` \\(merged\\)\\.\\n\\nExisting PR: ${merged.url}`));
     assert.equal(f.gh.ghCalls("create").length, 0);
   });

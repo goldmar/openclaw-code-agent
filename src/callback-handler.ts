@@ -93,9 +93,6 @@ function failureReply(sessionName: string | undefined, reason: string): string {
   return `❌ ${prefix}${(prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text) || "The action failed."}`;
 }
 
-/** `agent_pr(force_new=true)` refused: the branch's PR is open or merged. */
-const FORCE_NEW_REFUSED_PATTERN = /^⚠️ Cannot create new PR: A PR already exists for .+ \((?:open|merged)\)\./u;
-
 /** `agent_pr`'s answer when the branch's PR was closed without merging. */
 const CLOSED_PR_PATTERN = /A PR exists but was closed without merging: (\S+)/u;
 
@@ -243,6 +240,12 @@ function toolResultSucceeded(result: unknown): boolean {
 
 function worktreeActionTextSucceeded(text: string): boolean {
   return !/^\s*(?:Error\b:?|❌|⚠️)/.test(text);
+}
+
+function toolResultState(result: unknown): string | undefined {
+  if (!result || typeof result !== "object" || !("meta" in result)) return undefined;
+  const state = (result as { meta?: { state?: unknown } }).meta?.state;
+  return typeof state === "string" ? state : undefined;
 }
 
 /** The tool already sent the user an outcome notice; otherwise the button shows the tool text. */
@@ -1378,7 +1381,7 @@ export function createCallbackHandler(
             });
             // The PR was reopened or merged since New PR was offered: the press
             // is then a normal PR action (sync the open PR, or record the merge).
-            if (consumedToken.prForceNew && !toolResultSucceeded(result) && FORCE_NEW_REFUSED_PATTERN.test(toolResultText(result))) {
+            if (consumedToken.prForceNew && toolResultState(result) === "force_new_refused") {
               result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
             }
             const text = toolResultText(result);

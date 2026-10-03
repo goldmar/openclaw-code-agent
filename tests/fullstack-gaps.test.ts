@@ -224,13 +224,19 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     await waitUntil(() => lateResults.length > 0, "the bounded fallback");
     assert.deepEqual(lateResults, [false]);
     const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers.get(session.id);
-    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false], "the entry is settled");
-    // An outcome that still arrives afterwards is not reported a second time.
+    // The prompt may still land: its entry stays in flight, so its buttons stay valid
+    // and a newer re-offer cannot retire them.
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [true]);
+    const fresh = freshTokens(retry.request()!);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+    // An outcome that still arrives afterwards settles the entry and is not reported a second time.
     (retry.request()!.hooks as { onNotifySucceeded?: () => void }).onNotifySucceeded?.();
     assert.deepEqual(lateResults, [false]);
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false]);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "the delivered prompt keeps its buttons");
   });
 
-  it("cancels the fallback when the outcome arrives, and on dispose", async () => {
+  it("cancels the fallback when the outcome arrives, and answers a still-pending press on dispose", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { session } = await finishConflictingSession(s, "ask");
     await s.waitForButton("Merge");
@@ -238,7 +244,7 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     const retry = captureRetry(s);
     s.sm.userDeliveryResultWaitMs = 20;
     s.sm.reofferLateFallbackMs = 60_000;
-    const timers = (s.sm as unknown as { reofferLateFallbackTimers: Set<unknown> }).reofferLateFallbackTimers;
+    const timers = (s.sm as unknown as { reofferLateFallbacks: Map<unknown, unknown> }).reofferLateFallbacks;
 
     const lateResults: boolean[] = [];
     assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } }), "pending");
@@ -251,6 +257,7 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     assert.equal(timers.size, 1);
     s.sm.dispose();
     assert.equal(timers.size, 0, "dispose clears the fallback");
+    assert.deepEqual(lateResults, [true, false], "the pending press gets its plain failure line at dispose");
   });
 
   it("sends the plain failure line when the real direct send times out (dispatcher and executor chain)", async () => {
@@ -636,6 +643,30 @@ describe("goal loop", () => {
     assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
     assert.match(s.gc.getTask(task.id)?.failureReason ?? "", /plan was rejected/i);
     assert.equal(s.backend.turns.length, turnsBefore + 1, "nothing was resumed");
+  });
+
+  it("stops the goal when its dormant session is closed as completed", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const workdir = goalWorkdir();
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.backend.waitForTurns(turnsBefore + 1);
+    const task = s.gc.listTasks()[0]!;
+    await s.backend.endTurn("Plan: create done.txt.");
+    await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+    s.gc.planDecisionRecheckMs = 50;
+    const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+    session.kill("idle-timeout");
+    await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+    await s.sm.whenStorePersisted();
+
+    const text = await s.runTool("agent_kill", { session: session.id, reason: "completed" });
+    assert.match(text, /Marked as completed \(it was not running\)\. Its goal task stops: the session was closed without running\./);
+
+    assert.equal(s.sm.getPersistedSession(session.id)?.status, "completed");
+    await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
+    assert.equal(s.gc.getTask(task.id)?.failureReason, "The session was closed as completed without running.");
   });
 
   it("fails the goal when the session waits for a user answer it cannot give itself", async () => {

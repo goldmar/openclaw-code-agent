@@ -80,7 +80,7 @@ export function getKillSessionText(
       // Only the orchestrator's tool can ask for this. No completion handling
       // runs for a session that was not running, so an open branch is named.
       const branch = openWorktreeBranch(target);
-      return `ℹ️ [${target.name}] Marked as completed (it was not running).${branch
+      return `ℹ️ [${target.name}] Marked as completed (it was not running).${target.goalTaskId ? " Its goal task stops: the session was closed without running." : ""}${branch
         ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
         : ""}`;
     }

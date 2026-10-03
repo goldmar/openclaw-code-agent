@@ -46,7 +46,10 @@ type AgentPrExecuteResult = {
       | "pr_updated"
       | "merged"
       | "closed"
-      | "created";
+      | "created"
+      /** `force_new` met an open or merged PR (`prState`); nothing was pushed or created. */
+      | "force_new_refused";
+    prState?: "open" | "merged";
     /** An outcome notice went to the user; otherwise a button press shows the tool text. */
     outcomeNotified?: boolean;
   };
@@ -612,9 +615,18 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // force_new never replaces an open or merged PR: refuse before pushing
       // anything. A flag left from an earlier "closed" finding is stale then
       // (the PR was reopened or merged), so the next buttons are Sync PR / View PR.
-      const forceNewRefusal = (status: PRStatus): AgentPrExecuteResult => {
-        if (persistedSession?.worktreePrClosed && !patchWorktreeTarget(sm, target, { worktreePrClosed: undefined })) {
-          log.warn(`[agent_pr] Could not clear the closed-PR marker of session ${sessionName}`);
+      // When that PR is not the one the session recorded (the recorded one
+      // was closed and another was opened from this branch), the session
+      // adopts it, so the next PR action and Sync PR / View PR target it.
+      // Only a PR found by this session's branch is adopted, never another URL.
+      const forceNewRefusal = (status: PRStatus, foundByBranch: boolean): AgentPrExecuteResult => {
+        const adopt = foundByBranch && status.url !== undefined && status.url !== explicitTargetPrUrl && status.headRefName === branchName;
+        const patch: Partial<PersistedSessionInfo> = {
+          ...(persistedSession?.worktreePrClosed ? { worktreePrClosed: undefined } : {}),
+          ...(adopt ? { worktreePrUrl: status.url, worktreePrNumber: status.number } : {}),
+        };
+        if (Object.keys(patch).length > 0 && !patchWorktreeTarget(sm, target, patch)) {
+          log.warn(`[agent_pr] Could not update the PR record of session ${sessionName} after a refused force_new`);
         }
         return {
           content: [{
@@ -623,11 +635,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                   `Existing PR: ${status.url}\n\n` +
                   `To create a new PR, you must first close/merge the existing PR manually or use a different branch.`
           }],
-          meta: { success: false, state: "error" },
+          meta: { success: false, state: "force_new_refused", ...(status.state === "open" || status.state === "merged" ? { prState: status.state } : {}) },
         };
       };
       if (params.force_new && existingPrBeforePush.exists && (existingPrBeforePush.state === "open" || existingPrBeforePush.state === "merged")) {
-        return forceNewRefusal(existingPrBeforePush);
+        return forceNewRefusal(existingPrBeforePush, !effectiveTargetPrStatus?.exists);
       }
 
       // Push branch first for open PR updates and new PR creation.
@@ -652,7 +664,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         : syncedPrStatus;
 
       // Handle force_new parameter
-      if (params.force_new && prStatus.exists) return forceNewRefusal(prStatus);
+      if (params.force_new && prStatus.exists) return forceNewRefusal(prStatus, !resolvedTargetPrUrl);
 
       // PR Lifecycle Handling
       if (prStatus.exists && prStatus.state === "open") {
