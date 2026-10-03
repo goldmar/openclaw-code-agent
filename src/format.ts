@@ -56,6 +56,11 @@ export interface SessionListRenderable {
   runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
 }
 
+/** `1 file`, `2 files`: a count with its noun, for every user-facing line that counts things. */
+export function formatCount(count: number, singular: string, plural: string = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 /** Format a duration in milliseconds as `MmSs` or `Ss`. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms)) return "0s";
@@ -98,7 +103,7 @@ const STATUS_ICONS: Record<string, string> = {
   awaiting_plan_decision: "📋",
   awaiting_user_input: "❓",
   awaiting_worktree_decision: "🌿",
-  suspended: "⏸️",
+  suspended: "💤",
   terminal: "🏁",
 };
 

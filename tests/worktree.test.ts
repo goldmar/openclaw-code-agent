@@ -58,6 +58,18 @@ describe("sanitizeBranchName", () => {
 });
 
 describe("formatWorktreeOutcomeLine", () => {
+  it("reserves the checkmark for explicitly terminal outcomes", async () => {
+    const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
+    for (const kind of ["pr-opened", "pr-updated", "merge"] as const) {
+      const params = { kind, branch: "agent/example", sessionName: "example", targetRepo: "acme/repo", prUrl: "https://github.com/acme/repo/pull/1" };
+      const milestone = formatWorktreeOutcomeLine(params);
+      assert.match(milestone, /^ℹ️ \[example\] /);
+      assert.doesNotMatch(milestone, /✅|Completed|continues/);
+      assert.equal(formatWorktreeOutcomeLine({ ...params, sessionCompleted: true }),
+        `✅ [example] Completed — ${milestone.slice("ℹ️ [example] ".length)}`);
+    }
+  });
+
   it("formats merge outcome with stats", async () => {
     const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
     const result = formatWorktreeOutcomeLine({
@@ -83,7 +95,7 @@ describe("formatWorktreeOutcomeLine", () => {
       base: "main",
     });
     assert.ok(result.includes("Merged"));
-    assert.ok(result.includes("agent/fix-auth → main"));
+    assert.ok(result.includes("`agent/fix-auth` → `main`"));
     assert.ok(!result.includes("files"));
   });
 
@@ -99,7 +111,12 @@ describe("formatWorktreeOutcomeLine", () => {
     });
     assert.ok(result.includes("PR opened"));
     assert.ok(result.includes("https://github.com/myorg/myrepo/pull/42"));
-    assert.ok(result.includes("1 files"));
+    assert.ok(result.includes("(1 file, "));
+    const { formatCount } = await import("../src/format.js");
+    assert.equal(formatCount(1, "file"), "1 file");
+    assert.equal(formatCount(0, "commit"), "0 commits");
+    assert.equal(formatCount(3, "new commit"), "3 new commits");
+    assert.match(formatWorktreeOutcomeLine({ kind: "merge", branch: "agent/x", filesChanged: 2, insertions: 1, deletions: 1 }), /\(2 files, \+1\/-1\)$/);
     assert.ok(result.includes("+2/-0"));
     assert.ok(!result.includes("against"));
   });
@@ -139,7 +156,7 @@ describe("formatWorktreeOutcomeLine", () => {
       branch: "agent/fix-auth",
       prUrl: "https://github.com/myorg/myrepo/pull/42",
     });
-    assert.equal(result, "✅ PR updated: https://github.com/myorg/myrepo/pull/42");
+    assert.equal(result, "ℹ️ PR updated: https://github.com/myorg/myrepo/pull/42");
   });
 });
 
@@ -399,7 +416,7 @@ describe("createPR", () => {
 
       assert.deepEqual(result, {
         success: false,
-        error: "A PR already exists for agent/existing-pr, but it is closed: https://github.com/acme/repo/pull/9",
+        error: "A PR already exists for `agent/existing-pr`, but it is closed: https://github.com/acme/repo/pull/9",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);

@@ -66,7 +66,8 @@ describe("agent_goal edit", () => {
     const result = await handler?.({ args: 'edit goal-task New  goal   with spacing' });
 
     assert.deepEqual(editCall, { ref: "goal-task", goal: "New  goal   with spacing" });
-    assert.equal(result?.text, 'Task "goal-task" (goal-1) goal updated.');
+    // No task id for the user. The command's chat is unknown here, so the reply is the short line.
+    assert.equal(result?.text, "✏️ [goal-task] Goal task edited.");
   });
 
   it("tool rejects invalid params before calling the controller", async () => {
@@ -132,6 +133,6 @@ describe("agent_goal edit", () => {
 
     const result = await handler?.({ args: "edit goal-1 New goal" });
 
-    assert.equal(result?.text, 'Error: Goal task "goal-task" is waiting_for_user and cannot be edited.');
+    assert.equal(result?.text, "❌ [goal-task] Cannot edit the goal while the task waits for your input.");
   });
 });

@@ -29,7 +29,7 @@ describe("agent_kill tool parameters", () => {
     const { sm, killed } = fakeSessionManager();
     setSessionManager(sm as never);
     const result = await makeAgentKillTool().execute("id", { session: "runner" });
-    assert.match(text(result), /Session runner \[s-run\] has been terminated\./);
+    assert.match(text(result), /^⛔ \[runner\] Stopped\.$/);
     assert.deepEqual(killed, ["s-run"]);
   });
 

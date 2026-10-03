@@ -130,7 +130,7 @@ function createReal(): Real {
   };
   setSessionManager(manager as unknown as SessionManager);
 
-  const toolResult = (success: boolean) => ({ content: [{ type: "text", text: success ? "✅ done" : "❌ failed" }], meta: { success } });
+  const toolResult = (success: boolean) => ({ content: [{ type: "text", text: success ? "✅ done" : "❌ failed" }], meta: { success, outcomeNotified: success } });
   const mergeTool = (() => ({
     execute: async (_id: string, params: { session: string }) => {
       await Promise.resolve();
@@ -155,7 +155,7 @@ function createReal(): Real {
 
 /** Replies that mean a non-worktree token acted. */
 function nonWorktreeActions(replies: string[]): number {
-  return replies.filter((text) => text === "✅ Dismissed." || text.startsWith("✅ Skipped this update")).length;
+  return replies.filter((text) => text === "⏭️ Plan offer dismissed." || text.startsWith("⏭️ Skipped this update")).length;
 }
 
 function assertStoreMatchesModel(model: Model, real: Real): void {

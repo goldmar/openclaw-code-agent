@@ -28,7 +28,7 @@ describe("goal command", () => {
       args: '--verify "" ship the feature',
     });
 
-    assert.equal(result?.text, "Error: --verify commands must not be empty.");
+    assert.equal(result?.text, "❌ --verify commands must not be empty.");
   });
 
   it("uses shared launch resolution for verifier goals", async () => {
@@ -43,12 +43,16 @@ describe("goal command", () => {
         },
       },
     });
+    let sameChat: boolean | undefined;
     setGoalController({
-      async launchTask(config: Record<string, unknown>) {
+      async launchTask(config: Record<string, unknown>, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
         launchConfig = config;
+        sameChat = reply.sameChat(config);
+        reply.text = "🎯 [goal-command] Goal task started\n\nGoal:\nship the feature";
         return {
           id: "goal-command-1",
           name: "goal-command",
+          route: config.route,
           workdir: config.workdir,
           sessionId: "sess-goal-command",
           sessionName: "goal-command",
@@ -85,9 +89,34 @@ describe("goal command", () => {
     assert.equal(launchConfig?.loopMode, "verifier");
     assert.equal(launchConfig?.originChannel, "telegram|bot1|-1001234567890");
     assert.deepEqual(launchConfig?.verifierCommands, [{ label: "check-1", command: "pnpm test" }]);
-    assert.match(result?.text ?? "", /Goal task launched\./);
-    assert.match(result?.text ?? "", /Dir: \/tmp/);
-    assert.match(result?.text ?? "", /Verifiers:/);
+    // One message: the task's start notice is the reply, without ids.
+    assert.equal(sameChat, true, "typed in the chat the task reports to");
+    assert.equal(
+      result?.text,
+      "🎯 [goal-command] Goal task started\n\nGoal:\nship the feature\n\nFollow it with /agent_goal status goal-command; stop it with /agent_goal stop goal-command.",
+    );
+  });
+
+  it("reports a goal that failed to start once", async () => {
+    setPluginConfig({ defaultHarness: "codex", harnesses: { codex: { defaultModel: "gpt-5.5", allowedModels: ["gpt-5.5"] } } });
+    let handler: ((ctx: any) => Promise<{ text: string }> | { text: string }) | undefined;
+    registerGoalCommand({
+      registerCommand(command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    });
+    const ctx = { args: '--verify "pnpm test" ship the feature', workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "-1001234567890" } };
+
+    setGoalController({
+      async launchTask(_config: unknown, reply: { text?: string }) {
+        reply.text = "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness";
+        throw new Error("no harness");
+      },
+    } as any);
+    assert.equal((await handler?.(ctx))?.text, "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness");
+
+    setGoalController({ async launchTask() { throw new Error("no verifiers"); } } as any);
+    assert.equal((await handler?.(ctx))?.text, "❌ Goal task did not start: no verifiers");
   });
 
   it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {
@@ -106,9 +135,11 @@ describe("goal command", () => {
         },
       },
     });
+    let sameChat: boolean | undefined;
     setGoalController({
-      async launchTask(config: Record<string, unknown>) {
+      async launchTask(config: Record<string, unknown>, reply: { sameChat: (task: unknown) => boolean }) {
         launchConfig = config;
+        sameChat = reply.sameChat(config);
         return {
           id: "goal-command-2",
           name: "goal-command-agent-channel",
@@ -136,6 +167,107 @@ describe("goal command", () => {
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.originChannel, "telegram|bot1|-1001234567890");
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
-    assert.match(result?.text ?? "", /Goal task launched\./);
+    // The command's own chat is unknown, so the notice still goes to the configured channel.
+    assert.equal(sameChat, false);
+    // Not the task's chat: a short line; the full notice goes to the task's chat.
+    assert.equal(
+      result?.text,
+      "🎯 [goal-command-agent-channel] Goal task started.\n\nFollow it with /agent_goal status goal-command-agent-channel; stop it with /agent_goal stop goal-command-agent-channel.",
+    );
+  });
+
+  // The host's PluginCommandContext: top-level `channel`, `to`, `accountId`,
+  // `messageThreadId`, `senderId` and `sessionKey`; no `deliveryContext`.
+  const TOPIC_COMMAND = {
+    channel: "telegram",
+    to: "telegram:-1001234567890",
+    accountId: "bot1",
+    messageThreadId: 42,
+    senderId: "1234",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+  };
+
+  function goalHandler(): (ctx: any) => Promise<{ text: string }> {
+    let handler: ((ctx: any) => Promise<{ text: string }>) | undefined;
+    registerGoalCommand({
+      registerCommand(command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    });
+    assert.ok(handler, "expected /agent_goal handler");
+    return handler;
+  }
+
+  it("stores the command's bot account in a goal task launched from a Telegram topic", async () => {
+    setPluginConfig({ defaultHarness: "codex", harnesses: { codex: { defaultModel: "gpt-5.5", allowedModels: ["gpt-5.5"] } } });
+    let launchConfig: Record<string, unknown> | undefined;
+    setGoalController({
+      async launchTask(config: Record<string, unknown>, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
+        launchConfig = config;
+        reply.text = "🎯 [topic-goal] Goal task started\n\nGoal:\nship it";
+        return { id: "goal-topic-1", name: "topic-goal", route: config.route };
+      },
+    } as any);
+
+    const result = await goalHandler()({ ...TOPIC_COMMAND, args: "--workdir /tmp ship it" });
+
+    assert.equal(launchConfig?.originChannel, "telegram|bot1|-1001234567890");
+    assert.deepEqual(launchConfig?.route, {
+      provider: "telegram",
+      accountId: "bot1",
+      target: "-1001234567890",
+      threadId: "42",
+      sessionKey: TOPIC_COMMAND.sessionKey,
+    });
+    // The task's own chat: the full notice is the one reply.
+    assert.equal(
+      result.text,
+      "🎯 [topic-goal] Goal task started\n\nGoal:\nship it\n\nFollow it with /agent_goal status topic-goal; stop it with /agent_goal stop topic-goal.",
+    );
+  });
+
+  it("answers launch, stop and edit from another chat with a short line", async () => {
+    setPluginConfig({ defaultHarness: "codex", harnesses: { codex: { defaultModel: "gpt-5.5", allowedModels: ["gpt-5.5"] } } });
+    const task = {
+      id: "goal-topic-2",
+      name: "topic-goal",
+      status: "running",
+      route: { provider: "telegram", accountId: "bot1", target: "-1001234567890", threadId: "42" },
+    };
+    const sameChat: boolean[] = [];
+    setGoalController({
+      async launchTask(_config: unknown, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
+        sameChat.push(reply.sameChat(task));
+        reply.text = "🎯 [topic-goal] Goal task started\n\nGoal:\nship it";
+        return task;
+      },
+      stopTask(_ref: string, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
+        sameChat.push(reply.sameChat(task));
+        reply.text = "⛔ [topic-goal] Goal task stopped | $0.25 | 1m1s\n\nStopped by user.";
+        return { action: "stopped", task };
+      },
+      editTask(_ref: string, _goal: string, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
+        sameChat.push(reply.sameChat(task));
+        reply.text = "✏️ [topic-goal] Goal task edited\n\nGoal:\nship it faster";
+        return { action: "updated", task, previousGoal: "ship it" };
+      },
+    } as any);
+    const handler = goalHandler();
+    // Another topic of the same group, and the same topic through another bot account.
+    const otherTopic = { ...TOPIC_COMMAND, messageThreadId: 7, sessionKey: "agent:main:telegram:group:-1001234567890:topic:7" };
+    const otherBot = { ...TOPIC_COMMAND, accountId: "bot2" };
+
+    assert.equal(
+      (await handler({ ...otherTopic, args: "--workdir /tmp ship it" })).text,
+      "🎯 [topic-goal] Goal task started.\n\nFollow it with /agent_goal status topic-goal; stop it with /agent_goal stop topic-goal.",
+    );
+    assert.equal((await handler({ ...otherTopic, args: "stop topic-goal" })).text, "⛔ [topic-goal] Stopped.");
+    assert.equal((await handler({ ...otherBot, args: "edit topic-goal ship it faster" })).text, "✏️ [topic-goal] Goal task edited.");
+    assert.deepEqual(sameChat, [false, false, false]);
+
+    // In the task's own topic the notice itself is the reply.
+    assert.equal((await handler({ ...TOPIC_COMMAND, args: "stop topic-goal" })).text, "⛔ [topic-goal] Goal task stopped | $0.25 | 1m1s\n\nStopped by user.");
+    assert.equal((await handler({ ...TOPIC_COMMAND, args: "edit topic-goal ship it faster" })).text, "✏️ [topic-goal] Goal task edited\n\nGoal:\nship it faster");
+    assert.deepEqual(sameChat.slice(3), [true, true]);
   });
 });

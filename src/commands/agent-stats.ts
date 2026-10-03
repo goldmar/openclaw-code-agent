@@ -1,4 +1,5 @@
 import { sessionManager } from "../singletons";
+import { SERVICE_NOT_RUNNING } from "./args";
 import { formatStats } from "../format";
 
 interface CommandApi {
@@ -20,7 +21,7 @@ export function registerAgentStatsCommand(api: CommandApi): void {
     requireAuth: true,
     handler: () => {
       if (!sessionManager) {
-        return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
+        return { text: SERVICE_NOT_RUNNING };
       }
 
       const metrics = sessionManager.getMetrics();

@@ -101,7 +101,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(s.messages().filter((message) => /Which color\?/.test(message.text)).length, 1);
 
       const click = await s.click(green);
-      assert.deepEqual(click.replies, [`✅ [${session.name}] Answer sent: Green.`]);
+      assert.deepEqual(click.replies, [`💬 [${session.name}] Answer sent: Green.`]);
       assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Green"] } });
       await waitUntil(() => !session.pendingInputState, "question cleared");
 
@@ -177,7 +177,7 @@ for (const name of BACKEND_NAMES) {
 
       // The user answers in plain text, through the chat command.
       const reply = await s.host.runCommand("agent_respond", { args: `${session.id} approve` });
-      assert.doesNotMatch(reply.text ?? "", /^Error/, reply.text);
+      assert.doesNotMatch(reply.text ?? "", /^(?:Error|❌)/, reply.text);
       await expectImplementationStarted(s, decision, turnsBefore);
     });
 
@@ -208,7 +208,7 @@ for (const name of BACKEND_NAMES) {
         answered = s.backend.ask([COLOR]);
         await waitUntil(() => session.pendingInputState?.kind === "question", "pending question");
         const reply = await s.host.runCommand("agent_respond", { args: `${session.id} Blue` });
-        assert.doesNotMatch(reply.text ?? "", /^Error/, reply.text);
+        assert.doesNotMatch(reply.text ?? "", /^(?:Error|❌)/, reply.text);
       } finally {
         lock.release();
       }

@@ -156,6 +156,13 @@ function classifyGoalAutoReply(text: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The reply slot of a chat command (`/agent_goal`). The notice of what the
+ * command did is put in `text`; when the command was typed in the task's own
+ * chat (`sameChat`) it is not sent as well, so the user gets one message.
+ */
+export type GoalReplyNotice = { sameChat: (task: GoalTaskState) => boolean; text?: string };
+
 export type GoalTaskEditResult =
   | { action: "updated"; task: GoalTaskState; previousGoal: string }
   | { action: "not_found" }
@@ -550,7 +557,7 @@ export class GoalController {
     return this.store.get(ref);
   }
 
-  async launchTask(config: GoalTaskConfig): Promise<GoalTaskState> {
+  async launchTask(config: GoalTaskConfig, reply?: GoalReplyNotice): Promise<GoalTaskState> {
     const generation = this.generation; this.assertCurrent(generation);
     const required = requiredGoalVerifierCommands();
     if (required && config.verifierCommands !== undefined) {
@@ -607,11 +614,11 @@ export class GoalController {
     }
 
     try {
-      const started = await this.startTask(task, generation);
+      const started = await this.startTask(task, generation, reply);
       this.assertCurrent(generation);
       return started;
     } catch (err) {
-      if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to start the goal task: ${errorMessage(err)}`);
+      if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to start the goal task: ${errorMessage(err)}`, reply);
       throw err;
     }
   }
@@ -646,7 +653,7 @@ export class GoalController {
     return { task, action: "stopped" };
   }
 
-  private async startTask(task: GoalTaskState, generation = this.generation): Promise<GoalTaskState> {
+  private async startTask(task: GoalTaskState, generation = this.generation, reply?: GoalReplyNotice): Promise<GoalTaskState> {
     this.assertCurrent(generation); this.authorizeTask(task);
     const session = await this.spawnTaskSession(task, buildInitialPrompt(task), generation);
     if (this.discardRetiredSession(task, session, generation)) this.assertCurrent(generation);
@@ -660,11 +667,11 @@ export class GoalController {
     this.store.upsert(task);
     this.scheduleTaskEvaluation(task.id, "launch", session.id);
 
-    this.notify(task, `🎯 [${task.name}] Goal task started\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-started");
+    this.notify(task, `🎯 [${task.name}] Goal task started\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-started", reply);
     return task;
   }
 
-  stopTask(ref: string): { task: GoalTaskState; action: "stopped" | "already_terminal" } | undefined {
+  stopTask(ref: string, reply?: GoalReplyNotice): { task: GoalTaskState; action: "stopped" | "already_terminal" } | undefined {
     this.assertCurrent();
     const task = this.store.get(ref);
     if (!task) return undefined;
@@ -673,14 +680,18 @@ export class GoalController {
     }
 
     if (task.sessionId) {
+      // In the task's own chat the reply is the one message: the session's
+      // `⛔ [name] Stopped by user` does not follow it.
+      const session = reply?.sameChat(task) ? this.sessionManager.resolve?.(task.sessionId) : undefined;
+      if (session) session.stopNoticeReplaced = true;
       this.sessionManager.kill(task.sessionId, "user");
     }
 
-    this.markTaskStopped(task, "Stopped by user.");
+    this.markTaskStopped(task, "Stopped by user.", reply);
     return { task, action: "stopped" };
   }
 
-  editTask(ref: string, replacementGoal: string): GoalTaskEditResult {
+  editTask(ref: string, replacementGoal: string, reply?: GoalReplyNotice): GoalTaskEditResult {
     this.assertCurrent();
     const goal = replacementGoal.trim();
     if (!goal) return { action: "invalid_goal" };
@@ -696,7 +707,7 @@ export class GoalController {
     task.goal = goal;
     task.updatedAt = Date.now();
     this.store.upsert(task);
-    this.notify(task, `✏️ [${task.name}] Goal task edited\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-edited");
+    this.notify(task, `✏️ [${task.name}] Goal task edited\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-edited", reply);
     return { action: "updated", task, previousGoal };
   }
 
@@ -834,7 +845,7 @@ export class GoalController {
         task.status = "running";
         task.updatedAt = Date.now();
         this.store.upsert(task);
-        this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after gateway restart`, resumed);
+        this.notifyIterationStatus(task, `▶️ [${task.name}] Goal task resumed after gateway restart`, resumed);
         this.scheduleTaskEvaluation(task.id, "restore", resumed.id);
       } catch (err: unknown) {
         if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task after gateway restart: ${errorMessage(err)}`);
@@ -931,15 +942,15 @@ export class GoalController {
     try { this.authorizeTask(task); return true; } catch { return false; }
   }
 
-  private notify(task: GoalTaskState, text: string, label: string): void {
-    this.sessionManager.emitGoalTaskUpdate(task, text, label);
+  private notify(task: GoalTaskState, text: string, label: string, reply?: GoalReplyNotice): void {
+    const notice = this.sessionManager.emitGoalTaskUpdate(task, text, label, reply?.sameChat(task) === true);
+    if (reply) reply.text = notice;
   }
 
   private notifyIterationStatus(task: GoalTaskState, heading: string, _session?: Session, iterationSummary?: string): void {
-    const iterationLabel = task.loopMode === "ralph" ? "iteration" : "repair iteration";
-    const progressHeading = /\b(?:repair\s+)?iteration\s+\d+\/\d+\b/i.test(heading)
+    const progressHeading = /\biteration\s+\d+\/\d+\b/i.test(heading)
       ? heading
-      : `${heading} ${iterationLabel} ${task.iteration}/${task.maxIterations}`;
+      : `${heading} (iteration ${task.iteration}/${task.maxIterations})`;
     const compactSummary = formatIterationSummaryForNotification(iterationSummary);
     const text = compactSummary ? `${progressHeading}\n\n${compactSummary}` : progressHeading;
     this.notify(task, text, "goal-task-progress");
@@ -982,7 +993,7 @@ export class GoalController {
       }
       this.store.upsert(current);
 
-      this.notifyIterationStatus(current, `🔄 [${current.name}] Coding turn complete`, session);
+      this.notifyIterationStatus(current, `🔁 [${current.name}] Coding turn complete`, session);
       this.scheduleTaskEvaluation(task.id, "turnEnd", session.id);
     };
 
@@ -1041,7 +1052,7 @@ export class GoalController {
     dispose();
   }
 
-  private markTaskFailed(task: GoalTaskState, reason: string): void {
+  private markTaskFailed(task: GoalTaskState, reason: string, reply?: GoalReplyNotice): void {
     if (isTerminalGoalTaskStatus(task.status)) return;
     if (task.sessionId) this.removeSessionObserver(task.sessionId);
     const scheduled = this.scheduledEvaluations.get(task.id);
@@ -1051,7 +1062,7 @@ export class GoalController {
     task.failureReason = truncate(reason, MAX_REASON_CHARS);
     task.updatedAt = Date.now();
     this.store.upsert(task);
-    this.notify(task, `❌ [${task.name}] Goal task failed\n\n${task.failureReason}`, "goal-task-failed");
+    this.notify(task, `❌ [${task.name}] Goal task failed\n\n${task.failureReason}`, "goal-task-failed", reply);
   }
 
   private markTaskFailedWaitingForUser(task: GoalTaskState, reason: string): void {
@@ -1064,15 +1075,15 @@ export class GoalController {
     task.lastVerifierSummary = summary;
     task.updatedAt = Date.now();
     this.store.upsert(task);
-    this.notify(task, `✅ [${task.name}] Goal task succeeded\n\n${summary}`, "goal-task-succeeded");
+    this.notify(task, `✅ [${task.name}] Completed — goal succeeded\n\n${summary}`, "goal-task-succeeded");
   }
 
-  private markTaskStopped(task: GoalTaskState, reason: string): void {
+  private markTaskStopped(task: GoalTaskState, reason: string, reply?: GoalReplyNotice): void {
     task.status = "stopped";
     task.failureReason = truncate(reason, MAX_REASON_CHARS);
     task.updatedAt = Date.now();
     this.store.upsert(task);
-    this.notify(task, `⛔ [${task.name}] Goal task stopped\n\n${task.failureReason}`, "goal-task-stopped");
+    this.notify(task, `⛔ [${task.name}] Goal task stopped\n\n${task.failureReason}`, "goal-task-stopped", reply);
   }
 
   /** Remember that the first plan was approved: later iterations run within its scope. */
@@ -1191,7 +1202,7 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session, generation);
       if (this.discardRetiredSession(task, resumed, generation)) return;
       this.setTaskRunningWithSession(task, resumed);
-      this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
+      this.notifyIterationStatus(task, `▶️ [${task.name}] Goal task resumed after idle timeout`, resumed);
       this.scheduleTaskEvaluation(task.id, "idle-timeout-resume", resumed.id);
     } catch (err: unknown) {
       if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task after idle timeout: ${errorMessage(err)}`);
@@ -1408,7 +1419,7 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session, generation);
       if (this.discardRetiredSession(task, resumed, generation)) return;
       this.setTaskRunningWithSession(task, resumed);
-      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair iteration started after verifier failure`, undefined, iterationSummary);
+      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair started after verifier failure`, undefined, iterationSummary);
       this.scheduleTaskEvaluation(task.id, "repair-resume", resumed.id);
     } catch (err: unknown) {
       if (this.isCurrent(generation)) this.markTaskFailed(task, `Failed to resume the goal task: ${errorMessage(err)}`);

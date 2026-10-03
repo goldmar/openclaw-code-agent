@@ -1050,15 +1050,24 @@ describe("relocated feature boundary coverage", () => {
         respond: { acknowledge: async () => {}, clearButtons: async () => {}, editButtons: async () => {},
           reply: async ({ text }: { text: string }) => { replies.push(text); } } };
       setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      // The controller's notice is the one answer to the button; the button itself replies nothing.
+      const notices: string[] = [];
+      (f.manager as any).emitGoalTaskUpdate = (_task: unknown, text: string) => { notices.push(text); };
       await createCallbackHandler().handler(context as any);
       assert.equal(current.status, decision === "run" ? "failed" : "stopped");
-      assert.match(replies.join("\n"), decision === "run" ? /policy changed|stored suite/i : /cancelled/i);
+      assert.equal(notices.length, 1);
+      assert.match(notices[0]!, decision === "run"
+        ? /^❌ \[[\w-]+\] Goal task failed\n\n[\s\S]*(?:policy changed|stored suite)/i
+        : /^⛔ \[[\w-]+\] Goal task stopped\n\nThe user did not confirm the verifier commands\.$/);
+      assert.deepEqual(replies, []);
       assert.equal(f.counters().launches, 0);
       const terminal = JSON.parse(JSON.stringify(current));
       await createCallbackHandler().handler(context as any);
       assert.deepEqual(JSON.parse(JSON.stringify(current)), terminal);
       assert.equal(f.counters().launches, 0);
-      assert.match(replies.at(-1)!, /expired|used|no longer|stale/i);
+      assert.equal(notices.length, 1, "the replay sends no second notice");
+      assert.equal(replies.length, 1);
+      assert.match(replies[0]!, /expired|used|no longer|stale/i);
     });
   }
 

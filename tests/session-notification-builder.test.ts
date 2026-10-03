@@ -604,7 +604,7 @@ describe("session-notification-builder", () => {
       sessionName: "trading-platform-readiness-gate-fix-restart",
       taskName: "trading-platform-readiness-gate-fix-restart",
       summary: [
-        "✅ [trading-platform-readiness-gate-fix-restart] Goal task succeeded",
+        "✅ [trading-platform-readiness-gate-fix-restart] Completed — goal succeeded",
         "",
         'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
       ].join("\n"),

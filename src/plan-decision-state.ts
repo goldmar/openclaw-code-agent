@@ -77,6 +77,7 @@ export function buildFailedPlanResumeRollbackState(
       worktreeDisposition: postTerminal.worktreeDisposition,
       worktreeLifecycle: postTerminal.worktreeLifecycle,
       pendingWorktreeDecisionSince: postTerminal.pendingWorktreeDecisionSince,
+      deferredCompletionCycle: postTerminal.deferredCompletionCycle,
       lastWorktreeReminderAt: postTerminal.lastWorktreeReminderAt,
       worktreeDecisionSnoozedUntil: postTerminal.worktreeDecisionSnoozedUntil,
       worktreeMerged: postTerminal.worktreeMerged,

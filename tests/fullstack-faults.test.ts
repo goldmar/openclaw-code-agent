@@ -67,7 +67,9 @@ type IndexFile = { sessions: IndexRow[]; actionTokens: IndexToken[] };
 const WORKTREE_DECISION_KINDS = new Set(["worktree-merge", "worktree-decide-later", "worktree-dismiss", "worktree-create-pr", "worktree-update-pr"]);
 const RESOLVED_LIFECYCLE = new Set(["merged", "released", "dismissed", "no_change"]);
 /** Replies of a click that acted. A consumed button must never produce one. */
-const ACTED = /Answer sent|Snoozed 24h|✅ Discarded|Repo policy saved|^▶️/m;
+const ACTED = /Answer sent|snoozed 24h|🗑️|Repo policy saved|^▶️/m;
+/** Discard and Resume answer with a notice instead of a reply: a consumed button must not send one either. */
+const ACTED_NOTICE = /^🗑️ \[|^▶️ \[[^\]]+\] (Resumed|Relaunched)/;
 
 describe("restart from every saved store snapshot", () => {
   it("keeps pending prompts, never re-runs a used button, and leaves no orphan worktree state", async () => {
@@ -145,8 +147,14 @@ describe("restart from every saved store snapshot", () => {
       // after the click), where a lost consumption would show.
       for (const token of saved.actionTokens.filter((candidate) => candidate.consumedAt != null && !clicked.has(candidate.id))) {
         clicked.add(token.id);
+        const sentBefore = s.messages().length;
         const click = await s.click(token.id);
         assert.doesNotMatch(click.replies.join("\n"), ACTED, `${label}: used ${token.kind} button acted again`);
+        assert.deepEqual(
+          s.messages().slice(sentBefore).filter((message) => ACTED_NOTICE.test(message.text)).map((message) => message.text),
+          [],
+          `${label}: used ${token.kind} button acted again`,
+        );
       }
       assert.equal(git(repo, "rev-parse", "main"), mainHead, `${label}: no second merge`);
       assert.equal(s.backend.turns.length, turnsBefore, `${label}: no backend turn from a used button`);
@@ -175,10 +183,12 @@ describe("saves that fail", () => {
     };
     // Resume consumes its button (View output is read-only and never consumed).
     const resume = buttonIn(suspended, "Resume");
+    const sentBeforeResume = s.messages().length;
     const click = await s.click(resume);
     assert.equal(failures, 0, "the save after the click failed once");
-    assert.equal(click.replies.length, 1);
-    assert.doesNotMatch(click.replies[0]!, /expired|stale/);
+    // The click acted: the ▶️ Resumed notice is its one answer (no extra reply).
+    assert.deepEqual(click.replies, []);
+    await s.waitForMessage(/^▶️ \[[\w-]+\] Resumed/, sentBeforeResume);
     const disk = JSON.parse(readFileSync(sessionsIndexPath(), "utf-8")) as IndexFile;
     assert.equal(typeof disk.actionTokens.find((token) => token.id === resume.payload)?.consumedAt, "number", "the retried save persisted the consumption");
     const again = await s.click(resume);

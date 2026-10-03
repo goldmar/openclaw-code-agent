@@ -50,7 +50,7 @@ You review first. Read the whole plan with `agent_output(session, full=true)`, t
 
 ### `planApproval: "approve"`
 
-You may approve, but only after it verifies the plan: read it with `agent_output(session, full=true)`. Escalate with `agent_escalate(session, kind='plan', summary)` instead when it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task. Otherwise approve with `approval_rationale`.
+You may approve, but only after you verify the plan: read it with `agent_output(session, full=true)`. Escalate with `agent_escalate(session, kind='plan', summary)` instead when it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task. Otherwise approve with `approval_rationale`.
 
 ## Worktrees
 
@@ -63,8 +63,12 @@ You may approve, but only after it verifies the plan: read it with `agent_output
 
 ## After a session finishes
 
+- `✅` means the session completed: `✅ [name] Completed`, or `✅ [name] Completed — <outcome>`. Outcomes: `Merged: …`, `PR opened: …`, `PR updated: …`, `PR was already merged: …`, `PR is up to date: …` (auto-merge, auto-pr, or the merge or PR that resolves the `🔀 [name] Finished on …` prompt) and `no changes to merge` (a worktree session without commits). A goal task that succeeded is `✅ [task] Completed — goal succeeded`. `ℹ️ [name] Merged/PR opened/PR updated: …` is a milestone, not session completion: the session may still be running. In `delegate` mode the user already got `✅ [name] Completed`, so your merge is reported as `ℹ️`.
 - The plugin posts the status line (`✅ [name] Completed`, merge and PR outcomes). A wake then asks you for a short follow-up: tell the user in one or two sentences what was done, from the output. Do not repeat the status line or paste PR URLs.
 - A merge or PR made with `summary` needs no follow-up.
+- A completed session that needs attention is announced as `⚠️ [name] Completed — <problem>` (conflict, blocked or failed merge, failed auto-PR, policy, uncommitted changes) and gets no `✅`; a merge or PR you make for it afterwards is `ℹ️`. `❌` means the session, goal or launch itself failed.
+- `agent_kill(session, reason='completed')` on a session that paused with `⏸️ [name] Turn completed — session idle, waiting for a follow-up` answers `ℹ️ [name] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`; do not announce it again.
+- In a tool result `❌` (or `Error:`) means that call failed; the session is unchanged. `⚠️` in a tool result means the call needs your attention (rebase conflict, push failed).
 - A failure: tell the user the cause and your next step (continue with `agent_respond`, or fix the launch).
 - A wake with an `originRoute`: reach the user with the message tool to that route (threadId only when the route has one), then answer `NO_REPLY`.
 - If the session finished one phase of a larger job, start the next phase instead.

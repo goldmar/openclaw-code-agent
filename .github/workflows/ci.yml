@@ -181,7 +181,7 @@ jobs:
         env:
           SIZE_KB: ${{ steps.bundle-size.outputs.size_kb }}
         run: |
-          echo "Complete bundle size $SIZE_KB KB exceeds the 700 KB limit."
+          echo "Complete bundle size $SIZE_KB KB exceeds the 1 MB (1024 KB) limit."
           exit 1
 
   lockfile-check:

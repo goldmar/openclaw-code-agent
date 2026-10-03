@@ -1,15 +1,31 @@
 import type { SessionManager } from "../session-manager";
+import type { SessionRoute } from "../types";
+import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
-/** Resolve and close a session, returning user-facing result text. */
+/** A session status in the user's words: a killed session is "stopped". */
+export function userStatusWord(status: string): string {
+  return status === "killed" ? "stopped" : status;
+}
+
+/**
+ * Resolve and close a session, returning the result text.
+ * `replyIsStopNotice` (the `/agent_kill` command typed in the session's own
+ * chat): the returned text is the user's one `⛔ [name] Stopped by user |
+ * <footer>` line, so the lifecycle notice is not sent a second time. The
+ * predicate gets the resolved session; from another chat the notice stays in
+ * the session's chat and the reply is `⛔ [name] Stopped.`
+ */
 export function getKillSessionText(
   sm: SessionManager,
   ref: string,
   reason?: "completed" | "killed",
+  options: { replyIsStopNotice?: (session: { route?: SessionRoute; originSessionKey?: string }) => boolean } = {},
 ): string {
+  const already = userStatusWord;
   const session = sm.resolve(ref);
   if (!session) {
     const persisted = sm.getPersistedSession(ref);
-    if (!persisted) return `Error: Session "${ref}" not found.`;
+    if (!persisted) return `❌ Session "${ref}" not found.`;
     if (persisted.status === "killed" && persisted.lifecycle === "suspended") {
       const completed = reason === "completed";
       const updated = sm.updatePersistedSession(ref, {
@@ -20,24 +36,32 @@ export function getKillSessionText(
         killReason: completed ? "done" : "user",
       });
       if (updated) {
-        if (completed) {
-          return `Recovered session ${persisted.name} [${persisted.sessionId ?? persisted.harnessSessionId}] marked as completed. No live process was running.`;
-        }
-        return `Recovered session ${persisted.name} [${persisted.sessionId ?? persisted.harnessSessionId}] dismissed. No live process was running.`;
+        // No live process and no user notice: the row is only closed.
+        return completed
+          ? `ℹ️ [${persisted.name}] Marked as completed (it was not running).`
+          : `⛔ [${persisted.name}] Stopped (it was not running).`;
       }
     }
-    return `Session ${persisted.name} [${persisted.sessionId ?? persisted.harnessSessionId}] is a persisted ${persisted.status} record with no live process to kill.`;
+    return `ℹ️ [${persisted.name}] Already ${already(persisted.status)}; nothing to stop.`;
   }
 
   if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-    return `Session ${session.name} [${session.id}] is already ${session.status}. No action needed.`;
+    // A suspended session is left as it is (still resumable), so it is not called stopped.
+    return session.status === "killed" && session.lifecycle === "suspended"
+      ? `ℹ️ [${session.name}] Suspended, not running; nothing to stop.`
+      : `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
   }
 
   if (reason === "completed") {
+    // A real completion: the lifecycle sends the user `✅ [name] Completed`.
     session.complete();
-    return `Session ${session.name} [${session.id}] marked as completed.`;
+    return `ℹ️ [${session.name}] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`;
   }
 
+  const replyIsStopNotice = options.replyIsStopNotice?.(session) === true;
+  if (replyIsStopNotice) session.stopNoticeReplaced = true;
   sm.kill(session.id);
-  return `Session ${session.name} [${session.id}] has been terminated.`;
+  return replyIsStopNotice
+    ? `⛔ [${session.name}] Stopped by user${formatSessionStatsSuffix(sessionStats(session))}`
+    : `⛔ [${session.name}] Stopped.`;
 }

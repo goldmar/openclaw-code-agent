@@ -57,9 +57,8 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
-    assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
-    assert.match(result.text, /Session launched successfully/);
-    assert.match(result.text, /ID: sess-1/);
+    // One reply; the session's `🚀 [name] Launched` notice follows, as with the policy button.
+    assert.equal(result.text, "🧭 Repo policy saved: Require PR.");
   });
 
   it("does not guess when several deferred launches match the policy", async () => {
@@ -70,7 +69,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
-    assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
+    assert.match(result.text, /^🧭 Repo policy saved: Require PR\./);
     assert.match(result.text, /2 pending launches match this policy/);
   });
 
@@ -82,7 +81,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
-    assert.equal(result.text, "Repo policy set to pr-required for /repo.");
+    assert.equal(result.text, "🧭 Repo policy saved: Require PR.");
   });
 
   it("keeps older injected managers on the saved policy path", async () => {
@@ -92,7 +91,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
-    assert.equal(result.text, "Repo policy set to pr-required for /repo.");
+    assert.equal(result.text, "🧭 Repo policy saved: Require PR.");
   });
 
   it("reports deferred launch failures without losing the saved policy message", async () => {
@@ -105,7 +104,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
-    assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
+    assert.match(result.text, /^🧭 Repo policy saved: Require PR\./);
     assert.match(result.text, /Repo policy saved, but the deferred launch failed: launch capacity unavailable/);
     assert.match(result.text, /pending launch context was kept/);
   });
@@ -125,7 +124,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-allowed", workspaceDir: "/repo" });
 
-    assert.match(result.text, /Error: Policy pr-allowed requires PR automation/);
+    assert.match(result.text, /^❌ Policy pr-allowed requires PR automation/);
     assert.match(result.text, /Choose never-pr or manual/);
   });
 

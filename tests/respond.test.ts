@@ -613,6 +613,33 @@ describe("executeRespond", () => {
     assert.doesNotMatch(result.text, /steered/);
   });
 
+  it("tells the user when a message goes to a session with a pending plan as plan feedback", async () => {
+    const plain = createStubSession({ status: "running", lifecycle: "active", name: "plain", sendMessage: async () => {} });
+    assert.equal(
+      (await executeRespond(createStubSessionManager({ "test-id": plain }), { session: "test-id", message: "hello" })).userText,
+      "💬 [plain] Message sent.",
+    );
+
+    const planned: Record<string, any> = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      name: "planned",
+      pendingPlanApproval: true,
+      // The send moves the plan state on; the reply still names what the message was.
+      sendMessage: async () => { planned.pendingPlanApproval = false; },
+    });
+    const result = await executeRespond(createStubSessionManager({ "test-id": planned }), { session: "test-id", message: "use sqlite instead" });
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /sending as revision feedback/);
+    assert.equal(result.userText, "💬 [planned] Message sent as plan feedback.");
+
+    const revising = createStubSession({ status: "running", lifecycle: "active", name: "revising", approvalState: "changes_requested", sendMessage: async () => {} });
+    assert.equal(
+      (await executeRespond(createStubSessionManager({ "test-id": revising }), { session: "test-id", message: "and add tests" })).userText,
+      "💬 [revising] Message sent as plan feedback.",
+    );
+  });
+
   it("reports when a follow-up was steered into the running turn", async () => {
     const session = createStubSession({
       status: "running",
@@ -818,7 +845,7 @@ describe("executeRespond", () => {
     });
 
     assert.equal(result.isError, undefined);
-    assert.match(result.text, /Plan rejected for \[test-session\]\. Session stopped\./);
+    assert.match(result.text, /\[test-session\] Plan rejected\. Session stopped\./);
     assert.equal(sentMessage, undefined, "Reject must not be forwarded as revision feedback");
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(session.approvalState, "rejected");

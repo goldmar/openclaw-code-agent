@@ -61,6 +61,14 @@ describe("session-view app layer", () => {
     assert.match(text, /👉 Question waiting for an answer/);
     assert.match(text, /branch \[5\][\s\S]*👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
 
+    // `/agent_status` shows the same rows without tool syntax.
+    const forUser = getSessionsListingText(sm, "waiting", undefined, { forUser: true });
+    assert.match(forUser, /👉 Plan waiting for the user: Approve \/ Revise \/ Reject \(buttons, or reply approve, reject, or the changes\)(?:\n|$)/);
+    assert.match(forUser, /👉 Plan waiting for the orchestrator's review(?:\n|$)/);
+    assert.match(forUser, /👉 Question waiting for your answer: \/agent_output question shows it; answer with \/agent_respond question <answer>(?:\n|$)/);
+    assert.match(forUser, /👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard(?:\n|$)/);
+    assert.doesNotMatch(forUser, /agent_escalate|agent_merge|agent_respond\)|userInitiated/);
+
     // A branch with an existing PR that is pending again (new commits) still waits.
     const withPr: any = {
       list: (): never[] => [],
@@ -156,6 +164,10 @@ describe("session-view app layer", () => {
     assert.match(text, /revising \[1\][^\n]*\n(?:.*\n)*?   👉 Plan revision requested: waiting for the user's changes/);
     assert.doesNotMatch(text.split("asking [2]")[0]!, /Question waiting for an answer/);
     assert.match(text, /asking \[2\](?:.*\n)*?.*Question waiting for an answer/);
+    assert.match(
+      getSessionsListingText(sm, "waiting", undefined, { forUser: true }),
+      /revising \[1\][^\n]*\n(?:.*\n)*?   👉 Plan revision requested: reply with the changes(?:\n|$)/,
+    );
   });
 
   it("status=waiting lists a plan still pending after a Gateway restart (recovered as suspended)", () => {

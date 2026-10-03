@@ -203,7 +203,7 @@ describe("callback payload handling (properties)", () => {
           assert.equal(replies.length, 1, JSON.stringify(replies));
           const trimmed = payload?.trim() ?? "";
           if (!authorized) {
-            assert.deepEqual(replies, ["⛔ Unauthorized."]);
+            assert.deepEqual(replies, ["🚫 Unauthorized."]);
             assert.deepEqual(lookups, []);
           } else if (!trimmed) {
             assert.deepEqual(replies, ["⚠️ This button is not recognized. Use the buttons on the latest message."]);
