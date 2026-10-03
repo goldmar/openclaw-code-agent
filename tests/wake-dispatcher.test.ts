@@ -297,6 +297,20 @@ describe("WakeDispatcher", () => {
     }
   });
 
+  it("does not infer unrouted completion delivery from a silent reply, a receipt, or announce metadata", () => {
+    const delivery = { status: "skipped", mode: "announce" };
+    const receipt = { runId: "r1", sourceReplyDelivered: true };
+    for (const terminalReply of [{ disposition: "visible", text: "NO_REPLY" }, { disposition: "visible", text: " " }, { disposition: "silent", text: "Summary sent" }]) {
+      for (const extra of [{}, { delivery }, { terminalReceipt: receipt }]) {
+        assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ runId: "r1", status: "ok", terminalReply, ...extra }), false, "r1").outcome, "ambiguous");
+      }
+    }
+    const visible = { runId: "r1", status: "ok", terminalReply: { disposition: "visible", text: "Summary sent" }, delivery };
+    assert.deepEqual(validateCompletionFollowupWakeSuccess(JSON.stringify(visible), false, "r1"), { outcome: "success" });
+    assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ ...visible, yielded: true }), false, "r1").outcome, "ambiguous");
+    assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ ...visible, status: "timeout" }), false, "r1").outcome, "ambiguous");
+  });
+
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

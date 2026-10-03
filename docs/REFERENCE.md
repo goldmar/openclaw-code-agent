@@ -37,9 +37,9 @@ The unreleased compatibility update targets the OpenClaw `2026.9.8` package and 
 
 ### OpenClaw 2026.9.8 compatibility preparation
 
-No new plugin configuration migration is required. Keep existing plan approval, worktree strategies, model restrictions, and saved account/chat/topic routes. OpenClaw's `sessions_send` delivery result no longer includes `mode: "announce"`; OCA uses `chat.send` and matching `agent.wait` terminal receipts instead. A queued Start Plan offer, wake admission, or `NO_REPLY` alone is not proof of visible delivery. Cron workflows using private wakes should retain their explicit delivery policy rather than enabling announce delivery to compensate.
+No new plugin configuration migration is required. Keep existing plan approval, worktree strategies, model restrictions, and saved account/chat/topic routes. OpenClaw's `sessions_send` delivery result no longer includes `mode: "announce"`. OCA never read that field: completion wakes already go through `chat.send` and are confirmed by the matching `agent.wait` terminal receipt, so the change needs no OCA update. A queued Start Plan offer, wake admission, or `NO_REPLY` alone is not proof of visible delivery. Cron workflows using private wakes should retain their explicit delivery policy rather than enabling announce delivery to compensate.
 
-Enabling `planOfferTool` registers `agent_send_plan_offer`; it does not grant the tool to an agent. Global, provider, agent, group, sandbox, inherited, and runtime tool restrictions still apply. Runtime `toolsAllow` restrictions also apply when tools are disabled. Enable the delivery channel separately; OCA's Codex harness does not require OpenClaw's bundled Codex plugin to be enabled.
+Enabling `planOfferTool` registers `agent_send_plan_offer`; it does not grant the tool to an agent. Global, provider, agent, group, sandbox, inherited, and runtime tool restrictions still apply. Enable the delivery channel separately; OCA's Codex harness does not require OpenClaw's bundled Codex plugin to be enabled.
 
 Compatibility preparation does not publish a new OCA version, upgrade OpenClaw, or close release-monitor follow-up events. Those require the later release and deployment evidence.
 

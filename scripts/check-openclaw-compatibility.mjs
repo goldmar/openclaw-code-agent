@@ -20,12 +20,17 @@ function validateExcludedPlugin(result, before, after) {
     && (plugin.status === "loaded" || plugin.toolNames?.length)));
 }
 
-/** A skipped plugin must not register tools or mutate its preserved configuration. */
-export function validateDiscoveryRejection(result, before, after) {
+/**
+ * A skipped plugin must not register tools or mutate its preserved configuration.
+ * `reason` is the start of the host diagnostic for the declaration under test, so
+ * an invalid range and an unsatisfied range cannot pass on each other's message.
+ */
+export function validateDiscoveryRejection(result, before, after, reason) {
   validateExcludedPlugin(result, before, after);
   assert.ok(result.diagnostics?.some((diagnostic) => diagnostic.pluginId === pluginId
     && diagnostic.configDisposition === "preserve"
-    && /skipping discovery/u.test(diagnostic.message)), "expected a preserved discovery diagnostic");
+    && diagnostic.message?.startsWith(reason)
+    && diagnostic.message.includes("; skipping discovery")), "expected a preserved discovery diagnostic");
 }
 
 /** The older host enforces installation metadata during discovery too. */
@@ -85,9 +90,12 @@ async function main() {
         await mkdir(dirname(target), { recursive: true });
         await symlink(join(root, "node_modules", dependency), target, "dir");
       }
+      // The host only calls a declaration invalid when it is empty or not a string;
+      // a malformed range string is reported as an unsatisfied requirement.
+      const rejectedApi = scenario === "invalid-api" ? "" : ">=2099.1.1";
       if (scenario.endsWith("api")) {
         const fixture = JSON.parse(await readFile(join(candidate, "package.json"), "utf8"));
-        fixture.openclaw.compat.pluginApi = scenario === "invalid-api" ? "invalid-range" : ">=2099.1.1";
+        fixture.openclaw.compat.pluginApi = rejectedApi;
         await writeFile(join(candidate, "package.json"), JSON.stringify(fixture));
       }
       const port = await freePort();
@@ -116,7 +124,9 @@ async function main() {
           pkg.openclaw.install.minHostVersion, host.version);
       } else if (scenario.endsWith("api")) {
         const listed = JSON.parse((await call("plugins", "list", "--json")).stdout);
-        validateDiscoveryRejection(listed, configText, await readFile(env.OPENCLAW_CONFIG_PATH, "utf8"));
+        validateDiscoveryRejection(listed, configText, await readFile(env.OPENCLAW_CONFIG_PATH, "utf8"),
+          scenario === "invalid-api" ? "invalid package plugin API metadata:"
+            : `plugin requires plugin API ${rejectedApi}, but this host is ${host.version};`);
       } else {
         const inspection = JSON.parse((await call("plugins", "inspect", pluginId, "--runtime", "--json")).stdout);
         const tools = manifest.contracts.tools.filter((name) => scenario === "offer-enabled" || name !== "agent_send_plan_offer");
@@ -168,9 +178,15 @@ async function main() {
     }
     console.log(JSON.stringify({ hostVersion: host.version, packageVersion: pkg.version, tarballSha256: digest,
       gatewayChecked: args.includes("--gateway") && host.version === pkg.openclaw.build.openclawVersion, results }, null, 2));
-  } catch {
+  } catch (error) {
     // Do not print subprocess output or config; the isolated profile contains auth.
-    console.error(`OpenClaw compatibility check failed at ${stage}`);
+    // A subprocess failure's message embeds its stderr and a JSON parse error quotes
+    // its input, so report only how those ended.
+    const reason = error?.cmd !== undefined
+      ? `subprocess ${error.killed ? "timed out" : `exited with ${error.code ?? error.signal}`}`
+      : error instanceof SyntaxError ? "unparseable subprocess output"
+        : error instanceof Error ? error.message : String(error);
+    console.error(`OpenClaw compatibility check failed at ${stage}: ${reason}`);
     process.exitCode = 1;
   } finally {
     await rm(temp, { recursive: true, force: true });
