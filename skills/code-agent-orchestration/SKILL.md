@@ -63,9 +63,11 @@ You may approve, but only after it verifies the plan: read it with `agent_output
 
 ## After a session finishes
 
-- `✅` means the session completed: `✅ [name] Completed`, or `✅ [name] Completed — Merged/PR opened/PR updated: …` when the merge or PR is the completion notice (auto-merge, auto-pr, or the action that resolves an `ask` prompt). `ℹ️ [name] Merged/PR opened/PR updated: …` is a milestone, not session completion: the session may still be running. In `delegate` mode the user already got `✅ [name] Completed`, so your merge is reported as `ℹ️`.
+- `✅` means the session completed: `✅ [name] Completed`, or `✅ [name] Completed — Merged/PR opened/PR updated: …` when the merge or PR is the completion notice (auto-merge, auto-pr, or the merge or PR that resolves the `🔀 [name] Finished on …` prompt). A goal task that succeeded is `✅ [task] Completed — goal succeeded`. `ℹ️ [name] Merged/PR opened/PR updated: …` is a milestone, not session completion: the session may still be running. In `delegate` mode the user already got `✅ [name] Completed`, so your merge is reported as `ℹ️`.
 - The plugin posts the status line (`✅ [name] Completed`, merge and PR outcomes). A wake then asks you for a short follow-up: tell the user in one or two sentences what was done, from the output. Do not repeat the status line or paste PR URLs.
 - A merge or PR made with `summary` needs no follow-up.
+- A completion that ended in a `⚠️` / `❌` line (conflict, blocked or failed merge, failed auto-PR, policy, uncommitted changes) gets no `✅`; a merge or PR you make for it afterwards is `ℹ️`.
+- `agent_kill(session, reason='completed')` on a session that paused with `⏸️ [name] Turn completed` sends the user `✅ [name] Completed`; do not announce it again.
 - A failure: tell the user the cause and your next step (continue with `agent_respond`, or fix the launch).
 - A wake with an `originRoute`: reach the user with the message tool to that route (threadId only when the route has one), then answer `NO_REPLY`.
 - If the session finished one phase of a larger job, start the next phase instead.

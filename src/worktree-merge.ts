@@ -21,7 +21,6 @@ export interface DiffSummary {
 
 export interface MergeResult {
   success: boolean;
-  conflictFiles?: string[];
   error?: string;
   warnings?: string[];
   stashed?: boolean;

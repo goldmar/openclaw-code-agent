@@ -471,7 +471,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       worktreeBranch: "agent/no-change",
       preview: "",
     });
-    assert.match(noChange.userMessage, /no worktree changes to merge .* worktree cleaned up/u);
+    assert.match(noChange.userMessage, /Completed — no changes to merge/u);
     assert.doesNotMatch(noChange.userMessage, /undefined|NaN|\(\d+ files/u);
     assert.doesNotMatch(noChange.wakeMessage ?? "", /undefined|NaN/u);
 

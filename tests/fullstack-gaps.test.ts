@@ -124,7 +124,7 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     assert.match(failed.replies.join("\n"), /Rebase conflicts/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
-    assert.match(later.replies.join("\n"), /Snoozed 24h/);
+    assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
     assert.ok(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil);
   });
 });
@@ -223,7 +223,7 @@ describe("snooze and reminders", () => {
     await s.backend.endTurn("Added feature.txt.");
     const later = await s.waitForButton("Later");
     const click = await s.click(later);
-    assert.match(click.replies.join("\n"), /Snoozed 24h/);
+    assert.match(click.replies.join("\n"), /Reminder snoozed 24h/);
     const snoozedUntil = Date.parse(s.sm.getPersistedSession(session.id)?.worktreeDecisionSnoozedUntil ?? "");
     assert.ok(Math.abs(snoozedUntil - (Date.now() + 24 * 60 * 60 * 1000)) < 60_000, "snoozed for 24h");
 
@@ -398,7 +398,7 @@ describe("goal loop", () => {
     writeFileSync(join(workdir, "done.txt"), "done\n");
     await s.backend.endTurn("Created done.txt.");
     await waitUntil(() => s.gc.getTask(task.id)?.status === "succeeded", "goal succeeded");
-    await s.waitForMessage(/Goal task succeeded/);
+    await s.waitForMessage(/Completed — goal succeeded/);
   });
 
   it("resumes the goal after an idle timeout", async () => {

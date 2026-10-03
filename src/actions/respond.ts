@@ -45,6 +45,8 @@ interface RespondResult {
     status: "error"; code: "response_delivery_unconfirmed"; targetSelected: true; recovery: string;
   };
   isError?: boolean;
+  /** The resume posted its own user notice, so a button press needs no extra reply. */
+  userNoticeSent?: boolean;
 }
 
 type PlanReplyDecision = "approve" | "revise" | "reject";
@@ -158,6 +160,7 @@ async function spawnFreshRelaunch(
     );
     return {
       text: `Session ${session.name} was relaunched fresh — it was killed during startup before the harness initialized. New session: ${relaunched.name} [${relaunched.id}].`,
+      userNoticeSent: true,
     };
   } catch (err: unknown) {
     return { text: `Error relaunching session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };
@@ -307,7 +310,7 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
   sm.clearPlanDecisionTokens?.(sessionId);
 
   if (!target) {
-    return { text: `Plan rejected for [${name}].`, isError: false };
+    return { text: `[${name}] Plan rejected.`, isError: false };
   }
 
   const patch = buildPlanDecisionClosedPatch(target, "rejected");
@@ -315,11 +318,11 @@ export function rejectPlanDecision(sm: SessionManager, sessionId: string): Respo
     applyPlanDecisionPatchToSession(active, patch);
     sm.updatePersistedSession?.(sessionId, patch);
     sm.kill(active.id, "user");
-    return { text: `Plan rejected for [${active.name}]. Session stopped.` };
+    return { text: `[${active.name}] Plan rejected. Session stopped.` };
   }
 
   sm.updatePersistedSession?.(sessionId, patch);
-  return { text: `Plan rejected for [${name}]. Session remains stopped.` };
+  return { text: `[${name}] Plan rejected. Session remains stopped.` };
 }
 
 export function requestPlanDecisionChanges(
@@ -460,10 +463,15 @@ async function tryAutoResume(
       );
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
+        userNoticeSent: true,
       };
     }
     await sm.notifyResumedLaunch(resumed);
-    return { text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
+    return {
+      text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.`,
+      // `notifyResumedLaunch` posts only for a session that carries its resume id.
+      userNoticeSent: Boolean(resumed.resumeSessionId),
+    };
   } catch (err: unknown) {
     return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);
   }

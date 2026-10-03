@@ -635,11 +635,11 @@ describe("SessionNotificationService", () => {
 
     assert.equal(
       request.userMessage,
-      "✅ [no-change-stats] Completed — no worktree changes to merge — worktree cleaned up | $0.25 | 1m1s | codex | gpt-5.5",
+      "✅ [no-change-stats] Completed — no changes to merge | $0.25 | 1m1s | codex | gpt-5.5",
     );
   });
 
-  it("distinguishes PR-updated cleanup from a genuine no-change terminal notification", () => {
+  it("gives a no-change completion after an earlier PR outcome its ✅ and keeps the PR context in the wake", () => {
     const worktreeMessages = new SessionWorktreeMessageService();
     const request = worktreeMessages.buildNoChangeNotification({
       session: {
@@ -658,7 +658,7 @@ describe("SessionNotificationService", () => {
 
     assert.equal(
       request.userMessage,
-      "ℹ️ [pr-updated-clean] PR updated; no local worktree changes remained to merge — worktree cleaned up | 1m1s",
+      "✅ [pr-updated-clean] Completed — no changes to merge | 1m1s",
     );
     assert.match(String(request.wakeMessage), /Updated a PR; no local branch changes remained to merge\./);
     assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
@@ -1404,7 +1404,7 @@ describe("SessionNotificationService", () => {
 
     service.dispatch(session, {
       label: "goal-task-succeeded",
-      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      userMessage: "✅ [paper-watcher] Completed — goal succeeded",
       wakeMessageOnNotifySuccess: "goal success follow-up wake",
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-123",
@@ -1435,7 +1435,7 @@ describe("SessionNotificationService", () => {
       [
         {
           label: "goal-task-succeeded",
-          userMessage: "✅ [paper-watcher] Goal task succeeded",
+          userMessage: "✅ [paper-watcher] Completed — goal succeeded",
           wakeMessageOnNotifySuccess: "goal success follow-up wake",
           completionWakeSummaryRequired: true,
         },
@@ -1484,7 +1484,7 @@ describe("SessionNotificationService", () => {
     });
     service.dispatch(session, {
       label: "goal-task-succeeded",
-      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      userMessage: "✅ [paper-watcher] Completed — goal succeeded",
       wakeMessageOnNotifySuccess: "goal success follow-up wake",
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-terminal-first",
@@ -1500,7 +1500,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.wakeMessageOnNotifySuccess, "ordinary terminal completion wake");
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(requests[1]?.label, "goal-task-succeeded");
-    assert.equal(requests[1]?.userMessage, "✅ [paper-watcher] Goal task succeeded");
+    assert.equal(requests[1]?.userMessage, "✅ [paper-watcher] Completed — goal succeeded");
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
@@ -1554,7 +1554,7 @@ describe("SessionNotificationService", () => {
     );
     service.dispatch(goalRoutingProxy, {
       label: "goal-task-succeeded",
-      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      userMessage: "✅ [paper-watcher] Completed — goal succeeded",
       wakeMessageOnNotifySuccess: "goal success follow-up wake with same PR details",
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-pr-merged",
@@ -1619,7 +1619,7 @@ describe("SessionNotificationService", () => {
 
     service.dispatch(goalRoutingProxy, {
       label: "goal-task-succeeded",
-      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      userMessage: "✅ [paper-watcher] Completed — goal succeeded",
       wakeMessageOnNotifySuccess: "goal success follow-up wake with PR details",
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-pr-merged-goal-first",
@@ -1675,7 +1675,7 @@ describe("SessionNotificationService", () => {
 
     service.dispatch(session, {
       label: "goal-task-succeeded",
-      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      userMessage: "✅ [paper-watcher] Completed — goal succeeded",
       wakeMessageOnNotifySuccess: "goal success follow-up wake",
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "goal:goal-retry",
@@ -1733,7 +1733,7 @@ describe("SessionNotificationService", () => {
       goalTaskId: "goal-readiness-gate-fix-restart",
     } as any;
     const goalStatus = [
-      "✅ [trading-platform-readiness-gate-fix-restart] Goal task succeeded",
+      "✅ [trading-platform-readiness-gate-fix-restart] Completed — goal succeeded",
       "",
       'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
     ].join("\n");
@@ -1805,7 +1805,7 @@ describe("SessionNotificationService", () => {
       goalTaskId: "goal-trading-platform-full-repo-review-20-iter",
     } as any;
     const goalStatus = [
-      "✅ [trading-platform-full-repo-review-20-iter] Goal task succeeded",
+      "✅ [trading-platform-full-repo-review-20-iter] Completed — goal succeeded",
       "",
       'Completion promise "TRADING_PLATFORM_FULL_REPO_REVIEW_20_ITER_DONE" detected in agent output.',
     ].join("\n");
@@ -1920,7 +1920,7 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "goal-task-succeeded",
       userMessage: [
-        "✅ [trading-platform-full-repo-review-2-20-iter] Goal task succeeded",
+        "✅ [trading-platform-full-repo-review-2-20-iter] Completed — goal succeeded",
         "Session: trading-platform-full-repo-review-2-20-iter [session-fixture]",
       ].join("\n"),
       notifyUser: "always",
@@ -1961,7 +1961,7 @@ describe("SessionNotificationService", () => {
     });
 
     assert.equal(requests.length, 3);
-    assert.match(userMessages[0] ?? "", /Goal task succeeded/);
+    assert.match(userMessages[0] ?? "", /Completed — goal succeeded/);
     assert.match(userMessages[1] ?? "", /Full-repo OpenClaw Code Agent review finished and pushed/);
     assert.equal(userMessages.length, 2);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
@@ -2022,7 +2022,7 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "goal-task-succeeded",
       userMessage: [
-        "✅ [trading-platform-full-repo-review-2-20-iter] Goal task succeeded",
+        "✅ [trading-platform-full-repo-review-2-20-iter] Completed — goal succeeded",
         "Session: trading-platform-full-repo-review-2-20-iter [kzKq9Grv]",
       ].join("\n"),
       wakeMessageOnNotifySuccess: [
@@ -2067,10 +2067,10 @@ describe("SessionNotificationService", () => {
     assert.match(userMessages[0] ?? "", /Agent: Hardened paper runtime review guards/);
     assert.doesNotMatch(userMessages[0] ?? "", /Iteration summary:/);
     assert.doesNotMatch(userMessages[0] ?? "", /Status: running/);
-    assert.match(userMessages[1] ?? "", /Goal task succeeded/);
+    assert.match(userMessages[1] ?? "", /Completed — goal succeeded/);
     assert.doesNotMatch(userMessages[1] ?? "", /Completion promise/);
     assert.match(userMessages[2] ?? "", /Continued iteration 2\/20/);
-    assert.equal(userMessages.filter((message) => /Goal task succeeded/.test(message)).length, 1);
+    assert.equal(userMessages.filter((message) => /Completed — goal succeeded/.test(message)).length, 1);
     assert.equal(wakeAttempts, 1);
     assert.equal(requests[3]?.wakeMessage, undefined);
     assert.equal(requests[3]?.completionWakeSummaryRequired, false);

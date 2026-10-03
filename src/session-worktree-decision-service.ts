@@ -62,6 +62,8 @@ export class SessionWorktreeDecisionService {
         worktreeDisposition: "dismissed",
         worktreeDismissedAt: new Date().toISOString(),
         pendingWorktreeDecisionSince: undefined,
+        // A discard is not a completion: the deferred `✅` is dropped with it.
+        deferredCompletionCycle: undefined,
         worktreeState: "dismissed",
         lifecycle: "terminal",
         worktreePath: undefined,
@@ -78,7 +80,7 @@ export class SessionWorktreeDecisionService {
       } as Partial<PersistedSessionInfo>);
     }
 
-    const msg = `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed and permanently deleted.`;
+    const msg = `🗑️ [${sessionName}] Discarded: branch \`${branchName ?? "unknown"}\` and its worktree were permanently deleted.`;
     this.deps.dispatchNotification(
       this.deps.buildRoutingProxy({
         id: getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref,
@@ -119,7 +121,7 @@ export class SessionWorktreeDecisionService {
       && (persistedSession.worktreeReminderCount ?? 1) >= SessionReminderService.MAX_REMINDERS;
     const msg = remindersDone
       ? `⏭️ Kept for later: \`${branchName}\` (session: ${persistedSession.name}). No more reminders; /agent_status lists it.`
-      : `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
+      : `⏭️ [${persistedSession.name}] Reminder snoozed 24h for \`${branchName}\``;
 
     if (options.notifyUser !== false) {
       this.deps.dispatchNotification(

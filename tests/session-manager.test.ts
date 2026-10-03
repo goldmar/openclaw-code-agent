@@ -194,7 +194,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
         },
       } as any,
       [
-        "✅ [paper-harness-preopen-hardening] Goal task succeeded",
+        "✅ [paper-harness-preopen-hardening] Completed — goal succeeded",
         "",
         'Completion promise "PAPER_HARNESS_PREOPEN_HARDENING_COMPLETE" detected in agent output.',
       ].join("\n"),
@@ -207,7 +207,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.label, "goal-task-succeeded");
     assert.equal(
       request.userMessage,
-      "✅ [paper-harness-preopen-hardening] Goal task succeeded\nSession: paper-harness-preopen-hardening [bdTo6WBy]",
+      "✅ [paper-harness-preopen-hardening] Completed — goal succeeded\nSession: paper-harness-preopen-hardening [bdTo6WBy]",
     );
     assert.doesNotMatch(request.userMessage, /Completion promise/);
     assert.equal(request.notifyUser, "always");
@@ -2141,7 +2141,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
       const result = service.snoozeWorktreeDecision(pending.sessionId, { notifyUser: false });
 
-      assert.equal(result, "⏭️ Reminder snoozed 24h for `agent/address-pr176-review-comments` (session: address-pr176-review-comments)");
+      assert.equal(result, "⏭️ [address-pr176-review-comments] Reminder snoozed 24h for `agent/address-pr176-review-comments`");
       assert.deepEqual(
         updates.map((entry) => entry.ref),
         ["later-session", "later-thread"],

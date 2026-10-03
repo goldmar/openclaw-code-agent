@@ -118,10 +118,11 @@ function createCtx(
   };
 }
 
-function createToolResult(text: string, success: boolean) {
+/** `outcomeNotified`: the tool posted its own outcome notice (the default for a success). */
+function createToolResult(text: string, success: boolean, outcomeNotified = success) {
   return {
     content: [{ type: "text", text }],
-    meta: { success },
+    meta: { success, outcomeNotified },
   };
 }
 
@@ -1083,7 +1084,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
-    assert.equal(second.replies[0], "✅ Plan v1 was already approved; resume is in progress or running.");
+    assert.equal(second.replies[0], "👍 [test-session] Plan v1 was already approved; the session is resuming or running.");
   });
 
   it("approves and resumes an idle-timeout suspended persisted plan", async () => {
@@ -1430,7 +1431,7 @@ describe("createCallbackHandler()", () => {
     assert.match(approve.replies[0], /button cleanup failed/);
     assert.equal(reject.buttonMarkupEdits, 1);
     assert.equal(reject.buttonsCleared, 1);
-    assert.equal(reject.replies[0], "❌ Plan rejected for [test-session]. Session stopped.");
+    assert.equal(reject.replies[0], "⛔ [test-session] Plan rejected. Session stopped.");
   });
 
   it("serializes concurrent revise and reject plan decision callbacks", async () => {
@@ -1593,7 +1594,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(acknowledged, 1);
-    assert.equal(replies[0], "❌ Plan rejected for [reject-me]. Session stopped.");
+    assert.equal(replies[0], "⛔ [reject-me] Plan rejected. Session stopped.");
   });
 
   it("warns when Discord clearComponents fails and no acknowledge fallback is available", async () => {
@@ -1640,7 +1641,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.deepEqual(killed, { id: "test-id", reason: "user" });
-      assert.equal(replies[0], "❌ Plan rejected for [warn-me]. Session stopped.");
+      assert.equal(replies[0], "⛔ [warn-me] Plan rejected. Session stopped.");
       assert.match(warnings[0], /no acknowledge fallback available/i);
     } finally {
       console.warn = originalWarn;
@@ -1777,7 +1778,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
-    assert.match(state.replies[0], /Plan rejected for \[spellcast-release-readiness-plan\]\. Session remains stopped\./);
+    assert.match(state.replies[0], /⛔ \[spellcast-release-readiness-plan\] Plan rejected\. Session remains stopped\./);
     assert.deepEqual(patches[0], {
       approvalState: "rejected",
       lifecycle: "terminal",
@@ -1835,7 +1836,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "❌ Plan rejected for [restored-plan]. Session stopped.");
+    assert.equal(state.replies[0], "⛔ [restored-plan] Plan rejected. Session stopped.");
   });
 
   it("uses the newer current delivery version when approval prompt metadata diverges", async () => {
@@ -1907,7 +1908,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "❌ Plan rejected for [canonical-plan]. Session stopped.");
+    assert.equal(state.replies[0], "⛔ [canonical-plan] Plan rejected. Session stopped.");
   });
 
   it("rejects stale plan approval callbacks from an older plan-decision version", async () => {
@@ -2074,7 +2075,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(resolved, [{ sessionId: "sess-42", optionIndex: 1 }]);
     assert.equal(consumed, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ [sess-42] Answer sent.");
+    assert.equal(state.replies[0], "💬 [sess-42] Answer sent.");
   });
 
   it("does not consume or clear active question buttons when answer submission fails", async () => {
@@ -2155,7 +2156,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumedRequestId, "backend-42-request-7");
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ [review-morning-audio-brief] Answer sent: OpenAI model (Recommended). The session resumed.");
+    assert.equal(state.replies[0], "💬 [review-morning-audio-brief] Answer sent: OpenAI model (Recommended). The session resumed.");
   });
 
   it("serializes sibling answer buttons for the same persisted question", async () => {
@@ -2264,7 +2265,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitCalls, 1);
     assert.equal(consumeCalls, 1);
     assert.equal(firstState.buttonsCleared, 1);
-    assert.equal(firstState.replies[0], "✅ [sess-42] Answer sent.");
+    assert.equal(firstState.replies[0], "💬 [sess-42] Answer sent.");
   });
 
   it("reports duplicate question-answer callbacks as stale after a successful answer", async () => {
@@ -2297,7 +2298,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(firstResult, { handled: true });
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(submitted, true);
-    assert.equal(firstState.replies[0], "✅ [sess-42] Answer sent.");
+    assert.equal(firstState.replies[0], "💬 [sess-42] Answer sent.");
     assert.equal(secondState.replies[0], "⚠️ This question was already answered or replaced.");
   });
 
@@ -2324,7 +2325,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitted, true);
     assert.equal(consumes, 1);
     assert.equal(state.componentsCleared, 1);
-    assert.equal(state.replies[0], "✅ [sess-42] Answer sent.");
+    assert.equal(state.replies[0], "💬 [sess-42] Answer sent.");
   });
 
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
@@ -2380,6 +2381,29 @@ describe("createCallbackHandler()", () => {
       assert.equal(state.buttonsCleared, 1, kind);
       assert.deepEqual(state.replies, [], kind);
       assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons"], kind);
+    }
+  });
+
+  it("replies with the tool text when a successful merge or PR posted no outcome notice", async () => {
+    const cases = [
+      { kind: "worktree-create-pr" as const, text: "ℹ️ [ux-fix] PR was already merged: https://github.com/example/repo/pull/42" },
+      { kind: "worktree-update-pr" as const, text: "ℹ️ [ux-fix] PR is up to date: https://github.com/example/repo/pull/42" },
+      { kind: "worktree-merge" as const, text: "ℹ️ Session was already merged while preparing the merge." },
+    ];
+    for (const testCase of cases) {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
+        resolve: (): undefined => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+      } as any);
+      const tool = () => ({ execute: async () => createToolResult(testCase.text, true, false) }) as any;
+      const handler = createCallbackHandler("telegram", { makeAgentPrTool: tool, makeAgentMergeTool: tool });
+      const state = createCtx(`token-${testCase.kind}`);
+
+      assert.deepEqual(await handler.handler(state.ctx as any), { handled: true }, testCase.kind);
+      assert.equal(state.buttonsCleared, 1, testCase.kind);
+      assert.deepEqual(state.replies, [testCase.text], testCase.kind);
     }
   });
 
@@ -2447,7 +2471,7 @@ describe("createCallbackHandler()", () => {
       getPersistedSession: () => ({ name: "ux-fix" }),
       snoozeWorktreeDecision: (sessionId: string, options?: { notifyUser?: boolean }) => {
         snoozeCalls.push({ sessionId, notifyUser: options?.notifyUser });
-        return "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)";
+        return "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`";
       },
     } as any);
 
@@ -2460,7 +2484,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.editedMessages, []);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+    assert.deepEqual(state.replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
     assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 
@@ -2510,7 +2534,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(state.buttonsCleared, testCase.success ? 1 : 0, testCase.result);
-      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ Snoozed 24h for [ux-fix]"] : [], testCase.result);
+      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"] : [], testCase.result);
       assert.equal(state.replies[0], testCase.reply);
     }
   });
@@ -2524,7 +2548,7 @@ describe("createCallbackHandler()", () => {
       getPersistedSession: () => ({ name: "ux-fix" }),
       dismissWorktree: async () => shouldFail
         ? "Error: branch deletion failed."
-        : "🗑️ [ux-fix] Branch `agent/ux-fix` dismissed and permanently deleted.",
+        : "🗑️ [ux-fix] Discarded: branch `agent/ux-fix` and its worktree were permanently deleted.",
     } as any);
 
     const handler = createCallbackHandler();
@@ -2535,7 +2559,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(success.editedMessages, []);
     assert.equal(success.buttonMarkupEdits, 1);
     assert.equal(success.buttonsCleared, 1);
-    assert.equal(success.replies[0], "🗑️ Discarded");
+    // The 🗑️ notice is the one answer: no extra reply.
+    assert.deepEqual(success.replies, []);
 
     shouldFail = true;
     const failure = createCtx("token-dismiss");
@@ -2581,7 +2606,7 @@ describe("createCallbackHandler()", () => {
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
-      snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+      snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
     } as any);
 
     const clearedMessages: Array<{ text?: string }> = [];
@@ -2605,7 +2630,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(clearedMessages, [{ text: undefined }]);
-    assert.deepEqual(replies, [{ text: "⏭️ Snoozed 24h for [ux-fix]", ephemeral: true }]);
+    assert.deepEqual(replies, [{ text: "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`", ephemeral: true }]);
   });
 
   it("clears Telegram worktree buttons without editing prompt text when markup edit is unavailable", async () => {
@@ -2619,7 +2644,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
       } as any);
 
       const replies: string[] = [];
@@ -2642,7 +2667,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -2660,7 +2685,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
       } as any);
 
       const replies: string[] = [];
@@ -2683,7 +2708,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
       assert.match(warnings[0], /Failed to clear Discord worktree components: clearComponents failed/);
     } finally {
       console.warn = originalWarn;
@@ -2701,7 +2726,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
       } as any);
 
       const replies: string[] = [];
@@ -2724,7 +2749,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -2742,7 +2767,7 @@ describe("createCallbackHandler()", () => {
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
         getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+        snoozeWorktreeDecision: () => "⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`",
       } as any);
 
       const replies: string[] = [];
@@ -2768,7 +2793,7 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.deepEqual(editedMessages, []);
       assert.equal(clearAttempts, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(replies, ["⏭️ [ux-fix] Reminder snoozed 24h for `agent/ux-fix`"]);
       assert.match(warnings[0], /Failed to clear Discord worktree components: clear failed/);
     } finally {
       console.warn = originalWarn;
@@ -2850,7 +2875,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
     assert.equal(launches[0]?.workdir, "/home/alice/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.18 \[sess-plan\]/);
+    assert.match(state.replies[0], /^▶️ \[plugin-readiness-v2026\.5\.18\] Planning session started$/);
   });
 
   it("consumes Telegram forum-topic Start Plan callbacks without surfacing raw callback text", async () => {
@@ -2915,7 +2940,7 @@ describe("createCallbackHandler()", () => {
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.1 \[sess-plan-661\]/);
+    assert.match(state.replies[0], /^▶️ \[plugin-readiness-v2026\.6\.1\] Planning session started$/);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
   });
 
@@ -2966,7 +2991,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(launchCount, 0);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ Dismissed.");
+    assert.equal(state.replies[0], "⏭️ Plan offer dismissed.");
   });
 
   it("saves repo policy, clears only button markup, and continues the stored launch", async () => {
@@ -3322,7 +3347,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches.length, 1);
     assert.deepEqual(editedMessages, ["OpenClaw release monitor: v2026.6.1"]);
     assert.equal(buttonsCleared, 1);
-    assert.match(replies[0], /Planning session started: plugin-readiness-v2026\.5\.28 \[sess-plan-528\]/);
+    assert.match(replies[0], /^▶️ \[plugin-readiness-v2026\.5\.28\] Planning session started$/);
     assert.deepEqual(events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
   });
 

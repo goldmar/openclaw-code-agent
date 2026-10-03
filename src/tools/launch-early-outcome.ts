@@ -75,7 +75,7 @@ export async function awaitLaunchEarlyOutcome(
   }
   if (session.status === "completed") {
     return [
-      `[${session.name}] already finished (the user already sees the ✅ Completed notice). Tell the user what was done in this reply; no later wake repeats it.`,
+      `[${session.name}] already finished (the user already has the completion notice). Tell the user what was done in this reply; no later wake repeats it.`,
       ...(output ? [fenceAgentOutput(output, "output preview")] : []),
     ].join("\n");
   }

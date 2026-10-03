@@ -498,7 +498,7 @@ describe("GoalController", () => {
     assert.equal(task.iteration, 0);
     assert.equal(resumed, false);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-succeeded"]);
-    assert.match(notifications[0]?.text ?? "", /Goal task succeeded/);
+    assert.match(notifications[0]?.text ?? "", /Completed — goal succeeded/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Ralph iteration continued/);
   });
 
@@ -558,7 +558,7 @@ describe("GoalController", () => {
     assert.match(notifications[0]?.text ?? "", /Continued iteration 1\/8/);
     assert.match(notifications[0]?.text ?? "", /First controller turn found more repo checks to run/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /iteration 2\/8/);
-    assert.match(notifications[1]?.text ?? "", /Goal task succeeded/);
+    assert.match(notifications[1]?.text ?? "", /Completed — goal succeeded/);
     assert.doesNotMatch(notifications[1]?.text ?? "", /Ralph iteration continued/);
   });
 

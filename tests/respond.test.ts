@@ -818,7 +818,7 @@ describe("executeRespond", () => {
     });
 
     assert.equal(result.isError, undefined);
-    assert.match(result.text, /Plan rejected for \[test-session\]\. Session stopped\./);
+    assert.match(result.text, /\[test-session\] Plan rejected\. Session stopped\./);
     assert.equal(sentMessage, undefined, "Reject must not be forwarded as revision feedback");
     assert.deepEqual(killed, { id: "test-id", reason: "user" });
     assert.equal(session.approvalState, "rejected");

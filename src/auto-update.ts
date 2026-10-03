@@ -529,7 +529,7 @@ export class AutoUpdateService {
 
   private async sendRestartPrompt(route: NotificationRoute, version: string): Promise<void> {
     await this.notifier.send(route, [
-      `✅ Code Agent ${version} is installed. Restart the Gateway to load it (runs openclaw gateway restart)?`,
+      `⬆️ Code Agent ${version} is installed. Restart the Gateway to load it (runs openclaw gateway restart)?`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-restart", "Restart Gateway", {
         pluginUpdateVersion: version,

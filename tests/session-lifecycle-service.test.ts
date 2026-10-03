@@ -328,12 +328,16 @@ describe("SessionLifecycleService", () => {
 
   it("does not emit a second completion follow-up after a worktree outcome notification", async () => {
     const requests: Array<Record<string, unknown>> = [];
-    let terminalWakeChecks = 0;
+    // As in SessionManager: one terminal notice per terminal cycle.
+    const seenCycles = new Set<string>();
+    let strategyNotifies = true;
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
       clearWaitingTimestamp: () => {},
       handleWorktreeStrategy: async () => {
+        // A later pass over the same cycle finds the worktree resolved and sends nothing.
+        if (!strategyNotifies) return { notificationSent: false, worktreeRemoved: false };
         requests.push({
           label: "worktree-merge-success",
           userMessage: "✅ [portfolio-move-summary] Completed — Merged: agent/example → main (4 files, +531/-0)",
@@ -354,8 +358,10 @@ describe("SessionLifecycleService", () => {
       clearRetryTimersForSession: () => {},
       hasTurnCompleteWakeMarker: () => false,
       shouldEmitTurnCompleteWake: () => true,
-      shouldEmitTerminalWake: () => {
-        terminalWakeChecks += 1;
+      shouldEmitTerminalWake: (session) => {
+        const cycle = `${session.id}|${session.status}`;
+        if (seenCycles.has(cycle)) return false;
+        seenCycles.add(cycle);
         return true;
       },
       resolvePlanApprovalMode: () => "ask",
@@ -369,7 +375,7 @@ describe("SessionLifecycleService", () => {
       isAlreadyMerged: () => false,
     });
 
-    await service.handleSessionTerminal(createStubSession({
+    const session = createStubSession({
       id: "session-worktree-merge",
       name: "portfolio-move-summary",
       status: "completed",
@@ -377,12 +383,73 @@ describe("SessionLifecycleService", () => {
       worktreePath: "/tmp/worktree",
       originalWorkdir: "/tmp/repo",
       worktreeStrategy: "auto-merge",
-    }));
+    });
+    await service.handleSessionTerminal(session);
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0]?.label, "worktree-merge-success");
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
-    assert.equal(terminalWakeChecks, 1);
+
+    // The same terminal cycle handled again (worktree now resolved): the
+    // worktree notice owned it, so no generic ✅ Completed follows.
+    strategyNotifies = false;
+    await service.handleSessionTerminal(session);
+    assert.deepEqual(requests.map((request) => request.label), ["worktree-merge-success"]);
+  });
+
+  it("sends the user-only ✅ Completed when a session is closed as completed after ⏸️ Turn completed", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let currentStatus: "completed" | "running" = "completed";
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      // The orchestrator already got the turn-complete wake for this session.
+      hasTurnCompleteWakeMarker: () => true,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      getCurrentSessionStatus: () => currentStatus,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "done",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+    const session = createStubSession({
+      id: "session-closed-completed",
+      name: "closed-completed",
+      status: "completed",
+      killReason: "done",
+      duration: 12_000,
+      costUsd: 0.5,
+    });
+
+    await service.handleSessionTerminal(session);
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.label, "completed");
+    assert.match(String(requests[0]?.userMessage), /^✅ \[closed-completed\] Completed/);
+    // No second orchestrator wake.
+    assert.equal(requests[0]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[0]?.wakeMessageOnNotifyFailed, undefined);
+
+    // The id was resumed while worktree handling waited: no stale ✅ for the old run.
+    requests.length = 0;
+    currentStatus = "running";
+    await service.handleSessionTerminal(session);
+    assert.deepEqual(requests, []);
   });
 
   it("keeps completion follow-up summaries for degraded routes that still recover to a direct user route", () => {

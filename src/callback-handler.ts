@@ -194,11 +194,10 @@ function worktreeActionTextSucceeded(text: string): boolean {
   return !/^\s*(?:Error\b:?|❌|⚠️)/.test(text);
 }
 
-/** A merge that handed its conflicts to a resolver session is in progress, not failed. */
-function toolResultStartedConflictResolver(result: unknown): boolean {
+/** The tool already sent the user an outcome notice; otherwise the button shows the tool text. */
+function toolResultOutcomeNotified(result: unknown): boolean {
   if (!result || typeof result !== "object" || !("meta" in result)) return false;
-  const meta = (result as { meta?: { conflictResolverSessionId?: unknown } }).meta;
-  return typeof meta?.conflictResolverSessionId === "string";
+  return (result as { meta?: { outcomeNotified?: unknown } }).meta?.outcomeNotified === true;
 }
 
 /**
@@ -209,10 +208,9 @@ function toolResultStartedConflictResolver(result: unknown): boolean {
 async function reofferWorktreeDecisionAfterFailure(
   ctx: InteractiveCallbackContext,
   sessionId: string,
-  result: unknown,
   callbackAcknowledged: boolean,
 ): Promise<void> {
-  if (!sessionManager || toolResultStartedConflictResolver(result)) return;
+  if (!sessionManager) return;
   let reoffered = false;
   try {
     reoffered = (await sessionManager.reofferWorktreeDecision?.(sessionId)) ?? false;
@@ -532,9 +530,9 @@ function formatAnswerConfirmation(
   state: { forwardedToResumedSession: boolean; moreInputRequired: boolean },
 ): string {
   const choice = typeof token.label === "string" && token.label.trim() ? `: ${token.label.trim()}` : "";
-  if (state.forwardedToResumedSession) return `✅ [${sessionName}] Answer sent${choice}. The session resumed.`;
-  if (state.moreInputRequired) return `✅ [${sessionName}] Answer sent${choice}. Next question below.`;
-  return `✅ [${sessionName}] Answer sent${choice}.`;
+  if (state.forwardedToResumedSession) return `💬 [${sessionName}] Answer sent${choice}. The session resumed.`;
+  if (state.moreInputRequired) return `💬 [${sessionName}] Answer sent${choice}. Next question below.`;
+  return `💬 [${sessionName}] Answer sent${choice}.`;
 }
 
 const staleActionMessage = "⚠️ This button has expired or was already used.";
@@ -789,7 +787,7 @@ export function createCallbackHandler(
       if (actionSession && tokenMatchesAppliedPlanApproval(token, actionSession)) {
         sessionManager.consumePlanDecisionTokens?.(sessionId, token.planDecisionVersion!);
         await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-        await replyText(ctx, `✅ Plan v${token.planDecisionVersion} was already approved; resume is in progress or running.`);
+        await replyText(ctx, `👍 [${actionSessionName}] Plan v${token.planDecisionVersion} was already approved; the session is resuming or running.`);
         return { handled: true };
       }
       let invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
@@ -936,7 +934,7 @@ export function createCallbackHandler(
           if (actionSession && tokenMatchesAppliedPlanApproval(latestToken, actionSession)) {
             sessionManager.consumePlanDecisionTokens?.(sessionId, latestToken.planDecisionVersion!);
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, `✅ Plan v${latestToken.planDecisionVersion} was already approved; resume is in progress or running.`);
+            await replyText(ctx, `👍 [${actionSessionName}] Plan v${latestToken.planDecisionVersion} was already approved; the session is resuming or running.`);
             return { handled: true };
           }
           invalidPlanDecision = validatePlanDecisionToken(latestToken, actionSession);
@@ -1075,7 +1073,7 @@ export function createCallbackHandler(
           await clearPlanDecisionButtons(ctx, callbackAcknowledged);
           if (consumedToken.kind === "plan-reject") {
             const result = rejectPlanDecision(sessionManager, sessionId);
-            await replyText(ctx, `❌ ${result.text}`);
+            await replyText(ctx, `⛔ ${result.text}`);
             queueDecisionPressedNote(sessionManager, "plan-reject", sessionId, actionSessionName, tokenId);
           } else {
             // Also queues the orchestrator note that the next message is the change (N35).
@@ -1192,7 +1190,7 @@ export function createCallbackHandler(
               approvedVersion: consumedToken.pluginUpdateVersion,
             });
             try {
-              await replyText(ctx, `✅ ${text}`);
+              await replyText(ctx, `⬆️ ${text}`);
             } catch (err) {
               logButtonDiagnostic("callback_update_confirmation_failed", {
                 channel: ctx.channel,
@@ -1224,7 +1222,7 @@ export function createCallbackHandler(
             const text = autoUpdateService
               ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
               : "Skipped this update.";
-            await replyText(ctx, `✅ ${text}`);
+            await replyText(ctx, `⏭️ ${text}`);
             break;
           }
 
@@ -1233,7 +1231,7 @@ export function createCallbackHandler(
             const text = autoUpdateService
               ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
               : "OK. The update will be offered again tomorrow.";
-            await replyText(ctx, `✅ ${text}`);
+            await replyText(ctx, `⏭️ ${text}`);
             break;
           }
 
@@ -1243,10 +1241,12 @@ export function createCallbackHandler(
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               worktreeDecisionSucceeded = true;
+              // Nothing was posted (already merged, PR up to date, …): the tool text is the answer.
+              if (!toolResultOutcomeNotified(result)) await replyText(ctx, text);
               break;
             }
             await replyText(ctx, text);
-            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
+            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, callbackAcknowledged);
             break;
           }
 
@@ -1257,7 +1257,7 @@ export function createCallbackHandler(
               // After the final reminder, Later schedules nothing more (see snoozeWorktreeDecision).
               const confirmation = result.startsWith("⏭️ Kept for later")
                 ? `⏭️ Kept for later [${actionSessionName}]. No more reminders; /agent_status lists it.`
-                : `⏭️ Snoozed 24h for [${actionSessionName}]`;
+                : result;
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               await replyText(ctx, confirmation);
               worktreeDecisionSucceeded = true;
@@ -1274,9 +1274,9 @@ export function createCallbackHandler(
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               worktreeDecisionSucceeded = true;
             }
-            // Not ✅: that marker means the session completed, and a discard is not a completion.
-            await replyText(ctx, succeeded ? "🗑️ Discarded" : result);
-            if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, undefined, callbackAcknowledged);
+            // On success the `🗑️ [name] Discarded: …` notice is the one answer.
+            if (!succeeded) await replyText(ctx, result);
+            if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, callbackAcknowledged);
             break;
           }
 
@@ -1294,10 +1294,12 @@ export function createCallbackHandler(
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
               worktreeDecisionSucceeded = true;
+              // Nothing was posted (already merged, PR up to date, …): the tool text is the answer.
+              if (!toolResultOutcomeNotified(result)) await replyText(ctx, text);
               break;
             }
             await replyText(ctx, text);
-            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, result, callbackAcknowledged);
+            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, callbackAcknowledged);
             break;
           }
 
@@ -1332,7 +1334,7 @@ export function createCallbackHandler(
               alreadyAcknowledged: callbackAcknowledged,
               forceTelegramMarkupEdit: true,
             });
-            await replyText(ctx, `▶️ Planning session started: ${session.name} [${session.id}]`);
+            await replyText(ctx, `▶️ [${session.name}] Planning session started`);
             break;
           }
 
@@ -1341,7 +1343,7 @@ export function createCallbackHandler(
               alreadyAcknowledged: callbackAcknowledged,
               forceTelegramMarkupEdit: true,
             });
-            await replyText(ctx, `✅ Dismissed.`);
+            await replyText(ctx, `⏭️ Plan offer dismissed.`);
             break;
           }
 
@@ -1360,7 +1362,7 @@ export function createCallbackHandler(
               await replyText(ctx, !declined
                 ? "⚠️ That goal task no longer exists."
                 : declined.action === "stopped"
-                  ? `⛔ Goal task [${declined.task.name}] cancelled; its verifier commands were not run.`
+                  ? `⛔ [${declined.task.name}] Goal task cancelled; its verifier commands were not run.`
                   : `⚠️ Goal task [${declined.task.name}] is no longer waiting for confirmation (${declined.task.status}).`);
               break;
             }
@@ -1369,7 +1371,7 @@ export function createCallbackHandler(
               await replyText(ctx, !confirmed
                 ? "⚠️ That goal task no longer exists."
                 : confirmed.action === "started"
-                  ? `▶️ Goal task [${confirmed.task.name}] started with the confirmed verifier commands.`
+                  ? `▶️ [${confirmed.task.name}] Goal task started with the confirmed verifier commands.`
                   : `⚠️ Goal task [${confirmed.task.name}] is no longer waiting for confirmation (${confirmed.task.status}).`);
             } catch (err) {
               await replyText(ctx, `⚠️ Failed to start the goal task: ${err instanceof Error ? err.message : String(err)}`);
@@ -1462,7 +1464,7 @@ export function createCallbackHandler(
               forceTelegramMarkupEdit: true,
             });
             await replyText(ctx, [
-              `✅ Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`,
+              `🧭 Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`,
               ``,
               launchText,
             ].join("\n"));
@@ -1478,7 +1480,9 @@ export function createCallbackHandler(
               message: consumedToken.launchPrompt ?? "Continue where you left off.",
               userInitiated: true,
             });
-            await replyText(ctx, result.isError ? `⚠️ ${result.text}` : `▶️ [${actionSessionName}] Resumed.`);
+            // A resume already posts its own notice (`▶️ [name] Resumed | …`, `Relaunched fresh`, `👍 Plan approved`).
+            if (result.isError) await replyText(ctx, `⚠️ ${result.text}`);
+            else if (!result.userNoticeSent) await replyText(ctx, `▶️ [${actionSessionName}] Resumed.`);
             break;
           }
 

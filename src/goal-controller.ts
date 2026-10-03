@@ -1064,7 +1064,7 @@ export class GoalController {
     task.lastVerifierSummary = summary;
     task.updatedAt = Date.now();
     this.store.upsert(task);
-    this.notify(task, `✅ [${task.name}] Goal task succeeded\n\n${summary}`, "goal-task-succeeded");
+    this.notify(task, `✅ [${task.name}] Completed — goal succeeded\n\n${summary}`, "goal-task-succeeded");
   }
 
   private markTaskStopped(task: GoalTaskState, reason: string): void {

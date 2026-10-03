@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeAgentPrTool } from "../src/tools/agent-pr";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
+import { USER_BUTTON_TOOL_CALL_ID } from "../src/tools/worktree-tool-context";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { setPluginRuntime } from "../src/runtime-store";
@@ -22,7 +23,7 @@ const GENERATED_FOOTER = "Generated with [openclaw-code-agent](https://github.co
 const SESSION_NAME = "pr-flow";
 const SESSION_ID = "s-pr-flow";
 
-type AgentPrResult = { content: Array<{ type: "text"; text: string }>; meta: { success: boolean; state: string } };
+type AgentPrResult = { content: Array<{ type: "text"; text: string }>; meta: { success: boolean; state: string; outcomeNotified?: boolean } };
 type Outcome = { line: string; detailLines?: string[]; completionWakeOutcomeKey?: string };
 
 const LLM_METADATA = JSON.stringify({
@@ -257,7 +258,7 @@ describe("agent_pr execute(): new PRs", () => {
 
     const result = await f.run();
 
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     assert.equal(textOf(result), "ℹ️ [pr-flow] PR opened: https://github.com/acme/widget/pull/101");
     assert.equal(f.gh.remoteHead(f.branch), head, "the branch was pushed before the PR was opened");
     const [create] = f.gh.ghCalls("create");
@@ -303,7 +304,7 @@ describe("agent_pr execute(): new PRs", () => {
 
     const result = await f.run();
 
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     assert.equal(f.persisted()?.worktreeLifecycle?.state, "pr_open");
     assert.equal(f.persisted()?.worktreePrNumber, 101);
   });
@@ -340,7 +341,7 @@ describe("agent_pr execute(): new PRs", () => {
 
     const result = await f.run();
 
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     assert.match(textOf(result), /Target repo does not support draft PRs; created as regular \(non-draft\) PR instead\./);
     const creates = f.gh.ghCalls("create");
     assert.equal(creates.length, 2);
@@ -397,7 +398,7 @@ describe("agent_pr execute(): existing open PRs", () => {
 
     const result = await f.run();
 
-    assert.deepEqual(result.meta, { success: true, state: "pr_updated" });
+    assert.deepEqual(result.meta, { success: true, state: "pr_updated", outcomeNotified: true });
     const text = textOf(result);
     assert.match(text, new RegExp(`^ℹ️ \\[pr-flow\\] PR updated: ${seeded.url} \\(1 file, \\+1/-0\\)`));
     assert.match(text, /📝 Added comment detailing 1 new commit \(\+1 \/ -0\)/);
@@ -470,7 +471,7 @@ describe("agent_pr execute(): existing open PRs", () => {
     const result = await f.run();
 
     assert.deepEqual(result.meta, { success: true, state: "pr_open" });
-    assert.match(textOf(result), new RegExp(`⚠️ {2}Pushed to ${seeded.url} but failed to add comment\\.`));
+    assert.match(textOf(result), new RegExp(`⚠️ Pushed to ${seeded.url} but failed to add comment\\.`));
     assert.equal(f.outcomes.length, 0);
     assert.equal(f.persisted()?.worktreePrUrl, undefined, "a failed update does not claim the PR");
   });
@@ -482,7 +483,7 @@ describe("agent_pr execute(): existing open PRs", () => {
     const result = await f.run();
 
     assert.deepEqual(result.meta, { success: true, state: "pr_open" });
-    assert.match(textOf(result), new RegExp(`ℹ️ {2}PR already exists and is up to date: ${seeded.url}\\n\\nNo new commits to push\\.`));
+    assert.match(textOf(result), new RegExp(`ℹ️ \\[pr-flow\\] PR is up to date: ${seeded.url}\\n\\nNo new commits to push\\.`));
     assert.equal(f.gh.readState().comments.length, 0);
     assert.equal(f.persisted()?.worktreePrNumber, seeded.number);
   });
@@ -509,7 +510,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     const result = await f.run();
 
     assert.deepEqual(result.meta, { success: true, state: "merged" });
-    assert.match(textOf(result), new RegExp(`ℹ️ PR was already merged: ${seeded.url}`));
+    assert.match(textOf(result), new RegExp(`ℹ️ \\[pr-flow\\] PR was already merged: ${seeded.url}`));
     const persisted = f.persisted();
     assert.equal(persisted?.worktreeDisposition, "merged");
     assert.equal(persisted?.worktreePrUrl, seeded.url);
@@ -548,7 +549,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     const result = await f.run({ force_new: true });
 
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     const fresh = f.gh.readState().prs.find((pr) => pr.state === "OPEN");
     assert.ok(fresh && fresh.number !== closed.number);
     assert.equal(f.persisted()?.worktreePrUrl, fresh.url);
@@ -640,12 +641,13 @@ describe("worktree outcome completion", () => {
   }
 
   /** Finish the fixture session through the real terminal path with the given strategy. */
-  async function completeSession(f: Fixture, strategy: "ask" | "delegate") {
+  async function completeSession(f: Fixture, strategy: "ask" | "delegate" | "auto-merge" | "auto-pr") {
     f.sm.updatePersistedSession(SESSION_ID, { worktreeStrategy: strategy });
     const session = createStubSession({
       ...f.persisted(), id: SESSION_ID, status: "completed", phase: "implementing",
       originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
       startedAt: Date.now() - 60_000, duration: 60_000,
+      worktreeStrategy: strategy,
       getOutput: () => ["Finished."],
     });
     await f.sm["onSessionTerminal"](session);
@@ -689,7 +691,7 @@ describe("worktree outcome completion", () => {
 
     // A manual PR afterwards is a milestone, and a PR update too.
     const result = await f.run({ title: "Feature", body: "Adds a feature." });
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] PR opened: /);
     Object.assign(session, { worktreeState: "pr_open", worktreeLifecycle: { state: "pr_open" } });
     await f.sm["onSessionTerminal"](session);
@@ -704,7 +706,7 @@ describe("worktree outcome completion", () => {
     assert.equal(checkmarks(f).length, 1);
 
     const text = await runMerge();
-    assert.match(text, /^ℹ️ (Fast-forward|Merge commit): /);
+    assert.match(text, /\nMerge type: (Fast-forward|Merge commit)\./);
     assert.equal(f.outcomes.length, 1);
     assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] Merged: /);
     assert.equal(checkmarks(f).length, 1, "no second ✅");
@@ -723,12 +725,12 @@ describe("worktree outcome completion", () => {
     assert.equal(checkmarks(f).length, 0);
 
     const opened = await f.run({ title: "Feature", body: "Adds a feature." });
-    assert.deepEqual(opened.meta, { success: true, state: "created" });
+    assert.deepEqual(opened.meta, { success: true, state: "created", outcomeNotified: true });
     assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
 
     f.commit("more.txt", "more\n", "feat: add more");
     const updated = await f.run();
-    assert.deepEqual(updated.meta, { success: true, state: "pr_updated" });
+    assert.deepEqual(updated.meta, { success: true, state: "pr_updated", outcomeNotified: true });
     assert.match(f.outcomes[1]?.line ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
     assert.equal(checkmarks(f).length, 1, "exactly one ✅ for the terminal cycle");
   });
@@ -741,10 +743,98 @@ describe("worktree outcome completion", () => {
     assert.equal(checkmarks(f).length, 0);
 
     const text = await runMerge();
-    assert.match(text, /^ℹ️ (Fast-forward|Merge commit): /);
+    assert.match(text, /\nMerge type: (Fast-forward|Merge commit)\./);
     assert.equal(f.outcomes.length, 1);
     assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — Merged: /);
     assert.equal(checkmarks(f).length, 1);
+  });
+
+  // The 🔀 prompt replaces the ✅ whatever strategy led to it: a branch that
+  // changes hook / worktree-setup files is never merged or PR'd automatically.
+  it("completes an auto-merge session that ended in the decision prompt (hook change) with the merge button", async () => {
+    isolateGitHub();
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    await completeSession(f, "auto-merge");
+    assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-merge-ask"]);
+    assert.match(f.dispatches[0]?.userMessage ?? "", /^🔀 \[pr-flow\] Finished on /);
+    assert.equal(f.persisted()?.worktreeStrategy, "auto-merge");
+    assert.equal(checkmarks(f).length, 0);
+
+    const result = await makeAgentMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — Merged: /);
+    assert.equal(result.content[0]?.text.split("\n")[0], f.outcomes[0]?.line, "the tool result starts with the line the user got");
+    assert.equal(f.persisted()?.deferredCompletionCycle, undefined, "consumed");
+    assert.equal(checkmarks(f).length, 1);
+  });
+
+  it("completes an auto-pr session that ended in the decision prompt (hook change) with the PR button", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    await completeSession(f, "auto-pr");
+    assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-merge-ask"]);
+    assert.equal(f.persisted()?.worktreeStrategy, "auto-pr");
+    assert.equal(checkmarks(f).length, 0);
+
+    const opened = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME, title: "Feature", body: "Adds a feature." }) as AgentPrResult;
+    assert.deepEqual(opened.meta, { success: true, state: "created", outcomeNotified: true });
+    assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
+
+    f.commit("more.txt", "more\n", "feat: add more");
+    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME });
+    assert.match(f.outcomes[1]?.line ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
+    assert.equal(checkmarks(f).length, 1, "exactly one ✅ for the terminal cycle");
+  });
+
+  it("keeps the ✅ owed after a failed PR attempt and sends it once on the retry", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    await completeSession(f, "ask");
+    f.gh.updateState((state) => { state.failures.create = "GraphQL: Resource not accessible by integration (createPullRequest)"; });
+
+    const failed = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.deepEqual(failed.meta, { success: false, state: "error" });
+    assert.equal(f.outcomes.length, 0);
+    assert.equal(typeof f.persisted()?.deferredCompletionCycle, "number", "still owed");
+
+    f.gh.updateState((state) => { delete state.failures.create; });
+    const opened = await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.equal(opened.meta.state, "created");
+    assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
+    f.commit("more.txt", "more\n", "feat: add more");
+    await f.run();
+    assert.match(f.outcomes[1]?.line ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
+    assert.equal(checkmarks(f).length, 1);
+  });
+
+  it("completes a pending decision whose PR was already merged, and says so", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    await completeSession(f, "ask");
+    const seeded = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+
+    const result = await f.run();
+    assert.deepEqual(result.meta, { success: true, state: "merged", outcomeNotified: true });
+    assert.equal(f.outcomes.length, 1);
+    assert.equal(f.outcomes[0]?.line, `✅ [pr-flow] Completed — PR was already merged: ${seeded.url}`);
+    assert.equal(textOf(result).split("\n")[0], f.outcomes[0]?.line);
+    assert.equal(f.persisted()?.deferredCompletionCycle, undefined, "consumed");
+    assert.equal(checkmarks(f).length, 1);
+  });
+
+  it("does not owe a ✅ after a completion that ended in an attention line", async () => {
+    const f = await setup();
+    // No stored repo policy: the completion is policy-blocked (⚠️ with buttons).
+    await completeSession(f, "ask");
+    assert.deepEqual([...new Set(f.dispatches.map((request) => request.label))], ["worktree-policy-blocked"]);
+    assert.equal(f.persisted()?.deferredCompletionCycle, undefined);
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+
+    await f.run({ title: "Feature", body: "Adds a feature." });
+    assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] PR opened: /);
+    assert.equal(checkmarks(f).length, 0);
   });
 
   it("keeps a pending ask decision a milestone when the session is running again", async () => {
@@ -755,7 +845,7 @@ describe("worktree outcome completion", () => {
     assert.equal(f.persisted()?.worktreeState, "pending_decision");
 
     const result = await f.run({ title: "Feature", body: "Adds a feature." });
-    assert.deepEqual(result.meta, { success: true, state: "created" });
+    assert.deepEqual(result.meta, { success: true, state: "created", outcomeNotified: true });
     assert.match(f.outcomes[0]?.line ?? "", /^ℹ️ \[pr-flow\] PR opened: /);
     assert.equal(checkmarks(f).length, 0);
   });
@@ -777,10 +867,11 @@ describe("worktree outcome completion", () => {
     setSessionManager(restarted);
     const row = restarted.getPersistedSession(SESSION_ID);
     assert.equal(row?.worktreeState, "pending_decision", "the pending decision was loaded from disk");
+    assert.equal(typeof row?.deferredCompletionCycle, "number", "the owed ✅ was loaded from disk");
     assert.equal(row?.status, "completed");
 
     const opened = await f.run({ title: "Feature", body: "Adds a feature." });
-    assert.deepEqual(opened.meta, { success: true, state: "created" });
+    assert.deepEqual(opened.meta, { success: true, state: "created", outcomeNotified: true });
     f.commit("more.txt", "more\n", "feat: add more");
     await f.run();
     assert.equal(outcomes.length, 2);

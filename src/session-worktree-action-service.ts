@@ -165,7 +165,7 @@ export class SessionWorktreeActionService {
       return {
         kind: "notify",
         label: "worktree-no-commits-ahead",
-        message: `⚠️ [${session.name}] Auto-merge: branch '${branchName}' has no commits ahead of '${baseBranch}', but '${baseBranch}' has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to '${baseBranch}' instead of the worktree branch. Worktree: ${worktreePath}`,
+        message: `⚠️ [${session.name}] Auto-merge: branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, but \`${baseBranch}\` has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to \`${baseBranch}\` instead of the worktree branch. Worktree: ${worktreePath}`,
       };
     }
     if (completionState === "dirty-uncommitted") {

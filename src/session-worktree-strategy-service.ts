@@ -38,7 +38,7 @@ import {
   worktreeExists,
 } from "./worktree";
 import { createLogger } from "./logger";
-import { appendSessionStatsSuffix } from "./session-notification-stats";
+import { appendSessionStatsSuffix, type SessionNotificationStats } from "./session-notification-stats";
 
 const log = createLogger("session-worktree-strategy-service");
 
@@ -63,6 +63,18 @@ function buildWorktreeCycleKey(session: Pick<Session, "startedAt" | "worktreeBra
     session.worktreeBranch ?? "unknown-branch",
     session.worktreePath ?? "unknown-worktree",
   ].join(":");
+}
+
+/** The stats footer input shared by every line of this service (as on `✅ Completed`). */
+function sessionStats(session: Session): SessionNotificationStats {
+  return {
+    costUsd: session.costUsd,
+    duration: session.duration,
+    harnessName: session.harnessName,
+    model: session.model,
+    reasoningEffort: session.reasoningEffort,
+    backendInfo: session.backendInfo,
+  };
 }
 
 /**
@@ -344,6 +356,9 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
     if (action.strategy === "ask") {
+      // Reachable: the planner downgrades a requested `auto-pr` to `ask` (for
+      // example under a `never-pr` policy, where it cannot see an open PR), and
+      // `shouldUpdateExistingOpenPr` reads the session's requested strategy.
       if (await this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.baseBranch)) {
         return this.handleAutoPrStrategy(
           session,
@@ -416,6 +431,7 @@ export class SessionWorktreeStrategyService {
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
         preservedSummary: "existing PR worktree preserved until merge",
+        prUrl: session.worktreePrUrl,
       }));
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -544,8 +560,13 @@ export class SessionWorktreeStrategyService {
       policyReason,
       hookWarning,
       buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
+      stats: sessionStats(session),
     }));
     this.markPendingDecision(session);
+    // This prompt replaces the completion notice, whatever strategy led here
+    // (ask, or auto-merge / auto-pr / delegate with a hook warning): the merge
+    // or PR that resolves the decision sends the session's `✅` once.
+    this.updatePersistedSessionFor(session, { deferredCompletionCycle: session.startedAt });
     return { notificationSent: true, worktreeRemoved: false };
   }
 
@@ -650,14 +671,7 @@ export class SessionWorktreeStrategyService {
       filesChanged: diffSummary.filesChanged,
       insertions: diffSummary.insertions,
       deletions: diffSummary.deletions,
-    }), {
-      costUsd: session.costUsd,
-      duration: session.duration,
-      harnessName: session.harnessName,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
-      backendInfo: session.backendInfo,
-    });
+    }), sessionStats(session));
     let successMsg = outcomeLine;
     if (mergeResult.stashPopConflict) {
       successMsg += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${repoDir} to review stashed changes.`;

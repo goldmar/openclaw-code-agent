@@ -94,7 +94,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(userCheckmarks(f).length, 0);
 
       const later = await clickButton(buttonNamed(buttons, "Later"));
-      assert.match(later.replies.join("\n"), /Snoozed 24h/);
+      assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
       assert.equal(userCheckmarks(f).length + outcomes.length, 0, "Later keeps the decision pending");
 
       await clickButton(buttonNamed(buttons, "Merge"));
@@ -118,7 +118,7 @@ for (const name of BACKEND_NAMES) {
       const f = await finishSessionWithChange(name, repo, "ask");
       const buttons = await decisionButtons("worktree-merge-ask");
       const discard = await clickButton(buttonNamed(buttons, "Discard"));
-      assert.deepEqual(discard.replies, ["🗑️ Discarded"]);
+      assert.deepEqual(discard.replies, []);
       assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "dismissed");
       // A discarded session ends without a ✅.
       assert.equal(userCheckmarks(f).length, 0);

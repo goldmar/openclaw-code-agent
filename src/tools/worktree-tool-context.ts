@@ -166,21 +166,21 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
 }
 
 /**
- * True when resolving this worktree decision is also the session's completion
- * signal: an `ask` session announced its completion with the decision prompt
- * instead of `✅ Completed`, that decision is still pending, and the session is
- * still completed (not resumed since). Read it immediately before the patch
- * that resolves the decision; afterwards the stored state says resolved, so
- * later outcomes are milestones. Derived from stored state, so it survives a
- * Gateway restart.
+ * Defined (the cycle key) when this terminal cycle's completion notice was deferred to a `🔀`
+ * decision prompt (any strategy that ended in that prompt) and the session is
+ * still completed, so the outcome that resolves the decision is its `✅`.
+ * Read it immediately before the patch that resolves the decision and clear
+ * `deferredCompletionCycle` in that patch: the `✅` is then sent exactly once,
+ * a failed attempt leaves it owed, and it survives a Gateway restart.
  */
-export function resolvesPendingAskCompletion(sm: SessionManager, generation: SessionGeneration | undefined): boolean {
-  if (!generation) return false;
+export function owedCompletionCycle(sm: SessionManager, generation: SessionGeneration | undefined): number | undefined {
+  if (!generation) return undefined;
   const row = sm.getSessionGeneration(generation);
-  if (row?.worktreeStrategy !== "ask") return false;
-  if (row.worktreeState !== "pending_decision" && row.worktreeLifecycle?.state !== "pending_decision") return false;
+  const cycle = row?.deferredCompletionCycle;
+  // A marker from an earlier run of this id (the row's `createdAt` moved on) is stale.
+  if (!row || cycle === undefined || (row.createdAt !== undefined && row.createdAt !== cycle)) return undefined;
   const activeId = generation.kind === "oca" ? generation.sessionId : generation.pinnedLiveSessionId;
-  return ((activeId ? sm.get(activeId) : undefined) ?? row).status === "completed";
+  return ((activeId ? sm.get(activeId) : undefined) ?? row).status === "completed" ? cycle : undefined;
 }
 
 export function patchWorktreeTarget(sm: SessionManager, target: ResolvedWorktreeToolTarget, patch: Partial<PersistedSessionInfo>): boolean {

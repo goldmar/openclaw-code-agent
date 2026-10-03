@@ -101,7 +101,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(s.messages().filter((message) => /Which color\?/.test(message.text)).length, 1);
 
       const click = await s.click(green);
-      assert.deepEqual(click.replies, [`✅ [${session.name}] Answer sent: Green.`]);
+      assert.deepEqual(click.replies, [`💬 [${session.name}] Answer sent: Green.`]);
       assert.deepEqual(await answered, { kind: "answered", answers: { "Which color?": ["Green"] } });
       await waitUntil(() => !session.pendingInputState, "question cleared");
 

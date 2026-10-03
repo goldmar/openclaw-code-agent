@@ -415,10 +415,10 @@ export class SessionManager {
         const result = await makeAgentPrTool(undefined, { terminalCompletion: true }).execute("auto-pr", {
           session: session.id,
           base_branch: baseBranch,
-        }) as { meta?: { success?: boolean; state?: string } };
+        }) as { meta?: { success?: boolean; outcomeNotified?: boolean } };
         return {
           success: result?.meta?.success === true,
-          notificationSent: result?.meta?.state === "created" || result?.meta?.state === "pr_updated",
+          notificationSent: result?.meta?.outcomeNotified === true,
         };
       },
     });
@@ -467,6 +467,9 @@ export class SessionManager {
       hasTurnCompleteWakeMarker: (sessionId) => manager.lastTurnCompleteMarkers.has(sessionId),
       shouldEmitTurnCompleteWake: (session) => manager.shouldEmitTurnCompleteWake(session),
       shouldEmitTerminalWake: (session) => manager.shouldEmitTerminalWake(session),
+      getCurrentSessionStatus: (session) => (
+        manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
+      )?.status,
       resolvePlanApprovalMode: (session) => manager.resolvePlanApprovalMode(session),
       getPlanApprovalButtons: (sessionId, session) => interactions.getPlanApprovalButtons(sessionId, session),
       getResumeButtons: (sessionId, session) => interactions.getResumeButtons(sessionId, session),
@@ -1697,6 +1700,15 @@ export class SessionManager {
         summaryLines,
         hookWarning: options.hookWarning,
         buttons,
+        // No `backendInfo`: the routing proxy has none, and both footers must agree.
+        stats: {
+          costUsd: session.costUsd,
+          ...(activeSession
+            ? { duration: activeSession.duration, harnessName: activeSession.harnessName }
+            : { createdAt: persistedSession?.createdAt, completedAt: persistedSession?.completedAt, harness: persistedSession?.harness }),
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+        },
       }),
     );
 
@@ -2131,7 +2143,7 @@ export class SessionManager {
     routingProxy.originSessionKey = task.originSessionKey;
     const requiresGoalSuccessFollowup = label === "goal-task-succeeded";
     const goalSuccessUserMessage = [
-      `✅ [${task.name}] Goal task succeeded`,
+      `✅ [${task.name}] Completed — goal succeeded`,
       task.sessionId ? `Session: ${task.sessionName ?? task.name} [${task.sessionId}]` : undefined,
     ]
       .filter((line): line is string => Boolean(line))
