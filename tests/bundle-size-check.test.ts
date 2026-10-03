@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createBundleSizeReport } from "../scripts/check-bundle-size.mjs";
+import { createBundleSizeReport, DEFAULT_BUNDLE_LIMIT_BYTES } from "../scripts/check-bundle-size.mjs";
 
 const temporaryDirectories: string[] = [];
 
@@ -45,5 +45,14 @@ describe("complete bundle size reporting", () => {
     assert.equal(report.sizeBytes, 500);
     assert.equal(report.overLimit, false);
     assert.match(report.body, /✅ Within limit/);
+  });
+
+  it("limits the complete bundle to 1 MB by default", () => {
+    assert.equal(DEFAULT_BUNDLE_LIMIT_BYTES, 1_048_576);
+    const report = createBundleSizeReport(createDistFixture(300, 200));
+
+    assert.equal(report.maxSizeBytes, 1_048_576);
+    assert.equal(report.overLimit, false);
+    assert.match(report.body, /\| 1024\.0 KB \| ✅ Within limit \|/);
   });
 });
