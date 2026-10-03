@@ -62,8 +62,15 @@ export function textTopicCommand({ chat = COMMAND_GROUP, topic, accountId = "bot
   };
 }
 
-/** A command typed in a direct-messages topic (same `to` on both paths). */
-export function directTopicCommand({ chat = COMMAND_SENDER, topic, accountId = "bot1" }: TopicCommandInput, path: "native" | "text" = "native"): TelegramCommandContext {
+/**
+ * A command typed in a direct-messages topic (same `to` on both paths). Its
+ * session key is the shared main key, or with `threadSessionKey` the host's
+ * thread form, `…:thread:<chat>:direct-topic:<n>`.
+ */
+export function directTopicCommand(
+  { chat = COMMAND_SENDER, topic, accountId = "bot1", threadSessionKey = false }: TopicCommandInput & { threadSessionKey?: boolean },
+  path: "native" | "text" = "native",
+): TelegramCommandContext {
   return {
     channel: "telegram",
     ...(path === "text" ? { channelId: "telegram" as const } : {}),
@@ -71,7 +78,7 @@ export function directTopicCommand({ chat = COMMAND_SENDER, topic, accountId = "
     accountId,
     messageThreadId: topic,
     senderId: COMMAND_SENDER,
-    sessionKey: "agent:main:main",
+    sessionKey: threadSessionKey ? `agent:main:main:thread:${chat}:direct-topic:${topic}` : "agent:main:main",
   };
 }
 

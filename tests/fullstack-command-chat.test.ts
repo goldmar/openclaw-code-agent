@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { waitUntil } from "./harness-backends";
 import { startFullStack, TELEGRAM_TOPIC, type FullStack, type SentMessage } from "./fullstack-fixture";
-import { dmCommand, nativeTopicCommand, textTopicCommand } from "./command-contexts";
+import { directTopicCommand, dmCommand, nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 /**
  * One user-visible message per chat command, through the real plugin entry on
@@ -47,6 +47,13 @@ function visible(s: FullStack, reply: CommandReply, after: number): { reply: str
     reply: reply.suppressReply === true || !reply.text ? [] : [reply.text],
     notices: s.messages().filter((message) => message.index >= after),
   };
+}
+
+/** Like `settle`, for a session that completed. */
+async function settleCompleted(s: FullStack, name: string): Promise<void> {
+  await waitUntil(() => (s.sm.resolve(name)?.status ?? s.sm.getPersistedSession(name)?.status) === "completed", `${name} completed`);
+  await s.sm.whenStorePersisted();
+  await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
 /** Let the terminal lifecycle finish, so a notice that would be sent has been sent. */
@@ -267,4 +274,70 @@ describe("one message per chat command (Telegram topic)", () => {
     assert.equal(notice.accountId, TELEGRAM_TOPIC.accountId, "the notice leaves through the session's bot");
     assert.equal(String(notice.threadId), String(TELEGRAM_TOPIC.threadId));
   });
+
+  it("commands in a direct-messages topic: notices go into that topic, and /agent_kill there is one message", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    const direct = directTopicCommand({ topic: 9, accountId: TELEGRAM_TOPIC.accountId });
+    const launched = await command(s, "agent", { ...direct, args: `--name cmd-direct --workdir ${workdir()} --harness codex Start the task` });
+    assert.match(launched.text ?? "", /^🚀 \[cmd-direct\] Launched \| /);
+    await waitUntil(() => s.sm.resolve("cmd-direct")?.status === "running", "cmd-direct running");
+    assert.deepEqual(s.sm.resolve("cmd-direct")?.route, {
+      provider: "telegram",
+      accountId: TELEGRAM_TOPIC.accountId,
+      target: "1234:direct-topic:9",
+      threadId: undefined,
+      sessionKey: direct.sessionKey,
+    });
+
+    // From another direct topic of the same chat: a short reply there; the notice goes into the session's topic.
+    const before = s.host.durableSends.length;
+    const reply = await command(s, "agent_kill", { ...directTopicCommand({ topic: 8, accountId: TELEGRAM_TOPIC.accountId }, "text"), args: "cmd-direct" });
+    const notice = await s.waitForMessage(/^⛔ \[cmd-direct\] Stopped by user/, before);
+    await settle(s, "cmd-direct");
+    assert.equal(reply.text, "⛔ [cmd-direct] Stopped.");
+    // What the host's send gets: the in-band target (delivered with `direct_messages_topic_id`) and no thread id.
+    const sent = s.host.durableSends[notice.index]!;
+    assert.equal(sent.to, "1234:direct-topic:9");
+    assert.equal(sent.threadId, undefined);
+    assert.equal(sent.accountId, TELEGRAM_TOPIC.accountId);
+
+    // In the session's own direct topic the kill reply is the one message.
+    const again = await command(s, "agent", { ...direct, args: `--name cmd-direct-2 --workdir ${workdir()} --harness codex Start the task` });
+    assert.match(again.text ?? "", /^🚀 \[cmd-direct-2\] Launched \| /);
+    await waitUntil(() => s.sm.resolve("cmd-direct-2")?.status === "running", "cmd-direct-2 running");
+    const beforeOwn = s.host.durableSends.length;
+    const own = await command(s, "agent_kill", { ...directTopicCommand({ topic: 9, accountId: TELEGRAM_TOPIC.accountId }, "text"), args: "cmd-direct-2" });
+    await settle(s, "cmd-direct-2");
+    assert.match(own.text ?? "", /^⛔ \[cmd-direct-2\] Stopped by user/);
+    assert.deepEqual(visible(s, own, beforeOwn).notices.map((message) => message.text), []);
+  });
+
+  // The `⏸️ [name] Turn completed — session idle` line cannot be produced end
+  // to end: a real Session emits a non-question turn end only right after it
+  // completed itself (`SessionTurnRuntime.finishSuccessfulTurn` calls
+  // `completeTurn()` and then `emitTurnEnd(false)`), so the lifecycle's
+  // turn-end handler always sees a completed session and sends nothing. What a
+  // user sees for a turn that ends without a question is pinned here; the
+  // refused-`⏸️` case stays a unit test with a hand-built running session
+  // (tests/session-manager.test.ts).
+  for (const backend of ["codex", "claude-code"] as const) {
+    it(`${backend}: a turn that ends without a question completes the session with one ✅ and no ⏸️ line`, async () => {
+      const s = stack = await startFullStack({ backend, pluginConfig: PLUGIN_CONFIG });
+      const session = await s.launch({ name: "turn-done" });
+      const before = s.host.durableSends.length;
+      await s.backend.endTurn("Turn finished.");
+      await s.waitForMessage(/^✅ \[turn-done\] Completed/, before);
+      await settleCompleted(s, "turn-done");
+
+      assert.equal(session.status, "completed");
+      const texts = s.messages().filter((message) => message.index >= before).map((message) => message.text);
+      assert.equal(texts.filter((text) => /^✅ \[turn-done\]/.test(text)).length, 1, texts.join(" | "));
+      assert.deepEqual(texts.filter((text) => /Turn completed/.test(text)), [], "no idle line for a session that completed");
+
+      // Closing it again as completed changes nothing and sends no second ✅.
+      assert.equal(await s.runTool("agent_kill", { session: session.id, reason: "completed" }), "ℹ️ [turn-done] Already completed; nothing to stop.");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(s.messages().filter((message) => /^✅ \[turn-done\]/.test(message.text)).length, 1);
+    });
+  }
 });

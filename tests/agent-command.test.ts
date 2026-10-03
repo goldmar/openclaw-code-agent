@@ -84,10 +84,13 @@ describe("agent command", () => {
       assert.deepEqual(configs[0]?.route, { ...TOPIC_ROUTE, threadId: "1", sessionKey: general.sessionKey });
     }
 
-    // A direct-messages topic is not a route thread: the chat is not taken from `to`.
-    configs.length = 0;
-    await handler({ ...directTopicCommand({ topic: 5 }), args: "--name direct-topic --workdir /tmp --model sonnet --harness claude-code Fix it" });
-    assert.notEqual(configs[0]?.originChannel, "telegram|bot1|1234");
+    // A direct-messages topic: the topic is inside the target, never a thread id.
+    for (const direct of [directTopicCommand({ topic: 5 }), directTopicCommand({ topic: 5 }, "text"), directTopicCommand({ topic: 5, threadSessionKey: true })]) {
+      configs.length = 0;
+      await handler({ ...direct, args: "--name direct-topic --workdir /tmp --model sonnet --harness claude-code Fix it" });
+      assert.equal(configs[0]?.originChannel, "telegram|bot1|1234:direct-topic:5");
+      assert.deepEqual(configs[0]?.route, { provider: "telegram", accountId: "bot1", target: "1234:direct-topic:5", threadId: undefined, sessionKey: direct.sessionKey });
+    }
     configs.length = 0;
 
     // A DM with the default scope: every DM shares `agent:<id>:main`.

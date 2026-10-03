@@ -276,7 +276,47 @@ export function isInternalChatProvider(provider?: string): boolean {
   return Boolean(provider && INTERNAL_CHAT_PROVIDERS.has(provider.trim().toLowerCase()));
 }
 
+/**
+ * A Telegram direct-messages topic (the Direct Messages chat of a channel) is
+ * addressed inside the target, `<chat>:direct-topic:<n>`: that is the form the
+ * host's outbound sends parse (`parseTelegramTarget`) and deliver with
+ * `direct_messages_topic_id`. It is never a `threadId`, which the host sends as
+ * `message_thread_id`.
+ */
+const TELEGRAM_DIRECT_TOPIC_TARGET = /^(?:telegram:)?-?\d+:direct-topic:\d+$/i;
+
+export function isTelegramDirectTopicTarget(target?: string): boolean {
+  return TELEGRAM_DIRECT_TOPIC_TARGET.test(target?.trim() ?? "");
+}
+
+/**
+ * Canonical form of a Telegram route into a direct-messages topic: the topic
+ * is in the target and there is no thread id. A session key names such a topic
+ * as a thread (`…:thread:<chat>:direct-topic:<n>`, or `direct-topic:<n>`), and
+ * routes stored before this form existed carry that as `threadId`; both are
+ * folded into the target. A thread id that names another chat is left alone.
+ */
+function normalizeTelegramDirectTopicRoute(route: SessionRoute | undefined): SessionRoute | undefined {
+  if (!route || route.provider !== "telegram" || !route.target) return route;
+  if (isTelegramDirectTopicTarget(route.target)) {
+    return route.threadId === undefined ? route : { ...route, threadId: undefined };
+  }
+  const topic = /^(?:(-?\d+):)?direct-topic:(\d+)$/i.exec(String(route.threadId ?? "").trim());
+  if (!topic) return route;
+  const chat = route.target.trim().replace(/^telegram:/i, "");
+  if (!/^-?\d+$/.test(chat) || (topic[1] !== undefined && topic[1] !== chat)) return route;
+  return { ...route, target: `${chat}:direct-topic:${topic[2]}`, threadId: undefined };
+}
+
 export function routeFromOriginMetadata(
+  originChannel?: string,
+  originThreadId?: string | number,
+  originSessionKey?: string,
+): SessionRoute | undefined {
+  return normalizeTelegramDirectTopicRoute(routeFromRawOriginMetadata(originChannel, originThreadId, originSessionKey));
+}
+
+function routeFromRawOriginMetadata(
   originChannel?: string,
   originThreadId?: string | number,
   originSessionKey?: string,
@@ -392,7 +432,8 @@ export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
     provider: route?.provider,
     accountId: route?.accountId,
     target: route?.target,
-    threadId: route?.provider === "webchat"
+    // WebChat has no thread, and a Telegram direct-messages topic is in the target.
+    threadId: route?.provider === "webchat" || isTelegramDirectTopicTarget(route?.target)
       ? undefined
       : route?.threadId ?? (source.originThreadId != null ? String(source.originThreadId) : undefined),
   });

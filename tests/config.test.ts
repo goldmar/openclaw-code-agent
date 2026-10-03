@@ -833,13 +833,39 @@ describe("a Telegram chat command's origin and route", () => {
       assert.equal(isCommandInRouteChat(dm, { route }), true);
     }
 
-    // A direct-messages topic keeps the old route (its topic is not a thread id) and is never "the same chat".
+  });
+
+  it("routes a command typed in a direct-messages topic into that topic, on both paths", () => {
     for (const path of ["native", "text"] as const) {
-      const direct = directTopicCommand({ topic: 9 }, path);
-      assert.deepEqual(resolveSessionRoute(direct), sessionKeyOnly(direct));
-      assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234", threadId: "9" } }), false);
-      assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234" } }), false);
+      for (const threadSessionKey of [false, true]) {
+        const direct = directTopicCommand({ topic: 9, threadSessionKey }, path);
+        // The topic is inside the target (the form the host delivers with
+        // `direct_messages_topic_id`) and is never a thread id.
+        assert.equal(resolveOriginChannel(direct), "telegram|bot1|1234:direct-topic:9");
+        assert.equal(resolveOriginThreadId(direct), undefined);
+        const route = resolveSessionRoute(direct);
+        assert.deepEqual(route, { provider: "telegram", accountId: "bot1", target: "1234:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey });
+        assert.deepEqual(canonicalizeSessionRoute({ route }), route, "canonical");
+
+        // Only a command in that same direct topic, through the same bot, is the session's chat.
+        assert.equal(isCommandInRouteChat(direct, { route }), true);
+        assert.equal(isCommandInRouteChat({ ...direct, messageThreadId: undefined }, { route }), true);
+        assert.equal(isCommandInRouteChat({ ...direct, accountId: "bot2" }, { route }), false);
+        assert.equal(isCommandInRouteChat(directTopicCommand({ topic: 8, threadSessionKey }, path), { route }), false);
+        assert.equal(isCommandInRouteChat(directTopicCommand({ chat: "4321", topic: 9, threadSessionKey }, path), { route }), false);
+        assert.equal(isCommandInRouteChat({ ...direct, messageThreadId: 8 }, { route }), false, "`to` and thread id disagree");
+        // The plain DM, or a forum topic with the same numbers, is another place.
+        assert.equal(isCommandInRouteChat(dmCommandContext({}, path), { route }), false);
+        assert.equal(isCommandInRouteChat({ ...textTopicCommand({ chat: "1234", topic: 9 }) }, { route }), false);
+        assert.equal(isCommandInRouteChat({ ...nativeTopicCommand({ chat: "1234", topic: 9 }) }, { route }), false);
+        // And a direct-topic command is not in the plain DM or in a forum topic with the same numbers.
+        assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234" } }), false);
+        assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234", threadId: "9" } }), false);
+        assert.equal(isCommandInRouteChat(direct, { route: { ...route!, threadId: "9" } }), false);
+      }
     }
+    // Without a bot account the old fallbacks apply (no account-bearing route).
+    assert.equal(resolveOriginChannel({ ...directTopicCommand({ topic: 9 }), accountId: undefined }), "unknown");
   });
 
   it("leaves an explicit channel, a command without an account and other shapes as before", () => {
@@ -848,11 +874,8 @@ describe("a Telegram chat command's origin and route", () => {
     // No account: the old sender / session-key fallbacks.
     assert.equal(resolveOriginChannel({ ...dmCommand, accountId: undefined }), "telegram|1234");
     assert.equal(resolveOriginChannel({ ...topicCommand, accountId: undefined }), "unknown");
-    // A direct-messages topic is not a route thread: the chat is not taken from
-    // `to`, and the old fallbacks apply. Other shapes of `to` are not understood.
-    assert.equal(resolveOriginChannel({ ...dmCommand, to: "telegram:1234:direct-topic:9" }), "telegram|1234");
-    assert.equal(resolveOriginChannel(directTopicCommand({ topic: 9 })), "unknown");
-    assert.equal(resolveOriginChannel(directTopicCommand({ topic: 9 }, "text")), "unknown");
+    // A direct-messages topic stays inside the target. Other shapes of `to` are not understood.
+    assert.equal(resolveOriginChannel({ ...dmCommand, to: "telegram:1234:direct-topic:9" }), "telegram|default|1234:direct-topic:9");
     for (const to of ["telegram:-1001234567890:topic:", "telegram:-1001234567890:topic:42:extra", "telegram:-1001234567890:thread:42", "telegram:group:-1001234567890", "-1001234567890"]) {
       assert.equal(resolveOriginChannel({ ...topicCommand, to }), "unknown", to);
     }
@@ -973,6 +996,7 @@ describe("isCommandInRouteChat", () => {
     for (const to of [
       "-1001234567890",
       "telegram:-1001234567890:direct-topic:42",
+      "telegram:-1001234567890:direct-topic:",
       "telegram:-1001234567890:topic:",
       "telegram:-1001234567890:topic:42:topic:42",
       "telegram:-1001234567890:thread:42",

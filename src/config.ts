@@ -307,11 +307,14 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   // bot account that received it. Keeping that account makes the session's
   // notices leave through the bot the user typed to, and lets a later command
   // in the same chat be recognised (`isCommandInRouteChat`). The topic itself
-  // comes from `messageThreadId` (`resolveOriginThreadId`). Other providers'
-  // `to` is not the chat, and a `direct-topic` address is left to the
-  // fallbacks below: its topic is not a `message_thread_id`.
+  // comes from `messageThreadId` (`resolveOriginThreadId`). A direct-messages
+  // topic (`telegram:<chat id>:direct-topic:<n>`) stays inside the target: the
+  // host delivers that form with `direct_messages_topic_id`, and it is never a
+  // thread id. Other providers' `to` is not the chat.
   const commandTarget = parseTelegramCommandTarget(ctx?.to);
-  const commandChat = commandTarget && !commandTarget.directTopic ? commandTarget.chat : undefined;
+  const commandChat = commandTarget?.directTopic
+    ? `${commandTarget.chat}:direct-topic:${commandTarget.topic}`
+    : commandTarget?.chat;
   const commandAccount = toOptionalText(ctx?.accountId);
   if (commandChat && commandAccount && toOptionalText(ctx?.channel)?.toLowerCase() === "telegram" && !ctx?.messageChannel) {
     return `telegram|${commandAccount}|${commandChat}`;
@@ -347,7 +350,12 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
 
 /** Resolve Telegram thread/forum topic ID from command context. */
 export function resolveOriginThreadId(ctx: OriginContextLike | undefined): string | number | undefined {
-  return getTrustedDeliveryRoute(ctx).threadId ?? ctx?.messageThreadId ?? undefined;
+  const trusted = getTrustedDeliveryRoute(ctx).threadId;
+  if (trusted !== undefined) return trusted;
+  // In a direct-messages topic the host's `messageThreadId` is that topic's id,
+  // which is not a thread id (see `resolveOriginChannel`).
+  if (parseTelegramCommandTarget(ctx?.to)?.directTopic) return undefined;
+  return ctx?.messageThreadId ?? undefined;
 }
 
 /** Build the explicit session route used for notifications and wakes. */
@@ -373,10 +381,12 @@ export function resolveSessionRoute(
  * has `telegram:<chat id>:topic:<n>` with the same `<n>` in `messageThreadId`).
  * Elsewhere it is not (WhatsApp: the bot's own number; Discord and Slack:
  * `slash:<user>`), so every other provider and every unknown chat is never
- * "the same chat". A wrong "yes" would drop a notice from the chat that should
- * get it, so every form that is not understood is a "no": another `to` shape,
- * a `direct-topic` (its topic is not a route thread id), or a topic in `to`
- * that differs from `messageThreadId`.
+ * "the same chat". A command typed in a direct-messages topic
+ * (`telegram:<chat id>:direct-topic:<n>`) matches only a route into that same
+ * direct topic (`<chat id>:direct-topic:<n>` as the target, no thread). A wrong
+ * "yes" would drop a notice from the chat that should get it, so every form
+ * that is not understood is a "no": another `to` shape, or a topic in `to` that
+ * differs from `messageThreadId`.
  */
 export function isCommandInRouteChat(
   ctx: OriginContextLike | undefined,
@@ -385,16 +395,19 @@ export function isCommandInRouteChat(
   const route = target?.route;
   if (!route || route.provider !== "telegram" || toOptionalText(ctx?.channel)?.toLowerCase() !== "telegram") return false;
   const own = parseTelegramCommandTarget(ctx?.to);
-  if (!own || own.directTopic) return false;
+  if (!own) return false;
   const thread = toOptionalText(ctx?.messageThreadId);
   if (own.topic && thread && thread !== own.topic) return false;
   const accountId = toOptionalText(ctx?.accountId);
+  // A command's bot account must be the route's: a route without one is
+  // delivered through the default bot, which need not be the command's.
+  if (accountId && accountId !== route.accountId) return false;
   // The host addresses the chat as `telegram:<id>`; stored targets are bare.
-  return own.chat === route.target?.trim().replace(/^telegram:/, "")
-    // A command's bot account must be the route's: a route without one is
-    // delivered through the default bot, which need not be the command's.
-    && !(accountId && accountId !== route.accountId)
-    && (thread ?? own.topic ?? "") === String(route.threadId ?? "");
+  const routeTarget = route.target?.trim().replace(/^telegram:/, "");
+  if (own.directTopic) {
+    return routeTarget === `${own.chat}:direct-topic:${own.topic}` && String(route.threadId ?? "") === "";
+  }
+  return own.chat === routeTarget && (thread ?? own.topic ?? "") === String(route.threadId ?? "");
 }
 
 /**
