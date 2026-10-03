@@ -23,7 +23,7 @@ export function registerAgentStatusCommand(api: CommandApi): void {
       if (!sessionManager) {
         return { text: SERVICE_NOT_RUNNING };
       }
-      return { text: getSessionsListingText(sessionManager, "waiting") };
+      return { text: getSessionsListingText(sessionManager, "waiting", undefined, { forUser: true }) };
     },
   });
 }

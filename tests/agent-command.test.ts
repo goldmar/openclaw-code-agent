@@ -114,7 +114,10 @@ describe("agent command", () => {
     });
 
     assert.equal(spawnCalled, false);
-    assert.match(result.text, /Resume-first protection blocked a fresh launch/);
-    assert.match(result.text, /agent_respond/);
+    // In user terms: no ids, no tool syntax (the tool keeps its resume-first text).
+    assert.equal(
+      result.text,
+      "❌ [linked] Not launched: this chat already has a session for this directory (running).\nContinue it with /agent_respond linked <message>, or stop it with /agent_kill linked.",
+    );
   });
 });

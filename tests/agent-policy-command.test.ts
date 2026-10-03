@@ -124,7 +124,7 @@ describe("/agent_policy command", () => {
 
     const result = await captureHandler()({ args: "pr-allowed", workspaceDir: "/repo" });
 
-    assert.match(result.text, /Error: Policy pr-allowed requires PR automation/);
+    assert.match(result.text, /^❌ Policy pr-allowed requires PR automation/);
     assert.match(result.text, /Choose never-pr or manual/);
   });
 
