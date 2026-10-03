@@ -50,7 +50,7 @@ You review first. Read the whole plan with `agent_output(session, full=true)`, t
 
 ### `planApproval: "approve"`
 
-You may approve, but only after it verifies the plan: read it with `agent_output(session, full=true)`. Escalate with `agent_escalate(session, kind='plan', summary)` instead when it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task. Otherwise approve with `approval_rationale`.
+You may approve, but only after you verify the plan: read it with `agent_output(session, full=true)`. Escalate with `agent_escalate(session, kind='plan', summary)` instead when it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task. Otherwise approve with `approval_rationale`.
 
 ## Worktrees
 

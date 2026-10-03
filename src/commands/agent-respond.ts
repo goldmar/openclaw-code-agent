@@ -44,13 +44,13 @@ export function registerAgentRespondCommand(api: CommandApi): void {
 
       const refArg = consumeFirstCommandArg(remaining);
       if (!refArg) {
-        return { text: "Error: Missing message. Usage: /agent_respond <id-or-name> <message>" };
+        return { text: "❌ Missing message. Usage: /agent_respond <id-or-name> <message>" };
       }
 
       const ref = refArg.value;
       const message = refArg.rest;
       if (!message.trim()) {
-        return { text: "Error: Empty message. Usage: /agent_respond <id-or-name> <message>" };
+        return { text: "❌ Empty message. Usage: /agent_respond <id-or-name> <message>" };
       }
 
       const target = sessionManager.resolve(ref) ?? sessionManager.getPersistedSession(ref);

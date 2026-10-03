@@ -53,7 +53,7 @@ export function registerGoalCommand(api: CommandApi): void {
       const first = consumeFirstCommandArg(raw);
       const subcommand = first?.value.toLowerCase();
       if (subcommand === "status") {
-        return { text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), first!.rest) };
+        return { text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), first!.rest).replace(/^Error:/u, "❌") };
       }
       if (subcommand === "stop") {
         const ref = first!.rest.trim();
@@ -119,14 +119,14 @@ export function registerGoalCommand(api: CommandApi): void {
           if (!Number.isNaN(parsed) && parsed > 0) maxIterations = parsed;
         } else if (token === "--max-cost-usd" && i + 1 < tokens.length) {
           const parsed = Number.parseFloat(tokens[++i]);
-          if (!Number.isFinite(parsed) || parsed <= 0) return { text: "Error: --max-cost-usd must be a positive number." };
+          if (!Number.isFinite(parsed) || parsed <= 0) return { text: "❌ --max-cost-usd must be a positive number." };
           maxCostUsd = parsed;
         } else if (token === "--permission-mode" && i + 1 < tokens.length) {
           const mode = tokens[++i];
           if (mode === "default" || mode === "plan" || mode === "bypassPermissions") {
             permissionMode = mode;
           } else {
-            return { text: `Error: Invalid permission mode "${mode}".` };
+            return { text: `❌ Invalid permission mode "${mode}".` };
           }
         } else if (token === "--harness" && i + 1 < tokens.length) {
           harness = tokens[++i];
@@ -135,14 +135,14 @@ export function registerGoalCommand(api: CommandApi): void {
           if (mode === "ralph" || mode === "verifier") {
             loopMode = mode;
           } else {
-            return { text: `Error: Invalid goal mode "${mode}". Use ralph or verifier.` };
+            return { text: `❌ Invalid goal mode "${mode}". Use ralph or verifier.` };
           }
         } else if (token === "--completion-promise" && i + 1 < tokens.length) {
           completionPromise = tokens[++i];
         } else if (token === "--verify" && i + 1 < tokens.length) {
           const command = tokens[++i].trim();
           if (!command) {
-            return { text: "Error: --verify commands must not be empty." };
+            return { text: "❌ --verify commands must not be empty." };
           }
           verifierCommands.push(command);
         } else {

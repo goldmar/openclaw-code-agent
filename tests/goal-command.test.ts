@@ -28,7 +28,7 @@ describe("goal command", () => {
       args: '--verify "" ship the feature',
     });
 
-    assert.equal(result?.text, "Error: --verify commands must not be empty.");
+    assert.equal(result?.text, "❌ --verify commands must not be empty.");
   });
 
   it("uses shared launch resolution for verifier goals", async () => {

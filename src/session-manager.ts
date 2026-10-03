@@ -1962,7 +1962,7 @@ export class SessionManager {
           userMessage: `ℹ️ [${parentSession.name}] ${
             landed?.worktreeMerged || landed?.worktreeLifecycle?.state === "merged"
               ? "Already merged; nothing left to do."
-              : prUrl ? `PR is up to date: ${prUrl}` : "Conflict resolved; nothing was merged automatically."}`,
+              : prUrl ? `PR: ${prUrl}` : "Conflict resolved; nothing was merged automatically. The branch is kept."}`,
           notifyUser: "always",
         });
       }

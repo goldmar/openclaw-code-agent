@@ -296,6 +296,30 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
+  it("suppresses the session's stop notice only when the stop reply replaces it", () => {
+    for (const sameChat of [true, false]) {
+      const session = createStubSession({ id: "session-1", name: "goal-task" });
+      const killed: string[] = [];
+      const controller = new GoalController({
+        resolve: (id: string) => (id === "session-1" ? session : undefined),
+        // The flag must be set before the kill lands.
+        kill: (id: string) => { killed.push(`${id}:${session.stopNoticeReplaced === true}`); },
+        emitGoalTaskUpdate: (_task: GoalTaskState, text: string) => text,
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+      const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+      store.upsert(task);
+
+      const reply: { sameChat: () => boolean; text?: string } = { sameChat: () => sameChat };
+      assert.equal(controller.stopTask(task.id, reply)?.action, "stopped");
+
+      assert.deepEqual(killed, [`session-1:${sameChat}`]);
+      assert.equal(session.stopNoticeReplaced === true, sameChat);
+      assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+    }
+  });
+
   it("edits and persists an active goal without changing session lifecycle fields", () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({

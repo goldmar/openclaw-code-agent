@@ -680,6 +680,10 @@ export class GoalController {
     }
 
     if (task.sessionId) {
+      // In the task's own chat the reply is the one message: the session's
+      // `⛔ [name] Stopped by user` does not follow it.
+      const session = reply?.sameChat(task) ? this.sessionManager.resolve?.(task.sessionId) : undefined;
+      if (session) session.stopNoticeReplaced = true;
       this.sessionManager.kill(task.sessionId, "user");
     }
 

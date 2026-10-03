@@ -75,7 +75,7 @@ describe("agent command", () => {
     });
 
     // One message (N45): the reply is the launch line, with no separate 🚀 notice.
-    assert.equal(result.text, "🚀 [agent command] Launched | /tmp | sonnet\nFollow it with /agent_output agent command or /agent_status.");
+    assert.equal(result.text, "🚀 [agent command] Launched | /tmp | sonnet\nFollow it with /agent_output agent command or /agent_sessions.");
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.prompt, "Fix the auth bug");
     assert.equal(spawnConfig?.model, "sonnet");

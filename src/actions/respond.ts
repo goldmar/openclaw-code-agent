@@ -148,7 +148,7 @@ function formatResumeUnavailable(
     isError: true,
     userText: `❌ [${session.name}] ${details
       ? details.replace(/^Backend resume failed: /u, "Resume failed: ")
-      : `Cannot resume: ${reason === "completed"
+      : session.status === "starting" ? "Still starting; try again in a moment." : `Cannot resume: ${reason === "completed"
         ? "the session is closed"
         : reason === "already_running" ? "the session is already running" : "nothing is left to resume from"}.${
         reason === "already_running" ? "" : " Start a new one."}`}`,
@@ -578,7 +578,7 @@ export async function executeRespond(
   const notRunning = (status: string): RespondResult => ({
     text: `Error: Session ${target.name} [${session?.id ?? getSessionRef(persisted!)}] is not running (status: ${status}). Cannot send a message to a non-running session.`,
     isError: true,
-    userText: fail(`Not running (status: ${status}).`),
+    userText: fail("Not running; start a new session."),
   });
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 

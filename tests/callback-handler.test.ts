@@ -2627,6 +2627,28 @@ describe("createCallbackHandler()", () => {
     assert.equal(reoffers, 0);
   });
 
+  it("answers a second Discard button that hits a raw error in user terms", async () => {
+    let discarded = false;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      resolve: (): undefined => undefined,
+      // Discarded by another writer between the button's own check and the discard.
+      getPersistedSession: () => ({ name: "ux-fix", ...(discarded ? { worktreeLifecycle: { state: "dismissed" } } : {}) }),
+      dismissWorktree: async () => {
+        discarded = true;
+        return "Error: The session's repository was not found.";
+      },
+      reofferWorktreeDecision: async () => { throw new Error("nothing is left to re-offer"); },
+    } as any);
+
+    const state = createCtx("token-dismiss");
+    assert.deepEqual(await createCallbackHandler().handler(state.ctx as any), { handled: true });
+
+    assert.deepEqual(state.replies, ["❌ [ux-fix] The session's repository was not found."]);
+    assert.equal(state.buttonsCleared, 1);
+  });
+
   it("uses the same text-result predicate for discard prompt cleanup and replies", async () => {
     const cases = [
       { result: "Error: branch deletion failed.", success: false, reply: "❌ [ux-fix] Discard failed: branch deletion failed." },

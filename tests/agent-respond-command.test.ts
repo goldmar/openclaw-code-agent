@@ -163,6 +163,13 @@ describe("agent_respond command", () => {
       "❌ [test-session] Cannot resume: the session is closed. Start a new one.",
     );
 
+    // Not "nothing is left to resume from": the session has not started yet.
+    managerWith(createStubSession({ status: "starting", backendRef: undefined }));
+    assert.equal(
+      (await captureAgentRespondCommand()({ args: "test-id continue", ...SESSION_CHAT })).text,
+      "❌ [test-session] Still starting; try again in a moment.",
+    );
+
     assert.equal(
       (await captureAgentRespondCommand()({ args: "missing hello", ...SESSION_CHAT })).text,
       '❌ Session "missing" not found.',

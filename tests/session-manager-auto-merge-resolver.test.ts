@@ -79,9 +79,9 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
       { stored: { worktreeMerged: true }, text: "ℹ️ [parent-session] Already merged; nothing left to do." },
       {
         stored: { worktreePrUrl: "https://github.com/example/repo/pull/7" },
-        text: "ℹ️ [parent-session] PR is up to date: https://github.com/example/repo/pull/7",
+        text: "ℹ️ [parent-session] PR: https://github.com/example/repo/pull/7",
       },
-      { stored: {}, text: "ℹ️ [parent-session] Conflict resolved; nothing was merged automatically." },
+      { stored: {}, text: "ℹ️ [parent-session] Conflict resolved; nothing was merged automatically. The branch is kept." },
     ];
     for (const testCase of cases) {
       const { sm, cleanup } = createSessionManager();

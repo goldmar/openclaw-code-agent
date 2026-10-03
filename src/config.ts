@@ -183,6 +183,8 @@ interface OriginContextLike {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
+  /** Raw "To" of a chat command (`<provider>:<chat id>`). */
+  to?: string;
   messageChannel?: string;
   agentAccountId?: string;
   sessionKey?: string;
@@ -335,20 +337,26 @@ export function resolveSessionRoute(
 
 /**
  * A chat command was typed in the chat (and thread) that receives the session's
- * or goal task's notices. Only then may the command's reply replace a notice;
- * an unknown command chat is never "the same chat".
+ * or goal task's notices. Only then may the command's reply replace a notice.
+ * Compared on the address the host gives the command (`channel`, `to`,
+ * `messageThreadId`), never on the session key: with the default DM scope every
+ * DM on every channel shares `agent:<id>:main`. An unknown command chat is
+ * never "the same chat".
  */
 export function isCommandInRouteChat(
   ctx: OriginContextLike | undefined,
-  target: { route?: SessionRoute; originSessionKey?: string } | undefined,
+  target: { route?: SessionRoute } | undefined,
 ): boolean {
   const route = target?.route;
-  if (!ctx || !route) return false;
-  const key = ctx.sessionKey?.trim();
-  if (key && (key === target.originSessionKey || key === route.sessionKey)) return true;
-  const own = resolveSessionRoute(ctx);
-  return Boolean(own?.target && own.provider !== "system" && own.provider === route.provider
-    && own.target === route.target && (own.threadId ?? "") === (route.threadId ?? ""));
+  const own = ctx?.deliveryContext ?? { channel: ctx?.channel, to: ctx?.to, threadId: ctx?.messageThreadId };
+  const provider = own.channel?.trim().toLowerCase();
+  // The host addresses a chat as `<provider>:<id>`; stored targets are bare.
+  const chat = (value?: string) => {
+    const id = value?.trim();
+    return id?.startsWith(`${provider}:`) ? id.slice(provider!.length + 1) : id;
+  };
+  return Boolean(route && provider && provider !== "system" && chat(own.to) && provider === route.provider
+    && chat(own.to) === chat(route.target) && String(own.threadId ?? "") === String(route.threadId ?? ""));
 }
 
 /** Extract agentId from "channel|account|target" string. */

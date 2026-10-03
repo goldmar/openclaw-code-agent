@@ -121,12 +121,11 @@ export function registerAgentCommand(api: CommandApi): void {
           model: session.model,
           reasoningEffort: session.reasoningEffort,
         }) ?? resolution.harness;
-        return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_status.` };
+        return { text: `🚀 [${session.name}] Launched | ${session.worktreePath ?? resolution.workdir} | ${harnessLabel}\nFollow it with /agent_output ${session.name} or /agent_sessions.` };
       } catch (err: unknown) {
         const message = errorMessage(err);
         // The limit error names the orchestrator's tools; the user gets the command.
-        const reason = message.replace(/ Use agent_sessions .*$/u, "");
-        return { text: `❌ Launch failed: ${reason}\nUse /agent_sessions to see active sessions.` };
+        return { text: `❌ Launch failed: ${message.replace(/ Use agent_sessions .*$/u, "\nUse /agent_sessions to see active sessions.")}` };
       }
     },
   });

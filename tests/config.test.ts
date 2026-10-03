@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   setPluginConfig,
   pluginConfig,
+  isCommandInRouteChat,
   resolveAgentChannel,
   extractAgentId,
   resolveAgentId,
@@ -724,5 +725,58 @@ describe("autoUpdate config", () => {
     assert.equal(pluginConfig.autoUpdate, false);
     setPluginConfig({ autoUpdate: true });
     assert.equal(pluginConfig.autoUpdate, true);
+  });
+});
+
+describe("isCommandInRouteChat", () => {
+  // The host's PluginCommandContext: `channel`, `senderId`, `sessionKey`, `to`
+  // and `messageThreadId`, without a `deliveryContext`.
+  const topicRoute = { provider: "telegram", target: "-1001234567890", threadId: "42", sessionKey: "agent:main:telegram:group:-1001234567890:topic:42" };
+  const topicCommand = {
+    channel: "telegram",
+    senderId: "1234",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+    to: "telegram:-1001234567890",
+    messageThreadId: 42,
+  };
+  const dmRoute = { provider: "telegram", target: "1234", sessionKey: "agent:main:main" };
+  const dmCommand = { channel: "telegram", senderId: "1234", sessionKey: "agent:main:main", to: "telegram:1234" };
+
+  it("is true for a command typed in the session's Telegram topic", () => {
+    assert.equal(isCommandInRouteChat(topicCommand, { route: topicRoute }), true);
+    assert.equal(isCommandInRouteChat({ ...topicCommand, messageThreadId: "42" }, { route: topicRoute }), true);
+  });
+
+  it("is false for another topic of the same group", () => {
+    assert.equal(isCommandInRouteChat({ ...topicCommand, messageThreadId: 7 }, { route: topicRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...topicCommand, messageThreadId: undefined }, { route: topicRoute }), false);
+    // The session key alone does not make it the same chat.
+    assert.equal(
+      isCommandInRouteChat({ ...topicCommand, to: "telegram:-1009876543210" }, { route: topicRoute }),
+      false,
+    );
+  });
+
+  it("is true for a command typed in the session's Telegram DM", () => {
+    assert.equal(isCommandInRouteChat(dmCommand, { route: dmRoute }), true);
+    assert.equal(isCommandInRouteChat(dmCommand, { route: { ...dmRoute, target: "telegram:1234" } }), true);
+  });
+
+  it("is false for the shared main session key from another provider or DM", () => {
+    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: "discord", to: "user:1234" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: "discord", to: "discord:1234" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, senderId: "4321", to: "telegram:4321" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, messageThreadId: 3 }, { route: dmRoute }), false);
+  });
+
+  it("is false when the command's chat or the route is unknown", () => {
+    assert.equal(isCommandInRouteChat(undefined, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat(dmCommand, undefined), false);
+    assert.equal(isCommandInRouteChat(dmCommand, {}), false);
+    assert.equal(isCommandInRouteChat({ sessionKey: "agent:main:main" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ channel: "telegram", senderId: "1234", sessionKey: "agent:main:main" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, to: "telegram:" }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: undefined }, { route: dmRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...dmCommand, channel: "system", to: "system" }, { route: { provider: "system", target: "system" } }), false);
   });
 });

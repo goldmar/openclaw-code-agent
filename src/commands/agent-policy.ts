@@ -1,7 +1,7 @@
 import { sessionManager } from "../singletons";
 import type { RepoIntegrationPolicy } from "../types";
 import { consumeFirstCommandArg, SERVICE_NOT_RUNNING } from "./args";
-import { formatStoredRepoPolicyLine, getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { formatStoredRepoPolicyLine, getRepoPolicyOption, getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
 import { formatRepoPolicyReset, formatUnresolvedRepoPolicy } from "../tools/agent-repo-policy";
 
 interface AgentPolicyCommandContext {
@@ -55,32 +55,30 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
       if (action === "reset") {
         // `/agent_policy reset <path>` also targets a stored repo whose directory is gone.
         const target = (first?.rest ? consumeFirstCommandArg(first.rest)?.value : undefined) ?? ctx.workspaceDir;
-        if (!target) return { text: "Error: workspaceDir is required. Usage: /agent_policy reset [repo-path]" };
+        if (!target) return { text: "❌ workspaceDir is required. Usage: /agent_policy reset [repo-path]" };
         const removed = await sessionManager.resetRepoPolicy(target);
         return { text: formatRepoPolicyReset(target, removed, "command") };
       }
       const workdir = ctx.workspaceDir;
-      if (!workdir) return { text: "Error: workspaceDir is required." };
+      if (!workdir) return { text: "❌ workspaceDir is required." };
       if (action && isPolicy(action)) {
         if (typeof sessionManager.resolveRepoPolicy === "function") {
           const resolution = await sessionManager.resolveRepoPolicy(workdir);
           if (resolution.identity) {
             const validationError = validateRepoPolicyForPrAvailability(action, resolution.prAvailable);
-            if (validationError) return { text: `Error: ${validationError}` };
+            if (validationError) return { text: `❌ ${validationError}` };
           }
         }
         const record = await sessionManager.setRepoPolicy(workdir, action);
-        if (!record) return { text: `Error: ${workdir} is not a git repository.` };
-        const savedText = `Repo policy set to ${record.policy} for ${record.repoRoot}.`;
+        if (!record) return { text: `❌ ${workdir} is not a git repository.` };
+        // As with the policy button: the `🚀 [name] Launched | …` notice of a waiting launch follows.
+        const savedText = `🧭 Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`;
         try {
           // Guard is intentional: tests and older plugin-injected managers may not have this newer method.
           if (typeof sessionManager.continueLaunchAfterManualRepoPolicy !== "function") {
             return { text: savedText };
           }
           const continuation = await sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, action);
-          if (continuation.kind === "launched") {
-            return { text: [savedText, "", continuation.text].join("\n") };
-          }
           if (continuation.kind === "ambiguous") {
             return {
               text: [

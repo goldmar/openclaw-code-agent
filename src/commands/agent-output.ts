@@ -53,8 +53,8 @@ export function registerAgentOutputCommand(api: CommandApi): void {
         return { text: "Usage: /agent_output <id-or-name> [--full] [--lines N]" };
       }
 
-      const text = getSessionOutputText(sessionManager, ref, { full, lines });
-      return { text };
+      // Tool results keep `Error:`; the command answers in user terms.
+      return { text: getSessionOutputText(sessionManager, ref, { full, lines }).replace(/^Error:/u, "❌") };
     },
   });
 }

@@ -1327,7 +1327,7 @@ export function createCallbackHandler(
             if (succeeded || alreadyDiscarded) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
             if (succeeded) worktreeDecisionSucceeded = true;
             // On success the `🗑️ [name] Discarded: …` notice is the one answer.
-            if (alreadyDiscarded) await replyText(ctx, result);
+            if (alreadyDiscarded) await replyText(ctx, result.startsWith("Error") ? failureReply(actionSessionName, result) : result);
             else if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "Discard", result);
             break;
           }
