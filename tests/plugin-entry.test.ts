@@ -553,10 +553,11 @@ describe("plugin entry source", () => {
     const floor = escapeRegExp(openclawFloor);
 
     assert.match(reference, /## Compatibility And Upgrades/);
-    assert.match(reference, new RegExp(`requires, is built against, and is validated against OpenClaw \`${target}\``));
-    assert.match(readme, new RegExp(`requires, is built against, and is validated against OpenClaw \`${target}\``));
-    assert.match(reference, new RegExp(`Package installation therefore requires \`${target}\``));
-    assert.match(reference, new RegExp(`keep the verified \`${floor}\` compatibility floor`));
+    assert.match(reference, new RegExp(`unreleased compatibility update targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(readme, new RegExp(`unreleased compatibility update targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(reference, new RegExp(`installation minimum is \`${target}\``));
+    assert.match(reference, new RegExp(`npm peer compatibility floor remains \`${floor}\``));
+    assert.match(reference, /keeps the OCA version unchanged pending a separate release/);
     assert.match(readme, /installing this package changes no OpenClaw host configuration/);
     assert.match(readme, /Upgrading from 4\.x is not migration-free/);
     assert.match(readme, /Restrictive tool allowlists must add the new `agent_session_action` tool/);

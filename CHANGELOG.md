@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Target the OpenClaw `2026.9.8` package and public plugin SDK, with `2026.9.8` as the installation and loading minimum. Retain the declared `2026.9.7` plugin API, Gateway, and npm peer contracts: this hotfix introduces no public SDK changes used by OCA. This is compatibility preparation; the OCA version bump and publication remain separate.
+
+### Upgrade notes
+
+- Existing harness model restrictions, plan approval, worktree policies, and stored routes remain in effect. Keep model settings under `harnesses.<name>` and supply `allowedModels` alongside a custom `defaultModel` when it must remain restricted. Start Plan automation needs `planOfferTool: true`, effective tool grants, and an enabled delivery channel independently; OCA does not enable bundled harness plugins or migrate host configuration.
+
 ### Fixed
 
 - Codex sessions turn off Codex's native thread goals (`features.goals = false` on every `thread/start`, `thread/resume` and `thread/fork`). Native goals are on by default in every supported Codex CLI (0.156.1 and later). With them on, the model could create a goal, and Codex then started continuation turns by itself that OCA neither requested nor accounted for: they bypassed idle timeouts, cost tracking and `agent_goal` iteration and cost limits, and a stored active goal re-armed on resume. Claude Code sessions remove the `ProposeGoal` tool, so the model can no longer propose a native session goal; a `/goal` typed into a session is not blocked.
