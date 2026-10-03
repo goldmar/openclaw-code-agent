@@ -636,6 +636,8 @@ export interface PersistedSessionInfo {
   worktreePrUrl?: string;
   /** PR number for commenting and state checks. */
   worktreePrNumber?: number;
+  /** `agent_pr` found the branch's PR closed without merging: the decision buttons offer New PR. Cleared when a PR is open or merged. */
+  worktreePrClosed?: boolean;
   /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge or PR. */
   pendingWorktreeDecisionSince?: string;
   /**

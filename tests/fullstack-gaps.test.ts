@@ -164,6 +164,69 @@ describe("overlapping worktree retries", () => {
   });
 });
 
+describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
+  type RetryRequest = { label?: string; buttons?: Array<Array<{ callbackData: string; url?: string }>>; hooks?: { onNotifyAmbiguous?: () => void } };
+
+  /** Hold the retry prompt's dispatch back and hand its request to the test. */
+  function captureRetry(s: FullStack): { request: () => RetryRequest | undefined } {
+    const notifications = (s.sm as unknown as { notifications: { dispatch: (session: unknown, request: RetryRequest) => void } }).notifications;
+    const dispatch = notifications.dispatch.bind(notifications);
+    let captured: RetryRequest | undefined;
+    notifications.dispatch = (session, request) => {
+      if (request.label === "worktree-decision-retry") captured = request;
+      else dispatch(session, request);
+    };
+    return { request: () => captured };
+  }
+  const freshTokens = (request: RetryRequest): string[] => (request.buttons ?? []).flat().filter((button) => !button.url).map((button) => button.callbackData);
+
+  it("reports it as not delivered within the wait and keeps both button sets", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    const original = await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const retry = captureRetry(s);
+
+    const lateResults: boolean[] = [];
+    const reoffer = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } });
+    await waitUntil(() => Boolean(retry.request()), "the retry prompt dispatch");
+    // The direct send timed out: nobody knows whether the prompt arrived.
+    retry.request()!.hooks!.onNotifyAmbiguous!();
+
+    // Not "delivered": the caller sends its plain failure line (no silence).
+    assert.equal(await reoffer, false);
+    assert.deepEqual(lateResults, [], "the result came within the wait");
+    // The prompt may have arrived: its buttons stay valid, and so do the older ones.
+    const fresh = freshTokens(retry.request()!);
+    assert.ok(fresh.length > 0);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+    assert.ok(s.sm.getActionToken(original.payload), "the original controls stay usable");
+    // The entry is settled: a later delivered retry retires the older controls.
+    const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers.get(session.id);
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false]);
+  });
+
+  it("reports a late unknown outcome as a late failure, once", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const retry = captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+
+    const lateResults: boolean[] = [];
+    const reoffer = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } });
+    // The bounded wait ends first: the button sends nothing yet.
+    assert.equal(await reoffer, "pending");
+    assert.deepEqual(lateResults, []);
+
+    // The send then ends without a known outcome: the caller is told to send its plain line.
+    retry.request()!.hooks!.onNotifyAmbiguous!();
+    assert.deepEqual(lateResults, [false]);
+    for (const tokenId of freshTokens(retry.request()!)) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+  });
+});
+
 describe("auto-merge conflicts", () => {
   it("starts a conflict resolver session on a real rebase conflict and merges once it finishes", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
@@ -450,6 +513,43 @@ describe("goal loop", () => {
     await s.backend.endTurn("Plan: create done.txt.");
     await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
     assert.equal(s.backend.turns.length, turnsBefore + 1, "the loop does not approve its own plan");
+  });
+
+  it("stops the goal when its session, suspended while the plan waits, is stopped with agent_kill", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const workdir = goalWorkdir();
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.backend.waitForTurns(turnsBefore + 1);
+    const task = s.gc.listTasks()[0]!;
+    await s.backend.endTurn("Plan: create done.txt.");
+    await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+    s.gc.planDecisionRecheckMs = 50;
+    const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+
+    // The idle timeout suspends the session; its plan decision survives.
+    session.kill("idle-timeout");
+    await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+    await s.sm.whenStorePersisted();
+    assert.equal(s.sm.getPersistedSession(session.id)?.pendingPlanApproval, true);
+    // Its lifecycle stays "waiting for the plan decision", not "suspended".
+    assert.equal(s.sm.resolve(session.id)?.lifecycle, "awaiting_plan_decision");
+    // Let the goal controller see the suspension (it then waits for the plan decision).
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(s.gc.getTask(task.id)?.status, "waiting_for_plan_approval");
+
+    assert.match(await s.runTool("agent_kill", { session: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\)\.$/);
+
+    // The plan is rejected with the session, so nothing keeps waiting for it.
+    const row = s.sm.getPersistedSession(session.id);
+    assert.equal(row?.pendingPlanApproval, false);
+    assert.equal(row?.approvalState, "rejected");
+    assert.equal(row?.lifecycle, "terminal");
+    assert.equal(s.sm.resolve(session.id), undefined);
+    await waitUntil(() => s.gc.getTask(task.id)?.status !== "waiting_for_plan_approval", "the goal task leaves the plan wait");
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
+    assert.match(s.gc.getTask(task.id)?.failureReason ?? "", /plan was rejected/i);
+    assert.equal(s.backend.turns.length, turnsBefore + 1, "nothing was resumed");
   });
 
   it("fails the goal when the session waits for a user answer it cannot give itself", async () => {

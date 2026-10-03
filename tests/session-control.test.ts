@@ -167,9 +167,10 @@ describe("session-control app layer", () => {
   });
 
   it("says stopped, not killed, for a session that already ended", () => {
-    const sm: any = { resolve: () => ({ name: "s", id: "1", status: "killed" }) };
+    const closeSuspendedSession = SessionManager.prototype.closeSuspendedSession;
+    const sm: any = { resolve: () => ({ name: "s", id: "1", status: "killed" }), closeSuspendedSession };
     assert.equal(getKillSessionText(sm, "s"), "ℹ️ [s] Already stopped; nothing to stop.");
-    const stored: any = { resolve: (): undefined => undefined, getPersistedSession: () => ({ name: "p", status: "killed", lifecycle: "terminal" }) };
+    const stored: any = { resolve: (): undefined => undefined, getPersistedSession: () => ({ name: "p", status: "killed", lifecycle: "terminal" }), closeSuspendedSession };
     assert.equal(getKillSessionText(stored, "p"), "ℹ️ [p] Already stopped; nothing to stop.");
     const done: any = { resolve: () => ({ name: "s", id: "1", status: "completed" }) };
     assert.equal(getKillSessionText(done, "s"), "ℹ️ [s] Already completed; nothing to stop.");
@@ -182,7 +183,7 @@ describe("session-control app layer", () => {
     const sm: any = {
       resolve: () => session,
       kill: () => { killed = true; },
-      closeSuspendedSession: (ref: string, completed: boolean) => { closed.push([ref, completed]); return true; },
+      closeSuspendedSession: (ref: string, completed: boolean) => { closed.push([ref, completed]); return completed ? "completed" : "killed"; },
     };
     assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped (it was not running).");
     assert.equal(getKillSessionText(sm, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
@@ -190,8 +191,54 @@ describe("session-control app layer", () => {
     assert.equal(killed, false, "nothing is running: no kill and no stop notice");
 
     // A session that could not be closed is reported as it is.
-    const stuck: any = { resolve: () => session, closeSuspendedSession: () => false };
+    const stuck: any = { resolve: () => session, closeSuspendedSession: (): undefined => undefined };
     assert.equal(getKillSessionText(stuck, "s", "killed"), "ℹ️ [s] Already stopped; nothing to stop.");
+
+    // A session that was never persisted can only be stopped: the reply says what happened.
+    const unpersisted: any = { resolve: () => session, closeSuspendedSession: () => "killed" };
+    assert.equal(getKillSessionText(unpersisted, "s", "completed"), "⛔ [s] Stopped (it was not running).");
+
+    // Marked completed with an open branch: nothing lands it, and the result says so.
+    const branch = { ...session, worktreeBranch: "agent/s", worktreeStrategy: "ask" };
+    const withBranch: any = { resolve: () => branch, closeSuspendedSession: () => "completed" };
+    assert.equal(
+      getKillSessionText(withBranch, "s", "completed"),
+      "ℹ️ [s] Marked as completed (it was not running). Its branch `agent/s` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).",
+    );
+    const merged: any = { resolve: () => ({ ...branch, worktreeMerged: true }), closeSuspendedSession: () => "completed" };
+    assert.equal(getKillSessionText(merged, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
+  });
+
+  it("rejects a plan that still waits when a suspended session is closed, loaded or stored", () => {
+    const pendingPlan = { status: "killed", lifecycle: "awaiting_plan_decision", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 2, actionablePlanDecisionVersion: 2 };
+    // Stored only.
+    const cleared: string[] = [];
+    let patch: Record<string, unknown> | undefined;
+    const stored: any = {
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ sessionId: "s-plan", name: "plan", ...pendingPlan }),
+      clearPlanDecisionTokens: (ref: string) => { cleared.push(ref); },
+      updatePersistedSession: (_ref: string, next: Record<string, unknown>) => { patch = next; return true; },
+      closeSuspendedSession: SessionManager.prototype.closeSuspendedSession,
+    };
+    assert.equal(getKillSessionText(stored, "plan", "killed"), "⛔ [plan] Stopped (it was not running).");
+    assert.deepEqual(cleared, ["s-plan"], "the Approve / Revise / Reject buttons are retired");
+    assert.equal(patch?.pendingPlanApproval, false);
+    assert.equal(patch?.approvalState, "rejected");
+    assert.equal(patch?.planDecisionVersion, 3);
+    assert.equal("actionablePlanDecisionVersion" in patch! && patch!.actionablePlanDecisionVersion, undefined);
+    assert.equal(patch?.lifecycle, "terminal");
+    assert.equal(patch?.status, "killed");
+    assert.equal(patch?.resumable, false);
+
+    // A session the user stopped (its plan was rejected then) is not dormant: nothing is closed again.
+    const stopped: any = {
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ sessionId: "s-stopped", name: "stopped", status: "killed", lifecycle: "terminal" }),
+      updatePersistedSession: () => { throw new Error("must not patch a stopped session"); },
+      closeSuspendedSession: SessionManager.prototype.closeSuspendedSession,
+    };
+    assert.equal(getKillSessionText(stopped, "stopped", "killed"), "ℹ️ [stopped] Already stopped; nothing to stop.");
   });
 
   it("words every goal task status for the user", () => {

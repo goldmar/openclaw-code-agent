@@ -64,7 +64,8 @@ export type ExistingTargetPrBranchResolution =
     };
 
 export function shouldIgnoreClosedTargetPrForForceNew(forceNew: boolean | undefined, prStatus: PRStatus | undefined): boolean {
-  return forceNew === true && prStatus?.exists === true && prStatus.state !== "open";
+  // Only a PR closed without merging is replaced: an open or merged PR refuses force_new.
+  return forceNew === true && prStatus?.exists === true && prStatus.state === "closed";
 }
 
 export function normalizeForceNewReplacementPrStatus(
@@ -536,7 +537,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           },
         );
         // Every PR resolution consumes the `✅` owed to a deferred completion.
-        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined })) {
+        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined, worktreePrClosed: undefined })) {
           throw new Error("PR operation completed, but its selected session state could not be updated. Reconcile before retrying.");
         }
       };
@@ -772,6 +773,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           worktreeDisposition: "merged",
           worktreeDecisionSnoozedUntil: undefined,
           deferredCompletionCycle: undefined,
+          worktreePrClosed: undefined,
         };
         const owedCycle = owedCompletionCycle(sm, target.generation);
         if (!patchWorktreeTarget(sm, target, mergedPatch)) {
@@ -787,7 +789,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           meta: { success: true, state: "merged", ...(owedCycle === undefined ? {} : { outcomeNotified: true }) },
         } satisfies AgentPrExecuteResult;
       } else if (prStatus.exists && prStatus.state === "closed") {
-        // Case: PR was closed without merging — ask user what to do
+        // Case: PR was closed without merging — ask user what to do. The row
+        // remembers it, so every decision prompt offers New PR from now on.
+        patchWorktreeTarget(sm, target, { worktreePrClosed: true });
         return {
           content: [{
             type: "text",

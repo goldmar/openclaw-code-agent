@@ -76,6 +76,18 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(launch({ originChannel: "telegram|999", originThreadId: 42 }), "resolved");
     assert.equal(launch({ originChannel: "telegram|bot2|123", originThreadId: 42 }), "resolved");
     assert.equal(launch({ originChannel: "discord|123", originThreadId: 42 }), "resolved");
+
+    // A launch that names no account does not match a session stored with one
+    // (the same user's DM with another bot is another chat).
+    const accountless = resolveAgentLaunchRequest(
+      { prompt: "Continue work" },
+      { workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "123", threadId: 42 } },
+      {
+        list: () => [{ id: "sess-1", name: "linked", status: "running", workdir: "/tmp", originChannel: "telegram|bot1|123", originThreadId: 42 }],
+        listPersistedSessions: () => [],
+      },
+    ).kind;
+    assert.equal(accountless, "resolved");
   });
 
   it("uses deliveryContext when resolving linked-session routing", () => {

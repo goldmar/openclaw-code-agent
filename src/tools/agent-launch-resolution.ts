@@ -136,7 +136,9 @@ function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
  * Without a shared session key the chats are compared as routes, not as
  * `originChannel` strings: the same chat is stored with a bot account
  * (`telegram|<account>|<chat>`) or without one, depending on how the session
- * was launched. An account on only one side does not make it another chat.
+ * was launched. A stored session without an account (an older launch) matches
+ * the chat whatever bot the launch names; when the stored session has one, the
+ * launch must name the same: the same user's DM with another bot is another chat.
  */
 function routeMatchesSession(
   session: {
@@ -168,7 +170,7 @@ function routeMatchesSession(
   return own.provider === launch.provider
     && own.target === launch.target
     && normalizeThreadId(own.threadId) === normalizeThreadId(launch.threadId)
-    && (!own.accountId || !launch.accountId || own.accountId === launch.accountId);
+    && (!own.accountId || own.accountId === launch.accountId);
 }
 
 function summarizeLinkedSessions(matches: LinkedSessionMatch[]): string {

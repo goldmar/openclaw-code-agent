@@ -224,4 +224,47 @@ describe("one message per chat command (Telegram topic)", () => {
     assert.equal(s.backend.turns.length, turns, "no \"Continue where you left off.\" turn");
     assert.deepEqual(s.messages().filter((message) => message.index >= before).map((message) => message.text), []);
   });
+
+  it("/agent_kill on a session suspended while its plan waits rejects the plan and retires its buttons", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    const session = await s.launch({ name: "cmd-plan", permissionMode: "plan", planApproval: "ask" });
+    void s.backend.proposePlan("1. Add the migration\n2. Add tests");
+    await waitUntil(() => session.pendingPlanApproval === true, "pending plan approval");
+    const approve = await s.waitForButton("Approve");
+    const turns = s.backend.turns.length;
+    // What the idle timer does: the session is suspended and its plan keeps waiting.
+    session.kill("idle-timeout");
+    await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+    await s.sm.whenStorePersisted();
+    assert.equal(s.sm.getPersistedSession(session.id)?.pendingPlanApproval, true);
+
+    const reply = await command(s, "agent_kill", { ...TOPIC_COMMAND, args: "cmd-plan" });
+    assert.equal(reply.text, "⛔ [cmd-plan] Stopped (it was not running).");
+
+    const row = s.sm.getPersistedSession(session.id);
+    assert.equal(row?.pendingPlanApproval, false);
+    assert.equal(row?.approvalState, "rejected");
+    assert.equal(row?.lifecycle, "terminal");
+    // The old Approve button no longer approves or resumes anything.
+    const click = await s.click(approve);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.match(click.replies.join("\n"), /^⚠️/);
+    assert.equal(s.backend.turns.length, turns, "no resumed turn");
+    assert.equal(s.sm.resolve("cmd-plan"), undefined);
+  });
+
+  it("a text command through another bot account is not the session's chat: short reply plus the notice", async () => {
+    const s = stack = await startFullStack({ backend: "codex", pluginConfig: PLUGIN_CONFIG });
+    await launchFromTopic(s, "cmd-other-bot", TEXT_TOPIC_COMMAND);
+
+    const before = s.host.durableSends.length;
+    // The same chat and topic, typed to another bot of the same Gateway.
+    const reply = await command(s, "agent_kill", { ...TEXT_TOPIC_COMMAND, accountId: "other-bot", args: "cmd-other-bot" });
+    const notice = await s.waitForMessage(/^⛔ \[cmd-other-bot\] Stopped by user/, before);
+    await settle(s, "cmd-other-bot");
+
+    assert.equal(reply.text, "⛔ [cmd-other-bot] Stopped.");
+    assert.equal(notice.accountId, TELEGRAM_TOPIC.accountId, "the notice leaves through the session's bot");
+    assert.equal(String(notice.threadId), String(TELEGRAM_TOPIC.threadId));
+  });
 });

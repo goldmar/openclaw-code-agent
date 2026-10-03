@@ -233,6 +233,33 @@ interface SessionManagerServiceBundle {
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
+/**
+ * Stopping a session whose plan still waits for a decision rejects that plan:
+ * the decision is closed and no prompt for it stays actionable.
+ */
+function pendingPlanRejectedPatch(
+  session: Pick<PersistedSessionInfo, "approvalState" | "planDecisionVersion">,
+): Partial<PersistedSessionInfo> {
+  return {
+    lifecycle: "terminal",
+    runtimeState: "stopped",
+    pendingPlanApproval: false,
+    planApprovalContext: undefined,
+    approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
+    planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
+    actionablePlanDecisionVersion: undefined,
+    canonicalPlanPromptVersion: undefined,
+    approvalPromptRequiredVersion: undefined,
+    approvalPromptVersion: undefined,
+    approvalPromptStatus: "not_sent",
+    approvalPromptTransport: "none",
+    approvalPromptMessageKind: "none",
+    approvalPromptLastAttemptAt: undefined,
+    approvalPromptDeliveredAt: undefined,
+    approvalPromptFailedAt: undefined,
+  };
+}
+
 export class SessionManager {
   private readonly registry: SessionRuntimeRegistry;
   private sessions: Map<string, Session>;
@@ -1413,7 +1440,10 @@ export class SessionManager {
   ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
-    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions, { newPr: options.newPr });
+    // A PR found closed without merging is recorded on the row, so the 🔀
+    // prompt, the reminders and the re-offer all show New PR.
+    const newPr = options.newPr === true || this.getPersistedSession(sessionId)?.worktreePrClosed === true;
+    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions, { newPr });
   }
 
   private async getPolicyAwareWorktreeDecisionButtons(
@@ -1770,6 +1800,14 @@ export class SessionManager {
             hooks?.onDuplicateSkipped?.(reason);
             settle("skipped");
           },
+          // Outcome unknown (for example a send that timed out): a caller that
+          // handles it stops waiting; it decides what the user still gets.
+          ...(hooks?.onNotifyAmbiguous ? {
+            onNotifyAmbiguous: () => {
+              hooks.onNotifyAmbiguous?.();
+              settle("pending");
+            },
+          } : {}),
         },
       });
     });
@@ -1823,7 +1861,8 @@ export class SessionManager {
    * the older ones stay usable. Resolves true only when the new controls were
    * delivered, so the caller may clear the spent ones, and `"pending"` when the
    * delivery is still in flight after the bounded wait: the prompt is then the
-   * answer, and `onLateResult` reports how it ended. `closedPr` (the PR action
+   * answer, and `onLateResult` reports how it ended (false also when the
+   * outcome stays unknown, so the caller never leaves the user without a message). `closedPr` (the PR action
    * found its PR closed without merging) replaces Open PR / Sync PR by a
    * **New PR** button, which opens a fresh pull request.
    */
@@ -1886,6 +1925,9 @@ export class SessionManager {
     });
     // Set once the bounded wait is over: a result after that is a late one.
     let waitEnded = false;
+    // The send ended without a known outcome (it timed out): the prompt may or
+    // may not have arrived.
+    let ambiguous = false;
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
@@ -1906,9 +1948,18 @@ export class SessionManager {
           dropFresh();
           if (waitEnded) options.onLateResult?.(false);
         },
+        // Unknown outcome: the fresh buttons stay valid in case the prompt did
+        // arrive, the older ones stay too, and the caller sends its plain
+        // failure line. A duplicate is acceptable; silence is not.
+        onNotifyAmbiguous: () => {
+          settleEntry();
+          ambiguous = true;
+          if (waitEnded) options.onLateResult?.(false);
+        },
       },
     });
     waitEnded = true;
+    if (ambiguous) return false;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
     return delivery === "pending" ? "pending" : delivery === "delivered";
   }
@@ -2366,24 +2417,7 @@ export class SessionManager {
     // user's Approve / Revise / Reject resumes the session like an idle-suspended one.
     if (session.pendingPlanApproval && reason !== "shutdown") {
       this.clearPlanDecisionTokens(session.id);
-      const patch: Partial<PersistedSessionInfo> = {
-        lifecycle: "terminal",
-        runtimeState: "stopped",
-        pendingPlanApproval: false,
-        planApprovalContext: undefined,
-        approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
-        planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
-        actionablePlanDecisionVersion: undefined,
-        canonicalPlanPromptVersion: undefined,
-        approvalPromptRequiredVersion: undefined,
-        approvalPromptVersion: undefined,
-        approvalPromptStatus: "not_sent",
-        approvalPromptTransport: "none",
-        approvalPromptMessageKind: "none",
-        approvalPromptLastAttemptAt: undefined,
-        approvalPromptDeliveredAt: undefined,
-        approvalPromptFailedAt: undefined,
-      };
+      const patch = pendingPlanRejectedPatch(session);
       session.applyControlPatch(patch);
       Object.assign(session, patch);
       this.updatePersistedSession(session.id, patch);
@@ -2395,37 +2429,56 @@ export class SessionManager {
   /**
    * Close a suspended session (stopped by the idle timeout, or recovered after
    * a Gateway restart): nothing is running, so only its record is closed and
-   * no user notice is sent. A session that is still loaded is persisted and
-   * unloaded first, as runtime GC does, so the stored row is the one record
-   * and a later re-persist cannot reopen it. Returns false when the session is
-   * not suspended or has no record to close.
+   * no user notice is sent. A plan that still waits for a decision is rejected
+   * and its buttons are retired, as `kill()` does for a running session, so a
+   * goal task that waits for it stops. Question and Resume buttons are left as
+   * `kill()` leaves them: a stopped session stays resumable. A session that is
+   * still loaded is persisted and unloaded first, as runtime GC does, so the
+   * stored row is the one record and a later re-persist cannot reopen it.
+   * Returns the status the session was closed with (a session that was never
+   * persisted can only be stopped), or undefined when it is not suspended or
+   * has no record to close.
    */
-  closeSuspendedSession(ref: string, completed: boolean): boolean {
-    const isSuspended = (target?: Pick<PersistedSessionInfo, "status" | "lifecycle">): boolean =>
-      target?.status === "killed" && target.lifecycle === "suspended";
-    const patch: Partial<PersistedSessionInfo> = {
-      status: completed ? "completed" : "killed",
+  closeSuspendedSession(ref: string, completed: boolean): "completed" | "killed" | undefined {
+    const active = this.resolve(ref);
+    const target = active ?? this.getPersistedSession(ref);
+    // Suspended, or stopped by the idle timeout or a shutdown while its plan
+    // waited (that one keeps the lifecycle `awaiting_plan_decision`; a user
+    // stop would have rejected the plan).
+    const dormant = target?.status === "killed"
+      && (target.lifecycle === "suspended" || (target.lifecycle === "awaiting_plan_decision" && target.pendingPlanApproval === true));
+    if (!target || !dormant) return undefined;
+    const closedPatch = (asCompleted: boolean): Partial<PersistedSessionInfo> => ({
+      ...(target.pendingPlanApproval ? pendingPlanRejectedPatch(target) : {}),
+      status: asCompleted ? "completed" : "killed",
       lifecycle: "terminal",
       runtimeState: "stopped",
       resumable: false,
-      killReason: completed ? "done" : "user",
-    };
-    const active = this.resolve(ref);
-    if (!active) return isSuspended(this.getPersistedSession(ref)) && this.updatePersistedSession(ref, patch);
-    if (!isSuspended(active)) return false;
+      killReason: asCompleted ? "done" : "user",
+    });
+    const planRef = active?.id ?? ("sessionId" in target ? target.sessionId : undefined) ?? ref;
+    if (target.pendingPlanApproval) this.clearPlanDecisionTokens(planRef);
+    if (!active) return this.updatePersistedSession(ref, closedPatch(completed)) ? (completed ? "completed" : "killed") : undefined;
     this.persistSession(active, { scheduleRuntimeGc: false });
     if (this.store.getPersistedSession(active.id)?.sessionId !== active.id) {
-      // Never persisted (no backend conversation yet): close it in memory.
-      active.killReason = completed ? "done" : "user";
-      active.applyControlPatch({ lifecycle: "terminal", runtimeState: "stopped" });
-      return true;
+      // Never persisted (no backend conversation yet): there is no row to mark
+      // completed, and a loaded session's status cannot change, so it is stopped.
+      const controlPatch: Partial<PersistedSessionInfo> = {
+        ...(active.pendingPlanApproval ? pendingPlanRejectedPatch(active) : {}),
+        lifecycle: "terminal",
+        runtimeState: "stopped",
+      };
+      active.killReason = "user";
+      active.applyControlPatch(controlPatch);
+      Object.assign(active, controlPatch);
+      return "killed";
     }
     this.registry.remove(active.id, "closed-while-suspended");
     this.maintenance.cancelRuntimeGc(active.id);
     this.clearWaitingTimestampsForSession(active.id);
     this.lastTurnCompleteMarkers.delete(active.id);
     this.lastTerminalWakeMarkers.delete(active.id);
-    return this.updatePersistedSession(active.id, patch);
+    return this.updatePersistedSession(active.id, closedPatch(completed)) ? (completed ? "completed" : "killed") : undefined;
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */

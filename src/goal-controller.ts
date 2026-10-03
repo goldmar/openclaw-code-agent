@@ -563,6 +563,9 @@ export class GoalController {
     return this.store.get(ref);
   }
 
+  /** How often a goal whose suspended session waits for a plan decision is checked again. */
+  planDecisionRecheckMs = PLAN_DECISION_RECHECK_MS;
+
   async launchTask(config: GoalTaskConfig, reply?: GoalReplyNotice): Promise<GoalTaskState> {
     const generation = this.generation; this.assertCurrent(generation);
     const required = requiredGoalVerifierCommands();
@@ -1243,7 +1246,7 @@ export class GoalController {
         return;
       }
       this.schedulePlanDecisionRecheck(taskId, suspended);
-    }, PLAN_DECISION_RECHECK_MS);
+    }, this.planDecisionRecheckMs);
     timer.unref?.();
   }
 

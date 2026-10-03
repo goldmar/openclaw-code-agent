@@ -38,6 +38,19 @@ export function userPhaseWord(phase: string): string {
   return PHASE_WORDS[phase] ?? phase.replace(/_/gu, " ");
 }
 
+/** The branch of a worktree session that was neither merged, released nor discarded. */
+function openWorktreeBranch(target: {
+  worktreeBranch?: string;
+  worktreeStrategy?: string;
+  worktreeMerged?: boolean;
+  worktreeLifecycle?: { state?: string };
+}): string | undefined {
+  if (!target.worktreeBranch || !target.worktreeStrategy || target.worktreeStrategy === "off" || target.worktreeMerged) return undefined;
+  const state = target.worktreeLifecycle?.state;
+  if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change" || state === "pr_open") return undefined;
+  return target.worktreeBranch;
+}
+
 /**
  * Resolve and close a session, returning the result text.
  * `replyIsStopNotice` (the `/agent_kill` command typed in the session's own
@@ -60,13 +73,18 @@ export function getKillSessionText(
   // A suspended session (idle timeout, or recovered after a restart) has no
   // live process: closing it only closes the row, loaded or not, and sends no
   // user notice.
-  if (target.status === "killed" && target.lifecycle === "suspended") {
-    const completed = reason === "completed";
-    if (sm.closeSuspendedSession(ref, completed)) {
-      return completed
-        ? `ℹ️ [${target.name}] Marked as completed (it was not running).`
-        : `⛔ [${target.name}] Stopped (it was not running).`;
+  // (Also one stopped by the idle timeout while its plan waited: see `closeSuspendedSession`.)
+  if (target.status === "killed") {
+    const closed = sm.closeSuspendedSession(ref, reason === "completed");
+    if (closed === "completed") {
+      // Only the orchestrator's tool can ask for this. No completion handling
+      // runs for a session that was not running, so an open branch is named.
+      const branch = openWorktreeBranch(target);
+      return `ℹ️ [${target.name}] Marked as completed (it was not running).${branch
+        ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
+        : ""}`;
     }
+    if (closed) return `⛔ [${target.name}] Stopped (it was not running).`;
   }
 
   if (!session || session.status === "completed" || session.status === "failed" || session.status === "killed") {

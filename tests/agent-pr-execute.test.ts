@@ -536,6 +536,12 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.match(textOf(result), new RegExp(`A PR exists but was closed without merging: ${seeded.url}`));
     assert.match(textOf(result), /agent_pr\(force_new=true\)/);
     assert.equal(f.gh.ghCalls("create").length, 0);
+    // The row remembers it, so every later decision prompt offers New PR ...
+    assert.equal(f.persisted()?.worktreePrClosed, true);
+    // ... until a PR is open again.
+    const fresh = await f.run({ force_new: true });
+    assert.equal(fresh.meta.success, true);
+    assert.equal(f.persisted()?.worktreePrClosed, undefined);
   });
 
   it("refuses force_new while an open PR exists for the branch", async () => {
@@ -574,6 +580,19 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.ok(fresh && fresh.number !== closed.number);
     assert.equal(f.persisted()?.worktreePrUrl, fresh.url);
     assert.equal(f.gh.ghCalls("create").length, 1);
+  });
+
+  it("still refuses force_new when the session's recorded PR was merged", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: merged.url, worktreePrNumber: merged.number });
+
+    const result = await f.run({ force_new: true });
+
+    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.match(textOf(result), /Cannot create new PR: A PR already exists for `[^`]+` \(merged\)\./);
+    assert.equal(f.gh.ghCalls("create").length, 0, "a merged PR is never replaced");
+    assert.equal(f.persisted()?.worktreePrUrl, merged.url);
   });
 
   it("still refuses force_new while a merged PR exists for the branch", async () => {
