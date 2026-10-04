@@ -24,9 +24,9 @@ export function requiredFact(fact) {
 }
 const scalarObject = (value, fields) => { closed(value, fields); for (const item of Object.values(value)) assert.ok(item === null || ["string", "number", "boolean"].includes(typeof item)); };
 const processFields = ["pid", "state", "parent", "group", "startTicks", "executable"];
-const patchProofFields = new Set(["patchAckOk", "patchHashChanged", "patchSelectedPathChanged", "patchNoRestart", "patchResponseParsed", "patchArrayIntentDenied", "patchRequiredCommandsSchemaDenied", "patchRateLimitDenied", "patchBaseHashDenied"]);
+const patchProofFields = new Set(["patchAckOk", "patchHashChanged", "patchSelectedPathChanged", "patchNoRestart", "patchResponseParsed", "patchArrayIntentDenied", "patchRequiredCommandsSchemaDenied", "patchRateLimitDenied", "patchBaseHashDenied", "retiredAdmittedCheckDrained", "restoredEffectiveSuitePassed"]);
 const proofScalars = new Set("commandId exitCode signal timedOut stdioComplete rpcMethod invokedTool httpStatus toolError sourceArchiveSha256 hostEntrySha256 nativeExecutableSha256 packedSha256 installedEntrySha256 appliedRevision configRevision beforeRevision afterRevision alreadySetReadbackOnly sourceSha256 unchangedRevision setupOnly nativeThreadId nativeReceiptSha256 parentProof ownRunId responseId canonicalSha256 visible sessionId outcomeKey issuedAt succeededAt deliveryState publicOwnerId publicOwnerStatus activePublicView failedNotificationKey delivered goalId terminalStatus terminalRowSha256 iteration case policyFailure sameGoalId sameNativeThreadId oldSessionId restoredSessionId ownedShutdown listenerClosed bindingSha256 policyFingerprint repositoryIdentitySha256 selectedPolicy operatorTrustedExtras unrelatedPolicyChanged affectedPolicyABA restoredBindingUnchanged deniedBeforeEffects".split(" "));
-const proofArrays = { mutation: null, requiredVerifierCommands: null, requiredCommands: null, additionalCommands: null, effectiveCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
+const proofArrays = { mutation: null, requiredVerifierCommands: null, requiredCommands: null, additionalCommands: null, effectiveCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], retiredChecks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
 function proof(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value));
   for (const [key, item] of Object.entries(value)) {
@@ -42,9 +42,11 @@ function proof(value) {
     }
     assert.equal(key, "providerRequests", "Unknown feature proof field"); assert.ok(Array.isArray(item));
     for (const request of item) {
-      closed(request, ["index", "native", "bytes", "sha256", "responseId", "completed", "case", "threadId", "turnId", "owner", "deliberatelyAborted", "call", "executionExit", "matchedCallId", "receiptSha256", "text"]);
+      closed(request, ["index", "native", "bytes", "sha256", "responseId", "completed", "case", "threadId", "turnId", "owner", "deliberatelyAborted", "call", "executionExit", "matchedCallId", "receiptSha256", "text", "fixtureFailureCode"]);
       if (request.owner) { closed(request.owner, ["sessionId", "nativeProcess"]); assert.equal(typeof request.owner.sessionId, "string"); scalarObject(request.owner.nativeProcess, processFields); }
-      if (request.call) scalarObject(request.call, ["id", "type", "name", "advertisedSource"]);
+      if (request.call) scalarObject(request.call, ["id", "type", "name", "advertisedSource", "receiptMode"]);
+      if (request.call?.receiptMode !== undefined) assert.ok(["create", "read-existing"].includes(request.call.receiptMode));
+      if (request.fixtureFailureCode !== undefined) assert.ok(["FIXTURE_REQUEST_INVALID", "FIXTURE_INTENT_INVALID", "FIXTURE_NATIVE_IDENTITY_INVALID", "FIXTURE_NATIVE_OWNER_INVALID", "FIXTURE_NATIVE_EXECUTION_INVALID", "FIXTURE_SHUTDOWN_INVALID"].includes(request.fixtureFailureCode));
       for (const [field, scalar] of Object.entries(request)) if (!["owner", "call"].includes(field)) assert.ok(["string", "number", "boolean"].includes(typeof scalar));
     }
   }

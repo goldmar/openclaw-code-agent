@@ -2,13 +2,13 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof, assertPolicyRestoreOwner } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
-import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
+import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput, policyRestoreIntent, NATIVE_COMMAND, NATIVE_READ_COMMAND, assertNativeExecutionResult, responsesFixture } from "../scripts/e2e/oca501-native-protocol.mjs";
 import { Session } from "../src/session";
 import { SessionStore } from "../src/session-store";
 import { GoalController, normalizeVerifierCommands } from "../src/goal-controller";
@@ -302,6 +302,139 @@ describe("bounded representative host receipts", () => {
     assert.equal(matchingNativeOutput({ ...body, input: [...body.input, result] }, call), result);
     for (const change of [{ turn_id: "foreign" }, { thread_id: "foreign" }]) assert.throws(() => matchingNativeOutput({ ...body, client_metadata: { ...body.client_metadata, ...change }, input: [result] }, call));
     assert.throws(() => matchingNativeOutput({ ...body, input: [{ ...result, call_id: "foreign" }] }, call));
+  });
+  it("admits a policy restore only once for its original goal intent and distinct turn on the pinned thread", () => {
+    const tag = "OCA501_CASE_restore", goal = `${tag}: Finish.`;
+    const message = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+    const intent = { kind: "launch", goal, ralph: false };
+    const prefix = "The OpenClaw gateway restarted while this autonomous goal task was running.\nResume from the prior session context and continue toward the same goal immediately.";
+    const body = { tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }], client_metadata: { thread_id: "own-thread", turn_id: "new-turn" }, input: [message("<environment_context><cwd>/tmp/own/case</cwd></environment_context>"), message(`${prefix}\n\nGoal:\n${goal}\n\nInstructions:\n- Continue.`)] };
+    const fixture = () => ({ tag, intent, policyRestore: { phase: "registered", original: { harnessSessionId: "own-thread" }, originalTurn: "old-turn", originalExecutionComplete: true } });
+    const restored = policyRestoreIntent(body, fixture()); assert.equal(restored.kind, "restore");
+    assert.throws(() => currentNativeIntent(body, { caseTag: tag, intent }), "restore is not an unregistered launch");
+    for (const phase of ["admitting", "admitted", "released", "consumed"]) { const f = fixture(); f.policyRestore.phase = phase; assert.throws(() => policyRestoreIntent(body, f)); }
+    assert.throws(() => policyRestoreIntent(body, { ...fixture(), policyRestore: undefined }));
+    const incomplete = fixture(); incomplete.policyRestore.originalExecutionComplete = false; assert.throws(() => policyRestoreIntent(body, incomplete));
+    for (const metadata of [{ thread_id: "foreign", turn_id: "new-turn" }, { thread_id: "own-thread", turn_id: "old-turn" }, { thread_id: "own-thread", turn_id: "" }]) assert.throws(() => policyRestoreIntent({ ...body, client_metadata: metadata }, fixture()));
+    const ralphPrefix = "The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately.";
+    assert.throws(() => policyRestoreIntent({ ...body, input: [message(`${ralphPrefix}\n\nGoal:\n${goal}\n\nInstructions:\n- Continue.`)] }, fixture()));
+    const options = { transport: "native-codex", caseTag: tag, workdir: "/tmp/own/case", ownedRoot: "/tmp/own", callId: "oca501_exec_1", itemId: "item", intent: restored, expectedIdentity: body.client_metadata, validate: () => ({ ok: true }) };
+    const read = nativeExecutionCall(body, { ...options, receiptMode: "read-existing" });
+    assert.equal((read.args as { cmd?: string }).cmd, NATIVE_READ_COMMAND);
+    const result = { type: "function_call_output", call_id: read.callId, output: JSON.stringify({ exit_code: 0, output: "NATIVE-EXEC\n" }) };
+    assert.doesNotThrow(() => assertNativeExecutionResult(matchingNativeOutput({ ...body, input: [...body.input, result] }, read), read, "NATIVE-EXEC\n"));
+    assert.throws(() => assertNativeExecutionResult(result, read, "NATIVE-EXEC\nNATIVE-EXEC\n"), "restore cannot append a second marker");
+    assert.throws(() => assertNativeExecutionResult({ ...result, output: JSON.stringify({ exit_code: 1, output: "NATIVE-EXEC\n" }) }, read, "NATIVE-EXEC\n"));
+    assert.equal((nativeExecutionCall(body, options).args as { cmd?: string }).cmd, NATIVE_COMMAND, "a manually held restore still creates its own first receipt");
+    assert.throws(() => nativeExecutionCall(body, { ...options, receiptMode: "arbitrary" }));
+  });
+  it("holds the actual fixture restore response until drain and requires its own matched read result", async () => {
+    for (const revoke of ["none", "owner", "capability"]) {
+      const root = mkdtempSync(join(tmpdir(), "oca-fixture-restore-")), workdir = join(root, "case"); mkdirSync(workdir);
+      writeFileSync(join(workdir, "native-receipt.txt"), "NATIVE-EXEC\n");
+      const deferred = Promise.withResolvers<void>(); let drained = false, responseReceived = false, ownerCurrent = true;
+      const tag = "OCA501_CASE_control", intent = { kind: "launch", goal: `${tag}: Finish.`, ralph: false };
+      const capability: any = { phase: "registered", original: { harnessSessionId: "thread" }, originalTurn: "old-turn", originalExecutionComplete: true, drained: deferred.promise,
+        revalidate: async (record: any) => {
+          assert.equal(drained, true); assert.equal(record, capability.record); assert.equal(record.owner.sessionId, "new-owner");
+          if (revoke !== "none") queueMicrotask(() => {
+            if (revoke === "owner") ownerCurrent = false;
+            else fixture.policyRestore = { ...capability };
+          });
+          return () => { assert.equal(ownerCurrent, true, "replacement in the authorization return microtask must refuse"); assert.equal(record, capability.record); };
+        } };
+      const fixture: any = { tag, intent, workdir, threadId: "thread", turnId: "old-turn", executed: true, policyRestore: capability };
+      const provider = await responsesFixture({ root, model: "fixture", key: "owned-fixture-key", validate: () => ({ ok: true }),
+        observeNativeRestore: async (_fixture: any, record: any) => { assert.equal(capability.phase, "admitting"); assert.equal(record.threadId, "thread"); assert.equal(record.turnId, "new-turn"); },
+        observeNative: async () => ({ sessionId: "new-owner", nativeProcess: {} }) });
+      provider.cases.set(tag, fixture);
+      const message = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+      const body = { model: "fixture", stream: true, tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }], client_metadata: { thread_id: "thread", turn_id: "new-turn" }, input: [message(`<environment_context><cwd>${workdir}</cwd></environment_context>`), message(`The OpenClaw gateway restarted while this autonomous goal task was running.\nResume from the prior session context and continue toward the same goal immediately.\n\nGoal:\n${intent.goal}\n\nInstructions:\n- Continue.`)] };
+      const send = (input: any) => fetch(`${provider.url}/v1/responses`, { method: "POST", body: JSON.stringify(input), signal: AbortSignal.timeout(5000) });
+      let failure: unknown;
+      const pending = send(body).then(response => { responseReceived = true; return response; }).catch((error: unknown): undefined => { failure = error; return undefined; });
+      try {
+        await until(() => failure || capability.record?.owner, 5000); assert.equal(failure, undefined);
+        assert.equal(responseReceived, false); assert.equal(fixture.executed, false, "the old result cannot prove restored execution");
+        drained = true; capability.phase = "released"; deferred.resolve();
+        const response = await pending;
+        if (revoke !== "none") {
+          assert.equal(response, undefined); assert.ok(failure); assert.equal(fixture.call, undefined);
+          assert.equal(capability.phase, "released"); assert.equal(fixture.executed, false);
+          assert.deepEqual(provider.failures, ["FIXTURE_NATIVE_OWNER_INVALID"]);
+          assert.equal(readFileSync(join(workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+          continue;
+        }
+        assert.ok(response); await response.text();
+        assert.equal(capability.phase, "consumed"); assert.equal(fixture.call.receiptMode, "read-existing"); assert.equal(fixture.call.args.cmd, NATIVE_READ_COMMAND);
+        assert.equal(fixture.executed, false);
+        const output = { type: "function_call_output", call_id: fixture.call.callId, output: JSON.stringify({ exit_code: 0, output: "NATIVE-EXEC\n" }) };
+        await (await send({ ...body, input: [...body.input, output] })).text();
+        assert.equal(fixture.executed, true); assert.equal(provider.requests[1].executionExit, 0);
+        assert.equal(readFileSync(join(workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+        await assert.rejects(send({ ...body, client_metadata: { thread_id: "thread", turn_id: "another-turn" } }));
+        assert.deepEqual(provider.failures, ["FIXTURE_NATIVE_IDENTITY_INVALID"]);
+        assert.equal(provider.requests[2].fixtureFailureCode, "FIXTURE_NATIVE_IDENTITY_INVALID");
+      } finally { fixture.shutdownExpected = true; deferred.resolve(); await provider.close(); rmSync(root, { recursive: true, force: true }); }
+    }
+  });
+  it("requires the replacement current owner and immutable binding before and after policy-restore drain", () => {
+    const original = { id: "goal", name: "own", goal: "Own goal", workdir: "/tmp/own", loopMode: "verifier", iteration: 0, sessionId: "old", harnessSessionId: "thread", goalVerificationBinding: { version: 1, requiredCommands: ["a", "a"], additionalCommands: ["extra"] }, verifierCommands: [{ command: "a" }, { command: "a" }, { command: "extra" }] };
+    const goal = { ...structuredClone(original), status: "running", iteration: 1, sessionId: "new", sessionName: "new-owner" };
+    const row = { sessionId: "new", name: "new-owner", goalTaskId: "goal", workdir: "/tmp/own", backendRef: { conversationId: "thread" } };
+    const record = { threadId: "thread", turnId: "new-turn" };
+    const cap = { phase: "admitting", original, originalTurn: "old-turn" };
+    assert.doesNotThrow(() => assertPolicyRestoreOwner(cap, goal, row, record));
+    const changedGoals: ReadonlyArray<Partial<typeof goal>> = [{ id: "foreign" }, { workdir: "/tmp/foreign" }, { sessionId: "old" }, { status: "completed" }, { iteration: 2 }, { harnessSessionId: "foreign" }, { goalVerificationBinding: { ...original.goalVerificationBinding, additionalCommands: [] } }, { verifierCommands: original.verifierCommands.slice(1) }];
+    for (const change of changedGoals) assert.throws(() => assertPolicyRestoreOwner(cap, { ...goal, ...change }, row, record));
+    for (const change of [{ sessionId: "foreign" }, { goalTaskId: "foreign" }, { workdir: "/tmp/foreign" }, { backendRef: { conversationId: "foreign" } }]) assert.throws(() => assertPolicyRestoreOwner(cap, goal, { ...row, ...change }, record));
+    for (const change of [{ turnId: "old-turn" }, { threadId: "foreign" }]) assert.throws(() => assertPolicyRestoreOwner(cap, goal, row, { ...record, ...change }));
+    assert.throws(() => assertPolicyRestoreOwner({ ...cap, phase: "consumed" }, goal, row, record));
+    assert.throws(() => assertPolicyRestoreOwner({ ...cap, phase: "released", record }, goal, row, { ...record }), "a substituted response cannot consume the ticket after the drain await");
+    assert.doesNotThrow(() => assertPolicyRestoreOwner({ ...cap, phase: "released", record }, goal, row, record));
+  });
+  it("drains the pinned admitted process before releasing restored model work and refuses a changed owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oca-policy-drain-"));
+    const child = spawn("bash", ["-c", `while [ ! -f release ]; do sleep 0.05; done; printf '%s\\n' '{"ordinal":1,"kind":"CI","exit":0}' > checks.jsonl`], { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const identity = await until(() => { const current = processIdentity(child.pid!); return current?.executable.endsWith("/bash") && current; }, 5000); assert.ok(identity);
+    let ownerCurrent = false, released = false;
+    const capability = { phase: "admitted", record: { owner: { sessionId: "new" } }, check: identity, release: () => { released = true; } };
+    const fixture = { workdir: root, policyRestore: capability };
+    const run = Object.assign(Object.create(FeatureRun.prototype), { policyRestoreOwner: () => { assert.equal(ownerCurrent, true); } });
+    try {
+      await assert.rejects(run.drainPolicyRestore(fixture));
+      assert.equal(existsSync(join(root, "release")), false); assert.equal(released, false);
+      assert.equal(processIdentity(identity.pid)?.startTicks, identity.startTicks, "refusal leaves the original owned check held");
+      ownerCurrent = true; await run.drainPolicyRestore(fixture);
+      assert.equal(capability.phase, "released"); assert.equal(released, true);
+      assert.notEqual(processIdentity(identity.pid)?.startTicks, identity.startTicks);
+      assert.deepEqual(JSON.parse(readFileSync(join(root, "checks.jsonl"), "utf8")), { ordinal: 1, kind: "CI", exit: 0 });
+      await assert.rejects(run.drainPolicyRestore(fixture), "the drain capability cannot be reused");
+    } finally {
+      const stopped = await stopOwnedChild(child, { identity, graceMs: 1000, killMs: 1000 });
+      if (stopped.complete) rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps a retired admitted check separate from the restored owner's entire ordered suite", () => {
+    const root = mkdtempSync(join(tmpdir(), "oca-restored-checks-"));
+    const fixture = { tag: "OCA501_CASE_owned", workdir: root }, proofs: any[] = [];
+    const run = Object.assign(Object.create(FeatureRun.prototype), { proofs });
+    const expected = [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]];
+    const checks = [["CI", 0], ...expected].map(([kind, exit], i) => ({ ordinal: i + 1, kind, exit }));
+    try {
+      writeFileSync(join(root, "native-receipt.txt"), "NATIVE-EXEC\n");
+      writeFileSync(join(root, "checks.jsonl"), checks.map(row => JSON.stringify(row)).join("\n"));
+      run.checks(fixture, expected, [["CI", 0]]);
+      assert.deepEqual(proofs[0].retiredChecks, checks.slice(0, 1)); assert.deepEqual(proofs[0].checks, checks.slice(1));
+      assert.throws(() => run.checks(fixture, expected), "the retired result cannot replace a restored required check");
+      for (const bad of [checks.slice(0, -1), [...checks.slice(0, 2), checks[3], checks[2], checks[4]], checks.map((row, i) => i === 1 ? { ...row, exit: 1 } : row)]) {
+        writeFileSync(join(root, "checks.jsonl"), bad.map(row => JSON.stringify(row)).join("\n")); assert.throws(() => run.checks(fixture, expected, [["CI", 0]]));
+      }
+      const r = receipt(); r.proofs = [{ ...proofs[0], retiredAdmittedCheckDrained: true, restoredEffectiveSuitePassed: true }, { providerRequests: [{ fixtureFailureCode: "FIXTURE_INTENT_INVALID", call: { receiptMode: "read-existing" } }] }];
+      assert.deepEqual(decodeReceipt(frameReceipt(r), { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" }).receipt.proofs, r.proofs);
+      for (const value of ["PRIVATE_ERROR_PROSE", null, 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ providerRequests: [{ fixtureFailureCode: value }] }] }));
+      assert.throws(() => frameReceipt({ ...r, proofs: [{ providerRequests: [{ call: { receiptMode: "PRIVATE_ERROR_PROSE" } }] }] }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   it("joins actual running recovery rows through the controller's current task association", async () => {
     const directory = mkdtempSync(join(tmpdir(), "oca501-goal-owner-"));

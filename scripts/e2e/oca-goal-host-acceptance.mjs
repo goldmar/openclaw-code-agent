@@ -167,6 +167,24 @@ export function currentOwner(rows, listing, fixture, threadId, goal) {
   assert.ok(!blocks[0].includes("♻️ Recovered after a Gateway restart; no live process"));
   return row;
 }
+/** Compare only the registered goal and its actual replacement session, never a newest-row fallback. */
+export function assertPolicyRestoreOwner(capability, goal, row, record) {
+  const original = capability.original;
+  assert.ok(["admitting", "admitted", "released"].includes(capability.phase));
+  for (const field of ["id", "name", "goal", "workdir", "loopMode"]) assert.equal(goal[field], original[field]);
+  assert.equal(goal.status, "running"); assert.equal(goal.iteration, original.iteration + 1);
+  assert.deepEqual(goal.goalVerificationBinding, original.goalVerificationBinding);
+  assert.deepEqual(goal.verifierCommands, original.verifierCommands);
+  assert.equal(goal.harnessSessionId, original.harnessSessionId);
+  assert.equal(record.threadId, original.harnessSessionId);
+  assert.ok(typeof record.turnId === "string" && record.turnId);
+  assert.notEqual(record.turnId, capability.originalTurn);
+  if (capability.record) assert.equal(record, capability.record);
+  assert.notEqual(goal.sessionId, original.sessionId);
+  assert.equal(row.sessionId, goal.sessionId); assert.equal(row.name, goal.sessionName);
+  assert.equal(row.goalTaskId, original.id); assert.equal(row.workdir, original.workdir);
+  assert.equal(row.backendRef?.conversationId, original.harnessSessionId);
+}
 function tree(root) {
   return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const path = join(root, entry.name); assert.ok(entry.isDirectory() || entry.isFile());
@@ -275,7 +293,7 @@ export class FeatureRun {
     this.native = realpathSync(join(this.directory, "native/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"));
     assert.equal((await this.command(this.native, ["--version"])).stdout.trim(), "codex-cli 0.160.0");
     this.env.OPENCLAW_CODEX_APP_SERVER_COMMAND = this.native;
-    this.fixture = await responsesFixture({ root: this.workspace, model: MODEL, key: this.keys[1], validate: validator.validateJsonSchemaValue, observeNative: (fixture, record) => this.nativeOwner(fixture, record) });
+    this.fixture = await responsesFixture({ root: this.workspace, model: MODEL, key: this.keys[1], validate: validator.validateJsonSchemaValue, observeNative: (fixture, record) => this.nativeOwner(fixture, record), observeNativeRestore: (fixture, record) => this.nativePolicyRestore(fixture, record) });
     const nativeConfig = `model = "${MODEL}"\nmodel_provider = "oca501"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n[model_providers.oca501]\nname = "OCA501 loopback fixture"\nbase_url = "${this.fixture.url}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`;
     writeFileSync(join(this.env.CODEX_HOME, "config.toml"), nativeConfig, { mode: 0o600 });
     mkdirSync(join(this.directory, ".codex"));
@@ -427,6 +445,75 @@ export class FeatureRun {
     fixture.nativeProcess ??= native[0];
     fixture.nativeSessionId ??= row.sessionId; fixture.nativeSessionName ??= row.name;
     return { sessionId: row.sessionId, nativeProcess: native[0] };
+  }
+  policyRestoreOwner(fixture, record) {
+    const capability = fixture.policyRestore;
+    const goal = this.goals().find(g => g.id === capability.original.id);
+    assert.ok(goal);
+    const row = this.sessions().find(s => s.sessionId === goal.sessionId);
+    assert.ok(row);
+    assertPolicyRestoreOwner(capability, goal, row, record);
+    assert.equal(readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+    assert.ok(sameProcess(capability.gateway, this.gatewayIdentity));
+    return goal;
+  }
+  registerPolicyRestore(fixture, goal, check) {
+    assert.equal(fixture.policyRestore, undefined);
+    assert.equal(fixture.executed, true); assert.ok(fixture.call && fixture.nativeProcess);
+    const original = structuredClone(this.goals().find(g => g.id === goal.id));
+    assert.equal(original.status, "running"); assert.equal(original.goalVerificationBinding?.version, 1);
+    assert.equal(original.sessionId, fixture.nativeSessionId); assert.equal(original.harnessSessionId, fixture.threadId);
+    assert.ok(sameProcess(check, processIdentity(check.pid)));
+    const capability = { phase: "registered", original, originalTurn: fixture.turnId, originalExecutionComplete: true,
+      originalNative: fixture.nativeProcess, gateway: this.gatewayIdentity, check };
+    capability.drained = new Promise(resolve => { capability.release = resolve; });
+    capability.revalidate = async record => {
+      this.policyRestoreOwner(fixture, record);
+      assert.equal(capability.phase, "released");
+      assert.ok(!sameProcess(check, processIdentity(check.pid)), "The retired admitted check must drain before restored work");
+      await this.nativeOwner(fixture, record);
+      this.policyRestoreOwner(fixture, record);
+      return () => {
+        assert.equal(fixture.policyRestore, capability);
+        assert.equal(capability.phase, "released");
+        const current = this.policyRestoreOwner(fixture, record);
+        assert.equal(current.sessionId, record.owner.sessionId);
+        assert.equal(current.sessionId, fixture.nativeSessionId);
+        assert.ok(!sameProcess(check, processIdentity(check.pid)));
+        assert.ok(sameProcess(record.owner.nativeProcess, fixture.nativeProcess));
+        assert.ok(sameProcess(fixture.nativeProcess, processIdentity(fixture.nativeProcess.pid)));
+        assert.ok(sameProcess(capability.gateway, processIdentity(this.gateway.pid)));
+      };
+    };
+    fixture.policyRestore = capability;
+    return capability;
+  }
+  async nativePolicyRestore(fixture, record) {
+    const capability = fixture.policyRestore;
+    assert.equal(capability.phase, "admitting");
+    await until(() => {
+      const goal = this.goals().find(g => g.id === capability.original.id);
+      return goal?.status === "running" && goal.sessionId && goal.sessionId !== capability.original.sessionId;
+    });
+    this.policyRestoreOwner(fixture, record);
+    const previous = processIdentity(capability.originalNative.pid);
+    assert.ok(!sameProcess(capability.originalNative, previous) || previous.state === "Z");
+    fixture.oldSessionId = capability.original.sessionId;
+    fixture.nativeSnapshot = { gateway: this.gatewayIdentity, processes: [...fixture.nativeSnapshot.processes, capability.originalNative] };
+    fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined; fixture.nativeSessionName = undefined;
+  }
+  async drainPolicyRestore(fixture) {
+    const capability = fixture.policyRestore;
+    assert.ok(["registered", "admitting", "admitted"].includes(capability?.phase));
+    await until(() => capability.phase === "admitted" && capability.record?.owner);
+    this.policyRestoreOwner(fixture, capability.record);
+    assert.ok(sameProcess(capability.check, processIdentity(capability.check.pid)), "The original admitted check survives the B reload");
+    writeFileSync(join(fixture.workdir, "release"), "release\n");
+    await until(() => !sameProcess(capability.check, processIdentity(capability.check.pid)));
+    const checks = readFileSync(join(fixture.workdir, "checks.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(checks, [{ ordinal: 1, kind: "CI", exit: 0 }]);
+    this.policyRestoreOwner(fixture, capability.record);
+    capability.phase = "released"; capability.release();
   }
   async start() {
     this.stage = "gateway-start";
@@ -595,10 +682,11 @@ export class FeatureRun {
     this.proofs.push({ goalId: current.id, sessionId: row.sessionId, nativeThreadId: fixture.threadId, terminalStatus: current.status, terminalRowSha256: sha(JSON.stringify(current)), requiredCommands: binding.requiredCommands, additionalCommands: binding.additionalCommands, effectiveCommands: current.verifierCommands.map(spec => spec.command), bindingSha256: sha(JSON.stringify(binding)), policyFingerprint: binding.policyFingerprint, repositoryIdentitySha256: sha(JSON.stringify(binding.identity)), selectedPolicy: binding.source, operatorTrustedExtras: true, verifierCommands: current.verifierCommands.map(({ label, command }) => ({ label, command })), iteration: current.iteration });
     return current;
   }
-  checks(fixture, expected) { const checks = readFileSync(join(fixture.workdir, "checks.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    assert.deepEqual(checks, expected.map(([kind, exit], i) => ({ ordinal: i + 1, kind, exit })));
-    this.proofs.push({ case: fixture.tag, checks, nativeReceiptSha256: sha(readFileSync(join(fixture.workdir, "native-receipt.txt"))) });
-    }
+  checks(fixture, expected, retired = []) {
+    const checks = readFileSync(join(fixture.workdir, "checks.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(checks, [...retired, ...expected].map(([kind, exit], i) => ({ ordinal: i + 1, kind, exit })));
+    this.proofs.push({ case: fixture.tag, retiredChecks: checks.slice(0, retired.length), checks: checks.slice(retired.length), nativeReceiptSha256: sha(readFileSync(join(fixture.workdir, "native-receipt.txt"))) });
+  }
   async releaseBarrier(fixture) {
     const path = join(fixture.workdir, "barrier.pid");
     await until(() => existsSync(path));
@@ -694,13 +782,14 @@ export class FeatureRun {
       const unrelated = this.newCase("live-unrelated", { barrier: true, additionalCommands: ["bash extra-a.sh"] });
       const unrelatedGoal = await this.launch(unrelated, 3), unaffectedCheck = await this.releaseBarrier(unrelated);
       const unaffected = structuredClone(this.goals().find(g => g.id === unrelatedGoal.id));
+      const restoration = this.registerPolicyRestore(unrelated, unrelatedGoal, unaffectedCheck);
       await this.suite(["bash changed.sh", "bash changed.sh"], "b");
-      assert.ok(sameProcess(unaffectedCheck, processIdentity(unaffectedCheck.pid)));
-      writeFileSync(join(unrelated.workdir, "release"), "release\n");
+      await this.drainPolicyRestore(unrelated);
       const passed = await this.terminal(unrelatedGoal, unrelated, "succeeded");
       assert.deepEqual(passed.goalVerificationBinding, unaffected.goalVerificationBinding);
-      this.checks(unrelated, [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]]);
-      this.proofs.push({ unrelatedPolicyChanged: true, restoredBindingUnchanged: true, case: "live-unrelated-B" });
+      assert.equal(restoration.phase, "consumed");
+      this.checks(unrelated, [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]], [["CI", 0]]);
+      this.proofs.push({ unrelatedPolicyChanged: true, restoredBindingUnchanged: true, retiredAdmittedCheckDrained: true, restoredEffectiveSuitePassed: true, case: "live-unrelated-B" });
       const fixture = this.newCase("live-affected", { barrier: true, additionalCommands: ["bash extra-a.sh"] });
       const goal = await this.launch(fixture, 3), check = await this.releaseBarrier(fixture);
       const own = structuredClone(this.goals().find(g => g.id === goal.id)), effects = this.effects();
@@ -808,6 +897,7 @@ export class FeatureRun {
         writeFileSync(join(fixture.workdir, "release"), "cleanup release\n");
       } catch { failures.push("OWNED_CHILD_SHUTDOWN_FAILED"); }
     }
+    if (this.fixture) for (const fixture of this.fixture.cases.values()) fixture.shutdownExpected = true;
     try { if (this.gateway) await this.shutdown();
       } catch { failures.push("OWNED_GATEWAY_SHUTDOWN_FAILED");
       }

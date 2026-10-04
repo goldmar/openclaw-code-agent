@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 export const NATIVE_COMMAND = "printf 'NATIVE-EXEC\\n' | tee -a native-receipt.txt";
+export const NATIVE_READ_COMMAND = "cat native-receipt.txt";
 const completedScript = /^Script completed\nWall time \d+\.\d+ seconds\nOutput:\n$/;
 const own = (value, key) => Object.hasOwn(value, key);
 
@@ -63,7 +64,9 @@ export function currentNativeIntent(request, { caseTag, intent }) {
   if (intent.kind === "ordinary") assert.equal(current, intent.prompt);
   else {
     const prefix = intent.kind === "restore"
-      ? "The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately."
+      ? intent.ralph
+        ? "The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately."
+        : "The OpenClaw gateway restarted while this autonomous goal task was running.\nResume from the prior session context and continue toward the same goal immediately."
       : intent.ralph ? "You are working inside a Ralph Wiggum-style autonomous loop." : "You are working on an autonomous goal-driven task.";
     const heading = intent.kind === "restore" ? "Instructions:" : intent.ralph ? "Loop rules:" : "Working rules:";
     assert.ok(current.startsWith(`${prefix}\n\nGoal:\n${intent.goal}\n\n${heading}\n`), "Current registered native goal intent required");
@@ -72,7 +75,7 @@ export function currentNativeIntent(request, { caseTag, intent }) {
   return texts;
 }
 
-export function nativeExecutionCall(request, { transport, caseTag, workdir, ownedRoot, callId, itemId, validate, intent, expectedIdentity }) {
+export function nativeExecutionCall(request, { transport, caseTag, workdir, ownedRoot, callId, itemId, validate, intent, expectedIdentity, receiptMode = "create" }) {
   assert.equal(transport, "native-codex", "Parent model tools never authorize native execution");
   assert.match(caseTag, /^OCA501_CASE_[A-Za-z0-9_-]+$/);
   const userTexts = currentNativeIntent(request, { caseTag, intent });
@@ -84,8 +87,11 @@ export function nativeExecutionCall(request, { transport, caseTag, workdir, owne
   const identity = {};
   for (const field of ["thread_id", "turn_id"]) { assert.equal(typeof request.client_metadata?.[field], "string"); assert.ok(request.client_metadata[field]); assert.equal(request.client_metadata[field], expectedIdentity[field]); identity[field] = request.client_metadata[field]; }
   assert.match(callId, /^oca501_exec_\d+$/); assert.equal(typeof itemId, "string");
+  assert.ok(["create", "read-existing"].includes(receiptMode));
+  if (receiptMode === "read-existing") assert.equal(intent.kind, "restore", "Only an admitted restore can read the original receipt");
   const selected = selectNativeExecution(request);
-  const args = selected.tool.name === "shell_command" ? { command: NATIVE_COMMAND, workdir } : { cmd: NATIVE_COMMAND, login: false, workdir };
+  const command = receiptMode === "read-existing" ? NATIVE_READ_COMMAND : NATIVE_COMMAND;
+  const args = selected.tool.name === "shell_command" ? { command, workdir } : { cmd: command, login: false, workdir };
   const item = selected.mode === "custom"
     ? { id: itemId, type: "custom_tool_call", call_id: callId, namespace: selected.namespace, name: selected.tool.name, input: `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);` }
     : { id: itemId, type: "function_call", call_id: callId, name: selected.tool.name, arguments: JSON.stringify(args) };
@@ -94,7 +100,7 @@ export function nativeExecutionCall(request, { transport, caseTag, workdir, owne
     const validity = validate({ schema: selected.tool.parameters, value: args });
     assert.equal(validity.ok, true, "The actual advertised direct schema authorizes these safe arguments");
   }
-  return { item, selected, args, caseTag, workdir, callId, identity };
+  return { item, selected, args, caseTag, workdir, callId, identity, receiptMode };
 }
 
 function outputText(value, custom) {
@@ -145,10 +151,25 @@ export function assertNativeExecutionResult(output, call, receipt) {
   return result;
 }
 
+/** A registered policy reload may restore only its pinned original native conversation. */
+export function policyRestoreIntent(request, fixture) {
+  const capability = fixture.policyRestore;
+  assert.equal(capability?.phase, "registered", "A policy restore needs an unused registered capability");
+  const intent = { ...fixture.intent, kind: "restore" };
+  currentNativeIntent(request, { caseTag: fixture.tag, intent });
+  const identity = request.client_metadata;
+  assert.ok(typeof capability.original.harnessSessionId === "string" && capability.original.harnessSessionId);
+  assert.equal(identity?.thread_id, capability.original.harnessSessionId);
+  assert.ok(typeof identity?.turn_id === "string" && identity.turn_id);
+  assert.notEqual(identity.turn_id, capability.originalTurn);
+  assert.equal(capability.originalExecutionComplete, true);
+  return intent;
+}
 // Only external model outputs are simulated. All advertised tools execute in Codex.
-export async function responsesFixture({ root, model, key, validate, observeNative }) {
+export async function responsesFixture({ root, model, key, validate, observeNative, observeNativeRestore }) {
   const cases = new Map(), requests = [], failures = [];
   const server = createServer(async (req, res) => {
+    let failureCode = "FIXTURE_REQUEST_INVALID", record;
     try {
       assert.equal(req.method, "POST"); assert.ok(["/v1/responses", "/host/v1/responses"].includes(req.url));
       let bytes = Buffer.alloc(0);
@@ -156,28 +177,61 @@ export async function responsesFixture({ root, model, key, validate, observeNati
       const input = JSON.parse(bytes.toString("utf8")); assert.equal(input.model, model); assert.equal(input.stream, true);
       const native = req.url === "/v1/responses", index = requests.length + 1;
       if (!native) assert.equal(req.headers.authorization, `Bearer ${key}`);
-      const record = { index, native, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), responseId: `resp_${index}`, completed: false };
+      record = { index, native, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), responseId: `resp_${index}`, completed: false };
       requests.push(record);
       let text = `OCA501 parent receipt resp_${index}`, item;
       if (native) {
-        const candidates = [...cases.values()].filter(fixture => {
-          try { currentNativeIntent(input, { caseTag: fixture.tag, intent: fixture.intent }); return true; } catch { return false; }
+        failureCode = "FIXTURE_INTENT_INVALID";
+        const candidates = [...cases.values()].flatMap(fixture => {
+          try { currentNativeIntent(input, { caseTag: fixture.tag, intent: fixture.intent }); return [{ fixture, intent: fixture.intent, restored: false }]; } catch {}
+          try { return [{ fixture, intent: policyRestoreIntent(input, fixture), restored: true }]; } catch { return []; }
         });
-        assert.equal(candidates.length, 1); const fixture = candidates[0];
-        const texts = currentNativeIntent(input, { caseTag: fixture.tag, intent: fixture.intent });
+        assert.equal(candidates.length, 1); const { fixture, intent, restored } = candidates[0];
+        const texts = currentNativeIntent(input, { caseTag: fixture.tag, intent });
+        failureCode = "FIXTURE_NATIVE_IDENTITY_INVALID";
         const identity = input.client_metadata; assert.ok(identity?.thread_id && identity?.turn_id);
+        if (restored) {
+          assert.equal(typeof observeNativeRestore, "function");
+          const capability = fixture.policyRestore;
+          capability.phase = "admitting";
+          await observeNativeRestore(fixture, { ...record, threadId: identity.thread_id, turnId: identity.turn_id });
+          assert.equal(capability.phase, "admitting");
+          fixture.intent = intent;
+          fixture.oldTurns = [...(fixture.oldTurns ?? []), fixture.turnId];
+          fixture.turnId = undefined; fixture.call = undefined; fixture.executed = false; fixture.receiptMode = "read-existing";
+          capability.phase = "admitted";
+        }
         if (fixture.threadId) assert.equal(identity.thread_id, fixture.threadId); else fixture.threadId = identity.thread_id;
         if (fixture.turnId) assert.equal(identity.turn_id, fixture.turnId);
         else { assert.ok(!fixture.oldTurns?.includes(identity.turn_id)); fixture.turnId = identity.turn_id; }
         record.case = fixture.tag; record.threadId = identity.thread_id; record.turnId = identity.turn_id;
         const cwd = texts.filter(t => t.startsWith("<environment_context>")).at(-1)?.match(/<cwd>([^<]+)<\/cwd>/)?.[1]; assert.equal(cwd, fixture.workdir);
+        failureCode = "FIXTURE_NATIVE_OWNER_INVALID";
         record.owner = await observeNative(fixture, record);
+        if (restored) {
+          const capability = fixture.policyRestore;
+          capability.record = record;
+          const disposition = await Promise.race([capability.drained.then(() => "drained"), new Promise(done => res.once("close", () => done("closed")))]);
+          if (disposition === "closed") {
+            failureCode = "FIXTURE_SHUTDOWN_INVALID";
+            assert.equal(fixture.shutdownExpected, true); record.deliberatelyAborted = true; return;
+          }
+          assert.equal(capability.phase, "released");
+          const assertCurrent = await capability.revalidate(record);
+          assert.equal(typeof assertCurrent, "function");
+          assert.equal(fixture.policyRestore, capability);
+          assertCurrent();
+          assert.equal(capability.phase, "released");
+          capability.phase = "consumed";
+        }
         if (fixture.hold && !fixture.held) {
           fixture.held = record; await new Promise(done => res.once("close", done));
+          failureCode = "FIXTURE_SHUTDOWN_INVALID";
           assert.equal(fixture.shutdownExpected, true); record.deliberatelyAborted = true; return;
         }
+        failureCode = "FIXTURE_NATIVE_EXECUTION_INVALID";
         text = fixture.ralph ? "<promise>DONE</promise>" : "OCA501 native execution complete";
-        if (!fixture.call) { fixture.call = nativeExecutionCall(input, { transport: "native-codex", caseTag: fixture.tag, intent: fixture.intent, expectedIdentity: { thread_id: fixture.threadId, turn_id: fixture.turnId }, workdir: fixture.workdir, ownedRoot: root, callId: `oca501_exec_${index}`, itemId: `msg_${index}`, validate }); item = fixture.call.item; record.call = { id: fixture.call.callId, type: item.type, name: item.name, advertisedSource: fixture.call.selected.source }; }
+        if (!fixture.call) { fixture.call = nativeExecutionCall(input, { transport: "native-codex", caseTag: fixture.tag, intent: fixture.intent, expectedIdentity: { thread_id: fixture.threadId, turn_id: fixture.turnId }, workdir: fixture.workdir, ownedRoot: root, callId: `oca501_exec_${index}`, itemId: `msg_${index}`, validate, receiptMode: fixture.receiptMode ?? "create" }); item = fixture.call.item; record.call = { id: fixture.call.callId, type: item.type, name: item.name, advertisedSource: fixture.call.selected.source, receiptMode: fixture.call.receiptMode }; }
         else { assertNativeExecutionResult(matchingNativeOutput(input, fixture.call), fixture.call, readFileSync(join(fixture.workdir, "native-receipt.txt"), "utf8")); fixture.executed = true; record.executionExit = 0; record.matchedCallId = fixture.call.callId; record.receiptSha256 = createHash("sha256").update(readFileSync(join(fixture.workdir, "native-receipt.txt"))).digest("hex"); }
       }
       item ??= { id: `msg_${index}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [], logprobs: [] }] };
@@ -194,7 +248,7 @@ export async function responsesFixture({ root, model, key, validate, observeNati
       }
       event("response.output_item.done", { output_index: 0, item });
       event("response.completed", { response: { ...base, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }); res.end(); record.completed = true;
-    } catch { failures.push("FIXTURE_PROTOCOL_FAILURE"); res.destroy(); }
+    } catch { failures.push(failureCode); if (record) record.fixtureFailureCode = failureCode; res.destroy(); }
   });
   await new Promise(done => server.listen(0, "127.0.0.1", done));
   return { url: `http://127.0.0.1:${server.address().port}`, cases, requests, failures, close: async () => { server.closeAllConnections(); await new Promise(done => server.close(done)); } };
