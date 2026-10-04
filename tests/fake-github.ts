@@ -54,6 +54,8 @@ export type FakeGhFailures = {
   editBody?: boolean;
   /** `pr view` fails for every PR. */
   view?: boolean;
+  /** `pr list` fails with this stderr text (an outage, an expired login). */
+  list?: string;
 };
 
 export type FakeGhState = {
@@ -117,6 +119,7 @@ if (group === "repo" && command === "view") {
 if (group !== "pr") fail("fake gh: unsupported command " + args.join(" "), 2);
 
 if (command === "list") {
+  if (state.failures.list) fail(state.failures.list);
   const head = flag("--head");
   const repo = repoOf();
   // Like GitHub, newest first.

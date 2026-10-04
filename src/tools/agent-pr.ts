@@ -571,66 +571,31 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         ? undefined
         : (explicitTargetPrStatus ?? discoveredTargetPrStatus);
       const resolvedTargetPrUrl = effectiveTargetPrUrl ?? discoveredTargetPrStatus?.url;
-      // The PR this call acts on, known before anything is changed: the
-      // recorded or discovered one, else the branch's own PR.
+      // ---- 1. Find the PR this call acts on. Reads only: nothing is pushed,
+      // moved or changed above this line or in this step.
+      // The session's recorded (or discovered parent) PR; else the PR of this
+      // branch. An OPEN PR of this branch is the target in any case, also
+      // beside a merged one: it is what a push would update.
+      const recordedPr = effectiveTargetPrStatus?.exists ? effectiveTargetPrStatus : undefined;
+      const branchLookup = !recordedPr || recordedPr.state === "merged"
+        ? await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true })
+        : undefined;
+      if (branchLookup?.lookupFailed) {
+        // "Could not look" is not "there is no PR": acting on it could push
+        // into an open PR nobody checked.
+        return {
+          content: [{ type: "text", text: `❌ No PR opened: could not check existing pull requests for \`${branchName}\`: ${branchLookup.lookupFailed}` }],
+          meta: { success: false, state: "error" },
+        };
+      }
+      const targetFoundByBranch = !recordedPr || (branchLookup?.exists === true && branchLookup.state === "open");
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
-        effectiveTargetPrStatus?.exists
-          ? effectiveTargetPrStatus
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
+        targetFoundByBranch ? branchLookup! : recordedPr!,
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
-      // Hook and worktree-setup changes need the user. The changes that matter
-      // are those against the base the push will be reviewed against: the
-      // existing open PR's own base, else the base a new PR goes into. A PR
-      // that is already merged is only settled (nothing is pushed), and a
-      // force_new that will be refused changes nothing: no check for those.
-      const settlesWithoutPush = existingPrBeforePush.exists
-        && (existingPrBeforePush.state === "merged" || (params.force_new === true && existingPrBeforePush.state === "open"));
-      const hookRefusal = settlesWithoutPush ? undefined : await refuseHookChangesWithoutUser({
-        sessionManager: sm,
-        toolCallId: _id,
-        sessionRef: decisionRef,
-        decisionRef: () => worktreeDecisionRef(sm, target),
-        repoDir: originalWorkdir,
-        branchName,
-        baseBranch: existingPrBeforePush.exists && existingPrBeforePush.state === "open"
-          ? existingPrBase(existingPrBeforePush)
-          : baseBranch,
-        action: "pr",
-      });
-      if (hookRefusal) {
-        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
-      let targetBranchAlreadyRepresented = false;
-      if (effectiveTargetPrStatus?.exists && effectiveTargetPrStatus.state === "open") {
-        const sourceBranch = await resolveExistingTargetPrUpdateSourceBranch({
-          repoDir: originalWorkdir,
-          fallbackBranch: branchName,
-          targetPrStatus: effectiveTargetPrStatus,
-        });
-        const branchResolution = await resolveExistingTargetPrUpdateBranch({
-          repoDir: originalWorkdir,
-          sourceBranch,
-          targetPrStatus: effectiveTargetPrStatus,
-        });
-        if ("error" in branchResolution) {
-          return {
-            content: [{ type: "text", text: `Error: ${branchResolution.error}` }],
-            meta: { success: false, state: "error" },
-          } satisfies AgentPrExecuteResult;
-        }
-        branchName = branchResolution.branchName;
-        targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
-      }
-      const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
-      const updatingExistingOpenPr = existingPrBeforePush.exists && existingPrBeforePush.state === "open";
-      if (repoPolicy?.policy === "never-pr" && !updatingExistingOpenPr) {
-        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
-      if (repoPolicy && !repoPolicy.prAvailable) {
-        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
+      /** The URL the target is re-read by after the push; none when it was found by branch. */
+      const targetPrUrl = targetFoundByBranch ? undefined : resolvedTargetPrUrl;
 
       // force_new never replaces an open or merged PR: refuse before pushing
       // anything. A flag left from an earlier "closed" finding is stale then
@@ -658,24 +623,156 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           meta: { success: false, state: "force_new_refused", ...(status.state === "open" || status.state === "merged" ? { prState: status.state } : {}) },
         };
       };
-      if (params.force_new && existingPrBeforePush.exists && (existingPrBeforePush.state === "open" || existingPrBeforePush.state === "merged")) {
-        return forceNewRefusal(existingPrBeforePush, !effectiveTargetPrStatus?.exists);
+      /** Record a PR that was merged and answer; nothing is pushed or moved. */
+      const settleMerged = (prStatus: PRStatus): AgentPrExecuteResult => {
+        const mergedPatch: Partial<PersistedSessionInfo> = {
+          ...buildMergedPatch({
+            // The base the PR was merged into is the base the session landed on.
+            worktreeBaseBranch: prStatus.baseRefName ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
+            worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
+          }, {
+            resolutionSource: "agent_pr",
+            clearResolverSessionId: true,
+          }),
+          worktreePrUrl: prStatus.url,
+          worktreePrNumber: prStatus.number,
+          worktreePrBaseBranch: prStatus.baseRefName,
+          worktreeDisposition: "merged",
+          worktreeDecisionSnoozedUntil: undefined,
+          deferredCompletionCycle: undefined,
+          worktreePrClosed: undefined,
+        };
+        const owedCycle = owedCompletionCycle(sm, target.generation);
+        if (!patchWorktreeTarget(sm, target, mergedPatch)) {
+          return { content: [{ type: "text", text: "Error: PR is merged, but its selected session state could not be updated. Reconcile before retrying." }], meta: { success: false, state: "error" } };
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `${settledPrLine("PR was already merged", prStatus.url!, owedCycle)}\n\n` +
+                  `The worktree branch \`${branchName}\` can be cleaned up with agent_merge(delete_branch=true).` +
+                  (owedCycle === undefined ? "" : summaryShownNote(params.summary))
+          }],
+          meta: { success: true, state: "merged", ...(owedCycle === undefined ? {} : { outcomeNotified: true }) },
+        };
+      };
+      /** A PR closed without merging: remember it (the prompts then offer New PR) and ask; nothing is pushed or moved. */
+      const answerClosed = (prStatus: PRStatus): AgentPrExecuteResult => {
+        // Case: PR was closed without merging — ask user what to do. The row
+        // remembers it, so every decision prompt offers New PR from now on.
+        if (!patchWorktreeTarget(sm, target, { worktreePrClosed: true })) {
+          // Only the buttons of later prompts depend on it (they would offer Open PR / Sync PR again).
+          log.warn(`[agent_pr] Could not record the closed PR of session ${sessionName}`);
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️ A PR exists but was closed without merging: ${prStatus.url}\n\n` +
+                  `What would you like to do?\n\n` +
+                  `1. Reopen the closed PR manually on GitHub, then call agent_pr() again to update it\n` +
+                  `2. Close and delete the branch with agent_merge(delete_branch=true), then start a new session/worktree\n` +
+                  `3. Call agent_pr(force_new=true) to open a fresh PR from the same branch (the user's New PR button does this)\n\n` +
+                  `(This tool does not reopen or replace a closed PR on its own, to avoid unintended actions.)`
+          }],
+          meta: { success: false, state: "closed" },
+        };
+      };
+
+      // ---- 2. Outcomes that push and move nothing return here, before any
+      // local branch movement, push or PR change (and so before the hook
+      // check, which guards exactly those).
+      if (existingPrBeforePush.exists) {
+        if (params.force_new && (existingPrBeforePush.state === "open" || existingPrBeforePush.state === "merged")) {
+          return forceNewRefusal(existingPrBeforePush, targetFoundByBranch);
+        }
+        if (existingPrBeforePush.state === "merged") return settleMerged(existingPrBeforePush);
+        // (With force_new a closed PR is replaced by a new one: that is a push, below.)
+        if (existingPrBeforePush.state === "closed" && !params.force_new) return answerClosed(existingPrBeforePush);
+      }
+      /** The open PR this call updates, if any; otherwise a new PR is opened. */
+      const openPrToUpdate = existingPrBeforePush.exists && existingPrBeforePush.state === "open" ? existingPrBeforePush : undefined;
+
+      // ---- 3. From here on the call pushes: to update the open PR found in
+      // step 1, or to open a new one. Hook and worktree-setup changes need the
+      // user first. They are judged against the base the push is reviewed
+      // against: the open PR's own base, else the base the new PR goes into.
+      // A check that cannot be computed counts as "changed".
+      const hookCheckBase = openPrToUpdate ? existingPrBase(openPrToUpdate) : baseBranch;
+      /** Undefined when `branch` may be pushed; else the answer (the user was asked). */
+      const refuseHookChanges = async (branch: string): Promise<AgentPrExecuteResult | undefined> => {
+        const refusal = await refuseHookChangesWithoutUser({
+          sessionManager: sm,
+          toolCallId: _id,
+          sessionRef: decisionRef,
+          decisionRef: () => worktreeDecisionRef(sm, target),
+          repoDir: originalWorkdir,
+          branchName: branch,
+          baseBranch: hookCheckBase,
+          action: "pr",
+        });
+        if (!refusal) return undefined;
+        return { ...(typeof refusal === "string" ? { content: [{ type: "text", text: refusal }] } : refusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      };
+      // A PR the session recorded may be headed by another branch (a follow-up
+      // session of that PR). The branch whose commits go into it is chosen
+      // here, read-only, so that it is checked before any branch is moved.
+      const recordedOpenPr = openPrToUpdate && !targetFoundByBranch ? openPrToUpdate : undefined;
+      const sourceBranch = recordedOpenPr
+        ? await resolveExistingTargetPrUpdateSourceBranch({ repoDir: originalWorkdir, fallbackBranch: branchName, targetPrStatus: recordedOpenPr })
+        : branchName;
+      const sourceRefusal = await refuseHookChanges(sourceBranch);
+      if (sourceRefusal) return sourceRefusal;
+
+      // ---- 4. Local branch movement (the checked branch fast-forwarded into
+      // the PR's head branch), policy, then the push.
+      let targetBranchAlreadyRepresented = false;
+      if (recordedOpenPr) {
+        const branchResolution = await resolveExistingTargetPrUpdateBranch({
+          repoDir: originalWorkdir,
+          sourceBranch,
+          targetPrStatus: recordedOpenPr,
+        });
+        if ("error" in branchResolution) {
+          return {
+            content: [{ type: "text", text: `Error: ${branchResolution.error}` }],
+            meta: { success: false, state: "error" },
+          } satisfies AgentPrExecuteResult;
+        }
+        branchName = branchResolution.branchName;
+        targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
+      }
+      const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
+      if (repoPolicy?.policy === "never-pr" && !openPrToUpdate) {
+        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
+      if (repoPolicy && !repoPolicy.prAvailable) {
+        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
-      // Push branch first for open PR updates and new PR creation.
-      const shouldPushBranch = !effectiveTargetPrStatus || effectiveTargetPrStatus.state === "open";
-      if (shouldPushBranch && !targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
+      // ---- 5. The push. Every path that reaches this line updates an open PR
+      // or opens a new one. The branch pushed is the branch checked: when the
+      // PR's head branch is pushed instead of the one checked in step 3 (it
+      // may hold commits of its own), it is checked first.
+      if (!targetBranchAlreadyRepresented && branchName !== sourceBranch) {
+        const pushedBranchRefusal = await refuseHookChanges(branchName);
+        if (pushedBranchRefusal) return pushedBranchRefusal;
+      }
+      if (!targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
         return { content: [{ type: "text", text: `❌ Failed to push \`${branchName}\` — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Sync PR state from GitHub
-      const syncedPrStatus = normalizeForceNewReplacementPrStatus(
-        resolvedTargetPrUrl
-          ? await syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
-        explicitTargetPrStatus,
-        { forceNewIgnoresClosedTargetPr },
-      );
+      const afterPush = targetPrUrl
+        ? await syncWorktreePRByUrl(originalWorkdir, targetPrUrl, targetRepo)
+        : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true });
+      if (afterPush.lookupFailed) {
+        return {
+          content: [{ type: "text", text: `❌ PR not created or updated: \`${branchName}\` was pushed, but existing pull requests could not be checked: ${afterPush.lookupFailed}` }],
+          meta: { success: false, state: "error" },
+        };
+      }
+      const syncedPrStatus = normalizeForceNewReplacementPrStatus(afterPush, explicitTargetPrStatus, { forceNewIgnoresClosedTargetPr });
       // force_new replaces a PR that was closed without merging, whether the
       // session recorded it or it was found by branch: GitHub accepts a new PR
       // from the same branch.
@@ -684,7 +781,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         : syncedPrStatus;
 
       // Handle force_new parameter
-      if (params.force_new && prStatus.exists) return forceNewRefusal(prStatus, !resolvedTargetPrUrl);
+      if (params.force_new && prStatus.exists) return forceNewRefusal(prStatus, targetPrUrl === undefined);
 
       // PR Lifecycle Handling
       if (prStatus.exists && prStatus.state === "open") {
@@ -803,57 +900,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           } satisfies AgentPrExecuteResult;
         }
       } else if (prStatus.exists && prStatus.state === "merged") {
-        // Case: PR was merged
-        const mergedPatch: Partial<PersistedSessionInfo> = {
-          ...buildMergedPatch({
-            // The base the PR was merged into is the base the session landed on.
-            worktreeBaseBranch: prStatus.baseRefName ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
-            worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
-            worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
-          }, {
-            resolutionSource: "agent_pr",
-            clearResolverSessionId: true,
-          }),
-          worktreePrUrl: prStatus.url,
-          worktreePrNumber: prStatus.number,
-          worktreePrBaseBranch: prStatus.baseRefName,
-          worktreeDisposition: "merged",
-          worktreeDecisionSnoozedUntil: undefined,
-          deferredCompletionCycle: undefined,
-          worktreePrClosed: undefined,
-        };
-        const owedCycle = owedCompletionCycle(sm, target.generation);
-        if (!patchWorktreeTarget(sm, target, mergedPatch)) {
-          return { content: [{ type: "text", text: "Error: PR is merged, but its selected session state could not be updated. Reconcile before retrying." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-        }
-        return {
-          content: [{
-            type: "text",
-            text: `${settledPrLine("PR was already merged", prStatus.url!, owedCycle)}\n\n` +
-                  `The worktree branch \`${branchName}\` can be cleaned up with agent_merge(delete_branch=true).` +
-                  (owedCycle === undefined ? "" : summaryShownNote(params.summary))
-          }],
-          meta: { success: true, state: "merged", ...(owedCycle === undefined ? {} : { outcomeNotified: true }) },
-        } satisfies AgentPrExecuteResult;
+        // Merged between the look-up and now.
+        return settleMerged(prStatus);
       } else if (prStatus.exists && prStatus.state === "closed") {
-        // Case: PR was closed without merging — ask user what to do. The row
-        // remembers it, so every decision prompt offers New PR from now on.
-        if (!patchWorktreeTarget(sm, target, { worktreePrClosed: true })) {
-          // Only the buttons of later prompts depend on it (they would offer Open PR / Sync PR again).
-          log.warn(`[agent_pr] Could not record the closed PR of session ${sessionName}`);
-        }
-        return {
-          content: [{
-            type: "text",
-            text: `⚠️ A PR exists but was closed without merging: ${prStatus.url}\n\n` +
-                  `What would you like to do?\n\n` +
-                  `1. Reopen the closed PR manually on GitHub, then call agent_pr() again to update it\n` +
-                  `2. Close and delete the branch with agent_merge(delete_branch=true), then start a new session/worktree\n` +
-                  `3. Call agent_pr(force_new=true) to open a fresh PR from the same branch (the user's New PR button does this)\n\n` +
-                  `(This tool does not reopen or replace a closed PR on its own, to avoid unintended actions.)`
-          }],
-          meta: { success: false, state: "closed" },
-        } satisfies AgentPrExecuteResult;
+        return answerClosed(prStatus);
       } else {
         // Case: No PR exists — create new PR
         if (repoPolicy?.policy === "never-pr") {

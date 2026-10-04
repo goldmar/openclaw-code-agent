@@ -1,5 +1,5 @@
 import type { Session } from "./session";
-import { describeHookPathChanges, listHookPathChanges } from "./git-hooks";
+import { describeHookPathChanges, HOOK_CHECK_UNAVAILABLE_WARNING, listHookPathChanges } from "./git-hooks";
 import type { NotificationButton } from "./session-interactions";
 import type { PersistedSessionInfo, SessionStatus } from "./types";
 import type { RepoPolicyResolution } from "./repo-policy";
@@ -564,7 +564,7 @@ export class SessionWorktreeStrategyService {
     } catch (err) {
       log.warn(`[worktree] Could not check ${branchName} for hook changes: ${err instanceof Error ? err.message : String(err)}`);
       // Unknown is treated as changed: a person decides.
-      return "⚠️ Could not check this branch for git hook or worktree setup changes, so merging or opening a PR needs your confirmation.";
+      return HOOK_CHECK_UNAVAILABLE_WARNING;
     }
   }
 

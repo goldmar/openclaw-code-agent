@@ -9,7 +9,7 @@ import { resolveLandingBaseBranch, resolveWorktreeLifecycle, worktreeLifecycleRe
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
 import { repoNameForGh, resetCanonicalRepoNamesForTests } from "../src/worktree-pr";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
-import { USER_BUTTON_TOOL_CALL_ID } from "../src/tools/worktree-tool-context";
+import { USER_BUTTON_TOOL_CALL_ID, worktreeToolContextInternals } from "../src/tools/worktree-tool-context";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { setPluginRuntime } from "../src/runtime-store";
@@ -529,6 +529,175 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.equal(persisted?.worktreePrNumber, seeded.number);
     assert.equal(persisted?.worktreeLifecycle?.state, "merged");
     assert.equal(f.gh.ghCalls("create").length, 0);
+    // A merged PR (here found by branch) is only settled: the branch is not pushed.
+    assert.equal(f.gh.remoteHead(f.branch), "");
+  });
+
+  /** Every local branch and its commit: nothing may move where nothing may be pushed. */
+  const localRefs = (f: Fixture): string => git(f.gh.repoDir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads");
+  /** Count escalations to the user instead of delivering them. */
+  const watchEscalations = (f: Fixture): { count: () => number; warning: () => string | undefined } => {
+    let count = 0;
+    let warning: string | undefined;
+    f.sm.requestWorktreeDecisionFromUser = async (_ref, _summary, options) => { count += 1; warning = options?.hookWarning; return "Decision queued"; };
+    return { count: () => count, warning: () => warning };
+  };
+  const addHookCommit = (f: Fixture): void => {
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+  };
+
+  it("hook gate: a merged PR found by branch is settled without a push, also when the branch changes hook files", async () => {
+    const f = await setup();
+    addHookCommit(f);
+    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", baseRefName: "main" });
+    const asked = watchEscalations(f);
+    const refsBefore = localRefs(f);
+
+    const result = await f.run();
+
+    assert.equal(result.meta.state, "merged");
+    assert.match(textOf(result), new RegExp(`PR was already merged: ${merged.url}`));
+    assert.equal(asked.count(), 0, "nothing is pushed, so there is nothing to ask");
+    assert.equal(f.gh.remoteHead(f.branch), "", "the branch was not pushed");
+    assert.equal(localRefs(f), refsBefore, "no local branch moved");
+  });
+
+  it("hook gate: an open PR into another base is the target although a PR into the landing base was merged: the user is asked before any push", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    addHookCommit(f);
+    git(f.gh.repoDir, "branch", "release", "main");
+    try {
+      f.gh.seedPr({ headRefName: f.branch, state: "MERGED", baseRefName: "main" });
+      const open = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+      const asked = watchEscalations(f);
+      const refsBefore = localRefs(f);
+
+      const result = await f.run();
+
+      assert.equal(asked.count(), 1, "the push would add a hook file to the open PR");
+      assert.match(asked.warning() ?? "", /worktree-setup\.sh/);
+      assert.equal(result.meta.success, false);
+      assert.notEqual(result.meta.state, "merged", "not settled as merged while a PR of the branch is open");
+      assert.notEqual(f.persisted()?.worktreeLifecycle?.state, "merged");
+      assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed before the user's decision");
+      assert.equal(localRefs(f), refsBefore);
+
+      // The user's button then updates the open PR.
+      const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as AgentPrResult;
+      assert.equal(approved.meta.success, true, textOf(approved));
+      assert.equal(f.persisted()?.worktreePrUrl, open.url);
+      assert.notEqual(f.gh.remoteHead(f.branch), "");
+    } finally {
+      git(f.gh.repoDir, "branch", "-D", "release");
+    }
+  });
+
+  it("hook gate: a refused force_new moves no branch when the recorded open PR has another head branch", async () => {
+    const f = await setup();
+    addHookCommit(f);
+    // The session's recorded PR is headed by an older branch; this session's branch is ahead of it.
+    git(f.gh.repoDir, "branch", "pr-head", "main");
+    try {
+      const recorded = f.gh.seedPr({ headRefName: "pr-head", state: "OPEN", baseRefName: "main" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: recorded.url, worktreePrNumber: recorded.number });
+      const asked = watchEscalations(f);
+      const refsBefore = localRefs(f);
+
+      const result = await f.run({ force_new: true });
+
+      assert.deepEqual(result.meta, { success: false, state: "force_new_refused", prState: "open" });
+      assert.equal(localRefs(f), refsBefore, "the PR's head branch was not fast-forwarded");
+      assert.equal(f.gh.remoteHead(f.branch), "");
+      assert.equal(f.gh.remoteHead("pr-head"), "");
+      assert.equal(asked.count(), 0);
+    } finally {
+      git(f.gh.repoDir, "branch", "-D", "pr-head");
+    }
+  });
+
+  it("hook gate: a PR base that exists only on the remote is still checked", async () => {
+    const f = await setup();
+    addHookCommit(f);
+    // `release` is on GitHub but was never checked out here.
+    git(f.gh.repoDir, "push", "origin", "main:refs/heads/release");
+    git(f.gh.repoDir, "update-ref", "-d", "refs/remotes/origin/release");
+    assert.throws(() => git(f.gh.repoDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/release"), "not fetched yet either");
+    assert.throws(() => git(f.gh.repoDir, "rev-parse", "--verify", "--quiet", "refs/heads/release"));
+    try {
+      f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+      const asked = watchEscalations(f);
+
+      const result = await f.run();
+
+      assert.equal(asked.count(), 1);
+      assert.match(asked.warning() ?? "", /worktree-setup\.sh/, "the files are named: the check ran against the remote base");
+      assert.equal(result.meta.success, false);
+      assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
+      assert.throws(() => git(f.gh.repoDir, "rev-parse", "--verify", "--quiet", "refs/heads/release"), "no local branch was created");
+    } finally {
+      git(f.gh.repoDir, "push", "origin", ":refs/heads/release");
+      git(f.gh.repoDir, "update-ref", "-d", "refs/remotes/origin/release");
+    }
+  });
+
+  it("hook gate: a merged recorded PR is not settled while another PR of the branch is open", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    addHookCommit(f);
+    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", baseRefName: "main" });
+    const open = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "main" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: merged.url, worktreePrNumber: merged.number });
+    const asked = watchEscalations(f);
+
+    const result = await f.run();
+
+    assert.equal(asked.count(), 1);
+    assert.notEqual(result.meta.state, "merged");
+    assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
+    const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as AgentPrResult;
+    assert.equal(approved.meta.success, true, textOf(approved));
+    assert.equal(f.persisted()?.worktreePrUrl, open.url);
+  });
+
+  it("hook gate: a check that cannot be computed asks the user (agent_pr and agent_merge), and nothing is pushed or merged", async () => {
+    const f = await setup();
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    const real = worktreeToolContextInternals.listHookPathChanges;
+    worktreeToolContextInternals.listHookPathChanges = async () => { throw new Error("git diff failed"); };
+    try {
+      const asked = watchEscalations(f);
+      const mainBefore = git(f.gh.repoDir, "rev-parse", "main");
+      const refsBefore = localRefs(f);
+
+      const pr = await f.run();
+      assert.equal(asked.count(), 1);
+      assert.match(asked.warning() ?? "", /Could not check this branch for git hook or worktree setup changes/);
+      assert.equal(pr.meta.success, false);
+      assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
+      assert.equal(f.gh.ghCalls("create").length, 0);
+
+      const merge = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      assert.equal(asked.count(), 2);
+      assert.match(merge.content.map((entry) => entry.text).join("\n"), /^❌ Not merged: /);
+      assert.equal(git(f.gh.repoDir, "rev-parse", "main"), mainBefore, "nothing was merged");
+      assert.equal(localRefs(f), refsBefore);
+    } finally {
+      worktreeToolContextInternals.listHookPathChanges = real;
+    }
+  });
+
+  it("hook gate: a failed PR lookup is not \"no PR\": nothing is pushed", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    f.gh.updateState((state) => { state.failures.list = "HTTP 502: Bad Gateway"; });
+    const refsBefore = localRefs(f);
+
+    const result = await f.run();
+
+    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.match(textOf(result), /^❌ No PR opened: could not check existing pull requests for `[^`]+`: /);
+    assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
+    assert.equal(f.gh.ghCalls("create").length, 0);
+    assert.equal(localRefs(f), refsBefore);
   });
 
   it("asks what to do with a PR closed without merging", async () => {
@@ -696,6 +865,26 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, intoRelease.url, "no known base: open first");
     // With no PR into the session's base, the other one is still found.
     assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "develop")).url, intoRelease.url);
+    // `preferOpen` (agent_pr): an open PR is what a push updates, so it comes before a merged or closed PR into the session's base.
+    for (const settled of ["MERGED", "CLOSED"] as const) {
+      f.gh.resetState();
+      f.gh.seedPr({ headRefName: f.branch, state: settled, baseRefName: "main" });
+      const open = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+      f.gh.seedPr({ headRefName: f.branch, state: settled, baseRefName: "main" });
+      const found = await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "main", { preferOpen: true });
+      assert.equal(found.url, open.url, settled);
+      const byBase = await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "main");
+      assert.notEqual(byBase.url, open.url, "the other callers keep the base first");
+      assert.equal(byBase.anyOpen, true);
+    }
+    // gh could not be asked: that is "unknown", not "no PR".
+    f.gh.resetState();
+    f.gh.updateState((state) => { state.failures.list = "HTTP 502: Bad Gateway"; });
+    const failed = await syncWorktreePR(f.gh.repoDir, f.branch);
+    assert.equal(failed.exists, false);
+    assert.match(failed.lookupFailed ?? "", /\S/);
+    f.gh.resetState();
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).lookupFailed, undefined);
 
     // Only a fork's PR uses the branch name: this repository has no PR for it,
     // so a force_new is not refused for it and nothing is adopted.
@@ -782,6 +971,9 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       return { f, intoMain, intoParent };
     };
 
+    // The parent session's branch exists, like the base of any real PR.
+    git(github.repoDir, "branch", "agent/parent-session", "main");
+    cleanups.push(() => git(github.repoDir, "branch", "-D", "agent/parent-session"));
     // The session's recorded base (the parent session's branch) decides, not the newest PR or the default branch.
     const stacked = await seed("agent/parent-session");
     assert.equal((await stacked.f.run()).meta.success, true);

@@ -26,6 +26,8 @@ export interface PRStatus {
   ownHead?: boolean;
   /** Branch lookup only: whether any PR of this repository's branch is open, into whatever base. */
   anyOpen?: boolean;
+  /** Branch lookup only: gh could not be asked (the reason). `exists: false` then means "unknown", not "no PR". */
+  lookupFailed?: string;
 }
 
 function normalizePrState(state: string): PRStatus["state"] {
@@ -330,7 +332,14 @@ export async function createPR(
  * the same branch into another base. A session's recorded PR is looked up by
  * its URL (`syncWorktreePRByUrl`) before this is used.
  */
-export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string): Promise<PRStatus> {
+export async function syncWorktreePR(
+  repoDir: string,
+  branchName: string,
+  targetRepo?: string,
+  baseBranch?: string,
+  /** `preferOpen`: an open PR comes before any other, whatever its base (the PR a push would update). */
+  options: { preferOpen?: boolean } = {},
+): Promise<PRStatus> {
   await assertBranchName(branchName);
   // Without a GitHub remote gh can serve (and no explicit target repo) there is no PR to find.
   if (!targetRepo && !(await hasGitHubRemote(repoDir))) {
@@ -368,11 +377,12 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => prHeadIsOwnBranch(candidate, originOwner, targetRepo);
     // Which PR, not whatever order gh lists them in: one into the session's
     // base branch before one into another base; then an open one; then the
-    // newest (a newer closed PR on a reused branch counts, not an older merged one).
+    // newest (a newer closed PR on a reused branch counts, not an older merged
+    // one). With `preferOpen` an open PR comes first, whatever its base.
     const baseRank = (candidate: (typeof prs)[number]): number => (baseBranch && candidate.baseRefName !== baseBranch ? 1 : 0);
     const openRank = (candidate: (typeof prs)[number]): number => (normalizePrState(candidate.state) === "open" ? 0 : 1);
     const own = prs.filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate));
-    const pr = [...own].sort((a, b) => baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
+    const pr = [...own].sort((a, b) => (options.preferOpen ? openRank(a) - openRank(b) : 0) || baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
     if (!pr) {
       return { exists: false, state: "none" };
     }
@@ -394,8 +404,9 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     }
     return status;
   } catch (err) {
-    log.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
-    return { exists: false, state: "none" };
+    const reason = err instanceof Error ? err.message : String(err);
+    log.warn(`[worktree] Failed to sync PR status for ${branchName}: ${reason}`);
+    return { exists: false, state: "none", lookupFailed: reason.split("\n")[0]!.slice(0, 200) };
   }
 }
 

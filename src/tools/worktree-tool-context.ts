@@ -5,10 +5,13 @@ import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { SessionManager } from "../session-manager";
 import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
-import { describeHookPathChanges, listHookPathChanges } from "../git-hooks";
+import { describeHookPathChanges, HOOK_CHECK_UNAVAILABLE_WARNING, listHookPathChanges, localBranchIsKnownMissing } from "../git-hooks";
+import { createLogger } from "../logger";
 import { persistedForActiveGeneration, persistedGeneration, type SessionGeneration } from "../session-generation";
 import { pathsReferToSameLocation } from "../path-utils";
 import { sessionToolError } from "./session-tool-error";
+
+const log = createLogger("worktree-tool-context");
 
 /**
  * Tool-call id the button callback handler uses when a user's Merge / Open PR
@@ -16,11 +19,16 @@ import { sessionToolError } from "./session-tool-error";
  */
 export const USER_BUTTON_TOOL_CALL_ID = "callback";
 
+/** Test seam: the hook-change check used by `refuseHookChangesWithoutUser`. */
+export const worktreeToolContextInternals = { listHookPathChanges };
+
 /**
  * A branch that changes git hooks or worktree setup files is merged or turned
  * into a PR only on the user's button. Called from agent_merge / agent_pr: for
  * any other caller it posts the decision prompt (naming the files) and returns
- * the refusal text; undefined when the call may proceed.
+ * the refusal text; undefined when the call may proceed. Fails closed: a check
+ * that cannot be computed is refused the same way. `baseBranch` is the base the
+ * changes are reviewed against (an open PR's own base, else the landing base).
  */
 export async function refuseHookChangesWithoutUser(args: {
   sessionManager: Partial<Pick<SessionManager, "requestWorktreeDecisionFromUser">>;
@@ -36,11 +44,16 @@ export async function refuseHookChangesWithoutUser(args: {
   if (args.toolCallId === USER_BUTTON_TOOL_CALL_ID) return undefined;
   let hookWarning: string | undefined;
   try {
-    hookWarning = describeHookPathChanges(await listHookPathChanges(args.repoDir, args.branchName, args.baseBranch));
-  } catch {
-    // Without a computable branch diff the merge or PR itself cannot run
-    // either; let it report the real problem.
-    return undefined;
+    hookWarning = describeHookPathChanges(await worktreeToolContextInternals.listHookPathChanges(args.repoDir, args.branchName, args.baseBranch));
+  } catch (err) {
+    // Fail closed: a check that cannot be computed counts as "changed", so a
+    // person decides (a push needs neither the base nor this diff, so "the
+    // action would fail anyway" does not hold).
+    // The one exception: git reports that the branch itself does not exist.
+    // It has nothing to merge or push; the action reports that problem.
+    if (await localBranchIsKnownMissing(args.repoDir, args.branchName)) return undefined;
+    log.warn(`[worktree] Could not check ${args.branchName} for hook changes against ${args.baseBranch}: ${err instanceof Error ? err.message : String(err)}`);
+    hookWarning = HOOK_CHECK_UNAVAILABLE_WARNING;
   }
   if (!hookWarning) return undefined;
   const decisionRef = args.decisionRef ? args.decisionRef() : args.sessionRef;
