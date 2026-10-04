@@ -506,6 +506,8 @@ describe("syncWorktreePR", () => {
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName");
       assert.equal(result.headRefName, "agent/fix-lookup");
+      // gh lists another owner's fork PR with the same branch name first: it is not this repository's PR.
+      assert.equal(result.number, 12);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

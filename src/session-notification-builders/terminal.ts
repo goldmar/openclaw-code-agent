@@ -249,25 +249,3 @@ export function buildFailedPayload(args: {
     buttons: failedButtons,
   };
 }
-
-export function buildTurnCompletePayload(args: {
-  session: Pick<Session, "id" | "name" | "status" | "lifecycle" | "costUsd" | "harnessName" | "model" | "reasoningEffort"> & { worktreeStrategy?: Session["worktreeStrategy"] };
-  originThreadLine: OriginThreadLine;
-  preview: string;
-}): { userMessage: string; wakeMessage: string } {
-  const { session, originThreadLine, preview } = args;
-  return {
-    userMessage: `⏸️ [${session.name}] Turn completed — session idle, waiting for a follow-up${formatSessionStatsSuffix(session)}`,
-    wakeMessage: [
-      `Coding agent session turn ended.`,
-      `Name: ${session.name}`,
-      `ID: ${session.id}`,
-      `Status: ${session.status}`,
-      `Lifecycle: ${session.lifecycle}`,
-      ``,
-      `Last output (~20 lines):`,
-      fenceAgentOutput(preview, "last output"),
-      ...(originThreadLine ? ["", originThreadLine] : []),
-    ].join("\n"),
-  };
-}

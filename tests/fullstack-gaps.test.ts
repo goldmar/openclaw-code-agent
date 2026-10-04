@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { Session } from "../src/session";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { nativeTopicCommand } from "./command-contexts";
 import { waitUntil } from "./harness-backends";
 import { DISCORD_THREAD, sessionsIndexPath, startFullStack, TELEGRAM_TOPIC, type FullStack, type SentButton } from "./fullstack-fixture";
 
@@ -324,6 +325,25 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
     } finally {
       held.resolve();
     }
+  });
+
+  it("forgets a pending re-offer when the decision closes", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+    s.sm.reofferLateFallbackMs = 60_000;
+    const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers;
+
+    assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test."), "pending");
+    assert.deepEqual([...(reoffers.get(session.id)?.values() ?? [])].map((entry) => entry.inFlight), [true]);
+
+    // The user discards the branch: the decision is closed, so nothing stays in flight.
+    await s.sm.dismissWorktree(session.id);
+    await s.sm.whenStorePersisted();
+    assert.equal(reoffers.has(session.id), false);
   });
 
   it("reports a late unknown outcome as a late failure, once", async () => {
@@ -679,6 +699,44 @@ describe("goal loop", () => {
     assert.equal(s.messages().filter((message) => /Goal task (?:stopped|failed)/.test(message.text)).length, 1);
     assert.equal(s.gc.getTask(task.id)?.status, "stopped");
   });
+
+  for (const dormant of [false, true]) {
+    it(`/agent_kill on a goal's ${dormant ? "dormant" : "running"} session, typed in its own chat, is one message: the goal's stop notice`, async () => {
+      const s = stack = await startFullStack({ backend: "codex" });
+      const workdir = goalWorkdir();
+      const turnsBefore = s.backend.turns.length;
+      await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+      await s.backend.waitForTurns(turnsBefore + 1);
+      const task = s.gc.listTasks()[0]!;
+      await waitUntil(() => Boolean(s.gc.getTask(task.id)?.sessionId), "the goal session");
+      const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+      if (dormant) {
+        await s.backend.endTurn("Plan: create done.txt.");
+        await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+        session.kill("idle-timeout");
+        await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+        await s.sm.whenStorePersisted();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+
+      const before = s.host.durableSends.length;
+      const reply = await s.host.runCommand("agent_kill", {
+        ...nativeTopicCommand({ chat: TELEGRAM_TOPIC.to, topic: Number(TELEGRAM_TOPIC.threadId), accountId: TELEGRAM_TOPIC.accountId }),
+        args: session.name,
+      } as never) as { text?: string };
+      await waitUntil(() => s.gc.getTask(task.id)?.status === "stopped", "the goal task stops");
+      await s.sm.whenStorePersisted();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      assert.match(reply.text ?? "", /^⛔ \[[\w-]+\] Goal task stopped[^\n]*\n\nStopped by user\.$/);
+      assert.deepEqual(
+        s.messages().filter((message) => message.index >= before && /Stopped|stopped/.test(message.text)).map((message) => message.text),
+        [],
+        "no second stop message in the same chat",
+      );
+      assert.equal(s.gc.getTask(task.id)?.failureReason, "Stopped by user.");
+    });
+  }
 
   it("stops the goal when its dormant session is closed as completed", async () => {
     const s = stack = await startFullStack({ backend: "codex" });

@@ -312,16 +312,11 @@ describe("one message per chat command (Telegram topic)", () => {
     assert.deepEqual(visible(s, own, beforeOwn).notices.map((message) => message.text), []);
   });
 
-  // The `⏸️ [name] Turn completed — session idle` line cannot be produced end
-  // to end: a real Session emits a non-question turn end only right after it
-  // completed itself (`SessionTurnRuntime.finishSuccessfulTurn` calls
-  // `completeTurn()` and then `emitTurnEnd(false)`), so the lifecycle's
-  // turn-end handler always sees a completed session and sends nothing. What a
-  // user sees for a turn that ends without a question is pinned here; the
-  // refused-`⏸️` case stays a unit test with a hand-built running session
-  // (tests/session-manager.test.ts).
+  // A turn that ends without a question completes the session
+  // (`SessionTurnRuntime.finishSuccessfulTurn`): there is no "idle after a
+  // turn" state and no notice for one.
   for (const backend of ["codex", "claude-code"] as const) {
-    it(`${backend}: a turn that ends without a question completes the session with one ✅ and no ⏸️ line`, async () => {
+    it(`${backend}: a turn that ends without a question completes the session with exactly one ✅`, async () => {
       const s = stack = await startFullStack({ backend, pluginConfig: PLUGIN_CONFIG });
       const session = await s.launch({ name: "turn-done" });
       const before = s.host.durableSends.length;
@@ -332,7 +327,7 @@ describe("one message per chat command (Telegram topic)", () => {
       assert.equal(session.status, "completed");
       const texts = s.messages().filter((message) => message.index >= before).map((message) => message.text);
       assert.equal(texts.filter((text) => /^✅ \[turn-done\]/.test(text)).length, 1, texts.join(" | "));
-      assert.deepEqual(texts.filter((text) => /Turn completed/.test(text)), [], "no idle line for a session that completed");
+      assert.deepEqual(texts.filter((text) => !/^✅ \[turn-done\]/.test(text)), [], "nothing else is sent for the turn");
 
       // Closing it again as completed changes nothing and sends no second ✅.
       assert.equal(await s.runTool("agent_kill", { session: session.id, reason: "completed" }), "ℹ️ [turn-done] Already completed; nothing to stop.");

@@ -663,6 +663,34 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     });
   }
 
+  it("looks up the branch's PR by state, not by listing order, and never a fork's PR with the same branch name", async () => {
+    const f = await setup({ commit: false });
+    const { syncWorktreePR } = await import("../src/worktree");
+    // Seeded so that the newest PRs are the ones that must not win.
+    const open = f.gh.seedPr({ headRefName: f.branch, state: "OPEN" });
+    f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", headOwner: "someone-else" });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, open.url, "open before merged before closed");
+
+    f.gh.resetState();
+    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, merged.url, "merged before closed");
+
+    f.gh.resetState();
+    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    const newestClosed = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, newestClosed.url, "the newest within a state");
+
+    // Only a fork's PR uses the branch name: this repository has no PR for it,
+    // so a force_new is not refused for it and nothing is adopted.
+    f.gh.resetState();
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", headOwner: "someone-else" });
+    assert.deepEqual(await syncWorktreePR(f.gh.repoDir, f.branch), { exists: false, state: "none" });
+  });
+
   it("never adopts a PR the session did not record unless it was found by the session's branch", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     // The recorded PR itself is open: force_new is refused and the record is unchanged.

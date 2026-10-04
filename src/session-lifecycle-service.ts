@@ -7,7 +7,6 @@ import {
   buildCompletedPayload,
   buildFailedPayload,
   buildPlanApprovalFallbackMessages,
-  buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
 } from "./session-notification-builder";
@@ -126,14 +125,6 @@ function isCurrentPendingInputQuestion(
   );
 }
 
-function buildTurnCycleKey(session: Pick<Session, "startedAt" | "result">): string {
-  return [
-    session.startedAt ?? "unknown-started-at",
-    session.result?.session_id ?? "unknown-backend-session",
-    session.result?.num_turns ?? 0,
-  ].join(":");
-}
-
 function buildTerminalCycleKey(
   session: Pick<Session, "status" | "startedAt" | "result" | "killReason">,
 ): string {
@@ -157,8 +148,6 @@ export class SessionLifecycleService {
       dispatchSessionNotification: DispatchNotification;
       notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
       clearRetryTimersForSession: (sessionId: string) => void;
-      hasTurnCompleteWakeMarker: (sessionId: string) => boolean;
-      shouldEmitTurnCompleteWake: (session: Session) => boolean;
       shouldEmitTerminalWake: (session: Session) => boolean;
       /**
        * Execution status of the session that currently owns this id. Worktree
@@ -315,16 +304,9 @@ export class SessionLifecycleService {
       return;
     }
 
-    if (session.worktreeStrategy === "ask" || session.worktreeStrategy === "delegate") {
-      log.info(
-        `[SessionManager] Suppressing turn-complete wake for session ${session.id} ` +
-        `(worktreeStrategy=${session.worktreeStrategy}) — worktree notification will follow.`,
-      );
-      return;
-    }
-
-    if (!this.deps.shouldEmitTurnCompleteWake(session)) return;
-    this.emitTurnComplete(session);
+    // A turn that ends without a question or a plan decision has completed
+    // the session (`SessionTurnRuntime.finishSuccessfulTurn`), which is the
+    // first branch above: nothing else reaches this point.
   }
 
   /** True unless the branch is proven to have no commits beyond its parent branch. */
@@ -450,12 +432,7 @@ export class SessionLifecycleService {
       if (!this.deps.shouldEmitTerminalWake(session)) return;
       // Resumed while worktree handling waited: that run reports its own end.
       if (!completedNow) return;
-      // After `⏸️ Turn completed` the orchestrator already has its wake (it
-      // usually closed the session itself, agent_kill reason='completed'); the
-      // user still gets the one `✅ Completed` of this terminal cycle.
-      this.emitCompleted(session, {
-        userNoticeOnly: session.killReason === "done" && this.deps.hasTurnCompleteWakeMarker(session.id),
-      });
+      this.emitCompleted(session);
       return;
     }
 
@@ -750,29 +727,6 @@ export class SessionLifecycleService {
       wakeMessageOnNotifySuccess: buildQuestionShownWakeText(session, payload.userMessage),
       wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: payload.wakeMessage,
-    });
-  }
-
-  emitTurnComplete(session: Session): void {
-    log.info(
-      `[SessionManager] turn-complete wake dispatching for session ${session.id} ` +
-      `(turns=${session.result?.num_turns ?? 0}, strategy=${session.worktreeStrategy ?? "none"})`,
-    );
-    const payload = buildTurnCompletePayload({
-      session,
-      originThreadLine: this.deps.originThreadLine(session),
-      preview: this.deps.getOutputPreview(session),
-    });
-
-    this.deps.dispatchSessionNotification(session, {
-      label: "turn-complete",
-      idempotencyKey: `turn-complete:${session.id}:${buildTurnCycleKey(session)}`,
-      userMessage: payload.userMessage,
-      wakeMessage: payload.wakeMessage,
-      notifyUser: "always",
-      // No `✅ Completed` fallback when this line cannot be delivered: the session
-      // is idle, not completed. The orchestrator still gets the wake above, and
-      // the one `✅` is sent when the session completes.
     });
   }
 

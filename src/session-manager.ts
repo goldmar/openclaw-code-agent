@@ -260,6 +260,19 @@ function pendingPlanRejectedPatch(
   };
 }
 
+/** A chat command's view of a goal notice (the goal controller's `GoalReplyNotice`). */
+export type GoalStopReply = {
+  sameChat: (task: { route?: SessionRoute; originSessionKey?: string }) => boolean;
+  text?: string;
+  posted?: boolean;
+  taskName?: string;
+};
+
+export type GoalSessionStopHandlers = {
+  closedWhileDormant: (goalTaskId: string, outcome: "completed" | "killed", reply?: GoalStopReply) => string | undefined;
+  stopRunning: (goalTaskId: string, reply?: GoalStopReply) => boolean;
+};
+
 export class SessionManager {
   private readonly registry: SessionRuntimeRegistry;
   private sessions: Map<string, Session>;
@@ -267,7 +280,6 @@ export class SessionManager {
   maxPersistedSessions: number;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
-  private lastTurnCompleteMarkers: Map<string, string> = new Map();
   private lastTerminalWakeMarkers: Map<string, string> = new Map();
   private readonly mergeQueue = new KeyedOperationQueue();
   private spawnTail: Promise<void> = Promise.resolve();
@@ -488,14 +500,16 @@ export class SessionManager {
       persistSession: (session, persistOptions) => manager.persistSession(session, persistOptions),
       clearRuntimeSessionState: (sessionId) => {
         manager.clearWaitingTimestampsForSession(sessionId);
-        manager.lastTurnCompleteMarkers.delete(sessionId);
         manager.lastTerminalWakeMarkers.delete(sessionId);
       },
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
       updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
       getMaxPersistedSessions: () => manager.maxPersistedSessions,
     });
-    store.onActionTokensChanged(() => manager.syncActionTokenExpiryDeadline());
+    store.onActionTokensChanged(() => {
+      manager.syncActionTokenExpiryDeadline();
+      manager.pruneWorktreeReoffers();
+    });
     const lifecycle = new SessionLifecycleService({
       persistSession: (session) => manager.persistSession(session),
       clearWaitingTimestamp: (sessionId) => { manager.clearWaitingTimestampsForSession(sessionId); },
@@ -505,8 +519,6 @@ export class SessionManager {
       dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
       clearRetryTimersForSession: (sessionId) => wakeDispatcher.clearRetryTimersForSession(sessionId),
-      hasTurnCompleteWakeMarker: (sessionId) => manager.lastTurnCompleteMarkers.has(sessionId),
-      shouldEmitTurnCompleteWake: (session) => manager.shouldEmitTurnCompleteWake(session),
       shouldEmitTerminalWake: (session) => manager.shouldEmitTerminalWake(session),
       getCurrentSessionStatus: (session) => (
         manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
@@ -596,6 +608,7 @@ export class SessionManager {
   }
 
   private onPersistedSessionChanged(session?: PersistedSessionInfo): void {
+    this.pruneWorktreeReoffers();
     if (!session) return;
     this.syncPersistedSessionMaintenance(session);
     this.enforcePersistedRetention();
@@ -629,7 +642,7 @@ export class SessionManager {
 
   private goalTaskAuthorizer?: (id: string) => void;
   private goalTaskIsActive?: (id: string) => boolean;
-  private goalDormantCloseHandler?: (goalTaskId: string, outcome: "completed" | "killed") => string | undefined;
+  private goalSessionStopHandlers?: GoalSessionStopHandlers;
 
   /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
   setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
@@ -637,18 +650,28 @@ export class SessionManager {
     this.goalTaskIsActive = isActive;
   }
 
-  /** Internal owner callback: a goal's dormant session was closed; returns the name of the task it stopped. */
-  setGoalDormantCloseHandler(handler: (goalTaskId: string, outcome: "completed" | "killed") => string | undefined): void {
-    this.goalDormantCloseHandler = handler;
+  /** Internal owner callbacks for stopping a goal through its session (see the two methods below). */
+  setGoalSessionStopHandlers(handlers: GoalSessionStopHandlers): void {
+    this.goalSessionStopHandlers = handlers;
   }
 
   /**
    * Tell the goal task that owned a dormant session how the session was
    * closed. The task stops at once with its one `⛔ [task] Goal task stopped`
-   * notice. Returns the task's name, or undefined when no active task owned it.
+   * notice (returned in `reply` instead of sent when the command was typed in
+   * the task's own chat). Returns the task's name, or undefined when no active
+   * task owned the session.
    */
-  stopGoalOfClosedSession(goalTaskId: string | undefined, outcome: "completed" | "killed"): string | undefined {
-    return goalTaskId ? this.goalDormantCloseHandler?.(goalTaskId, outcome) : undefined;
+  stopGoalOfClosedSession(goalTaskId: string | undefined, outcome: "completed" | "killed", reply?: GoalStopReply): string | undefined {
+    return goalTaskId ? this.goalSessionStopHandlers?.closedWhileDormant(goalTaskId, outcome, reply) : undefined;
+  }
+
+  /**
+   * Stop the goal task that owns a running session, which also stops the
+   * session: one stop message, the goal's. False when no active task owns it.
+   */
+  stopGoalOfRunningSession(goalTaskId: string | undefined, reply?: GoalStopReply): boolean {
+    return goalTaskId ? this.goalSessionStopHandlers?.stopRunning(goalTaskId, reply) === true : false;
   }
 
   /** A goal that finished or whose record is gone can no longer be driven or succeed. */
@@ -843,7 +866,6 @@ export class SessionManager {
         this.registry.remove(existing.id, "session-id-override-replacement");
       }
       this.clearWaitingTimestampsForSession(config.sessionIdOverride);
-      this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
       this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
       this.maintenance.cancelRuntimeGc(config.sessionIdOverride);
     }
@@ -1874,6 +1896,31 @@ export class SessionManager {
     return this.worktreeDecisions.snoozeWorktreeDecision(ref, options);
   }
 
+  private worktreeDecisionIsOpen(ref: string): boolean {
+    const persisted = this.getPersistedSession(ref);
+    if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
+    const state = persisted.worktreeLifecycle?.state;
+    if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
+    if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
+    return Boolean(persisted.worktreePath || persisted.worktreeBranch);
+  }
+
+  /**
+   * Forget re-offer entries that can no longer matter: the decision closed,
+   * the session is gone, or all of the entry's buttons expired or were used.
+   * Without this an entry whose delivery outcome never arrives would stay in
+   * flight forever.
+   */
+  private pruneWorktreeReoffers(): void {
+    for (const [ref, reoffers] of this.worktreeReoffers) {
+      const open = this.worktreeDecisionIsOpen(ref);
+      for (const [generation, entry] of reoffers) {
+        if (!open || ![...entry.tokens].some((tokenId) => this.getActionToken(tokenId))) reoffers.delete(generation);
+      }
+      if (reoffers.size === 0) this.worktreeReoffers.delete(ref);
+    }
+  }
+
   /**
    * Re-offer an open worktree decision after a button action failed (merge, PR,
    * or discard). A callback consumes its token before acting, so another writer
@@ -1894,14 +1941,7 @@ export class SessionManager {
     failure: string,
     options: { closedPr?: boolean; onLateResult?: (delivered: boolean) => void | Promise<void> } = {},
   ): Promise<boolean | "pending"> {
-    const decisionIsOpen = (): boolean => {
-      const persisted = this.getPersistedSession(ref);
-      if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
-      const state = persisted.worktreeLifecycle?.state;
-      if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
-      if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
-      return Boolean(persisted.worktreePath || persisted.worktreeBranch);
-    };
+    const decisionIsOpen = (): boolean => this.worktreeDecisionIsOpen(ref);
     if (!decisionIsOpen()) return false;
     const active = this.resolve(ref);
     const persisted = this.getPersistedSession(ref);
@@ -2410,20 +2450,6 @@ export class SessionManager {
     return session.planApproval ?? pluginConfig.planApproval ?? "delegate";
   }
 
-  private shouldEmitTurnCompleteWake(session: Session): boolean {
-    const marker = `${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}`;
-    const prev = this.lastTurnCompleteMarkers.get(session.id);
-    if (prev === marker) {
-      log.info(
-        `[SessionManager] shouldEmitTurnCompleteWake: debounced for session ${session.id} ` +
-        `(marker unchanged: ${marker})`,
-      );
-      return false;
-    }
-    this.lastTurnCompleteMarkers.set(session.id, marker);
-    return true;
-  }
-
   private shouldEmitTerminalWake(session: Session): boolean {
     const marker = `${session.status}|${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
     const prev = this.lastTerminalWakeMarkers.get(session.id);
@@ -2502,9 +2528,16 @@ export class SessionManager {
       resumable: false,
       killReason: asCompleted ? "done" : "user",
     });
+    // The plan's buttons are retired only once the close is recorded: an
+    // unsaved close leaves the dormant plan with working buttons.
     const planRef = active?.id ?? ("sessionId" in target ? target.sessionId : undefined) ?? ref;
-    if (target.pendingPlanApproval) this.clearPlanDecisionTokens(planRef);
-    if (!active) return this.updatePersistedSession(ref, closedPatch(completed)) ? (completed ? "completed" : "killed") : "unsaved";
+    const hadPendingPlan = target.pendingPlanApproval === true;
+    const saved = (updateRef: string): "completed" | "killed" | "unsaved" => {
+      if (!this.updatePersistedSession(updateRef, closedPatch(completed))) return "unsaved";
+      if (hadPendingPlan) this.clearPlanDecisionTokens(planRef);
+      return completed ? "completed" : "killed";
+    };
+    if (!active) return saved(ref);
     this.persistSession(active, { scheduleRuntimeGc: false });
     if (this.store.getPersistedSession(active.id)?.sessionId !== active.id) {
       // Never persisted (no backend conversation yet): there is no row to mark
@@ -2517,14 +2550,14 @@ export class SessionManager {
       active.killReason = "user";
       active.applyControlPatch(controlPatch);
       Object.assign(active, controlPatch);
+      if (hadPendingPlan) this.clearPlanDecisionTokens(planRef);
       return "killed";
     }
     this.registry.remove(active.id, "closed-while-suspended");
     this.maintenance.cancelRuntimeGc(active.id);
     this.clearWaitingTimestampsForSession(active.id);
-    this.lastTurnCompleteMarkers.delete(active.id);
     this.lastTerminalWakeMarkers.delete(active.id);
-    return this.updatePersistedSession(active.id, closedPatch(completed)) ? (completed ? "completed" : "killed") : "unsaved";
+    return saved(active.id);
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */

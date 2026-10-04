@@ -864,6 +864,27 @@ describe("a Telegram chat command's origin and route", () => {
         assert.equal(isCommandInRouteChat(direct, { route: { ...route!, threadId: "9" } }), false);
       }
     }
+    // The host's key for a channel's Direct Messages chat names the topic in-band
+    // (`agent:<id>:telegram:group:-100…:direct-topic:<n>`): the route from the
+    // command and the one from the session key are the same place.
+    for (const path of ["native", "text"] as const) {
+      const direct = directTopicCommand({ chat: "-1001234567890", topic: 9, groupSessionKey: true }, path);
+      assert.equal(direct.sessionKey, "agent:main:telegram:group:-1001234567890:direct-topic:9");
+      assert.equal(parseThreadIdFromSessionKey(direct.sessionKey), undefined, "a direct topic is not a thread id");
+      const expected: { provider: string; accountId: string; target: string; threadId: string | undefined; sessionKey: string } = {
+        provider: "telegram", accountId: "bot1", target: "-1001234567890:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey,
+      };
+      assert.deepEqual(resolveSessionRoute(direct), expected);
+      assert.equal(isCommandInRouteChat(direct, { route: expected }), true);
+      // `shouldPreferTelegramSessionKeyRoute`: when `to` names another place, the key's direct topic wins, with the command's account.
+      assert.deepEqual(resolveSessionRoute({ ...direct, to: "telegram:-1009876543210:direct-topic:9" }), expected);
+      assert.deepEqual(resolveSessionRoute({ ...direct, to: "telegram:-1001234567890" }), expected);
+      // Without an account the route comes from the session key alone: the same direct topic, no thread.
+      assert.deepEqual(resolveSessionRoute({ ...direct, accountId: undefined }), { provider: "telegram", target: "-1001234567890:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey });
+      // A command in the channel's forum-style topic 9 or in another direct topic is elsewhere.
+      assert.equal(isCommandInRouteChat(nativeTopicCommand({ topic: 9 }), { route: expected }), false);
+      assert.equal(isCommandInRouteChat(directTopicCommand({ chat: "-1001234567890", topic: 8, groupSessionKey: true }, path), { route: expected }), false);
+    }
     // Without a bot account the old fallbacks apply (no account-bearing route).
     assert.equal(resolveOriginChannel({ ...directTopicCommand({ topic: 9 }), accountId: undefined }), "unknown");
   });

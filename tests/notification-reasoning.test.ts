@@ -14,7 +14,7 @@ import { SessionNotificationService } from "../src/session-notifications";
 import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { formatHarnessModelLabel, formatReasoningMetadataSuffix } from "../src/session-display";
-import { buildCompletedPayload, buildFailedPayload, buildTurnCompletePayload, buildWaitingForInputPayload } from "../src/session-notification-builder";
+import { buildCompletedPayload, buildFailedPayload, buildWaitingForInputPayload } from "../src/session-notification-builder";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import { resolveWorktreeToolTarget } from "../src/tools/worktree-tool-context";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
@@ -152,7 +152,6 @@ describe("notification reasoning visibility", () => {
       for (const [label, payload] of [
         ["completed", buildCompletedPayload({ session, preview: "Done", originThreadLine: "" })],
         ["failed", buildFailedPayload({ session, preview: "", originThreadLine: "", errorSummary: "Failure", worktreeAutoCleaned: false })],
-        ["turn-complete", buildTurnCompletePayload({ session, preview: "Next", originThreadLine: "" })],
       ] as const) {
         assert.match(payload.userMessage, /\| reasoning: medium(?:\n|$)/);
         service.dispatch(session, { label, ...payload });

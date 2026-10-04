@@ -68,7 +68,7 @@ export function textTopicCommand({ chat = COMMAND_GROUP, topic, accountId = "bot
  * thread form, `…:thread:<chat>:direct-topic:<n>`.
  */
 export function directTopicCommand(
-  { chat = COMMAND_SENDER, topic, accountId = "bot1", threadSessionKey = false }: TopicCommandInput & { threadSessionKey?: boolean },
+  { chat = COMMAND_SENDER, topic, accountId = "bot1", threadSessionKey = false, groupSessionKey = false }: TopicCommandInput & { threadSessionKey?: boolean; groupSessionKey?: boolean },
   path: "native" | "text" = "native",
 ): TelegramCommandContext {
   return {
@@ -78,7 +78,10 @@ export function directTopicCommand(
     accountId,
     messageThreadId: topic,
     senderId: COMMAND_SENDER,
-    sessionKey: threadSessionKey ? `agent:main:main:thread:${chat}:direct-topic:${topic}` : "agent:main:main",
+    // `groupSessionKey`: the key of a channel's Direct Messages chat (negative chat id), which names the topic in-band.
+    sessionKey: groupSessionKey
+      ? `agent:main:telegram:group:${chat}:direct-topic:${topic}`
+      : threadSessionKey ? `agent:main:main:thread:${chat}:direct-topic:${topic}` : "agent:main:main",
   };
 }
 

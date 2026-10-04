@@ -525,7 +525,13 @@ export class GoalController {
     this.sessionManager = sessionManager;
     this.store = new GoalTaskStore();
     this.sessionManager.setGoalTaskAuthorizer?.((id) => this.assertTaskAuthorized(id), (id) => this.isTaskActive(id));
-    this.sessionManager.setGoalDormantCloseHandler?.((id, outcome) => this.sessionClosedWhileDormant(id, outcome));
+    this.sessionManager.setGoalSessionStopHandlers?.({
+      closedWhileDormant: (id, outcome, reply) => this.sessionClosedWhileDormant(id, outcome, reply),
+      // A retired controller stops nothing: the session is then stopped directly.
+      stopRunning: (id, reply) => {
+        try { return this.stopTask(id, reply)?.action === "stopped"; } catch { return false; }
+      },
+    });
   }
 
   start(): void {
@@ -659,7 +665,7 @@ export class GoalController {
    * happen in it, and nothing was done that verifiers could check, so the task
    * stops now, with its one stop notice; later rechecks see a finished task.
    */
-  sessionClosedWhileDormant(taskId: string, outcome: "completed" | "killed"): string | undefined {
+  sessionClosedWhileDormant(taskId: string, outcome: "completed" | "killed", reply?: GoalReplyNotice): string | undefined {
     if (!this.isCurrent(this.generation)) return undefined;
     const task = this.store.get(taskId);
     if (!task || isTerminalGoalTaskStatus(task.status)) return undefined;
@@ -669,7 +675,7 @@ export class GoalController {
     this.scheduledEvaluations.delete(task.id);
     this.markTaskStopped(task, outcome === "completed"
       ? "The session was closed as completed without running."
-      : "Stopped by user.");
+      : "Stopped by user.", reply);
     return task.name;
   }
 
@@ -1262,10 +1268,6 @@ export class GoalController {
         return;
       }
       const persisted = this.sessionManager.getPersistedSession(task.sessionId);
-      if (persisted?.status === "completed" && !current) {
-        this.markTaskStopped(task, "The session was closed as completed without running.");
-        return;
-      }
       if (persisted?.approvalState === "rejected") {
         this.markTaskStopped(task, "The plan was rejected.");
         return;
@@ -1512,10 +1514,11 @@ export class GoalController {
         // The session is no longer loaded (for example a dormant session that
         // was stopped): its stored row says how it ended.
         const stored = task.sessionId ? this.sessionManager.getPersistedSession?.(task.sessionId) : undefined;
-        // A dormant session the orchestrator marked completed never ran its
-        // turn, so there is nothing to verify: the goal stops.
-        if (stored?.status === "completed") this.markTaskStopped(task, "The session was closed as completed without running.");
-        else if (stored?.approvalState === "rejected") this.markTaskStopped(task, "The plan was rejected.");
+        // (A dormant session closed with agent_kill stops its task directly,
+        // `sessionClosedWhileDormant`. A session that completed normally and
+        // was then unloaded is not one of these cases: its completion was
+        // handled when it happened, so finding it gone here is a failure.)
+        if (stored?.status !== "completed" && stored?.approvalState === "rejected") this.markTaskStopped(task, "The plan was rejected.");
         else if (stored?.status === "killed" && stored.killReason === "user") this.markTaskStopped(task, "Stopped by user.");
         else this.markTaskFailed(task, "Underlying session could not be found.");
         return;

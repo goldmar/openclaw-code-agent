@@ -1,4 +1,4 @@
-import type { SessionManager } from "../session-manager";
+import type { GoalStopReply, SessionManager } from "../session-manager";
 import type { GoalTaskStatus, SessionRoute } from "../types";
 import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
@@ -36,6 +36,14 @@ const PHASE_WORDS: Record<string, string> = {
 /** A session phase (its lifecycle) in the user's words. */
 export function userPhaseWord(phase: string): string {
   return PHASE_WORDS[phase] ?? phase.replace(/_/gu, " ");
+}
+
+type KillOptions = { replyIsStopNotice?: (session: { route?: SessionRoute; originSessionKey?: string }) => boolean };
+
+/** The goal notice as this command's reply when it is typed in the task's own chat (commands only). */
+function goalStopReply(options: KillOptions): GoalStopReply | undefined {
+  const sameChat = options.replyIsStopNotice;
+  return sameChat ? { sameChat: (task) => sameChat(task) === true } : undefined;
 }
 
 /** The branch of a worktree session that was neither merged, released nor discarded. */
@@ -76,8 +84,10 @@ export function getKillSessionText(
   // (Also one stopped by the idle timeout while its plan waited: see `closeSuspendedSession`.)
   if (target.status === "killed") {
     const closed = sm.closeSuspendedSession(ref, reason === "completed");
-    // A goal task that owned the session stops with it (one goal notice).
-    const goalTask = closed === "completed" || closed === "killed" ? sm.stopGoalOfClosedSession?.(target.goalTaskId, closed) : undefined;
+    // A goal task that owned the session stops with it: one goal notice,
+    // which is this command's reply when typed in the task's own chat.
+    const goalReply = goalStopReply(options);
+    const goalTask = closed === "completed" || closed === "killed" ? sm.stopGoalOfClosedSession?.(target.goalTaskId, closed, goalReply) : undefined;
     if (closed === "completed") {
       // Only the orchestrator's tool can ask for this. No completion handling
       // runs for a session that was not running, so an open branch is named.
@@ -87,7 +97,7 @@ export function getKillSessionText(
         : ""}`;
     }
     if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;
-    if (closed) return `⛔ [${target.name}] Stopped (it was not running).`;
+    if (closed) return goalTask && goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${target.name}] Stopped (it was not running).`;
   }
 
   if (!session || session.status === "completed" || session.status === "failed" || session.status === "killed") {
@@ -98,6 +108,14 @@ export function getKillSessionText(
     // A real completion: the lifecycle sends the user `✅ [name] Completed`.
     session.complete();
     return `ℹ️ [${session.name}] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`;
+  }
+
+  // A goal's session is stopped through its goal task: the task's
+  // `⛔ [task] Goal task stopped` is the one stop message (the reply in the
+  // task's own chat, the notice in the task's chat otherwise).
+  const goalReply = goalStopReply(options);
+  if (sm.stopGoalOfRunningSession?.(session.goalTaskId, goalReply)) {
+    return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${session.name}] Stopped.`;
   }
 
   const replyIsStopNotice = options.replyIsStopNotice?.(session) === true;

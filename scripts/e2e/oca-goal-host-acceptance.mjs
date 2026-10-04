@@ -131,7 +131,7 @@ export function currentOwner(rows, listing, fixture, threadId, goal) {
   const row = candidates[0];
   if (goal && Object.hasOwn(row, "goalTaskId")) assert.equal(row.goalTaskId, goal.id);
   if (!goal) assert.equal(row.goalTaskId, undefined);
-  const blocks = listing.split(/(?=^(?:🟡|🟢|✅|❌|⛔|📋|❓|🌿|⏸️) [^\n]* \[[^\]\n]+\] — )/m).filter(block => block.startsWith(`🟢 ${row.name} [${row.sessionId}] — running · `));
+  const blocks = listing.split(/(?=^(?:🟡|🟢|✅|❌|⛔|📋|❓|🌿) [^\n]* \[[^\]\n]+\] — )/m).filter(block => block.startsWith(`🟢 ${row.name} [${row.sessionId}] — running · `));
   assert.equal(blocks.length, 1, "Exactly one current public native owner required");
   assert.ok(!blocks[0].includes("♻️ Recovered after a Gateway restart; no live process"));
   return row;

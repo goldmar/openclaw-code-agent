@@ -97,7 +97,6 @@ describe("WebChat notification delivery", () => {
       resolveWorktreeRepoDir: () => undefined, updatePersistedSession: f.patch,
       dispatchSessionNotification: (session, request) => f.service.dispatch(session, request),
       notifySession: () => {}, clearRetryTimersForSession: () => {},
-      hasTurnCompleteWakeMarker: () => false, shouldEmitTurnCompleteWake: () => true,
       shouldEmitTerminalWake: () => true, resolvePlanApprovalMode: () => "ask",
       getPlanApprovalButtons: () => buttons,
       getResumeButtons: () => [], getQuestionButtons: () => undefined,

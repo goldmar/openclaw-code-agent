@@ -233,11 +233,26 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
       headRefName?: string;
       baseRefName?: string;
     }>;
-    const expectedOwner = targetRepo ? (await inferOriginOwner(repoDir))?.toLowerCase() : undefined;
-    const pr = prs.find((candidate) => (
-      candidate.headRefName === branchName
-      && (!expectedOwner || candidate.headRepositoryOwner?.login?.toLowerCase() === expectedOwner)
-    ));
+    // Only a PR whose head is this repository's branch counts: `--head <branch>`
+    // also lists PRs from other owners' forks that use the same branch name.
+    // With a target repo (a PR from this fork into upstream) the head owner
+    // must be known to be origin's owner; without one, a PR whose head owner is
+    // known to be someone else is left out.
+    const originOwner = (await inferOriginOwner(repoDir))?.toLowerCase();
+    const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => {
+      const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
+      if (targetRepo) return !originOwner || headOwner === originOwner;
+      return !originOwner || !headOwner || headOwner === originOwner;
+    };
+    // The PR that matters most: an open one, else a merged one, else a closed
+    // one, and the newest within each (not whatever order gh lists them in).
+    const stateRank = (state: string): number => {
+      const normalized = normalizePrState(state);
+      return normalized === "open" ? 0 : normalized === "merged" ? 1 : 2;
+    };
+    const pr = prs
+      .filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate))
+      .sort((a, b) => stateRank(a.state) - stateRank(b.state) || b.number - a.number)[0];
     if (!pr) {
       return { exists: false, state: "none" };
     }

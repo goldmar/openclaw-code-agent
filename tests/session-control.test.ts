@@ -213,7 +213,12 @@ describe("session-control app layer", () => {
     const goal: any = {
       resolve: () => ({ ...session, goalTaskId: "goal-1" }),
       closeSuspendedSession: (_ref: string, completed: boolean) => (completed ? "completed" : "killed"),
-      stopGoalOfClosedSession: (taskId: string | undefined, outcome: string) => { goalStops.push([taskId, outcome]); return "ship-it"; },
+      stopGoalOfClosedSession: (taskId: string | undefined, outcome: string, reply?: { sameChat: (task: unknown) => boolean; text?: string; posted?: boolean }) => {
+        goalStops.push([taskId, outcome]);
+        // The controller: the notice is the reply in the task's own chat, posted otherwise.
+        if (reply) Object.assign(reply, { text: "⛔ [ship-it] Goal task stopped\n\nStopped by user.", posted: !reply.sameChat({ route: undefined }) });
+        return "ship-it";
+      },
     };
     assert.equal(
       getKillSessionText(goal, "s", "completed"),
@@ -221,6 +226,10 @@ describe("session-control app layer", () => {
     );
     assert.equal(getKillSessionText(goal, "s", "killed"), "⛔ [s] Stopped (it was not running).");
     assert.deepEqual(goalStops, [["goal-1", "completed"], ["goal-1", "killed"]], "the goal is told how its session was closed");
+    // `/agent_kill` typed in the task's own chat: the goal notice is the one message.
+    assert.equal(getKillSessionText(goal, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [ship-it] Goal task stopped\n\nStopped by user.");
+    // From another chat the notice was posted there, and the reply is the short line.
+    assert.equal(getKillSessionText(goal, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped (it was not running).");
     // An unsaved close stops no goal.
     const unsavedGoal: any = { ...goal, closeSuspendedSession: () => "unsaved", stopGoalOfClosedSession: () => { throw new Error("must not stop the goal"); } };
     assert.match(getKillSessionText(unsavedGoal, "s", "killed"), /^❌ \[s\] Not stopped/);
@@ -258,6 +267,31 @@ describe("session-control app layer", () => {
       closeSuspendedSession: SessionManager.prototype.closeSuspendedSession,
     };
     assert.equal(getKillSessionText(stopped, "stopped", "killed"), "ℹ️ [stopped] Already stopped; nothing to stop.");
+  });
+
+  it("stops a running goal session through its goal task: one stop message", () => {
+    const session: Record<string, unknown> = { name: "s", id: "1", status: "running", goalTaskId: "goal-1", costUsd: 0, duration: 1_000 };
+    let killed = false;
+    const sm: any = {
+      resolve: () => session,
+      kill: () => { killed = true; },
+      stopGoalOfRunningSession: (_taskId: string, reply?: { sameChat: (task: unknown) => boolean; text?: string; posted?: boolean }) => {
+        if (reply) Object.assign(reply, { text: "⛔ [ship-it] Goal task stopped | $0.10 | 5s\n\nStopped by user.", posted: !reply.sameChat({}) });
+        return true;
+      },
+    };
+    // In the task's own chat the goal notice is the reply; nothing else is sent.
+    assert.equal(getKillSessionText(sm, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [ship-it] Goal task stopped | $0.10 | 5s\n\nStopped by user.");
+    // From another chat, and for the tool: the short line; the goal notice is in the task's chat.
+    assert.equal(getKillSessionText(sm, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped.");
+    assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped.");
+    assert.equal(killed, false, "the goal controller stops its session itself");
+    assert.equal("stopNoticeReplaced" in session, false);
+
+    // No active goal task owns the session: it is stopped directly, as before.
+    const orphan: any = { resolve: () => session, kill: () => { killed = true; }, stopGoalOfRunningSession: () => false };
+    assert.equal(getKillSessionText(orphan, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [s] Stopped by user | $0.00 | 1s");
+    assert.equal(killed, true);
   });
 
   it("words every goal task status for the user", () => {
