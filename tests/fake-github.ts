@@ -32,6 +32,8 @@ export type FakePullRequest = {
   headRefName: string;
   baseRefName: string;
   headOwner: string;
+  /** Defaults to "the head owner is not the repository's owner". */
+  isCrossRepository?: boolean;
   repo: string;
 };
 
@@ -90,6 +92,7 @@ const pick = (pr, fields) => {
   const all = {
     url: pr.url, number: pr.number, title: pr.title, body: pr.body, state: pr.state, isDraft: pr.isDraft,
     headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRepositoryOwner: { login: pr.headOwner },
+    isCrossRepository: pr.isCrossRepository ?? pr.headOwner !== pr.repo.split("/")[0],
   };
   const out = {};
   for (const field of fields.split(",")) if (field in all) out[field] = all[field];
@@ -283,6 +286,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
         headRefName: pr.headRefName,
         baseRefName: pr.baseRefName ?? "main",
         headOwner: pr.headOwner ?? owner,
+        ...(pr.isCrossRepository === undefined ? {} : { isCrossRepository: pr.isCrossRepository }),
         repo: fullRepo,
       };
       state.prs.push(seeded);

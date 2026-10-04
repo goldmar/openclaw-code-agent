@@ -397,7 +397,7 @@ describe("createPR", () => {
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);
       assert.ok(calls.includes("pr create --base main --draft --repo goldmar/openclaw-code-agent --head goldmar:agent/existing-pr --title Existing PR --body Body"));
-      assert.ok(calls.includes("pr list --head agent/existing-pr --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo goldmar/openclaw-code-agent"));
+      assert.ok(calls.includes("pr list --head agent/existing-pr --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository --repo goldmar/openclaw-code-agent"));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -486,7 +486,7 @@ describe("syncWorktreePR", () => {
         headRefName: "agent/fix-lookup",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -504,9 +504,9 @@ describe("syncWorktreePR", () => {
       const result = await syncWorktreePR(repoDir, "agent/fix-lookup");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository");
       assert.equal(result.headRefName, "agent/fix-lookup");
-      // gh lists another owner's fork PR with the same branch name first: it is not this repository's PR.
+      // Both listed PRs are open: the newest one, not the first listed.
       assert.equal(result.number, 12);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
@@ -539,7 +539,7 @@ describe("syncWorktreePR", () => {
       await syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

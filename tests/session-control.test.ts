@@ -224,12 +224,12 @@ describe("session-control app layer", () => {
       getKillSessionText(goal, "s", "completed"),
       "ℹ️ [s] Marked as completed (it was not running). Its goal task \"ship-it\" is stopped: the session was closed without running, so its verifiers did not run.",
     );
-    assert.equal(getKillSessionText(goal, "s", "killed"), "⛔ [s] Stopped (it was not running).");
+    assert.equal(getKillSessionText(goal, "s", "killed"), "⛔ [s] Stopped (it was not running); goal task \"ship-it\" stopped.");
     assert.deepEqual(goalStops, [["goal-1", "completed"], ["goal-1", "killed"]], "the goal is told how its session was closed");
     // `/agent_kill` typed in the task's own chat: the goal notice is the one message.
     assert.equal(getKillSessionText(goal, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [ship-it] Goal task stopped\n\nStopped by user.");
     // From another chat the notice was posted there, and the reply is the short line.
-    assert.equal(getKillSessionText(goal, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped (it was not running).");
+    assert.equal(getKillSessionText(goal, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped (it was not running); goal task \"ship-it\" stopped.");
     // An unsaved close stops no goal.
     const unsavedGoal: any = { ...goal, closeSuspendedSession: () => "unsaved", stopGoalOfClosedSession: () => { throw new Error("must not stop the goal"); } };
     assert.match(getKillSessionText(unsavedGoal, "s", "killed"), /^❌ \[s\] Not stopped/);
@@ -277,19 +277,36 @@ describe("session-control app layer", () => {
       kill: () => { killed = true; },
       stopGoalOfRunningSession: (_taskId: string, reply?: { sameChat: (task: unknown) => boolean; text?: string; posted?: boolean }) => {
         if (reply) Object.assign(reply, { text: "⛔ [ship-it] Goal task stopped | $0.10 | 5s\n\nStopped by user.", posted: !reply.sameChat({}) });
-        return true;
+        return "ship-it";
       },
     };
     // In the task's own chat the goal notice is the reply; nothing else is sent.
     assert.equal(getKillSessionText(sm, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [ship-it] Goal task stopped | $0.10 | 5s\n\nStopped by user.");
     // From another chat, and for the tool: the short line; the goal notice is in the task's chat.
-    assert.equal(getKillSessionText(sm, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped.");
-    assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped.");
-    assert.equal(killed, false, "the goal controller stops its session itself");
-    assert.equal("stopNoticeReplaced" in session, false);
+    // (The mock controller did not stop the named session, as in the startup
+    // window of a new iteration: the session the user named is stopped directly,
+    // without a second stop notice.)
+    assert.equal(killed, true);
+    assert.equal(session.stopNoticeReplaced, true);
+    // From another chat, and for the tool: the short line names the goal task; its notice is in the task's chat.
+    assert.equal(getKillSessionText(sm, "s", "killed", { replyIsStopNotice: () => false }), "⛔ [s] Stopped; goal task \"ship-it\" stopped.");
+    assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped; goal task \"ship-it\" stopped.");
+
+    // When the controller stopped the named session itself, it is not killed a second time.
+    let again = false;
+    const stopped: any = {
+      resolve: () => session,
+      kill: () => { again = true; },
+      stopGoalOfRunningSession: () => { session.status = "killed"; return "ship-it"; },
+    };
+    assert.equal(getKillSessionText(stopped, "s", "killed"), "⛔ [s] Stopped; goal task \"ship-it\" stopped.");
+    assert.equal(again, false);
+    session.status = "running";
+    delete session.stopNoticeReplaced;
+    killed = false;
 
     // No active goal task owns the session: it is stopped directly, as before.
-    const orphan: any = { resolve: () => session, kill: () => { killed = true; }, stopGoalOfRunningSession: () => false };
+    const orphan: any = { resolve: () => session, kill: () => { killed = true; }, stopGoalOfRunningSession: (): undefined => undefined };
     assert.equal(getKillSessionText(orphan, "s", "killed", { replyIsStopNotice: () => true }), "⛔ [s] Stopped by user | $0.00 | 1s");
     assert.equal(killed, true);
   });

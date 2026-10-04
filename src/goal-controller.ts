@@ -529,7 +529,10 @@ export class GoalController {
       closedWhileDormant: (id, outcome, reply) => this.sessionClosedWhileDormant(id, outcome, reply),
       // A retired controller stops nothing: the session is then stopped directly.
       stopRunning: (id, reply) => {
-        try { return this.stopTask(id, reply)?.action === "stopped"; } catch { return false; }
+        try {
+          const stopped = this.stopTask(id, reply);
+          return stopped?.action === "stopped" ? stopped.task.name : undefined;
+        } catch { return undefined; }
       },
     });
   }
@@ -722,6 +725,14 @@ export class GoalController {
       const session = this.sessionManager.resolve?.(task.sessionId);
       if (session) session.stopNoticeReplaced = true;
       this.sessionManager.kill(task.sessionId, "user");
+    }
+    // The task's newest session may not be `task.sessionId` yet: every
+    // iteration is a new session, recorded on the task only once it runs.
+    for (const session of this.sessionManager.list?.("all") ?? []) {
+      if (session.goalTaskId !== task.id || session.id === task.sessionId) continue;
+      if (session.status !== "starting" && session.status !== "running") continue;
+      session.stopNoticeReplaced = true;
+      this.sessionManager.kill(session.id, "user");
     }
 
     this.markTaskStopped(task, "Stopped by user.", reply);

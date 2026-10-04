@@ -202,7 +202,11 @@ export async function createPR(
   }
 }
 
-export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): Promise<PRStatus> {
+/**
+ * The PR of a branch. `baseBranch` (the session's base, when known) makes a PR
+ * into that base win over a PR from the same branch into another base.
+ */
+export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string): Promise<PRStatus> {
   await assertBranchName(branchName);
   // Without a GitHub remote gh can serve (and no explicit target repo) there is no PR to find.
   if (!targetRepo && !(await hasGitHubRemote(repoDir))) {
@@ -213,7 +217,7 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
   }
 
   try {
-    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName"];
+    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -232,27 +236,30 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
       headRepositoryOwner?: { login?: string };
       headRefName?: string;
       baseRefName?: string;
+      isCrossRepository?: boolean;
     }>;
     // Only a PR whose head is this repository's branch counts: `--head <branch>`
     // also lists PRs from other owners' forks that use the same branch name.
     // With a target repo (a PR from this fork into upstream) the head owner
-    // must be known to be origin's owner; without one, a PR whose head owner is
-    // known to be someone else is left out.
+    // must be origin's owner. Without one, a PR from the repository itself
+    // always counts, whatever its owner is called (origin's URL may still carry
+    // the name from before a rename or transfer); only a PR that GitHub marks
+    // as coming from another repository, with a known and different head
+    // owner, is left out.
     const originOwner = (await inferOriginOwner(repoDir))?.toLowerCase();
     const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => {
       const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
       if (targetRepo) return !originOwner || headOwner === originOwner;
-      return !originOwner || !headOwner || headOwner === originOwner;
+      return !(candidate.isCrossRepository === true && originOwner && headOwner && headOwner !== originOwner);
     };
-    // The PR that matters most: an open one, else a merged one, else a closed
-    // one, and the newest within each (not whatever order gh lists them in).
-    const stateRank = (state: string): number => {
-      const normalized = normalizePrState(state);
-      return normalized === "open" ? 0 : normalized === "merged" ? 1 : 2;
-    };
+    // Which PR, not whatever order gh lists them in: one into the session's
+    // base branch before one into another base; then an open one; then the
+    // newest (a newer closed PR on a reused branch counts, not an older merged one).
+    const baseRank = (candidate: (typeof prs)[number]): number => (baseBranch && candidate.baseRefName !== baseBranch ? 1 : 0);
+    const openRank = (candidate: (typeof prs)[number]): number => (normalizePrState(candidate.state) === "open" ? 0 : 1);
     const pr = prs
       .filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate))
-      .sort((a, b) => stateRank(a.state) - stateRank(b.state) || b.number - a.number)[0];
+      .sort((a, b) => baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
     if (!pr) {
       return { exists: false, state: "none" };
     }

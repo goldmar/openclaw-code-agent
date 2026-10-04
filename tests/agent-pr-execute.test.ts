@@ -663,32 +663,52 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     });
   }
 
-  it("looks up the branch's PR by state, not by listing order, and never a fork's PR with the same branch name", async () => {
+  it("looks up the branch's PR by base, then open, then newest, and never a fork's PR with the same branch name", async () => {
     const f = await setup({ commit: false });
     const { syncWorktreePR } = await import("../src/worktree");
-    // Seeded so that the newest PRs are the ones that must not win.
+    // An open PR wins over newer merged and closed ones; a fork's PR never counts.
     const open = f.gh.seedPr({ headRefName: f.branch, state: "OPEN" });
     f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
     f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
     f.gh.seedPr({ headRefName: f.branch, state: "OPEN", headOwner: "someone-else" });
-    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, open.url, "open before merged before closed");
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, open.url, "open first");
 
+    // Without an open PR the newest counts: a closed PR on a reused branch, not the older merged one.
     f.gh.resetState();
     f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
-    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
-    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
-    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, merged.url, "merged before closed");
-
-    f.gh.resetState();
-    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
     const newestClosed = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
-    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, newestClosed.url, "the newest within a state");
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, newestClosed.url, "the newest when none is open");
+    f.gh.resetState();
+    f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    const newestMerged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, newestMerged.url);
+
+    // The session's base branch: its own PR is not beaten by a newer, open PR into another base.
+    f.gh.resetState();
+    const intoMain = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED", baseRefName: "main" });
+    const intoRelease = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "main")).url, intoMain.url);
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "release")).url, intoRelease.url);
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, intoRelease.url, "no known base: open first");
+    // With no PR into the session's base, the other one is still found.
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, undefined, "develop")).url, intoRelease.url);
 
     // Only a fork's PR uses the branch name: this repository has no PR for it,
     // so a force_new is not refused for it and nothing is adopted.
     f.gh.resetState();
     f.gh.seedPr({ headRefName: f.branch, state: "OPEN", headOwner: "someone-else" });
     assert.deepEqual(await syncWorktreePR(f.gh.repoDir, f.branch), { exists: false, state: "none" });
+
+    // The repository's owner was renamed (or the repository transferred) and
+    // origin still carries the old name: its own PR is not a fork's PR.
+    f.gh.resetState();
+    const renamed = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", headOwner: "new-owner-name", isCrossRepository: false });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, renamed.url);
+    f.gh.resetState();
+    const mergedRenamed = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", headOwner: "new-owner-name", isCrossRepository: false });
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).state, "merged");
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, mergedRenamed.url);
   });
 
   it("never adopts a PR the session did not record unless it was found by the session's branch", async () => {

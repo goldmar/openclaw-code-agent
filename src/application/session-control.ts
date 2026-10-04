@@ -97,7 +97,10 @@ export function getKillSessionText(
         : ""}`;
     }
     if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;
-    if (closed) return goalTask && goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${target.name}] Stopped (it was not running).`;
+    if (closed) {
+      if (!goalTask) return `⛔ [${target.name}] Stopped (it was not running).`;
+      return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${target.name}] Stopped (it was not running); goal task "${goalTask}" stopped.`;
+    }
   }
 
   if (!session || session.status === "completed" || session.status === "failed" || session.status === "killed") {
@@ -114,8 +117,15 @@ export function getKillSessionText(
   // `⛔ [task] Goal task stopped` is the one stop message (the reply in the
   // task's own chat, the notice in the task's chat otherwise).
   const goalReply = goalStopReply(options);
-  if (sm.stopGoalOfRunningSession?.(session.goalTaskId, goalReply)) {
-    return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${session.name}] Stopped.`;
+  const stoppedGoal = sm.stopGoalOfRunningSession?.(session.goalTaskId, goalReply);
+  if (stoppedGoal) {
+    // The session the user named may be newer than the one the task had
+    // recorded (an iteration that is still starting): it is stopped too.
+    if (session.status === "starting" || session.status === "running") {
+      session.stopNoticeReplaced = true;
+      sm.kill(session.id);
+    }
+    return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${session.name}] Stopped; goal task "${stoppedGoal}" stopped.`;
   }
 
   const replyIsStopNotice = options.replyIsStopNotice?.(session) === true;

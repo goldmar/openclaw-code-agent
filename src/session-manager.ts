@@ -270,7 +270,7 @@ export type GoalStopReply = {
 
 export type GoalSessionStopHandlers = {
   closedWhileDormant: (goalTaskId: string, outcome: "completed" | "killed", reply?: GoalStopReply) => string | undefined;
-  stopRunning: (goalTaskId: string, reply?: GoalStopReply) => boolean;
+  stopRunning: (goalTaskId: string, reply?: GoalStopReply) => string | undefined;
 };
 
 export class SessionManager {
@@ -668,10 +668,11 @@ export class SessionManager {
 
   /**
    * Stop the goal task that owns a running session, which also stops the
-   * session: one stop message, the goal's. False when no active task owns it.
+   * task's sessions: one stop message, the goal's. Returns the task's name,
+   * or undefined when no active task owns the session.
    */
-  stopGoalOfRunningSession(goalTaskId: string | undefined, reply?: GoalStopReply): boolean {
-    return goalTaskId ? this.goalSessionStopHandlers?.stopRunning(goalTaskId, reply) === true : false;
+  stopGoalOfRunningSession(goalTaskId: string | undefined, reply?: GoalStopReply): string | undefined {
+    return goalTaskId ? this.goalSessionStopHandlers?.stopRunning(goalTaskId, reply) : undefined;
   }
 
   /** A goal that finished or whose record is gone can no longer be driven or succeed. */
@@ -1907,7 +1908,8 @@ export class SessionManager {
 
   /**
    * Forget re-offer entries that can no longer matter: the decision closed,
-   * the session is gone, or all of the entry's buttons expired or were used.
+   * the session is gone, or none of the entry's button tokens exists any more
+   * (expired or deleted; a used token still exists until it is deleted).
    * Without this an entry whose delivery outcome never arrives would stay in
    * flight forever.
    */

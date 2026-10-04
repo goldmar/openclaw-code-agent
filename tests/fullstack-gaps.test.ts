@@ -682,7 +682,7 @@ describe("goal loop", () => {
     // Otherwise the stop lands first: the controller then finds the session
     // unloaded and reads how it ended from the stored row.
 
-    assert.match(await s.runTool("agent_kill", { session: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\)\.$/);
+    assert.match(await s.runTool("agent_kill", { session: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\); goal task "[\w-]+" stopped\.$/);
 
     // The plan is rejected with the session, so nothing keeps waiting for it.
     const row = s.sm.getPersistedSession(session.id);

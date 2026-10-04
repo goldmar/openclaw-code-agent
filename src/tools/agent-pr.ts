@@ -600,7 +600,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
         effectiveTargetPrStatus?.exists
           ? effectiveTargetPrStatus
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo),
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
@@ -652,7 +652,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const syncedPrStatus = normalizeForceNewReplacementPrStatus(
         resolvedTargetPrUrl
           ? await syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo),
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
@@ -873,7 +873,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number
-          const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo);
+          const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch);
 
           // Persist PR URL and number
           const resolvesDeferredCompletion = owedCompletionCycle(sm, target.generation) !== undefined;

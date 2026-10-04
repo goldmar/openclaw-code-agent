@@ -384,6 +384,31 @@ describe("GoalController", () => {
     }
   });
 
+  it("stops the task's newest session too when it is still starting and not yet recorded on the task", () => {
+    // Every iteration is a new session; `task.sessionId` is updated only once it runs.
+    const previous = createStubSession({ id: "session-1", name: "goal-task", status: "killed", goalTaskId: "goal-1" });
+    const starting = createStubSession({ id: "session-2", name: "goal-task", status: "starting", goalTaskId: "goal-1" });
+    const foreign = createStubSession({ id: "session-3", name: "other", status: "running", goalTaskId: "goal-other" });
+    const killed: string[] = [];
+    const controller = new GoalController({
+      resolve: (id: string) => [previous, starting, foreign].find((session) => session.id === id),
+      list: () => [previous, starting, foreign],
+      kill: (id: string) => { killed.push(id); },
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string) => text,
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+    store.upsert(task);
+
+    assert.equal(controller.stopTask(task.id)?.action, "stopped");
+
+    assert.deepEqual(killed, ["session-1", "session-2"], "the recorded session and the one that is starting; never another task's");
+    assert.equal(starting.stopNoticeReplaced, true, "one stop message: the goal's");
+    assert.equal(foreign.stopNoticeReplaced, undefined);
+    assert.equal(task.status, "stopped");
+  });
+
   it("edits and persists an active goal without changing session lifecycle fields", () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
