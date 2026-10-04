@@ -123,6 +123,8 @@ export function buildCompletedPayload(args: {
   >;
   originThreadLine: OriginThreadLine;
   preview: string;
+  /** One extra line under the completion line (for example commits an open PR does not have). */
+  note?: string;
 }): {
   userMessage: string;
   wakeMessageOnNotifySuccess: string;
@@ -132,10 +134,11 @@ export function buildCompletedPayload(args: {
   const { session, originThreadLine, preview } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine.trim());
   const followupContract = buildCompletionFollowupContract();
-  const userMessage = `✅ [${session.name}] Completed${formatSessionStatsSuffix(session)}`;
+  const userMessage = `✅ [${session.name}] Completed${formatSessionStatsSuffix(session)}${args.note ? `\n${args.note}` : ""}`;
   const buildWakeMessage = (canonicalStatusDelivered: boolean): string => [
     `[${session.name}] Completed. ID: ${session.id}`,
     statusDeliveryLine(userMessage, canonicalStatusDelivered),
+    ...(args.note ? [args.note.replace(/^⚠️\s*/u, "")] : []),
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
     ...formatApprovalExecutionContextLines(session),
     `Output (end):`,

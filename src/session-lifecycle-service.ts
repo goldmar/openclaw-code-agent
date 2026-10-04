@@ -36,6 +36,8 @@ type WorktreeStrategyResult = {
   worktreeRemoved: boolean;
   /** Only the orchestrator was told (`delegate`): the user still gets `✅ Completed`. */
   userCompletionNoticeOwed?: boolean;
+  /** One extra line for the generic `✅ Completed` notice. */
+  completionNote?: string;
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
@@ -432,7 +434,7 @@ export class SessionLifecycleService {
       if (!this.deps.shouldEmitTerminalWake(session)) return;
       // Resumed while worktree handling waited: that run reports its own end.
       if (!completedNow) return;
-      this.emitCompleted(session);
+      this.emitCompleted(session, { note: worktreeResult.completionNote });
       return;
     }
 
@@ -730,7 +732,7 @@ export class SessionLifecycleService {
     });
   }
 
-  emitCompleted(session: Session, options: { userNoticeOnly?: boolean } = {}): void {
+  emitCompleted(session: Session, options: { userNoticeOnly?: boolean; note?: string } = {}): void {
     const preview = this.deps.getOutputPreview(session);
     // `userNoticeOnly`: another notice already woke the orchestrator for this terminal cycle.
     const followupSummaryRequired = !options.userNoticeOnly && this.shouldRequestCompletionFollowup(session);
@@ -738,6 +740,7 @@ export class SessionLifecycleService {
       session,
       originThreadLine: this.deps.originThreadLine(session),
       preview,
+      note: options.note,
     });
     const terminalCycleKey = buildTerminalCycleKey(session);
     const terminalOutcomeKey = `terminal:${session.id}:${terminalCycleKey}`;

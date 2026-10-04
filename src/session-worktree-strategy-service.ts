@@ -50,6 +50,8 @@ export type WorktreeStrategyResult = {
    * the generic `✅ Completed` line, without a second orchestrator wake.
    */
   userCompletionNoticeOwed?: boolean;
+  /** One extra line for the generic `✅ Completed` notice (nobody is prompted, yet something is left to do). */
+  completionNote?: string;
 };
 
 type DiffSummary = NonNullable<Awaited<ReturnType<typeof getDiffSummary>>>;
@@ -348,15 +350,24 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: removed };
     }
 
+    if (action.reopenedFrom === "merged" || action.reopenedFrom === "released") {
+      // New commits after the merge: the branch is open again, so the merge
+      // tools and buttons must not answer "already merged".
+      session.worktreeMerged = undefined;
+      session.worktreeMergedAt = undefined;
+      this.updatePersistedSessionFor(session, { worktreeMerged: undefined, worktreeMergedAt: undefined });
+    }
+    const openPrUrl = action.reopenedFrom === "pr_open" ? session.worktreePrUrl : undefined;
+
     // Hook or worktree-setup changes run code on later git operations: never
     // merge or open a PR for them automatically. The user decides, with the
     // changed files named in the prompt.
     const hookWarning = await this.describeHookChanges(action.repoDir, action.branchName, action.baseBranch);
     if (hookWarning) {
       if (action.strategy === "delegate" && !action.policyBlocked) {
-        return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning);
+        return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning, openPrUrl);
       }
-      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning, retry);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning, retry, Boolean(openPrUrl));
     }
 
     if (action.policyBlocked) {
@@ -396,10 +407,10 @@ export class SessionWorktreeStrategyService {
           retry,
         );
       }
-      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, undefined, retry);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, undefined, retry, Boolean(openPrUrl));
     }
     if (action.strategy === "delegate") {
-      return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
+      return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, undefined, openPrUrl);
     }
     if (action.strategy === "auto-merge") {
       return this.handleAutoMergeStrategy(
@@ -577,6 +588,8 @@ export class SessionWorktreeStrategyService {
     policyReason?: string,
     hookWarning?: string,
     retry = false,
+    /** The counted commits were made after the session's PR was opened. */
+    afterOpenPr = false,
   ): Promise<WorktreeStrategyResult> {
     const summary = await buildWorktreeDecisionWorkSummary({
       sessionName: session.name,
@@ -593,6 +606,7 @@ export class SessionWorktreeStrategyService {
       summaryLines: summary.lines,
       policyReason,
       hookWarning,
+      afterOpenPr,
       buttons: await this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
       stats: sessionStats(session),
     }));
@@ -614,8 +628,11 @@ export class SessionWorktreeStrategyService {
     allowedActions: AllowedWorktreeActions,
     policyReason?: string,
     hookWarning?: string,
+    /** The session's open PR, which does not have these commits yet. */
+    openPrUrl?: string,
   ): WorktreeStrategyResult {
     this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildDelegateNotification({
+      openPrUrl,
       session,
       branchName,
       baseBranch,

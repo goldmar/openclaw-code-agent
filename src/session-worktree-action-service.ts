@@ -1,7 +1,9 @@
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
-import { getCommitsAheadCount, getDiffSummary, resolveLandingBaseBranch } from "./worktree";
+import { existsSync } from "node:fs";
+import { getCommitsAheadCount, getCommitsAheadCountSince, getDiffSummary, getUnpushedCommits, resolveLandingBaseBranch } from "./worktree";
+import { formatCount } from "./format";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { RepoIntegrationPolicy } from "./types";
@@ -20,7 +22,7 @@ const RESOLVED_WORKTREE_STATES = new Set([
 ]);
 
 export type PlannedWorktreeAction =
-  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean } }
+  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string } }
   /** `problem` completes `⚠️ [name] Completed — `; `detail` lines follow it. */
   | { kind: "notify"; label: string; problem: string; detail: string[] }
   | {
@@ -68,7 +70,16 @@ export type PlannedWorktreeAction =
       baseBranch: string;
       diffSummary: DiffSummary;
       sessionRef?: string;
+      /**
+       * The worktree had been resolved (a PR was opened, or the branch was
+       * merged or released) and the session committed again afterwards. With
+       * `pr_open` the counts are the commits the PR does not have.
+       */
+      reopenedFrom?: "pr_open" | "merged" | "released";
     };
+
+/** Commits made after a worktree was resolved. `sinceRef`: the PR's pushed head, when known. */
+type NewWorkSinceResolution = { state: "pr_open" | "merged" | "released"; count?: number; sinceRef?: string };
 
 /**
  * Pure worktree-strategy planner.
@@ -91,33 +102,91 @@ export class SessionWorktreeActionService {
     },
   ) {}
 
+  /**
+   * A resolved worktree stays resolved only while the branch has nothing new.
+   * A session can commit after its PR was opened or its branch was merged (the
+   * PR or merge happened while it ran, or it was resumed): those commits would
+   * otherwise end with a plain `✅` and never be pushed or merged.
+   * Undefined: nothing new, the worktree is still resolved.
+   */
+  private async newWorkSinceResolution(
+    session: Session,
+    state: string,
+  ): Promise<NewWorkSinceResolution | undefined> {
+    if (state !== "pr_open" && state !== "merged" && state !== "released") return undefined;
+    const worktreePath = session.worktreePath;
+    const branchName = session.worktreeBranch;
+    if (!worktreePath || !branchName || !existsSync(worktreePath)) return undefined;
+    const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
+    if (!repoDir) return undefined;
+    if (state === "pr_open") {
+      // What the last push has: local evidence, nothing is fetched. Unknown
+      // counts as new (fail towards asking).
+      const unpushed = await getUnpushedCommits(repoDir, branchName, session.worktreePushRemote ?? "origin");
+      if (unpushed?.count === 0) return undefined;
+      return { state, count: unpushed?.count, sinceRef: unpushed?.remoteRef };
+    }
+    // Merged or released: new only when commits made after that moment are
+    // ahead of the base, with content the base does not have. (Being ahead
+    // of the local base alone proves nothing: a PR merged on GitHub leaves the
+    // local base behind.) Without a recorded moment the worktree stays resolved.
+    const resolvedAt = session.worktreeMergedAt ?? session.worktreeLifecycle?.resolvedAt;
+    if (!resolvedAt) return undefined;
+    const baseBranch = await resolveLandingBaseBranch(session, repoDir);
+    const ahead = await getCommitsAheadCountSince(repoDir, branchName, baseBranch, resolvedAt);
+    if (!ahead) return undefined;
+    const completionState = await this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
+    return completionState === "has-commits" || completionState === "dirty-uncommitted" ? { state, count: ahead } : undefined;
+  }
+
   async plan(session: Session): Promise<PlannedWorktreeAction> {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
-    if (this.deps.isAlreadyMerged(sessionRef)) {
-      log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
-    }
-    const resolvedWorktreeState =
+    const skip: PlannedWorktreeAction = { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+    const recordedState =
       RESOLVED_WORKTREE_STATES.has(session.worktreeState)
         ? session.worktreeState
         : (session.worktreeLifecycle?.state && RESOLVED_WORKTREE_STATES.has(session.worktreeLifecycle.state)
           ? session.worktreeLifecycle.state
           : undefined);
-    if (resolvedWorktreeState && !(resolvedWorktreeState === "pr_open" && session.worktreeStrategy === "auto-pr")) {
-      log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+    const alreadyMerged = this.deps.isAlreadyMerged(sessionRef);
+    // `auto-pr` with an open PR is not "resolved": it updates the PR below.
+    const resolvedState = alreadyMerged
+      ? (recordedState === "released" ? "released" : "merged")
+      : (recordedState === "pr_open" && session.worktreeStrategy === "auto-pr" ? undefined : recordedState);
+    const strategy = session.worktreeStrategy;
+    const runsNow = session.status === "completed" && this.deps.shouldRunWorktreeStrategy(session);
+
+    let newWork: NewWorkSinceResolution | undefined;
+    if (resolvedState) {
+      newWork = runsNow ? await this.newWorkSinceResolution(session, resolvedState) : undefined;
+      if (!newWork) {
+        log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${resolvedState} — skipping strategy handling`);
+        return skip;
+      }
+      log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" committed after its worktree was ${resolvedState} — not resolved`);
     }
     if (session.status !== "completed") {
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+      return skip;
     }
     if (!this.deps.shouldRunWorktreeStrategy(session)) {
       log.info(`[SessionManager] handleWorktreeStrategy: skipping — session "${session.name}" is in phase "${session.phase}"`);
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+      return skip;
     }
 
-    const strategy = session.worktreeStrategy;
     if (!strategy || strategy === "off" || strategy === "manual") {
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+      // Nobody is prompted under these strategies: the completion notice says
+      // what the PR is missing.
+      if (newWork?.state === "pr_open" && newWork.count) {
+        return {
+          kind: "skip",
+          result: {
+            notificationSent: false,
+            worktreeRemoved: false,
+            completionNote: `⚠️ ${formatCount(newWork.count, "commit")} on \`${session.worktreeBranch}\` ${newWork.count === 1 ? "is" : "are"} not in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`,
+          },
+        };
+      }
+      return skip;
     }
 
     const worktreePath = session.worktreePath!;
@@ -191,7 +260,10 @@ export class SessionWorktreeActionService {
       };
     }
 
-    const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
+    // With an open PR the prompt counts what the PR does not have yet.
+    const diffSummary = (newWork?.state === "pr_open" && newWork.sinceRef
+      ? await getDiffSummary(repoDir, branchName, baseBranch, { sinceRef: newWork.sinceRef })
+      : undefined) ?? await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
@@ -203,10 +275,12 @@ export class SessionWorktreeActionService {
       ? await this.deps.isPrAvailable(repoDir)
       : livePolicy?.prAvailable ?? await this.deps.isPrAvailable(repoDir);
     const policyDecision = resolveWorktreePolicyDecision({
-      requestedStrategy: strategy,
+      // `auto-merge` with an open PR: merging past the PR is the user's call,
+      // so it becomes the prompt (Merge / Sync PR / Later / Discard).
+      requestedStrategy: newWork?.state === "pr_open" && strategy === "auto-merge" ? "ask" : strategy,
       policy: effectivePolicy,
       prAvailable,
-      existingOpenPr: false,
+      existingOpenPr: newWork?.state === "pr_open",
     });
 
     if (!policyDecision.strategy) {
@@ -226,6 +300,7 @@ export class SessionWorktreeActionService {
       baseBranch,
       diffSummary,
       sessionRef: sessionRef ?? undefined,
+      ...(newWork ? { reopenedFrom: newWork.state } : {}),
     };
   }
 }

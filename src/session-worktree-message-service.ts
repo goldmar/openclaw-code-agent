@@ -141,6 +141,8 @@ export class SessionWorktreeMessageService {
     hookWarning?: string;
     /** Footer of the heading, as on `✅ Completed`. */
     stats?: SessionNotificationStats;
+    /** The counted commits were made after the session's PR was opened and are not in it. */
+    afterOpenPr?: boolean;
   }): SessionNotificationRequest {
     const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
@@ -170,6 +172,7 @@ export class SessionWorktreeMessageService {
       ].join(":"),
       userMessage: [
         `🔀 [${session.name}] Finished on ${branchLine}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${args.stats ? formatSessionStatsSuffix(args.stats) : ""}`,
+        ...(args.afterOpenPr ? ["", "These commits were made after the PR was opened and are not in it yet."] : []),
         ...(summaryLines.length > 0 ? ["", ...summaryLines.map((line) => `- ${line}`)] : []),
         ...(policyReason ? ["", `Policy: ${policyReason}`] : []),
         ...(hookWarning ? ["", hookWarning] : []),
@@ -202,6 +205,7 @@ export class SessionWorktreeMessageService {
     allowedActions?: { merge: boolean; pr: boolean };
     originThreadLine?: string;
     hookWarning?: string;
+    openPrUrl?: string;
   }): SessionNotificationRequest {
     const { session, branchName, baseBranch, diffSummary, policyReason, allowedActions, originThreadLine, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
@@ -233,6 +237,7 @@ export class SessionWorktreeMessageService {
         allowedActions,
         policyReason,
         hookWarning,
+        openPrUrl: args.openPrUrl,
       }),
       notifyUser: "never",
     };

@@ -1,4 +1,4 @@
-import { assertBranchName, localBranchRef } from "./worktree-ref-validation";
+import { assertBranchName, localBranchRef, assertBranchOrRemoteTrackingRef } from "./worktree-ref-validation";
 import { runGit, withRepoLock } from "./git-exec";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -56,11 +56,19 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export async function getDiffSummary(repoDir: string, branch: string, base: string): Promise<DiffSummary | undefined> {
+export async function getDiffSummary(
+  repoDir: string,
+  branch: string,
+  base: string,
+  /** `sinceRef`: count from this remote-tracking ref instead of the base branch (what a PR does not have yet). */
+  options: { sinceRef?: string } = {},
+): Promise<DiffSummary | undefined> {
   await assertBranchName(branch);
   await assertBranchName(base);
   const branchRef = await localBranchRef(branch);
-  const baseRef = await localBranchRef(base);
+  if (options.sinceRef && !options.sinceRef.startsWith("refs/remotes/")) return undefined;
+  if (options.sinceRef) await assertBranchOrRemoteTrackingRef(options.sinceRef);
+  const baseRef = options.sinceRef ?? await localBranchRef(base);
 
   try {
     const countResult = await runGit(["-C", repoDir, "rev-list", "--count", `${baseRef}..${branchRef}`], { timeout: 10_000 });
