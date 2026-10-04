@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeAgentPrTool } from "../src/tools/agent-pr";
+import { discoverExistingTargetPr, makeAgentPrTool } from "../src/tools/agent-pr";
+import { resolveWorktreeLifecycle } from "../src/worktree-lifecycle-resolver";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { USER_BUTTON_TOOL_CALL_ID } from "../src/tools/worktree-tool-context";
 import { SessionManager } from "../src/session-manager";
@@ -709,6 +710,133 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     const mergedRenamed = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", headOwner: "new-owner-name", isCrossRepository: false });
     assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).state, "merged");
     assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, mergedRenamed.url);
+  });
+
+  it("excludes a deleted fork's PR without a target repo, and keeps the strict owner check with one", async () => {
+    const f = await setup({ commit: false });
+    const { syncWorktreePR } = await import("../src/worktree");
+    const orphan = (pr: { number: number }): void => f.gh.updateState((state) => {
+      // A fork that was deleted: GitHub reports the PR as cross-repository with no head owner.
+      Object.assign(state.prs.find((candidate) => candidate.number === pr.number)!, { headOwner: null, isCrossRepository: true });
+    });
+
+    orphan(f.gh.seedPr({ headRefName: f.branch, state: "OPEN" }));
+    assert.deepEqual(await syncWorktreePR(f.gh.repoDir, f.branch), { exists: false, state: "none" });
+    // The repository's own (older, closed) PR is found behind it.
+    f.gh.resetState();
+    const own = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    orphan(f.gh.seedPr({ headRefName: f.branch, state: "OPEN" }));
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch)).url, own.url);
+
+    // Fork → upstream (`targetRepo`): the head owner must be origin's owner, as before.
+    f.gh.resetState();
+    const upstream = "upstream-org/widget";
+    const mine = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED", repo: upstream, headOwner: f.gh.owner, isCrossRepository: true });
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", repo: upstream, headOwner: "someone-else", isCrossRepository: true });
+    orphan(f.gh.seedPr({ headRefName: f.branch, state: "OPEN", repo: upstream }));
+    assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, upstream)).url, mine.url);
+    // A same-named owner string is still required there: a renamed-owner PR does not match with a target repo.
+    f.gh.resetState();
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", repo: upstream, headOwner: "new-owner-name", isCrossRepository: false });
+    assert.deepEqual(await syncWorktreePR(f.gh.repoDir, f.branch, upstream), { exists: false, state: "none" });
+  });
+
+  it("the lifecycle resolver prefers the session's recorded PR, else the branch's PR into the recorded base", async () => {
+    const f = await setup({ commit: false });
+    const session = (worktreePrUrl: string | undefined) => ({
+      workdir: f.gh.repoDir,
+      worktreePath: f.worktreePath,
+      worktreeBranch: f.branch,
+      worktreeBaseBranch: "main",
+      ...(worktreePrUrl ? { worktreePrUrl } : {}),
+    });
+    const pr = async (worktreePrUrl: string | undefined) => {
+      const resolved = await resolveWorktreeLifecycle(session(worktreePrUrl), { includePrSync: true });
+      return { url: resolved.evidence.prUrl, state: resolved.evidence.prState };
+    };
+
+    // The recorded PR is this branch's PR: it counts, although a newer open PR exists for the branch.
+    const recorded = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+    const newer = f.gh.seedPr({ headRefName: f.branch, state: "OPEN" });
+    assert.deepEqual(await pr(recorded.url), { url: recorded.url, state: "closed" });
+    // Nothing recorded: the branch lookup (open first).
+    assert.deepEqual(await pr(undefined), { url: newer.url, state: "open" });
+
+    // The recorded URL is another branch's PR, or is gone: the lookup, with the recorded base.
+    f.gh.resetState();
+    const intoMain = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED", baseRefName: "main" });
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+    const otherBranch = f.gh.seedPr({ headRefName: "another-branch", state: "OPEN" });
+    assert.deepEqual(await pr(otherBranch.url), { url: intoMain.url, state: "closed" });
+    assert.deepEqual(await pr(`https://github.com/${f.gh.owner}/${f.gh.repo}/pull/999`), { url: intoMain.url, state: "closed" });
+  });
+
+  it("agent_pr picks the branch's PR by base: explicit base_branch, then the session's recorded base, then the default branch", async () => {
+    const seed = async (recordedBase: string | undefined) => {
+      const f = await setup({ llmReplies: [LLM_METADATA, LLM_METADATA], persisted: { worktreeBaseBranch: recordedBase } });
+      // A stacked session: PRs from its branch into the default branch and into the branch it is stacked on.
+      const intoMain = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "main" });
+      const intoParent = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "agent/parent-session" });
+      return { f, intoMain, intoParent };
+    };
+
+    // The session's recorded base (the parent session's branch) decides, not the newest PR or the default branch.
+    const stacked = await seed("agent/parent-session");
+    assert.equal((await stacked.f.run()).meta.success, true);
+    assert.equal(stacked.f.persisted()?.worktreePrUrl, stacked.intoParent.url);
+    const stackedOnMain = await seed("main");
+    assert.equal((await stackedOnMain.f.run()).meta.success, true);
+    assert.equal(stackedOnMain.f.persisted()?.worktreePrUrl, stackedOnMain.intoMain.url);
+
+    // An explicit base_branch overrides the recorded base for that call.
+    const explicit = await seed("agent/parent-session");
+    assert.equal((await explicit.f.run({ base_branch: "main" })).meta.success, true);
+    assert.equal(explicit.f.persisted()?.worktreePrUrl, explicit.intoMain.url);
+
+    // No recorded base: the detected default branch.
+    const unrecorded = await seed(undefined);
+    assert.equal((await unrecorded.f.run()).meta.success, true);
+    assert.equal(unrecorded.f.persisted()?.worktreePrUrl, unrecorded.intoMain.url);
+  });
+
+  it("an \"already exists\" recovery reuses only the open PR into the base that was asked for", async () => {
+    const f = await setup({ commit: false });
+    const { createPR } = await import("../src/worktree");
+    f.gh.updateState((state) => { state.failures.create = "GraphQL: A pull request already exists for this branch. (createPullRequest)"; });
+
+    // Only a PR into another base exists: it is not "the existing PR".
+    const intoRelease = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "release" });
+    const refused = await createPR(f.gh.repoDir, f.branch, "main", "Title", "Body");
+    assert.equal(refused.success, false);
+    assert.equal(refused.prUrl, undefined);
+    assert.doesNotMatch(refused.error ?? "", new RegExp(intoRelease.url));
+    assert.match(refused.error ?? "", /already exists/);
+
+    // The PR into the requested base is reused, also when a newer one into another base exists.
+    const intoMain = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "main" });
+    f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "hotfix" });
+    const reused = await createPR(f.gh.repoDir, f.branch, "main", "Title", "Body");
+    assert.equal(reused.success, true);
+    assert.equal(reused.prUrl, intoMain.url);
+    assert.match((reused.warnings ?? []).join(" "), /reused the existing open PR/);
+  });
+
+  it("the parent-branch lookup finds the parent's PR into the session's base behind a newer one into another base", async () => {
+    const f = await setup({ commit: false });
+    const parent = "agent/parent-session";
+    git(f.gh.repoDir, "switch", "-c", parent);
+    try {
+      const matching = f.gh.seedPr({ headRefName: parent, state: "OPEN", baseRefName: "main" });
+      f.gh.seedPr({ headRefName: parent, state: "OPEN", baseRefName: "release" });
+      const args = { repoDir: f.gh.repoDir, worktreeBranch: f.branch, expectedParentBranch: parent };
+
+      assert.equal((await discoverExistingTargetPr({ ...args, baseBranch: "main" }))?.url, matching.url);
+      // No PR of the parent into that base: nothing is discovered.
+      assert.equal(await discoverExistingTargetPr({ ...args, baseBranch: "develop" }), undefined);
+    } finally {
+      git(f.gh.repoDir, "switch", "main");
+      git(f.gh.repoDir, "branch", "-D", parent);
+    }
   });
 
   it("never adopts a PR the session did not record unless it was found by the session's branch", async () => {

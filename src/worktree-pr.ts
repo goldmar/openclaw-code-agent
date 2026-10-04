@@ -96,6 +96,9 @@ function isExistingPullRequestError(message: string): boolean {
 async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo: string | undefined, base: string): Promise<PRResult | undefined> {
   // The PR that "already exists" is the one into the base this PR was created for.
   const existingPr = await syncWorktreePR(repoDir, branch, targetRepo, base);
+  // The lookup only prefers that base: a PR into another base is not the one
+  // gh refused to duplicate, so it is neither reused nor reported.
+  if (existingPr.exists && existingPr.baseRefName !== undefined && existingPr.baseRefName !== base) return undefined;
   if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
     return {
       success: true,
