@@ -90,8 +90,10 @@ if (!statePath) {
 // One appended line per call: concurrent gh processes never lose each other's entry.
 fs.appendFileSync(statePath + ".calls", JSON.stringify({ args, cwd: process.cwd() }) + "\n");
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+// Read-only calls may overlap maintenance and newer test-owner updates. Only
+// successful API mutations save a snapshot; reads/errors must never overwrite it.
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-const fail = (message, code = 1) => { save(); process.stderr.write(message + "\n"); process.exit(code); };
+const fail = (message, code = 1) => { process.stderr.write(message + "\n"); process.exit(code); };
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const has = (name) => args.includes(name);
 const repoOf = () => flag("--repo") || state.repo;
@@ -129,7 +131,6 @@ const [group, command, target] = args;
 if (group === "repo" && command === "view") {
   // The repository's current name: differs from the remote's after a rename or transfer.
   const named = target && !target.startsWith("--") ? target : state.repo;
-  save();
   process.stdout.write(JSON.stringify({ nameWithOwner: state.canonicalRepo || named }) + "\n");
   process.exit(0);
 }
@@ -141,20 +142,18 @@ if (command === "list") {
   const repo = repoOf();
   // Like GitHub, newest first.
   const prs = state.prs.filter((pr) => pr.repo === repo && (!head || pr.headRefName === head)).sort((a, b) => b.number - a.number);
-  save();
   process.stdout.write(JSON.stringify(prs.map((pr) => pick(pr, flag("--json") || "url,number"))) + "\n");
   process.exit(0);
 }
 if (command === "view") {
   const pr = findPr(target);
   if (!pr) fail("no pull requests found for " + target);
-  save();
   process.stdout.write(JSON.stringify(pick(pr, flag("--json") || "url,number")) + "\n");
   process.exit(0);
 }
 if (command === "create") {
   if (state.failures.create) fail(state.failures.create);
-  if (state.failures.createSilent) { save(); process.exit(1); }
+  if (state.failures.createSilent) process.exit(1);
   const draft = has("--draft");
   if (draft && state.failures.draftUnsupported) fail("pull request create failed: GraphQL: Draft pull requests are not supported in this repository. (createPullRequest)");
   const base = flag("--base");
