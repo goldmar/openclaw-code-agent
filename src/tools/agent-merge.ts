@@ -9,6 +9,7 @@ import {
   pushBranch,
   deleteBranch,
   resolveLandingBaseBranch,
+  branchExists,
   removeWorktree,
   pruneWorktrees,
   getDiffSummary,
@@ -133,7 +134,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
     description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID" }),
-      base_branch: Type.Optional(Type.String({ description: "Default: the base of the session's existing PR or merge, else its recorded base (worktree_base_branch at launch), else the repository's detected default branch" })),
+      base_branch: Type.Optional(Type.String({ description: "Default: the session's recorded base (worktree_base_branch at launch), else the repository's detected default branch" })),
       strategy: Type.Optional(
         Type.StringEnum(["merge", "squash"], {
           description: "merge (default): rebase onto base, then fast-forward. squash: one commit.",
@@ -187,13 +188,23 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
-      // The session's landing base, as `agent_pr`, the decision prompt, the
-      // automatic merge and the status tool compute it: the base this call
-      // names, else the base an existing PR or merge fixed, else the base
-      // recorded at launch (the merge target, not where the worktree was
-      // created from), else the detected default branch.
+      // The session's landing base, as the decision prompt, the automatic
+      // merge, the status tool and a new PR compute it: the base this call
+      // names, else the base recorded at launch (the merge target, not where
+      // the worktree was created from), else the detected default branch.
       const resolvedBaseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, effectiveWorkdir, params.base_branch);
       const baseBranch = resolvedBaseBranch;
+      // A base named by the call or recorded for the session must exist: never
+      // fall through to an obscure git error, and never merge somewhere else.
+      const namedBaseBranch = params.base_branch ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch;
+      if (namedBaseBranch && !(await branchExists(effectiveWorkdir, namedBaseBranch))) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Merge blocked: base branch \`${namedBaseBranch}\` does not exist in ${effectiveWorkdir}.\nPass base_branch to name the branch to merge into.`,
+          }],
+        };
+      }
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true

@@ -36,21 +36,29 @@ function buildDefaultLifecycle(session: Pick<
 
 /**
  * The base branch a session lands on: the base this call names; else the base
- * a PR or merge already fixed for the session (its worktree lifecycle); else
- * the base recorded at launch (`worktree_base_branch`); else the repository's
- * detected default branch. Merge, PR, the decision prompt and the status tool
- * all use this one order.
+ * recorded at launch (`worktree_base_branch`); else the repository's detected
+ * default branch. `agent_merge` and the Merge button, the decision prompt, the
+ * delegate wake, the automatic merge, the status tool, and where a new PR
+ * goes all use this one order, so they always name the same base. The base of
+ * an existing PR is not part of it: that PR keeps its own base for everything
+ * about the PR, and the lifecycle's base (which a pending-decision patch
+ * rewrites, and a resumed session does not carry) only answers "has this
+ * branch landed".
  */
 export async function resolveLandingBaseBranch(
-  session: Pick<PersistedSessionInfo, "worktreeBaseBranch" | "worktreeLifecycle"> | undefined,
+  session: Pick<PersistedSessionInfo, "worktreeBaseBranch"> | undefined,
   repoDir: string,
   explicitBaseBranch?: string,
 ): Promise<string> {
   return explicitBaseBranch
-    ?? session?.worktreeLifecycle?.baseBranch
     ?? session?.worktreeBaseBranch
     ?? await detectDefaultBranch(repoDir);
 }
+
+/** Test seam: the branch PR lookup the resolver uses. */
+export const worktreeLifecycleResolverInternals = {
+  lookupBranchPr: syncWorktreePR,
+};
 
 async function getEffectiveBaseBranch(
   session: Pick<PersistedSessionInfo, "workdir" | "worktreeBaseBranch" | "worktreeLifecycle">,
@@ -185,7 +193,8 @@ export async function resolveWorktreeLifecycle(
     const lookupBranchPr = (): Promise<PRStatus> => {
       const lookupBase = session.worktreeBaseBranch ?? lifecycle.baseBranch;
       const key = [workdir, branchName, prTargetRepo ?? "", lookupBase ?? ""].join("\0");
-      const pending = options.prLookups?.get(key) ?? syncWorktreePR(workdir, branchName, prTargetRepo, lookupBase);
+      const pending = options.prLookups?.get(key)
+        ?? worktreeLifecycleResolverInternals.lookupBranchPr(workdir, branchName, prTargetRepo, lookupBase);
       options.prLookups?.set(key, pending);
       return pending;
     };

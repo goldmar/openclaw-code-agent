@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverExistingTargetPr, makeAgentPrTool } from "../src/tools/agent-pr";
-import { resolveLandingBaseBranch, resolveWorktreeLifecycle } from "../src/worktree-lifecycle-resolver";
+import { resolveLandingBaseBranch, resolveWorktreeLifecycle, worktreeLifecycleResolverInternals } from "../src/worktree-lifecycle-resolver";
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
 import { resetCanonicalRepoNamesForTests } from "../src/worktree-pr";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
@@ -887,35 +887,60 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     }
   });
 
-  it("a base fixed by an existing PR is the session's landing base for the status tool and a bare agent_merge", async () => {
+  it("an existing PR's base is not the session's landing base: the status tool shows both, and a bare agent_merge lands on the landing base", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA], persisted: { worktreeBaseBranch: undefined } });
     await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
     const mainBefore = git(f.gh.repoDir, "rev-parse", "main");
     git(f.gh.repoDir, "branch", "release", "main");
     try {
-      // No recorded base: the PR is opened into the base this call names.
+      // No recorded base: the PR is opened into the base this call names ...
       const opened = await f.run({ base_branch: "release" });
       assert.equal(opened.meta.state, "created");
       assert.equal(f.gh.readState().prs.at(-1)?.baseRefName, "release");
-      assert.equal(f.persisted()?.worktreeLifecycle?.baseBranch, "release");
-      assert.equal(await resolveLandingBaseBranch(f.persisted(), f.gh.repoDir), "release");
-      assert.equal(await resolveLandingBaseBranch(f.persisted(), f.gh.repoDir, "main"), "main", "an explicit base still wins");
+      assert.equal(f.persisted()?.worktreeLifecycle?.baseBranch, "release", "the PR's own base is recorded for the PR");
+      // ... which does not change where the session lands: explicit, else recorded, else the default branch.
+      assert.equal(await resolveLandingBaseBranch(f.persisted(), f.gh.repoDir), "main");
+      assert.equal(await resolveLandingBaseBranch({ worktreeBaseBranch: "develop" }, f.gh.repoDir), "develop");
+      assert.equal(await resolveLandingBaseBranch({ worktreeBaseBranch: "develop" }, f.gh.repoDir, "release"), "release");
 
       const status = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
       const statusText = status.content.map((entry) => entry.text).join("\n");
-      assert.ok(statusText.includes(`${f.branch} → release`), statusText);
+      assert.ok(statusText.includes(`${f.branch} → main`), statusText);
+      assert.match(statusText, /PR base:\s+release/, statusText);
 
-      // A bare merge goes where the PR goes.
-      git(f.gh.repoDir, "switch", "release");
+      // A bare merge goes to the landing base, as the 🔀 prompt would say.
       const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
       const text = merged.content.map((entry) => entry.text).join("\n");
-      assert.match(text, /Merged: `[^`]+` → `release`/, text);
-      assert.equal(git(f.gh.repoDir, "rev-parse", "main"), mainBefore, "the default branch is untouched");
+      assert.match(text, /Merged: `[^`]+` → `main`/, text);
+      assert.equal(git(f.gh.repoDir, "rev-parse", "release"), mainBefore, "the PR's base is untouched");
     } finally {
       git(f.gh.repoDir, "switch", "main");
       git(f.gh.repoDir, "reset", "--hard", mainBefore);
       git(f.gh.repoDir, "branch", "-D", "release");
     }
+  });
+
+  it("a base branch that no longer exists gives a clear answer instead of a wrong merge", async () => {
+    const f = await setup({ persisted: { worktreeBaseBranch: "gone-branch" } });
+    await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
+    const mainBefore = git(f.gh.repoDir, "rev-parse", "main");
+
+    const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    const text = merged.content.map((entry) => entry.text).join("\n");
+    assert.doesNotMatch(text, /Merged: /, text);
+    assert.match(text, /gone-branch/, text);
+    assert.match(text, /^(?:❌|⚠️|Error)/, text);
+    assert.equal(git(f.gh.repoDir, "rev-parse", "main"), mainBefore, "nothing was merged anywhere else");
+
+    // The resolver (status, retention) does not throw for a stored lifecycle base that is gone.
+    const resolved = await resolveWorktreeLifecycle({
+      workdir: f.gh.repoDir,
+      worktreePath: f.worktreePath,
+      worktreeBranch: f.branch,
+      worktreeLifecycle: { state: "pending_decision", updatedAt: new Date().toISOString(), baseBranch: "gone-branch" },
+    }, { includePrSync: false });
+    assert.notEqual(resolved.derivedState, "merged");
+    assert.equal(resolved.cleanupSafe, false);
   });
 
   it("a maintenance pass asks GitHub for no branch lookups for resolved sessions, and for one per repository and branch otherwise", async () => {
@@ -944,25 +969,33 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     let views = prCalls("view");
     maintenance.bootstrapMaintenanceSchedules();
     await maintenance.whenIdle();
-    // (The sessions are resolved concurrently and the fake gh records its calls with
-    // a read-modify-write of one file, so a count can be short, never long.)
     assert.equal(prCalls("list") - lists, 0, "a merged recorded PR needs no branch lookup");
-    assert.ok(prCalls("view") - views >= 1 && prCalls("view") - views <= 3, "at most one read of the recorded PR per session");
+    assert.equal(prCalls("view") - views, 3, "one read of the recorded PR per session");
 
     // Closed recorded PRs with a worktree left: the open-PR check is needed, once for the shared repository and branch.
     f.gh.updateState((state) => { state.prs.find((pr) => pr.number === merged.number)!.state = "CLOSED"; });
     lists = prCalls("list");
     views = prCalls("view");
-    maintenance.bootstrapMaintenanceSchedules();
-    await maintenance.whenIdle();
-    assert.ok(prCalls("list") - lists <= 1, "one branch lookup for three sessions of one branch, not three");
-    assert.ok(prCalls("view") - views <= 3);
-    // The lookup did run: each of the three sessions was resolved with its result.
-    const lookups = new Map<string, Promise<unknown>>();
-    for (const index of [1, 2, 3]) {
-      await resolveWorktreeLifecycle(f.sm.getPersistedSession(`s-resolved-${index}`)!, { includePrSync: true, prLookups: lookups as never });
+    // Count the lookups where the resolver makes them.
+    const realLookup = worktreeLifecycleResolverInternals.lookupBranchPr;
+    let lookups = 0;
+    worktreeLifecycleResolverInternals.lookupBranchPr = (...args) => { lookups += 1; return realLookup(...args); };
+    try {
+      maintenance.bootstrapMaintenanceSchedules();
+      await maintenance.whenIdle();
+      assert.equal(lookups, 1, "the maintenance pass shares one lookup among three sessions of one branch");
+      assert.equal(prCalls("list") - lists, 1);
+      assert.equal(prCalls("view") - views, 3);
+
+      // Outside a pass nothing is shared: each resolve makes its own lookup.
+      lookups = 0;
+      for (const index of [1, 2, 3]) {
+        await resolveWorktreeLifecycle(f.sm.getPersistedSession(`s-resolved-${index}`)!, { includePrSync: true });
+      }
+      assert.equal(lookups, 3);
+    } finally {
+      worktreeLifecycleResolverInternals.lookupBranchPr = realLookup;
     }
-    assert.equal(lookups.size, 1, "three sessions of one repository and branch share one lookup");
   });
 
   it("trusts a recorded PR of the repository after its owner was renamed", async () => {

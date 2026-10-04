@@ -83,8 +83,9 @@ if (!statePath) {
   process.stderr.write("fake gh: OCA_FAKE_GH_STATE is not set\n");
   process.exit(4);
 }
+// One appended line per call: concurrent gh processes never lose each other's entry.
+fs.appendFileSync(statePath + ".calls", JSON.stringify({ args, cwd: process.cwd() }) + "\n");
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-state.calls.push({ args, cwd: process.cwd() });
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 const fail = (message, code = 1) => { save(); process.stderr.write(message + "\n"); process.exit(code); };
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -265,8 +266,12 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
   // Drop any cached `gh --version` probe so the fake binary is the one found.
   setGitHubCliAvailabilityForTests(undefined);
 
-  const readState = (): FakeGhState => JSON.parse(readFileSync(statePath, "utf-8")) as FakeGhState;
-  const writeState = (state: FakeGhState): void => writeFileSync(statePath, JSON.stringify(state, null, 2));
+  const callsPath = `${statePath}.calls`;
+  writeFileSync(callsPath, "");
+  const readCalls = (): FakeGhCall[] => readFileSync(callsPath, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as FakeGhCall);
+  // Calls are logged in their own append-only file; everything else is one JSON document.
+  const readState = (): FakeGhState => ({ ...(JSON.parse(readFileSync(statePath, "utf-8")) as FakeGhState), calls: readCalls() });
+  const writeState = (state: FakeGhState): void => writeFileSync(statePath, JSON.stringify({ ...state, calls: [] }, null, 2));
 
   return {
     repoDir,
@@ -275,6 +280,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
     repo,
     readState,
     resetState() {
+      writeFileSync(callsPath, "");
       writeState({ ...initialState, prs: [], comments: [], calls: [], failures: {} });
     },
     updateState(update) {
@@ -304,7 +310,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
       return seeded;
     },
     ghCalls(subcommand) {
-      const calls = readState().calls;
+      const calls = readCalls();
       return subcommand ? calls.filter((call) => call.args[1] === subcommand) : calls;
     },
     remoteHead(branch) {

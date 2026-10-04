@@ -67,7 +67,9 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
           : (resolved.preserve ? "preserve" : "blocked");
 
         lines.push(`Session: ${target.name} [${target.id}]`);
-        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${await resolveLandingBaseBranch(persisted ?? { worktreeLifecycle: resolved.lifecycle }, target.workdir).catch(() => "(unknown)")}`));
+        // The landing base (where a merge or a new PR goes); an existing PR keeps its own base.
+        const landingBase = await resolveLandingBaseBranch(persisted, target.workdir).catch(() => "(unknown)");
+        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${landingBase}`));
         lines.push(statusField("Repo", target.workdir));
         lines.push(statusField("Lifecycle", formatWorktreeLifecycleState(resolved.lifecycle.state)));
         if (resolved.derivedState !== resolved.lifecycle.state) {
@@ -76,6 +78,8 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
         lines.push(statusField("Cleanup", cleanup));
         if (resolved.evidence.prUrl) {
           lines.push(statusField("PR", `${resolved.evidence.prUrl} (${resolved.evidence.prState ?? "unknown"})`));
+          const prBase = persisted?.worktreeLifecycle?.baseBranch;
+          if (prBase && prBase !== landingBase) lines.push(statusField("PR base", prBase));
         }
         if (resolved.evidence.branchAheadCount != null || resolved.evidence.baseAheadCount != null) {
           lines.push(statusField("Ahead", `${resolved.evidence.branchAheadCount ?? 0} ahead / ${resolved.evidence.baseAheadCount ?? 0} behind`));

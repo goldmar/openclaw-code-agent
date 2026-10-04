@@ -442,6 +442,57 @@ describe("the merge target of a session", () => {
     assert.equal(explicit.heads().develop, explicitBefore.develop, "the recorded base is untouched");
   });
 
+  it("a base recorded for an existing PR does not move the prompt or the Merge button: both name the landing base", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    // No recorded base. The session's lifecycle carries another base (as an earlier PR into `develop` leaves it).
+    const repo = createRepo();
+    git(repo, "branch", "develop");
+    await s.sm.setRepoPolicy(repo, "never-pr");
+    const session = await s.launch({ workdir: repo, worktreeStrategy: "ask", name: "merge-pr-base" });
+    Object.assign(session, {
+      worktreeLifecycle: { ...(session.worktreeLifecycle ?? { state: "provisioned", updatedAt: new Date().toISOString() }), baseBranch: "develop" },
+    });
+    assert.equal(session.worktreeLifecycle?.baseBranch, "develop");
+    commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
+    const developBefore = git(repo, "rev-parse", "develop");
+    await s.backend.endTurn("Added feature.txt.");
+
+    const prompt = await s.waitForMessage(/^🔀 \[merge-pr-base\] Finished on `[^`]+` → `[^`]+`/);
+    assert.match(prompt.text, /^🔀 \[merge-pr-base\] Finished on `[^`]+` → `main`/);
+    await s.click(buttonIn(prompt, "Merge"));
+    await waitUntil(() => exists(repo, "main", "feature.txt"), "merged where the prompt said", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
+    assert.match(outcome.text, /Merged: `[^`]+` → `main`/);
+    assert.equal(git(repo, "rev-parse", "develop"), developBefore);
+  });
+
+  it("a resumed session keeps its recorded base: the second prompt and its Merge button name it again", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, session, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
+    const first = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const before = heads();
+
+    // The user continues the session instead of deciding; it completes again.
+    const turnsBefore = s.backend.turns.length;
+    const resumedText = await s.runTool("agent_respond", { session: session.id, message: "Add one more file." });
+    assert.doesNotMatch(resumedText, /^(?:Error|❌)/, resumedText);
+    await s.backend.waitForTurns(turnsBefore + 1);
+    await waitUntil(() => s.sm.resolve(session.id)?.status === "running", "resumed session running");
+    const resumed = s.sm.resolve(session.id)!;
+    assert.equal(resumed.worktreeBaseBranch, "develop");
+    commit(resumed.worktreePath!, "more.txt", "more\n", "add more");
+    await s.backend.endTurn("Added more.txt.");
+
+    const second = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `[^`]+`/, first.index + 1);
+    assert.match(second.text, /→ `develop`/);
+    await s.click(buttonIn(second, "Merge"));
+    await waitUntil(() => exists(repo, "develop", "more.txt"), "merged into the recorded base", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, second.index + 1);
+    assert.match(outcome.text, /Merged: `[^`]+` → `develop`/);
+    assert.equal(heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(repo, "main", "more.txt"), false);
+  });
+
   it("agent_merge for a session with no recorded base lands on the detected default branch", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { repo, session, heads } = await finishedSession(s, { strategy: "delegate", launchFrom: "main", recordBase: false });

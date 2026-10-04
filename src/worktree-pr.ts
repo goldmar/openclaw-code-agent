@@ -104,8 +104,11 @@ function isExistingPullRequestError(message: string): boolean {
     || /a pull request for branch .+ into branch .+ already exists/i.test(message);
 }
 
-/** Canonical `owner/repo` per checkout and target repo, as GitHub names it now. */
-const canonicalRepoNames = new Map<string, string>();
+/** How long a failed canonical-name lookup is remembered, so a gh outage costs one call, not one per session. */
+const CANONICAL_REPO_FAILURE_TTL_MS = 5 * 60_000;
+
+/** Canonical `owner/repo` per named repository, as GitHub names it now; shared while a lookup is in flight. */
+const canonicalRepoNames = new Map<string, { name: Promise<string | undefined>; failedAt?: number }>();
 
 /** Test hook: forget the cached canonical repository names. */
 export function resetCanonicalRepoNamesForTests(): void {
@@ -113,13 +116,34 @@ export function resetCanonicalRepoNamesForTests(): void {
 }
 
 /**
+ * GitHub's current `owner/repo` for a repository named `expected`. The name is
+ * passed explicitly (gh's own choice of remote may prefer `upstream`); GitHub
+ * redirects a renamed or transferred repository, so the canonical name comes back.
+ */
+function canonicalRepoName(repoDir: string, expected: string): Promise<string | undefined> {
+  const cached = canonicalRepoNames.get(expected);
+  if (cached && (cached.failedAt === undefined || Date.now() - cached.failedAt < CANONICAL_REPO_FAILURE_TTL_MS)) return cached.name;
+  const entry: { name: Promise<string | undefined>; failedAt?: number } = {
+    name: runGh(["repo", "view", expected, "--json", "nameWithOwner"], { cwd: repoDir, timeout: 10_000 })
+      .then((out) => (JSON.parse(out.trim()) as { nameWithOwner?: string }).nameWithOwner?.toLowerCase())
+      .catch((): undefined => undefined)
+      .then((name) => {
+        if (!name) entry.failedAt = Date.now();
+        return name;
+      }),
+  };
+  canonicalRepoNames.set(expected, entry);
+  return entry.name;
+}
+
+/**
  * Whether a PR URL names a PR of the repository that PRs of this checkout go
  * to: the target repo, else origin's repository. gh answers with the PR's
  * canonical URL, while origin's URL (or a configured target repo) may still
  * carry the owner or name from before a rename or transfer. So when the names
- * differ, the repository's identity decides: gh is asked once per checkout for
- * the canonical name. An unknown side counts as a match; when gh cannot say,
- * differing names are a mismatch.
+ * differ, the repository's identity decides: gh is asked for the canonical
+ * name of the expected repository. An unknown side counts as a match; when gh
+ * cannot say, differing names are a mismatch.
  */
 async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo: string | undefined): Promise<boolean> {
   const urlRepo = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\//i.exec(prUrl)?.[1]?.toLowerCase();
@@ -133,17 +157,7 @@ async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo:
     }
   }
   if (!urlRepo || !expected || urlRepo === expected) return true;
-  const cacheKey = `${repoDir}\0${targetRepo ?? ""}`;
-  let canonical = canonicalRepoNames.get(cacheKey);
-  if (!canonical) {
-    try {
-      const out = await runGh(["repo", "view", ...(targetRepo ? [targetRepo] : []), "--json", "nameWithOwner"], { cwd: repoDir, timeout: 10_000 });
-      canonical = (JSON.parse(out.trim()) as { nameWithOwner?: string }).nameWithOwner?.toLowerCase();
-      if (canonical) canonicalRepoNames.set(cacheKey, canonical);
-    } catch {
-      canonical = undefined;
-    }
-  }
+  const canonical = await canonicalRepoName(repoDir, expected);
   return canonical !== undefined && urlRepo === canonical;
 }
 

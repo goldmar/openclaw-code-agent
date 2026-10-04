@@ -422,7 +422,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       title: Type.Optional(Type.String({ description: "Default: generated" })),
       body: Type.Optional(Type.String({ description: "Default: generated. On an open PR, replaces the body." })),
       update_metadata: Type.Optional(Type.Boolean({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
-      base_branch: Type.Optional(Type.String({ description: "Base for a new PR. Default: the base of the session's existing PR or merge, else its recorded base (worktree_base_branch at launch), else the detected default branch. An existing PR keeps its own base" })),
+      base_branch: Type.Optional(Type.String({ description: "Base for a new PR. Default: the session's recorded base (worktree_base_branch at launch), else the detected default branch. An existing PR keeps its own base" })),
       force_new: Type.Optional(Type.Boolean({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
       target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
@@ -487,11 +487,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Where a NEW PR goes and which of the branch's PRs a lookup prefers: the
-      // session's landing base (the base this call names, else the base an
-      // existing PR or merge fixed, else the base recorded at launch, which is
-      // the target and not where the worktree was created from, else the
-      // detected default branch). An existing PR keeps its own base for
-      // everything said or counted about it: see `existingPrBase`.
+      // session's landing base (the base this call names, else the base
+      // recorded at launch, which is the target and not where the worktree was
+      // created from, else the detected default branch). An existing PR keeps
+      // its own base for everything said or counted about it: see `existingPrBase`.
       const baseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, originalWorkdir, params.base_branch);
       /** The base of the PR that is being updated or settled; never retargeted by this call. */
       const existingPrBase = (status: PRStatus): string => status.baseRefName ?? baseBranch;
@@ -504,7 +503,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         decisionRef: () => worktreeDecisionRef(sm, target),
         repoDir: originalWorkdir,
         branchName,
-        baseBranch,
+        // An existing PR is the target: the hook changes that matter are those against its own base.
+        baseBranch: persistedSession?.worktreePrUrl && persistedSession.worktreeLifecycle?.state === "pr_open"
+          ? persistedSession.worktreeLifecycle.baseBranch ?? baseBranch
+          : baseBranch,
         action: "pr",
       });
       if (hookRefusal) {
