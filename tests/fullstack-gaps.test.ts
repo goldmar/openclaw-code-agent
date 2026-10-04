@@ -367,6 +367,94 @@ describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
   });
 });
 
+describe("the merge target of a session", () => {
+  const exists = (repo: string, branch: string, file: string): boolean => {
+    try { git(repo, "cat-file", "-e", `${branch}:${file}`); return true; } catch { return false; }
+  };
+
+  /** A finished worktree session with one commit; `develop` is a non-default branch of the repository. */
+  async function finishedSession(
+    s: FullStack,
+    options: { strategy: "ask" | "delegate"; launchFrom: "develop" | "main"; recordBase: boolean },
+  ): Promise<{ repo: string; session: Session; heads: () => { main: string; develop: string } }> {
+    const repo = createRepo();
+    git(repo, "branch", "develop");
+    git(repo, "switch", "develop");
+    commit(repo, "develop.txt", "develop work\n", "develop work");
+    git(repo, "switch", options.launchFrom);
+    await s.sm.setRepoPolicy(repo, "never-pr");
+    const before = new Set(s.sm.list("all").map((session) => session.id));
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_launch", {
+      prompt: "Start the task",
+      workdir: repo,
+      name: "merge-target",
+      harness: "codex",
+      worktree_strategy: options.strategy,
+      permission_mode: "default",
+      ...(options.recordBase ? { worktree_base_branch: "develop" } : {}),
+    });
+    await waitUntil(() => s.sm.list("all").some((candidate) => !before.has(candidate.id)), "a launched session");
+    const session = s.sm.list("all").find((candidate) => !before.has(candidate.id))!;
+    await s.backend.waitForTurns(turnsBefore + 1);
+    await waitUntil(() => session.status === "running", "session running");
+    commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
+    const heads = () => ({ main: git(repo, "rev-parse", "main"), develop: git(repo, "rev-parse", "develop") });
+    await s.backend.endTurn("Added feature.txt.");
+    await waitUntil(() => session.status === "completed", "session completed");
+    return { repo, session, heads };
+  }
+
+  it("the 🔀 prompt, the Merge button and the outcome line all name the session's recorded base", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
+    const prompt = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const before = heads();
+    const merge = buttonIn(prompt, "Merge");
+
+    await s.click(merge);
+    await waitUntil(() => exists(repo, "develop", "feature.txt"), "merged into the recorded base", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
+
+    assert.match(outcome.text, /^✅ \[merge-target\] Completed — Merged: `[^`]+` → `develop`/);
+    assert.equal(heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(repo, "main", "feature.txt"), false);
+  });
+
+  it("agent_merge without base_branch lands on the recorded base; an explicit base_branch overrides it", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const recorded = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
+    const before = recorded.heads();
+
+    const text = await s.runTool("agent_merge", { session: recorded.session.id });
+    assert.match(text, /Merged: `[^`]+` → `develop`/, text);
+    assert.equal(exists(recorded.repo, "develop", "feature.txt"), true);
+    assert.equal(recorded.heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(recorded.repo, "main", "feature.txt"), false);
+
+    // An explicit base wins over the recorded one for that call.
+    const explicit = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
+    git(explicit.repo, "switch", "main");
+    const explicitBefore = explicit.heads();
+    const overridden = await s.runTool("agent_merge", { session: explicit.session.id, base_branch: "main" });
+    assert.match(overridden, /Merged: `[^`]+` → `main`/, overridden);
+    assert.equal(exists(explicit.repo, "main", "feature.txt"), true);
+    assert.equal(explicit.heads().develop, explicitBefore.develop, "the recorded base is untouched");
+  });
+
+  it("agent_merge for a session with no recorded base lands on the detected default branch", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, session, heads } = await finishedSession(s, { strategy: "delegate", launchFrom: "main", recordBase: false });
+    assert.equal(s.sm.getPersistedSession(session.id)?.worktreeBaseBranch, undefined);
+    const before = heads();
+
+    const text = await s.runTool("agent_merge", { session: session.id });
+    assert.match(text, /Merged: `[^`]+` → `main`/, text);
+    assert.equal(exists(repo, "main", "feature.txt"), true);
+    assert.equal(heads().develop, before.develop);
+  });
+});
+
 describe("auto-merge conflicts", () => {
   it("starts a conflict resolver session on a real rebase conflict and merges once it finishes", async () => {
     const s = stack = await startFullStack({ backend: "codex" });

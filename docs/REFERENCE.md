@@ -707,7 +707,7 @@ Merge a worktree branch back to base.
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `session` | `string` | Yes | Must resolve to a session with worktree metadata |
-| `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to the base branch the session's worktree was created from, else the detected default branch (the same base as `agent_pr` and the automatic merge) |
+| `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Precedence: this parameter, else the session's recorded base branch (`worktree_base_branch` at launch), else the detected default branch. It is the base the `🔀 [name] Finished on `<branch>` → `<base>`` prompt, the **Merge** button, the automatic merge, `agent_pr` and `agent_worktree_status` use |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
 | `summary` | `string` | No | One or two lines for the user on what changed. Shown under the merge outcome line; then no follow-up summary wake is sent |
 
@@ -735,7 +735,7 @@ Create or update a GitHub PR for a worktree branch.
 | `session` | `string` | Yes | Must resolve to a session with worktree metadata |
 | `title` | `string` | No | Auto-generated if omitted |
 | `body` | `string` | No | Auto-generated if omitted |
-| `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to the base branch the session's worktree was created from (so a stacked session's PR goes into the branch it is stacked on), else the detected default branch. The one base is used for the PR lookup, creation, change counts and messages |
+| `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Precedence: this parameter, else the session's recorded base branch (`worktree_base_branch` at launch, so a stacked session's PR goes into the branch it is stacked on), else the detected default branch. The one base is used for the PR lookup, creation, change counts and messages |
 | `force_new` | `boolean` | No | Open a new PR: rejected while an open (or merged) PR exists for the branch instead of updating it; a PR that was closed without merging (recorded by the session or found by branch) is replaced by a fresh one from the same branch; a merged PR is never replaced. An open or merged PR is refused before anything is pushed (`meta.state: force_new_refused`); when that PR is not the recorded one but was found by the session's branch, the session records it, so the next `agent_pr` call updates it |
 | `update_metadata` | `boolean` | No | For an open PR, refresh the title and body. By default only OpenClaw-generated bodies and fallback titles are refreshed |
 | `target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from the `upstream` remote. Must be `OWNER/REPO` or `HOST/OWNER/REPO`; anything else is rejected |
