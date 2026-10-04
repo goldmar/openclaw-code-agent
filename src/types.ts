@@ -426,7 +426,7 @@ export interface SessionConfig {
   rewindTurns?: number;
   multiTurn?: boolean;
   /** Internal live authorization installed by SessionManager; never persisted or caller selectable. */
-  assertGoalTaskAuthorized?: () => void;
+  assertGoalTaskAuthorized?: (workdir: string) => Promise<GoalAuthorizationTicket>;
   /**
    * Internal, settled once per launch: "attached" keeps the goal owner and its
    * live guard; "detached" continues a finished or missing goal's session as
@@ -495,17 +495,45 @@ export interface PluginConfig {
    */
   worktreeGitHooks: WorktreeGitHooksMode;
   /**
-   * Goal verifier commands pre-approved by the operator. A goal launched by the
-   * orchestrator with only these commands needs no user confirmation.
+   * Additional goal verifier commands pre-approved by the operator. A goal
+   * whose model-supplied additions are all listed needs no user confirmation.
    */
   trustedVerifierCommands?: string[];
-  /** Complete ordered operator-required goal suite; absence preserves confirmation behavior. */
-  requiredGoalVerifierCommands?: string[];
+  goalVerificationPolicies?: GoalVerificationPolicies;
+  /** Removed global setting, retained only for explicit migration diagnostics. */
+  requiredGoalVerifierCommands?: unknown;
   /** Register the opt-in `agent_send_plan_offer` tool (default false). */
   planOfferTool?: boolean;
 }
 
 export type WorktreeGitHooksMode = "run" | "skip";
+
+export interface GoalVerificationPolicies {
+  repositories?: { repository: string; requiredCommands: string[] }[];
+  defaultRequiredCommands?: string[];
+}
+
+export interface GoalRepositoryIdentity {
+  kind: "git" | "directory";
+  path: string;
+  device: string;
+  inode: string;
+}
+
+export interface GoalVerificationBinding {
+  version: 1;
+  identity: GoalRepositoryIdentity;
+  source: "repository" | "default" | "none";
+  repository?: string;
+  requiredCommands: string[];
+  additionalCommands: string[];
+  policyFingerprint: string;
+}
+
+/** Internal owner capability; callers recheck it synchronously after every await. */
+export interface GoalAuthorizationTicket {
+  isCurrent(): boolean;
+}
 
 /** Raw plugin config as accepted from OpenClaw (validated against `openclaw.plugin.json` configSchema). */
 export interface RawPluginConfig {
@@ -531,8 +559,9 @@ export interface RawPluginConfig {
   worktreeGitHooks?: WorktreeGitHooksMode;
   /** Operator-approved goal verifier commands (exact strings). */
   trustedVerifierCommands?: string[];
-  /** Complete ordered operator-required goal suite; absence preserves confirmation behavior. */
-  requiredGoalVerifierCommands?: string[];
+  goalVerificationPolicies?: GoalVerificationPolicies;
+  /** Removed global setting, retained only for explicit migration diagnostics. */
+  requiredGoalVerifierCommands?: unknown;
   /** Register the opt-in `agent_send_plan_offer` tool; default false. */
   planOfferTool?: boolean;
 }
@@ -753,6 +782,7 @@ export interface GoalTaskConfig {
   permissionMode?: PermissionMode;
   loopMode?: GoalLoopMode;
   completionPromise?: string;
+  /** Additional task checks appended after the actual repository's operator-required baseline. */
   verifierCommands?: GoalVerifierSpec[];
   /** Optional spend limit: no further iteration starts once the task's sessions cost this much. */
   maxCostUsd?: number;
@@ -808,6 +838,8 @@ export interface GoalTaskState {
   loopMode: GoalLoopMode;
   completionPromise?: string;
   verifierCommands: GoalVerifierSpec[];
+  /** Controller-owned repository/policy admission, never supplied by a goal caller. */
+  goalVerificationBinding?: GoalVerificationBinding;
   /** Controller-generated immutable command selection for this goal, independent of later removal of config. */
   requiredVerifierCommands?: string[];
   lastVerifierSummary?: string;

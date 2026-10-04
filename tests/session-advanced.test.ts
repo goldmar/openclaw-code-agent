@@ -1194,7 +1194,7 @@ describe("Session steering and thread actions", () => {
     const plain = createFakeHarness("thread-action-unsupported");
     const plainSession = await startWith(plain);
     try {
-      assert.throws(() => plainSession.requestThreadAction({ kind: "compact" }), /does not support the "compact" thread action/);
+      await assert.rejects(plainSession.requestThreadAction({ kind: "compact" }), /does not support the "compact" thread action/);
     } finally {
       plainSession.kill("user");
     }
@@ -1206,12 +1206,12 @@ describe("Session steering and thread actions", () => {
     });
     const session = await startWith(capable);
     try {
-      session.requestThreadAction({ kind: "review", target: { type: "baseBranch", branch: "main" } });
+      await session.requestThreadAction({ kind: "review", target: { type: "baseBranch", branch: "main" } });
       await tick(20);
       assert.deepEqual(capable.consumedPrompts.at(-1), { type: "control", action: { kind: "review", target: { type: "baseBranch", branch: "main" } } });
     } finally {
       session.kill("user");
     }
-    assert.throws(() => session.requestThreadAction({ kind: "compact" }), /Session is not running/);
+    await assert.rejects(session.requestThreadAction({ kind: "compact" }), /Session is not running/);
   });
 });

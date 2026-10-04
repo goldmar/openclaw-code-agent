@@ -6,7 +6,7 @@ import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 export const sha = value => createHash("sha256").update(value).digest("hex");
 export const FILE_LIMIT = 4 * 1024 * 1024;
-export const HOST_PIN = "c074824a27c96d3983043f9eeb33823cd1772d8c";
+export const HOST_PIN = "fc23bc864e4553c2d215e479eeec47b67a0bf943";
 export const assignments = Object.freeze({ smoke: [], admission: ["admission"], gates: ["whole-gate"], live: ["live-policy"], restore: ["organic-restore"], all: ["admission", "whole-gate", "live-policy", "organic-restore", "immutable-history", "end-to-end-cleanup"] });
 export function excluded(name, bytes, domain = "original captured bytes") {
   assert.ok(/^[a-z][a-z0-9.-]*$/.test(name));
@@ -24,8 +24,8 @@ export function requiredFact(fact) {
 }
 const scalarObject = (value, fields) => { closed(value, fields); for (const item of Object.values(value)) assert.ok(item === null || ["string", "number", "boolean"].includes(typeof item)); };
 const processFields = ["pid", "state", "parent", "group", "startTicks", "executable"];
-const proofScalars = new Set("commandId exitCode signal timedOut stdioComplete rpcMethod invokedTool httpStatus toolError sourceArchiveSha256 hostEntrySha256 nativeExecutableSha256 packedSha256 installedEntrySha256 appliedRevision configRevision beforeRevision afterRevision alreadySetReadbackOnly sourceSha256 unchangedRevision setupOnly nativeThreadId nativeReceiptSha256 parentProof ownRunId responseId canonicalSha256 visible sessionId outcomeKey issuedAt succeededAt deliveryState publicOwnerId publicOwnerStatus activePublicView failedNotificationKey delivered goalId terminalStatus terminalRowSha256 iteration case policyFailure sameGoalId sameNativeThreadId oldSessionId restoredSessionId ownedShutdown listenerClosed".split(" "));
-const proofArrays = { mutation: null, requiredVerifierCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
+const proofScalars = new Set("commandId exitCode signal timedOut stdioComplete rpcMethod invokedTool httpStatus toolError sourceArchiveSha256 hostEntrySha256 nativeExecutableSha256 packedSha256 installedEntrySha256 appliedRevision configRevision beforeRevision afterRevision alreadySetReadbackOnly sourceSha256 unchangedRevision setupOnly nativeThreadId nativeReceiptSha256 parentProof ownRunId responseId canonicalSha256 visible sessionId outcomeKey issuedAt succeededAt deliveryState publicOwnerId publicOwnerStatus activePublicView failedNotificationKey delivered goalId terminalStatus terminalRowSha256 iteration case policyFailure sameGoalId sameNativeThreadId oldSessionId restoredSessionId ownedShutdown listenerClosed bindingSha256 policyFingerprint repositoryIdentitySha256 selectedPolicy operatorTrustedExtras unrelatedPolicyChanged affectedPolicyABA restoredBindingUnchanged deniedBeforeEffects".split(" "));
+const proofArrays = { mutation: null, requiredVerifierCommands: null, requiredCommands: null, additionalCommands: null, effectiveCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
 function proof(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value));
   for (const [key, item] of Object.entries(value)) {
@@ -62,14 +62,14 @@ function privacy(value, secrets) {
 }
 export function validateReceipt(receipt, expected) {
   closed(receipt, ["format", "complete", "candidateSha", "nodeVersion", "scenario", "hostVersion", "hostCommit", "nativeVersion", "assigned", "completed", "disposition", "failure", "cleanup", "excluded", "proofs", "retiredHostClaims"]);
-  assert.equal(receipt.format, "oca501-slim-v1");
+  assert.equal(receipt.format, "oca-repo-goal-slim-v1");
   assert.equal(receipt.complete, true);
   for (const field of ["candidateSha", "nodeVersion", "scenario"]) assert.equal(receipt[field], expected[field]);
   assert.match(receipt.candidateSha, /^[a-f0-9]{40}$/);
   assert.ok(["24.16.0", "26.1.0"].includes(receipt.nodeVersion));
-  assert.equal(receipt.hostVersion, "2026.9.7");
+  assert.equal(receipt.hostVersion, "2026.9.8");
   assert.equal(receipt.hostCommit, HOST_PIN);
-  assert.equal(receipt.nativeVersion, "0.159.3");
+  assert.equal(receipt.nativeVersion, "0.160.0");
   assert.ok(Object.hasOwn(assignments, receipt.scenario));
   assert.deepEqual(receipt.assigned, assignments[receipt.scenario]);
   assert.equal(new Set(receipt.completed).size, receipt.completed.length);

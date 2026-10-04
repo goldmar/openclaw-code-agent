@@ -1,4 +1,5 @@
 import "./test-env";
+import { bindGoalTask } from "./goal-policy-fixtures";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -32,6 +33,14 @@ afterEach(() => {
   }
 });
 
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let count = 0; count < 400; count++) {
+    if (predicate()) return;
+    await tick(5);
+  }
+  assert.fail("Owning asynchronous operation did not reach its held boundary");
+}
+
 function createStore(): GoalTaskStore {
   const dir = mkdtempSync(join(tmpdir(), "goal-controller-test-"));
   tempDirs.push(dir);
@@ -40,12 +49,12 @@ function createStore(): GoalTaskStore {
   } as NodeJS.ProcessEnv);
 }
 
-function buildTask(overrides: Partial<GoalTaskState> = {}): GoalTaskState {
-  return {
+async function buildTask(overrides: Partial<GoalTaskState> = {}): Promise<GoalTaskState> {
+  return bindGoalTask({
     id: "goal-1",
     name: "goal-task",
     goal: "Ship the feature",
-    workdir: "/tmp/project",
+    workdir: "/tmp",
     status: "running",
     createdAt: 1,
     updatedAt: 1,
@@ -56,7 +65,7 @@ function buildTask(overrides: Partial<GoalTaskState> = {}): GoalTaskState {
     loopMode: "verifier",
     permissionMode: "bypassPermissions",
     ...overrides,
-  };
+  });
 }
 
 describe("GoalController", () => {
@@ -96,7 +105,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({
+    const task = await buildTask({
       sessionId: "session-1",
       sessionName: "goal-task",
       harnessSessionId: "hs-1",
@@ -116,6 +125,7 @@ describe("GoalController", () => {
       getOutput: () => ["Paste the API key to continue."],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.status, "failed");
@@ -134,7 +144,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({
+    const task = await buildTask({
       sessionId: "session-1",
       sessionName: "goal-task",
       harnessSessionId: "hs-1",
@@ -146,6 +156,7 @@ describe("GoalController", () => {
       killReason: "user",
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.status, "stopped");
@@ -171,7 +182,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({
+    const task = await buildTask({
       status: "waiting_for_user",
       sessionId: "session-1",
       sessionName: "goal-task",
@@ -197,7 +208,7 @@ describe("GoalController", () => {
       } as any);
       const store = createStore();
       (controller as any).store = store;
-      const task = buildTask({ sessionId: "session-1", sessionName: "goal-task", verifierCommands: [{ label: "check-1", command: "true" }] });
+      const task = await buildTask({ sessionId: "session-1", sessionName: "goal-task", verifierCommands: [{ label: "check-1", command: "true" }] });
       store.upsert(task);
       await (controller as any).reconcileTask(task);
       return { status: task.status, reason: task.failureReason, notifications };
@@ -217,7 +228,7 @@ describe("GoalController", () => {
     }
   });
 
-  it("stops a task at once, with one notice, when its dormant session is closed", () => {
+  it("stops a task at once, with one notice, when its dormant session is closed", async () => {
     for (const [outcome, reason] of [["completed", "The session was closed as completed without running."], ["killed", "Stopped by user."]] as const) {
       const notifications: string[] = [];
       const controller = new GoalController({
@@ -226,7 +237,7 @@ describe("GoalController", () => {
       } as any);
       const store = createStore();
       (controller as any).store = store;
-      const task = buildTask({ status: "waiting_for_plan_approval", sessionId: "session-1", sessionName: "goal-task" });
+      const task = await buildTask({ status: "waiting_for_plan_approval", sessionId: "session-1", sessionName: "goal-task" });
       store.upsert(task);
 
       // Typed in the task's own chat: the notice is returned as the reply, not sent.
@@ -243,12 +254,12 @@ describe("GoalController", () => {
     }
   });
 
-  it("drops attached session observers after the attached session reaches a terminal state", () => {
+  it("drops attached session observers after the attached session reaches a terminal state", async () => {
     const controller = new GoalController({} as any);
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({ status: "running" });
+    const task = await buildTask({ status: "running" });
     store.upsert(task);
 
     const session = Object.assign(new EventEmitter(), {
@@ -278,7 +289,7 @@ describe("GoalController", () => {
       evaluations.push({ taskId, trigger, sessionId });
     };
 
-    const task = buildTask({ status: "running" });
+    const task = await buildTask({ status: "running" });
     store.upsert(task);
 
     const session = Object.assign(new EventEmitter(), {
@@ -306,7 +317,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({ status: "running" });
+    const task = await buildTask({ status: "running" });
     store.upsert(task);
     (controller as any).inFlight.add(task.id);
 
@@ -320,7 +331,7 @@ describe("GoalController", () => {
     assert.equal((controller as any).dirtyEvaluationSessionIds.get(task.id), "session-current");
   });
 
-  it("does not overwrite a terminal task when stopTask is called again", () => {
+  it("does not overwrite a terminal task when stopTask is called again", async () => {
     const killed: Array<{ id: string; reason: string }> = [];
     const notifications: string[] = [];
     const controller = new GoalController({
@@ -334,7 +345,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({
+    const task = await buildTask({
       status: "succeeded",
       sessionId: "session-1",
       failureReason: undefined,
@@ -352,7 +363,7 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
-  it("suppresses the session's stop notice for every goal stop: the goal notice is the one stop message", () => {
+  it("suppresses the session's stop notice for every goal stop: the goal notice is the one stop message", async () => {
     for (const sameChat of [true, false, undefined]) {
       const session = createStubSession({ id: "session-1", name: "goal-task" });
       const killed: string[] = [];
@@ -364,7 +375,7 @@ describe("GoalController", () => {
       } as any);
       const store = createStore();
       (controller as any).store = store;
-      const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+      const task = await buildTask({ sessionId: "session-1", sessionName: "goal-task" });
       store.upsert(task);
 
       // `undefined`: the agent_goal tool, which passes no reply.
@@ -384,7 +395,7 @@ describe("GoalController", () => {
     }
   });
 
-  it("stops the task's newest session too when it is still starting and not yet recorded on the task", () => {
+  it("stops the task's newest session too when it is still starting and not yet recorded on the task", async () => {
     // Every iteration is a new session; `task.sessionId` is updated only once it runs.
     const previous = createStubSession({ id: "session-1", name: "goal-task", status: "killed", goalTaskId: "goal-1" });
     const starting = createStubSession({ id: "session-2", name: "goal-task", status: "starting", goalTaskId: "goal-1" });
@@ -398,7 +409,7 @@ describe("GoalController", () => {
     } as any);
     const store = createStore();
     (controller as any).store = store;
-    const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+    const task = await buildTask({ sessionId: "session-1", sessionName: "goal-task" });
     store.upsert(task);
 
     assert.equal(controller.stopTask(task.id)?.action, "stopped");
@@ -409,7 +420,7 @@ describe("GoalController", () => {
     assert.equal(task.status, "stopped");
   });
 
-  it("edits and persists an active goal without changing session lifecycle fields", () => {
+  it("edits and persists an active goal without changing session lifecycle fields", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
@@ -419,7 +430,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({
+    const task = await buildTask({
       goal: "Ship the feature",
       status: "running",
       updatedAt: 10,
@@ -432,7 +443,7 @@ describe("GoalController", () => {
     });
     store.upsert(task);
 
-    const result = controller.editTask("goal-task", "  Ship the feature and update smoke tests  ");
+    const result = await controller.editTask("goal-task", "  Ship the feature and update smoke tests  ");
     const persisted = store.get("goal-1");
 
     assert.equal(result.action, "updated");
@@ -450,22 +461,22 @@ describe("GoalController", () => {
     assert.match(notifications[0]?.text ?? "", /Ship the feature and update smoke tests/);
   });
 
-  it("allows editing a waiting_for_session goal because it is recoverable active state", () => {
+  it("allows editing a waiting_for_session goal because it is recoverable active state", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({ status: "waiting_for_session", goal: "Old goal" });
+    const task = await buildTask({ status: "waiting_for_session", goal: "Old goal" });
     store.upsert(task);
 
-    const result = controller.editTask("goal-1", "New goal");
+    const result = await controller.editTask("goal-1", "New goal");
 
     assert.equal(result.action, "updated");
     assert.equal(store.get("goal-1")?.goal, "New goal");
     assert.equal(store.get("goal-1")?.status, "waiting_for_session");
   });
 
-  it("rejects an empty replacement goal without mutating state", () => {
+  it("rejects an empty replacement goal without mutating state", async () => {
     const notifications: string[] = [];
     const controller = new GoalController({
       emitGoalTaskUpdate: (_task: GoalTaskState, _text: string, label: string) => {
@@ -475,10 +486,10 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const task = buildTask({ goal: "Original goal", updatedAt: 10 });
+    const task = await buildTask({ goal: "Original goal", updatedAt: 10 });
     store.upsert(task);
 
-    const result = controller.editTask("goal-1", "   ");
+    const result = await controller.editTask("goal-1", "   ");
 
     assert.equal(result.action, "invalid_goal");
     assert.equal(store.get("goal-1")?.goal, "Original goal");
@@ -486,7 +497,7 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
-  it("rejects non-editable goal states without notifications", () => {
+  it("rejects non-editable goal states without notifications", async () => {
     const statuses: Array<GoalTaskState["status"]> = ["succeeded", "failed", "stopped", "waiting_for_user"];
 
     for (const status of statuses) {
@@ -499,10 +510,10 @@ describe("GoalController", () => {
       const store = createStore();
       (controller as any).store = store;
 
-      const task = buildTask({ status, goal: "Original goal", updatedAt: 10 });
+      const task = await buildTask({ status, goal: "Original goal", updatedAt: 10 });
       store.upsert(task);
 
-      const result = controller.editTask("goal-1", "New goal");
+      const result = await controller.editTask("goal-1", "New goal");
 
       assert.equal(result.action, "not_editable");
       assert.equal(store.get("goal-1")?.goal, "Original goal");
@@ -522,7 +533,7 @@ describe("GoalController", () => {
       throw new Error("runVerifiers should not be called");
     };
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "verifier",
       sessionId: "session-1",
       verifierCommands: [{ label: "test", command: "pnpm test" }],
@@ -533,6 +544,7 @@ describe("GoalController", () => {
       error: "Verifier session exploded",
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.status, "failed");
@@ -551,7 +563,7 @@ describe("GoalController", () => {
       throw new Error("resumeTaskSession should not be called");
     };
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       sessionId: "session-1",
@@ -563,6 +575,7 @@ describe("GoalController", () => {
       getOutput: () => ["DONE"],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.status, "failed");
@@ -587,7 +600,7 @@ describe("GoalController", () => {
       throw new Error("resumeTaskSession should not be called");
     };
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       maxIterations: 20,
@@ -605,6 +618,7 @@ describe("GoalController", () => {
       ],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.status, "succeeded");
@@ -642,7 +656,7 @@ describe("GoalController", () => {
       return resumedSession;
     };
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       sessionId: "session-1",
@@ -658,6 +672,7 @@ describe("GoalController", () => {
       ],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, firstTurn);
     await (controller as any).handleTerminalSession(task, resumedSession);
 
@@ -692,7 +707,7 @@ describe("GoalController", () => {
       getOutput: (): never[] => [],
     });
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       sessionId: "session-1",
@@ -709,6 +724,7 @@ describe("GoalController", () => {
       ],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.iteration, 1);
@@ -740,7 +756,7 @@ describe("GoalController", () => {
       harnessSessionId: "hs-2",
     });
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       sessionId: "session-1",
@@ -753,6 +769,7 @@ describe("GoalController", () => {
       getOutput: (): never[] => [],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
@@ -784,7 +801,7 @@ describe("GoalController", () => {
       harnessSessionId: "hs-2",
     });
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
       verifierCommands: [{ label: "readiness", command: "pnpm readiness" }],
@@ -801,6 +818,7 @@ describe("GoalController", () => {
       ],
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.iteration, 1);
@@ -837,7 +855,7 @@ describe("GoalController", () => {
       harnessSessionId: "hs-2",
     });
 
-    const task = buildTask({
+    const task = await buildTask({
       loopMode: "verifier",
       verifierCommands: [{ label: "readiness", command: "pnpm readiness" }],
       sessionId: "session-1",
@@ -849,6 +867,7 @@ describe("GoalController", () => {
       status: "completed",
     });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(task.iteration, 1);
@@ -882,8 +901,9 @@ describe("GoalController", () => {
       } as any);
       const store = createStore();
       (controller as any).store = store;
-      const task = buildTask({ sessionId: "session-1", permissionMode: "plan" });
+      const task = await buildTask({ sessionId: "session-1", permissionMode: "plan" });
 
+      store.upsert(task);
       await (controller as any).handleRunningSession(task, session);
 
       assert.deepEqual(permissionModes, []);
@@ -901,7 +921,8 @@ describe("GoalController", () => {
         return createStubSession({ id: "session-2", name: "goal-task", harnessName: "codex", on: (): undefined => undefined });
       },
     } as any);
-    const task = buildTask({ permissionMode: "plan" });
+    const store = createStore(); (controller as any).store = store;
+    const task = await buildTask({ permissionMode: "plan" }); store.upsert(task);
     await (controller as any).spawnManagedTaskSession(task, "first");
     task.planApproved = true;
     await (controller as any).spawnManagedTaskSession(task, "repair", "hs-1");
@@ -929,8 +950,9 @@ describe("GoalController", () => {
     } as any);
     const store = createStore();
     (controller as any).store = store;
-    const task = buildTask({ sessionId: "session-1", permissionMode: "plan" });
+    const task = await buildTask({ sessionId: "session-1", permissionMode: "plan" });
 
+    store.upsert(task);
     await (controller as any).handleTerminalSession(task, session);
 
     assert.equal(launched, false);
@@ -954,7 +976,7 @@ describe("GoalController", () => {
 
     const task = await controller.launchTask({
       goal: "Make tests pass",
-      workdir: "/tmp/project",
+      workdir: "/tmp",
       verifierCommands: [{ label: "check-1", command: "pnpm test" }],
       maxIterations: 100,
       requireVerifierConfirmation: true,
@@ -980,18 +1002,18 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const repeated = buildTask({ id: "g-repeat" });
+    const repeated = await buildTask({ id: "g-repeat" });
     assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), true);
     assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), true);
     assert.equal((controller as any).recordFailureFingerprint(repeated, "fp", "FAIL check"), false);
     assert.equal(repeated.status, "failed");
     assert.match(repeated.failureReason ?? "", /repeated 3 times/);
 
-    const restarting = buildTask({ id: "g-restart", iteration: 7, maxIterations: 8 });
+    const restarting = await buildTask({ id: "g-restart", iteration: 7, maxIterations: 8 });
     assert.equal((controller as any).consumeIteration(restarting, "Gateway restarted."), false);
     assert.equal(restarting.status, "failed");
 
-    const costly = buildTask({ id: "g-cost", maxCostUsd: 1, totalCostUsd: 0 });
+    const costly = await buildTask({ id: "g-cost", maxCostUsd: 1, totalCostUsd: 0 });
     const run = { id: "s", startedAt: 1, costUsd: 0.6 };
     assert.equal((controller as any).recordRunCost(costly, run), true);
     assert.equal((controller as any).recordRunCost(costly, run), true, "the same run is counted once");
@@ -1000,10 +1022,10 @@ describe("GoalController", () => {
     assert.match(costly.failureReason ?? "", /cost limit/);
   });
 
-  it("bounds max_cost_usd for runs that bill nothing per token by their API-price estimate", () => {
+  it("bounds max_cost_usd for runs that bill nothing per token by their API-price estimate", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
     (controller as any).store = createStore();
-    const chatgpt = buildTask({ id: "g-chatgpt", maxCostUsd: 1, totalCostUsd: 0 });
+    const chatgpt = await buildTask({ id: "g-chatgpt", maxCostUsd: 1, totalCostUsd: 0 });
     // Codex with a ChatGPT login: billed $0, estimated $0.70 per run at API prices.
     const run = { id: "cx", startedAt: 1, costUsd: 0, usage: { estimatedCostUsd: 0.7 } };
     assert.equal((controller as any).recordRunCost(chatgpt, run), true);
@@ -1014,10 +1036,10 @@ describe("GoalController", () => {
     assert.equal(goalRunCostUsd({ costUsd: 0 }), 0);
   });
 
-  it("uses GPT-6.1 Sol API estimates to stop subscription goals at the cost limit once per run", () => {
+  it("uses GPT-6.1 Sol API estimates to stop subscription goals at the cost limit once per run", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
     (controller as any).store = createStore();
-    const task = buildTask({ id: "g-sol61", model: "gpt-6.1-sol", maxCostUsd: 0.5, totalCostUsd: 0 });
+    const task = await buildTask({ id: "g-sol61", model: "gpt-6.1-sol", maxCostUsd: 0.5, totalCostUsd: 0 });
     const estimate = estimateCodexApiCostUsd({
       model: task.model,
       usage: {
@@ -1042,7 +1064,7 @@ describe("GoalController", () => {
     (controller as any).store = store;
     (controller as any).started = true;
 
-    const task = buildTask({
+    const task = await buildTask({
       status: "waiting_for_user",
       waitingForUserReason: "Need a human decision.",
       sessionId: "session-1",
@@ -1070,7 +1092,7 @@ describe("GoalController", () => {
     await assert.rejects(
       () => controller.launchTask({
         goal: "Ship it",
-        workdir: "/tmp/project",
+        workdir: "/tmp",
         loopMode: "verifier",
         verifierCommands: [],
       }),
@@ -1091,11 +1113,11 @@ describe("GoalController", () => {
     await assert.rejects(
       () => controller.launchTask({
         goal: "Ship it",
-        workdir: "/tmp/project",
+        workdir: "/tmp",
         loopMode: "verifier",
         verifierCommands: [{ label: "x", command: "   " }],
       }),
-      /require at least one verifier command/i,
+      /Invalid additional goal checks/i,
     );
     assert.equal(spawned, false);
   });
@@ -1115,7 +1137,9 @@ describe("GoalController", () => {
 
   it("returns a synthetic verifier failure when verifier-mode tasks have no verifier commands", async () => {
     const controller = new GoalController({} as any);
-    const result = await (controller as any).runVerifiers(buildTask({ verifierCommands: [] }));
+    const task = await buildTask({ verifierCommands: [] });
+    const store = createStore(); (controller as any).store = store; store.upsert(task);
+    const result = await (controller as any).runVerifiers(task);
 
     assert.equal(result.status, "fail");
     assert.equal(result.steps.length, 1);
@@ -1129,7 +1153,7 @@ describe("GoalController", () => {
     (controller as any).store = store;
     (controller as any).started = true;
 
-    const task = buildTask({
+    const task = await buildTask({
       status: "waiting_for_session",
       verifierCommands: [],
     });
@@ -1150,13 +1174,15 @@ describe("GoalController", () => {
     process.env.BASH_ENV = shellHookPath;
     process.env.ENV = shellHookPath;
 
-    const result = await (controller as any).runVerifiers(buildTask({
+    const task = await buildTask({
       workdir: dir,
       verifierCommands: [{
         label: "check-clean-shell-env",
         command: "printf '%s' \"${OPENCLAW_TEST_VERIFIER_HOOK:-}\"",
       }],
-    }));
+    });
+    const store = createStore(); (controller as any).store = store; store.upsert(task);
+    const result = await (controller as any).runVerifiers(task);
 
     assert.equal(result.status, "pass");
     assert.equal(result.steps[0]?.output, "(no output)");
@@ -1182,7 +1208,9 @@ describe("GoalController", () => {
       },
     } as any);
 
-    await (controller as any).spawnManagedTaskSession(buildTask({ harness: "codex" }), "Resume the task", "thread-app-server");
+    const task = await buildTask({ harness: "codex" });
+    const store = createStore(); (controller as any).store = store; store.upsert(task);
+    await (controller as any).spawnManagedTaskSession(task, "Resume the task", "thread-app-server");
 
     assert.equal(capturedConfig.resumeSessionId, "thread-app-server");
     assert.equal(capturedConfig.resumeWorktreeFrom, "thread-app-server");
@@ -1201,10 +1229,10 @@ describe("GoalController", () => {
       launchAndAwaitRunning: async () => { await new Promise<void>((resolve) => { resolveSpawn = resolve; }); return late; },
     } as any);
     const store = createStore(); (controller as any).store = store;
-    const task = buildTask({ status: "waiting_for_session", harnessSessionId: "resume-thread-1", sessionId: undefined, sessionName: undefined,
+    const task = await buildTask({ status: "waiting_for_session", harnessSessionId: "resume-thread-1", sessionId: undefined, sessionName: undefined,
       verifierCommands: [{ label: "test", command: "true" }] }); store.upsert(task);
     controller.start(); const restoration = (controller as any).restorePromise;
-    await tick(0); controller.stop(); const captured = structuredClone(store.get(task.id)); resolveSpawn(); await restoration;
+    await waitUntil(() => typeof resolveSpawn === "function"); controller.stop(); const captured = structuredClone(store.get(task.id)); resolveSpawn(); await restoration;
     assert.deepEqual(killed, [{ id: late.id, reason: "shutdown" }]); assert.deepEqual(store.get(task.id), captured);
     assert.equal(task.harnessSessionId, "resume-thread-1"); assert.equal(task.sessionId, undefined);
   });
@@ -1221,7 +1249,7 @@ describe("GoalController", () => {
         sendGoalVerifierConfirmation: () => {}, kill: (id: string) => { killed.push(id); },
         launchAndAwaitRunning: async () => { await new Promise<void>((resolve) => { release = resolve; }); if (rejects) throw new Error("late launch failure"); return late; },
       } as any); (controller as any).store = store;
-      const task = buildTask({ sessionId: "original", harnessSessionId: "original-thread", verifierCommands: [{ label: "fail", command: "false" }],
+      const task = await buildTask({ sessionId: "original", harnessSessionId: "original-thread", verifierCommands: [{ label: "fail", command: "false" }],
         ...(operation === "ralph" ? { loopMode: "ralph", completionPromise: "DONE" } : {}) }); store.upsert(task);
       let pending: Promise<unknown>;
       if (operation === "launch") pending = controller.launchTask({ goal: "New", workdir: "/tmp", verifierCommands: [{ label: "pass", command: "true" }] });
@@ -1248,11 +1276,11 @@ describe("GoalController", () => {
         sendMessage: async () => { await new Promise<void>(resolve => { release = resolve; }); if (rejects) throw new Error("late input failure"); return { disposition: "sent" }; },
       });
       const controller = new GoalController({ resolve: () => session, assertGoalTaskAuthorized: (id: string) => controller.assertTaskAuthorized(id),
-        continueGoalSession: (target: { goalTaskId?: string }) => { controller.assertTaskAuthorized(target.goalTaskId!); return "attached"; } } as any);
+        continueGoalSession: async (target: { goalTaskId?: string }) => ({ goalOwnership: "attached", authorization: await controller.assertTaskAuthorized(target.goalTaskId!) }) } as any);
       const store = createStore(); (controller as any).store = store;
-      const task = buildTask({ sessionId: session.id, harnessSessionId: "thread", verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
+      const task = await buildTask({ sessionId: session.id, harnessSessionId: "thread", verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
       const pending: Promise<void> = (controller as any).reconcileTask(task);
-      for (let count = 0; !release && count < 20; count += 1) await tick(1);
+      await waitUntil(() => typeof release === "function");
       assert.equal(typeof release, "function"); controller.stop(); const captured = JSON.stringify(store.list());
       release(); await pending; assert.equal(JSON.stringify(store.list()), captured);
     });
@@ -1265,10 +1293,10 @@ describe("GoalController", () => {
       const controller = new GoalController({ resolve: () => late, kill: (id: string) => { killed.push(id); },
         launchAndAwaitRunning: async () => { await new Promise<void>(resolve => { release = resolve; }); return late; },
       } as any); (controller as any).store = store;
-      const task = buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
+      const task = await buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(task);
       const pending: Promise<unknown> = (controller as any).spawnManagedTaskSession(task, "Launch");
       const outcome = pending.then((): null => null, (error: Error): Error => error);
-      controller.stop();
+      await waitUntil(() => typeof release === "function"); controller.stop();
       if (reassigned === "goal") late.goalTaskId = "foreign";
       else { (controller as any).restoreRecoverableTasks = async (): Promise<void> => {}; controller.start(); task.sessionId = late.id; store.upsert(task); }
       const captured = JSON.stringify(store.list()); release(); assert.match((await outcome as Error).message, /controller retired/);
@@ -1281,7 +1309,7 @@ describe("GoalController", () => {
     let release!: () => void; (controller as any).restorePromise = new Promise<void>(resolve => { release = resolve; });
     const pending: Promise<void> = (controller as any).evaluateTask("goal-1", "old-restore"); controller.stop();
     (controller as any).restoreRecoverableTasks = async (): Promise<void> => {}; controller.start();
-    const current = buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(current);
+    const current = await buildTask({ verifierCommands: [{ label: "pass", command: "true" }] }); store.upsert(current);
     const captured = JSON.stringify(store.list()); release(); await pending; assert.equal(JSON.stringify(store.list()), captured); controller.stop();
   });
 

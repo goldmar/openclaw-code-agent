@@ -375,19 +375,37 @@ export function rejectPlanDecision(
   return { text: `[${name}] Plan rejected. Session remains stopped.`, userText: `⛔ [${name}] Plan rejected. Session remains stopped.` };
 }
 
-export function requestPlanDecisionChanges(
+function planAuthorizationSignature(target: ResumableSession | undefined): string {
+  return JSON.stringify(target && [getStableSessionId(target), getBackendConversationId(target), target.backendRef?.kind,
+    "harnessName" in target ? target.harnessName : target.harness, target.workdir,
+    "startedAt" in target ? target.startedAt : target.createdAt,
+    target.planDecisionVersion, target.actionablePlanDecisionVersion, target.pendingPlanApproval, target.approvalState,
+    "harnessName" in target ? target.controlStateSnapshot().planModeApproved : target.planModeApproved,
+    target.planApprovalContext, target.currentPermissionMode, target.approvalRationale]);
+}
+function goalOwnerUnchanged(target: ResumableSession | undefined, original: string | undefined, active?: Session): boolean {
+  return target?.goalTaskId === original || (target === active && active?.goalDetached === true && !target.goalTaskId);
+}
+
+export async function requestPlanDecisionChanges(
   sm: SessionManager,
   sessionId: string,
   options: { fromOrchestratorTurn?: boolean } = {},
-): RespondResult {
+): Promise<RespondResult> {
   const active = sm.resolve(sessionId);
   const persisted = active ? undefined : sm.getPersistedSession(sessionId);
   const target = active ?? persisted;
   const name = target?.name ?? sessionId;
-  try { if (target?.goalTaskId) sm.continueGoalSession(target, active); } catch (err) {
+  const decisionSignature = planAuthorizationSignature(target);
+  const originalGoalOwner = target?.goalTaskId;
+  try { if (target?.goalTaskId) { let continuation; do { continuation = await sm.continueGoalSession(target, active); } while (!continuation.authorization.isCurrent()); } } catch (err) {
     return { text: `Error: ${errorMessage(err)}`, isError: true, userText: `❌ [${name}] ${errorMessage(err)}` };
   }
 
+  const current = sm.resolve(sessionId) ?? sm.getPersistedSession(sessionId);
+  if ((active && current !== active) || planAuthorizationSignature(current) !== decisionSignature || !goalOwnerUnchanged(current, originalGoalOwner, active)) {
+    return { text: "Error: The plan decision changed during authorization. Review the current plan before retrying.", isError: true };
+  }
   sm.clearPlanDecisionTokens?.(sessionId);
 
   const reviewedVersion = target ? (target.actionablePlanDecisionVersion ?? target.planDecisionVersion) : undefined;
@@ -596,14 +614,35 @@ export async function executeRespond(
   // shortcuts stay user-only (the orchestrator approves with approve=true).
   const textPlanDecision = replyDecision === "reject" || params.userInitiated ? replyDecision : undefined;
   // Reject remains available even when policy denies additional goal work.
+  let decisionSignature = planAuthorizationSignature(target);
+  const originalGoalOwner = target?.goalTaskId;
   let goalOwnership: SessionConfig["goalOwnership"];
+  const originalPendingInput = session?.pendingInputState;
+  const pendingInputSignature = JSON.stringify(originalPendingInput);
+  const pendingInputIsCurrent = (): boolean => session?.pendingInputState === originalPendingInput
+    && JSON.stringify(session?.pendingInputState) === pendingInputSignature;
+  const stalePendingInput = (): RespondResult => ({
+    text: "Error: The pending input request changed during authorization. Review the current question before replying.", isError: true,
+  });
+  const assertActionIsCurrent = (): void => {
+    const current = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
+    if ((session && current !== session) || planAuthorizationSignature(current) !== decisionSignature
+      || !goalOwnerUnchanged(current, originalGoalOwner, session)) throw new Error("The plan or session changed during authorization. Review the current plan before retrying.");
+    if (!params.approve && !params.interrupt && !pendingInputIsCurrent()) throw new Error(stalePendingInput().text.replace(/^Error: /, ""));
+  };
   if (textPlanDecision !== "reject") {
     try {
-      if (target.goalTaskId) goalOwnership = sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController });
+      if (target.goalTaskId) { let continuation; do { continuation = await sm.continueGoalSession(target, session, { fromGoalController: params.fromGoalController }); } while (!continuation.authorization.isCurrent()); goalOwnership = continuation.goalOwnership; }
     } catch (err) {
       return { text: `Error: ${errorMessage(err)}`, isError: true, userText: fail(errorMessage(err)) };
     }
   }
+  const currentTarget = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
+  if (textPlanDecision !== "reject" && ((session && currentTarget !== session)
+    || planAuthorizationSignature(currentTarget) !== decisionSignature || !goalOwnerUnchanged(currentTarget, originalGoalOwner, session))) {
+    return { text: "Error: The plan decision changed during authorization. Review the current plan before retrying.", isError: true };
+  }
+  if (!params.approve && !params.interrupt && !pendingInputIsCurrent()) return stalePendingInput();
   if (textPlanDecision === "approve") {
     return executeRespond(sm, {
       ...params,
@@ -683,6 +722,7 @@ export async function executeRespond(
     if (replyError) {
       return { text: replyError, isError: true, userText: fail(replyError.replace(/^.*?: /u, "Answer not sent: ")) };
     }
+    assertActionIsCurrent();
 
     const pendingQuestionIndex = session.pendingInputState?.activeQuestionIndex;
     const pendingQuestionCount = session.pendingInputState?.questions?.length;
@@ -690,6 +730,10 @@ export async function executeRespond(
       !params.approve
       && session.pendingInputState?.allowsFreeText
       && (await session.submitPendingInputText?.(params.message)) === true;
+
+    // A declined submission may mean its native request was replaced during
+    // admission. Never send that old answer as a new prompt to the replacement.
+    if (!submittedPendingText && !params.approve && !params.interrupt && !pendingInputIsCurrent()) return stalePendingInput();
 
     if (submittedPendingText) {
       // No "↪️" echo of the user's own words (N46).
@@ -718,6 +762,7 @@ export async function executeRespond(
     if (params.interrupt) {
       redirectedActiveTurn = await session.interrupt();
     }
+    assertActionIsCurrent();
 
     // Permission escalation — explicit approve flag
     const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
@@ -740,13 +785,16 @@ export async function executeRespond(
       sentAsPlanFeedback = true;
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
+    // Advance only for this action's synchronous permission/rationale changes.
+    decisionSignature = planAuthorizationSignature(session);
 
     // A goal-loop reply never detaches: re-check right before delivery, and
     // refuse a session that an explicit action detached in the meantime.
     if (params.fromGoalController) {
       if (session.goalDetached) throw new Error("The goal ended; this session now continues as an ordinary session.");
-      if (session.goalTaskId) sm.continueGoalSession(session, session, { fromGoalController: true });
+      if (session.goalTaskId) { let continuation; do { continuation = await sm.continueGoalSession(session, session, { fromGoalController: true }); } while (!continuation.authorization.isCurrent()); }
     }
+    assertActionIsCurrent();
     const delivery = await session.sendMessage(params.message);
     if (isPlanApproval) {
       persistPlanApprovalState(sm, session);

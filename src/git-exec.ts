@@ -19,6 +19,8 @@ export interface CommandOptions {
   timeout: number;
   /** Optional stdin payload; otherwise stdin is closed immediately. */
   input?: string;
+  /** Identity reads may strip Git redirection variables; normal git/gh keeps the Gateway environment. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export type CommandError = Error & {
@@ -54,7 +56,8 @@ function settleCommand(
 }
 
 function execOptions(options: CommandOptions) {
-  return { cwd: options.cwd, timeout: options.timeout, encoding: "utf-8", maxBuffer: 1024 * 1024, windowsHide: true } as const;
+  return { cwd: options.cwd, timeout: options.timeout, encoding: "utf-8", maxBuffer: 1024 * 1024, windowsHide: true,
+    ...(options.env ? { env: options.env } : {}) } as const;
 }
 
 function closeStdin(child: ChildProcess, input: string | undefined): void {

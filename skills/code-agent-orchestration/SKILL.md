@@ -77,7 +77,7 @@ You may approve, but only after you verify the plan: read it with `agent_output(
 
 ## Goal loops
 
-Use `agent_goal(action="launch", goal, verifier_commands?)` only when the user asks for an autonomous loop. `action="status" | "edit" | "stop"` manage it. Verifier commands suggested by you need the user's confirmation once.
+Use `agent_goal(action="launch", goal, verifier_commands?)` only when the user asks for an autonomous loop. `action="status" | "edit" | "stop"` manage it. The actual repository selects the operator-required baseline. `verifier_commands` are additional checks appended after it; they cannot replace it or select a policy. Your additions need the user's confirmation once unless the operator pre-approved them in `trustedVerifierCommands`.
 
 ## Files
 

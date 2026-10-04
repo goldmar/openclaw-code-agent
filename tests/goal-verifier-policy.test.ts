@@ -1,4 +1,5 @@
 import "./test-env";
+import { bindGoalTask } from "./goal-policy-fixtures";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -20,7 +21,7 @@ import { registerHarness } from "../src/harness";
 import { createCallbackHandler } from "../src/callback-handler";
 import { setGoalController, setSessionManager } from "../src/singletons";
 import { createFakeHarness, createStubSession, tick } from "./helpers";
-import type { GoalTaskState, GoalVerifierSpec } from "../src/types";
+import type { GoalAuthorizationTicket, GoalTaskState, GoalVerifierSpec } from "../src/types";
 
 const dirs: string[] = [];
 const ctx = { workspaceDir: "/tmp", oneShotCliRun: true };
@@ -31,12 +32,12 @@ function fixture() {
   const store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(dir, "goals.json") });
   let launches = 0;
   let confirmations = 0;
-  let authorizer: ((id: string) => void) | undefined;
+  let authorizer: ((id: string, workdir?: string) => Promise<GoalAuthorizationTicket>) | undefined;
   let activeCheck: ((id: string) => boolean) | undefined;
   const manager = {
     emitGoalTaskUpdate: () => {},
     sendGoalVerifierConfirmation: () => { confirmations += 1; },
-    setGoalTaskAuthorizer: (callback: (id: string) => void, isActive?: (id: string) => boolean) => { authorizer = callback; activeCheck = isActive; },
+    setGoalTaskAuthorizer: (callback: (id: string, workdir?: string) => Promise<GoalAuthorizationTicket>, isActive?: (id: string) => boolean) => { authorizer = callback; activeCheck = isActive; },
     kill: () => {},
     resolve: (): undefined => undefined,
     resolveBackendConversationId: (ref: string) => ref,
@@ -44,12 +45,20 @@ function fixture() {
   };
   const controller = new GoalController(manager as any);
   (controller as any).store = store;
-  return { controller, store, dir, manager, counters: () => ({ launches, confirmations }), authorize: (id: string) => authorizer!(id), isActive: (id: string) => activeCheck!(id) };
+  return { controller, store, dir, manager, counters: () => ({ launches, confirmations }), authorize: (id: string, workdir?: string) => authorizer!(id, workdir), isActive: (id: string) => activeCheck!(id) };
 }
-function task(commands: string[], overrides: Partial<GoalTaskState> = {}): GoalTaskState {
-  return { id: "goal", name: "goal", goal: "Ship", workdir: "/tmp", status: "running", createdAt: 1,
-    updatedAt: 2, iteration: 0, maxIterations: 1, loopMode: "verifier", verifierCommands: specs(commands), repeatedFailureCount: 0, ...overrides };
+async function task(commands: string[], overrides: Partial<GoalTaskState> = {}): Promise<GoalTaskState> {
+  return bindGoalTask({ id: "goal", name: "goal", goal: "Ship", workdir: dirs.at(-1) ?? "/tmp", status: "running", createdAt: 1,
+    updatedAt: 2, iteration: 0, maxIterations: 1, loopMode: "verifier", verifierCommands: specs(commands), repeatedFailureCount: 0, ...overrides });
 }
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let count = 0; count < 400; count++) {
+    if (predicate()) return;
+    await tick(5);
+  }
+  assert.fail("Owning asynchronous operation did not reach its held boundary");
+}
+
 async function waitForFile(path: string) {
   for (let count = 0; count < 200; count += 1) {
     if (existsSync(path)) return;
@@ -62,10 +71,10 @@ beforeEach(() => setPluginConfig({}));
 afterEach(() => { setPluginConfig({}); setGoalController(null); setSessionManager(null); while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
 describe("operator-required goal suite admission", () => {
-  it("injects the full ordered suite for omission and explicit Ralph, preserving duplicate steps", () => {
-    setPluginConfig({ requiredGoalVerifierCommands: ["  bash ci.sh  ", "bash lint.sh", "bash ci.sh"] });
+  it("injects the full ordered suite for omission and explicit Ralph, preserving duplicate steps", async () => {
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["  bash ci.sh  ", "bash lint.sh", "bash ci.sh"] } });
     for (const goalMode of [undefined, "ralph"] as const) {
-      const result = resolveGoalLaunchRequest({ goal: "Ship", goalMode }, ctx);
+      const result = await resolveGoalLaunchRequest({ goal: "Ship", goalMode }, ctx);
       assert.equal(result.kind, "resolved");
       if (result.kind !== "resolved") return;
       assert.deepEqual(result.verifierCommands, specs(["bash ci.sh", "bash lint.sh", "bash ci.sh"]));
@@ -75,69 +84,77 @@ describe("operator-required goal suite admission", () => {
 
   it("copies config arrays and tracks meaningful policy changes including A -> B -> A", () => {
     const commands = [" true "];
-    setPluginConfig({ requiredGoalVerifierCommands: commands });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
     const revision = getGoalVerifierPolicyRevision();
     commands[0] = "false";
-    assert.deepEqual(pluginConfig.requiredGoalVerifierCommands, [" true "]);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"], idleTimeoutMinutes: 2 });
+    assert.deepEqual(pluginConfig.goalVerificationPolicies?.defaultRequiredCommands, [" true "]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] }, idleTimeoutMinutes: 2 });
     assert.equal(getGoalVerifierPolicyRevision(), revision);
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
     assert.equal(getGoalVerifierPolicyRevision(), revision + 2);
   });
 
-  it("fails closed for malformed runtime config before storing or launching anything", async () => {
+  it("fails closed for malformed policies and explicitly rejects the removed global", async () => {
     const f = fixture();
-    for (const requiredGoalVerifierCommands of [null, "true", [], [""], [" \n "], ["true", 5], {}]) {
-      setPluginConfig({ requiredGoalVerifierCommands } as any);
-      const result = resolveGoalLaunchRequest({ goal: "Ship" }, ctx);
-      assert.equal(result.kind, "error");
-      await assert.rejects(f.controller.launchTask({ goal: "Ship", workdir: f.dir }), /requiredGoalVerifierCommands/);
+    for (const required of [null, "true", [], [""], [" \n "], ["true", 5], {}]) {
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: required } } as any);
+      assert.equal((await resolveGoalLaunchRequest({ goal: "Ship" }, ctx)).kind, "error");
+      await assert.rejects(f.controller.launchTask({ goal: "Ship", workdir: f.dir }), /goalVerificationPolicies/);
       assert.deepEqual(f.store.list(), []);
       assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
     }
-  });
-
-  it("rejects weaker, reordered, blank, malformed and shell-expanded selection atomically", async () => {
-    const f = fixture();
-    setPluginConfig({ requiredGoalVerifierCommands: ["bash ci.sh", "bash lint.sh", "bash ci.sh"] });
-    const selections: unknown[] = [[], ["true"], ["bash ci.sh"], ["bash lint.sh", "bash ci.sh", "bash ci.sh"],
-      ["bash ci.sh", "bash lint.sh"], ["bash ci.sh", "bash lint.sh", ""], ["bash ci.sh", "bash lint.sh", "bash ci.sh", "true"],
-      ["bash ci.sh", "bash lint.sh", "bash ci.sh || true"], ["bash ci.sh", "bash lint.sh", "bash ci.sh\ntrue"],
-      ["bash ci.sh", "bash lint.sh", "bash  ci.sh"], ["bash ci.sh", "bash lint.sh", "BASH ci.sh"],
-      ["bash ci.sh", "bash lint.sh", "bash ./ci.sh"], ["bash ci.sh", "bash lint.sh", null], "true"];
-    for (const selection of selections) {
-      assert.equal(resolveGoalLaunchRequest({ goal: "Ship", verifierCommands: selection as any }, ctx).kind, "error");
-      const raw = Array.isArray(selection) ? selection.map((command) => ({ label: "check", command })) : selection;
-      await assert.rejects(f.controller.launchTask({ goal: "Ship", workdir: f.dir, verifierCommands: raw as any,
-        loopMode: "ralph", requireVerifierConfirmation: false, permissionMode: "bypassPermissions" }));
+    for (const legacy of [[], ["true"], null, {}]) {
+      setPluginConfig({ requiredGoalVerifierCommands: legacy } as any);
+      await assert.rejects(f.controller.launchTask({ goal: "Legacy", workdir: f.dir }), /requiredGoalVerifierCommands was removed.*Migrate/);
       assert.deepEqual(f.store.list(), []);
-      assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
     }
-    await assert.rejects(f.controller.launchTask({ goal: "Ship", workdir: f.dir, verifierCommands: [{ command: "bash ci.sh" }] as any }));
   });
 
-  it("enforces tool, slash and direct launch while leaving no-policy weak checks available", async () => {
-    const f = fixture();
-    setGoalController(f.controller);
-    const tool = makeAgentGoalTool(ctx);
+  it("appends complete caller additions without replacing or reordering the required suite", async () => {
+    const f = fixture(), required = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: required } });
+    for (const additional of [[], ["true"], ["bash ci.sh"], ["bash lint.sh", "bash ci.sh"], ["bash ci.sh || true"], ["bash  ci.sh"]]) {
+      const resolution = await resolveGoalLaunchRequest({ goal: "Ship", verifierCommands: additional }, ctx);
+      assert.equal(resolution.kind, "resolved");
+      if (resolution.kind !== "resolved") continue;
+      assert.deepEqual(resolution.verifierCommands, specs([...required, ...additional]));
+      const current = await f.controller.launchTask({ goal: "Addition", workdir: f.dir, verifierCommands: specs(additional), requireVerifierConfirmation: true });
+      assert.deepEqual(current.verifierCommands, specs([...required, ...additional]));
+      assert.deepEqual(current.goalVerificationBinding?.additionalCommands, additional);
+      assert.equal(current.status, additional.length ? "awaiting_verifier_confirmation" : "running");
+    }
+    const before = structuredClone(f.store.list()), counters = f.counters();
+    for (const additional of [[" "], ["true", null], "true", Array(1)]) {
+      assert.equal((await resolveGoalLaunchRequest({ goal: "Ship", verifierCommands: additional as any }, ctx)).kind, "error");
+      const raw = Array.isArray(additional) ? Array.from(additional, command => ({ label: "check", command })) : additional;
+      await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, verifierCommands: raw as any }));
+      assert.deepEqual(f.store.list(), before); assert.deepEqual(f.counters(), counters);
+    }
+  });
+
+  it("tool additions preserve confirmation; typed and trusted additions append without it", async () => {
+    const f = fixture(); setGoalController(f.controller);
+    const context = { ...ctx, workspaceDir: f.dir }, tool = makeAgentGoalTool(context);
     let handler!: (ctx: any) => Promise<{ text: string }>;
     registerGoalCommand({ registerCommand(command) { handler = command.handler; } });
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
-    const denied = await tool.execute("tool", { action: "launch", goal: "Ship", verifier_commands: ["false"] });
-    assert.equal(denied.isError, true);
-    assert.match((await handler({ ...ctx, args: '--verify "false" Ship' })).text, /complete ordered/);
-    assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
-    const launched = await tool.execute("tool", { action: "launch", goal: "Ship", goal_mode: "ralph" });
-    assert.equal(launched.isError, false);
-    assert.match(launched.content[0].text, /Operator-required verifiers:/);
-    await handler({ ...ctx, args: "Ship" });
-    const direct = await f.controller.launchTask({ goal: "Direct", workdir: f.dir });
-    assert.deepEqual(direct.requiredVerifierCommands, ["true"]);
-    assert.deepEqual(f.counters(), { launches: 3, confirmations: 0 });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const waiting = await tool.execute("tool", { action: "launch", goal: "Ship", verifier_commands: ["false"] });
+    assert.equal(waiting.isError, false); assert.match(waiting.content[0].text, /waiting for the user's confirmation/);
+    assert.deepEqual(f.counters(), { launches: 0, confirmations: 1 });
+    assert.match((await handler({ ...context, args: '--verify "false" Typed' })).text, /Goal task started/);
+    const typed = f.store.list().find(row => row.goal === "Typed")!;
+    assert.deepEqual(typed.verifierCommands, specs(["true", "false"]));
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] }, trustedVerifierCommands: ["false"] });
+    const trusted = await tool.execute("trusted", { action: "launch", goal: "Trusted", verifier_commands: ["false"] });
+    assert.equal(trusted.isError, false); assert.match(trusted.content[0].text, /Goal task launched/);
+    const requiredOnly = await f.controller.launchTask({ goal: "Baseline", workdir: f.dir });
+    assert.deepEqual(requiredOnly.goalVerificationBinding?.requiredCommands, ["true"]);
+    assert.deepEqual(f.counters(), { launches: 3, confirmations: 1 });
     setPluginConfig({});
-    await f.controller.launchTask({ goal: "Legacy", workdir: f.dir, verifierCommands: specs(["false"]) });
-    assert.equal(f.counters().launches, 4, "negative control: compatibility admits caller checks");
+    const callerOnly = await f.controller.launchTask({ goal: "Caller", workdir: f.dir, verifierCommands: specs(["false"]) });
+    assert.deepEqual(callerOnly.verifierCommands, specs(["false"]));
+    assert.equal(callerOnly.goalVerificationBinding?.source, "none");
   });
 
   it("rejects attempted verifier edits and stale confirmation without changing selection", async () => {
@@ -149,8 +166,8 @@ describe("operator-required goal suite admission", () => {
       const result = await makeAgentGoalTool(ctx).execute("edit", { action: "edit", task: waiting.id, goal: "New", ...fields });
       assert.equal(result.isError, true);
     }
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-    await assert.rejects(f.controller.confirmVerifierCommands(waiting.id), /policy changed|stored suite/);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+    await assert.rejects(f.controller.confirmVerifierCommands(waiting.id), /policy.*changed|binding/i);
     assert.equal(waiting.status, "failed");
     assert.deepEqual(waiting.verifierCommands, original);
     assert.equal(f.counters().launches, 0);
@@ -163,36 +180,47 @@ describe("required suite execution and recovery", () => {
   it("executes the complete ordered suite including duplicates; a later failure cannot succeed", async () => {
     const f = fixture();
     const commands = ["printf A >> trace", "printf A >> trace", "printf B >> trace; exit 3"];
-    setPluginConfig({ requiredGoalVerifierCommands: commands });
-    const current = task(commands, { workdir: f.dir });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
+    const current = await task(commands, { workdir: f.dir });
     f.store.upsert(current);
     await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed" }));
     assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "AAB");
     assert.equal(current.status, "failed");
     assert.match(current.lastVerifierSummary ?? current.failureReason ?? "", /FAIL check-3/);
-    assert.deepEqual(current.requiredVerifierCommands, commands, "matching legacy selection bound without replacement");
+    assert.deepEqual(current.goalVerificationBinding?.requiredCommands, commands, "modern fixture retains its immutable baseline");
   });
 
-  it("Ralph needs both its promise and every operator check, even after config removal", async () => {
+  it("Ralph requires passing baseline and additions, and config removal cannot downgrade a goal", async () => {
     for (const command of ["false", "true"]) {
       const f = fixture();
-      setPluginConfig({ requiredGoalVerifierCommands: [command] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [command] } });
       const current = await f.controller.launchTask({ goal: "Ralph", workdir: f.dir, loopMode: "ralph", maxIterations: 1 });
-      setPluginConfig({});
       await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["<promise>DONE</promise>"] }));
       assert.equal(current.status, command === "true" ? "succeeded" : "failed");
-      assert.deepEqual(current.requiredVerifierCommands, [command]);
+      assert.deepEqual(current.goalVerificationBinding?.requiredCommands, [command]);
     }
+  });
+
+  it("removing configured policies invalidates the original required binding", async () => {
+    const f = fixture(); setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["touch unexpected"] } });
+    const current = await f.controller.launchTask({ goal: "Keep baseline", workdir: f.dir, loopMode: "ralph" });
+    const binding = structuredClone(current.goalVerificationBinding);
+    setPluginConfig({});
+    await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
+    assert.equal(current.status, "failed"); assert.deepEqual(current.goalVerificationBinding, binding);
+    assert.equal(existsSync(join(f.dir, "unexpected")), false);
   });
 
   it("Ralph promise-only is denied under required policy and remains compatible when absent", async () => {
     const f = fixture();
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
-    const blocked = task([], { loopMode: "ralph", completionPromise: "DONE" });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const blocked = await task([], { loopMode: "ralph", completionPromise: "DONE" });
+    f.store.upsert(blocked);
     await (f.controller as any).handleTerminalSession(blocked, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
     assert.equal(blocked.status, "failed");
     setPluginConfig({});
-    const legacy = task([], { id: "legacy", loopMode: "ralph", completionPromise: "DONE" });
+    const legacy = await task([], { id: "legacy", loopMode: "ralph", completionPromise: "DONE" });
+    f.store.upsert(legacy);
     await (f.controller as any).handleTerminalSession(legacy, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
     assert.equal(legacy.status, "succeeded");
   });
@@ -202,15 +230,15 @@ describe("required suite execution and recovery", () => {
       const f = fixture();
       const first = "touch started; while [ ! -f release ]; do sleep 0.01; done; printf A >> trace";
       const commands = [first, "printf B >> trace"];
-      setPluginConfig({ requiredGoalVerifierCommands: commands });
-      const current = task(commands, { workdir: f.dir, maxIterations: 8 });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
+      const current = await task(commands, { workdir: f.dir, maxIterations: 8 });
       f.store.upsert(current);
       const evaluation = (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed" }));
       await waitForFile(join(f.dir, "started"));
-      if (transition === "equivalent") setPluginConfig({ requiredGoalVerifierCommands: commands.map((c) => ` ${c} `), idleTimeoutMinutes: 1 });
+      if (transition === "equivalent") setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands.map((c) => ` ${c} `) }, idleTimeoutMinutes: 1 });
       else {
-        setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-        if (transition === "roundtrip") setPluginConfig({ requiredGoalVerifierCommands: commands });
+        setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+        if (transition === "roundtrip") setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
       }
       writeFileSync(join(f.dir, "release"), "");
       await evaluation;
@@ -224,7 +252,7 @@ describe("required suite execution and recovery", () => {
     const f = fixture(), commands = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
     writeFileSync(join(f.dir, "ci.sh"), `echo "$$" > held.pid; touch started; while [ ! -f release ]; do sleep 0.01; done; printf '{"ordinal":1,"kind":"CI","exit":0}\\n' >> checks.jsonl\n`);
     writeFileSync(join(f.dir, "lint.sh"), "touch unexpected-lint\n");
-    setPluginConfig({ requiredGoalVerifierCommands: commands });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
     const current = await f.controller.launchTask({ goal: "Eager policy", workdir: f.dir, maxIterations: 8 });
     const session = createStubSession({ id: current.sessionId, name: current.sessionName, harnessSessionId: "original-thread", status: "completed" });
     (f.manager as any).resolve = () => session;
@@ -234,10 +262,10 @@ describe("required suite execution and recovery", () => {
       const check = processIdentity(Number(readFileSync(join(f.dir, "held.pid"), "utf8"))); assert.ok(check);
       const original = structuredClone(current), launches = f.counters();
       assert.equal((f.controller as any).inFlight.has(current.id), true); assert.equal(current.status, "running");
-      setPluginConfig({ requiredGoalVerifierCommands: ["bash changed.sh"] });
-      assert.throws(() => f.controller.assertTaskAuthorized(current.id), /Goal verifier policy changed or its stored suite does not match/);
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["bash changed.sh"] } });
+      await assert.rejects( f.controller.assertTaskAuthorized(current.id), /policy.*changed/i);
       assert.equal(current.status, "failed");
-      for (const field of ["id", "name", "goal", "workdir", "iteration", "sessionId", "sessionName", "harnessSessionId", "requiredVerifierCommands"] as const) assert.deepEqual(current[field], original[field]);
+      for (const field of ["id", "name", "goal", "workdir", "iteration", "sessionId", "sessionName", "harnessSessionId", "goalVerificationBinding"] as const) assert.deepEqual(current[field], original[field]);
       assert.equal(processIdentity(check.pid)?.startTicks, check.startTicks);
       const terminal = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8"));
       writeFileSync(join(f.dir, "release"), "release\n"); await evaluation;
@@ -252,9 +280,9 @@ describe("required suite execution and recovery", () => {
     it(`retires ${loopMode} held checks without later effects or recoverable-row writes`, async () => {
       const f = fixture(), first = "printf A >> trace; touch started; while [ ! -f release ]; do sleep 0.01; done; exit 0";
       const commands = [first, "printf B >> trace"];
-      setPluginConfig({ requiredGoalVerifierCommands: commands });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
       f.controller.start(); await (f.controller as any).restorePromise;
-      const current = task(commands, { workdir: f.dir, loopMode, maxIterations: 8, requiredVerifierCommands: commands, sessionId: "original", harnessSessionId: "thread" });
+      const current = await task(commands, { workdir: f.dir, loopMode, maxIterations: 8, sessionId: "original", harnessSessionId: "thread" });
       const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
       (f.manager as any).resolve = () => session;
       let notifications = 0; f.manager.emitGoalTaskUpdate = () => { notifications += 1; };
@@ -275,8 +303,8 @@ describe("required suite execution and recovery", () => {
 
   it("cannot overwrite a newer controller's whole terminal row after its old check drains", async () => {
     const f = fixture(), first = "if [ ! -f new-owner ]; then touch started; while [ ! -f release ]; do sleep 0.01; done; fi; printf A >> trace";
-    const commands = [first, "printf B >> trace"]; setPluginConfig({ requiredGoalVerifierCommands: commands });
-    const current = task(commands, { workdir: f.dir, requiredVerifierCommands: commands, sessionId: "original", harnessSessionId: "thread" });
+    const commands = [first, "printf B >> trace"]; setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
+    const current = await task(commands, { workdir: f.dir, sessionId: "original", harnessSessionId: "thread" });
     const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed" });
     (f.manager as any).resolve = () => session; f.store.upsert(current);
     const pending: Promise<void> = (f.controller as any).reconcileTask(current);
@@ -294,8 +322,8 @@ describe("required suite execution and recovery", () => {
     for (const exit of ["true", "false"]) {
     it(`discards ${loopMode} ${exit} proof retired in the final await across stop-start ABA`, async () => {
       const f = fixture(), commands = [`printf A >> trace; ${exit}`];
-      setPluginConfig({ requiredGoalVerifierCommands: commands });
-      const current = task(commands, { workdir: f.dir, loopMode, requiredVerifierCommands: commands, sessionId: "original" }); f.store.upsert(current);
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
+      const current = await task(commands, { workdir: f.dir, loopMode, sessionId: "original" }); f.store.upsert(current);
       const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
       (f.manager as any).resolve = () => session;
       const run = (f.controller as any).runVerifiers.bind(f.controller); let captured = "";
@@ -315,14 +343,15 @@ describe("required suite execution and recovery", () => {
   it("blocks all controller continuation paths before launch or automatic reply", async () => {
     for (const phase of ["restore", "idle", "ralph", "repair", "reply", "edit"] as const) {
       const f = fixture();
-      const current = task(["true"], { workdir: f.dir, maxIterations: 8, harnessSessionId: "thread", sessionId: "session", loopMode: phase === "ralph" ? "ralph" : "verifier" });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+      const current = await task(["true"], { workdir: f.dir, maxIterations: 8, harnessSessionId: "thread", sessionId: "session", loopMode: phase === "ralph" ? "ralph" : "verifier" });
       f.store.upsert(current);
-      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       const session = createStubSession({ status: phase === "reply" ? "running" : "completed", harnessSessionId: "thread", getOutput: () => ["Should I continue?"], pendingInputState: phase === "reply" ? { kind: "question" } : undefined });
       if (phase === "restore") { (f.controller as any).started = true; await (f.controller as any).restoreRecoverableTasks(); }
       else if (phase === "idle") await (f.controller as any).resumeAfterIdleTimeout(current, session, "Continue");
       else if (phase === "reply") await (f.controller as any).handleRunningSession(current, session);
-      else if (phase === "edit") assert.throws(() => f.controller.editTask(current.id, "New"), /policy changed/);
+      else if (phase === "edit") await assert.rejects( f.controller.editTask(current.id, "New"), /policy.*changed/);
       else await (f.controller as any).handleTerminalSession(current, session);
       assert.equal(current.status, "failed", phase);
       assert.equal(f.counters().launches, 0, phase);
@@ -330,33 +359,33 @@ describe("required suite execution and recovery", () => {
     }
   });
 
-  it("preserves malformed persisted evidence and terminal historical rows without grandfathering active state", () => {
+  it("preserves malformed persisted evidence and terminal historical rows without grandfathering active state", async () => {
     const f = fixture();
-    const historical = task(["true"], { status: "succeeded", lastVerifierSummary: "old proof", lastVerifierFingerprint: "old hash" });
+    const historical = await task(["true"], { status: "succeeded", lastVerifierSummary: "old proof", lastVerifierFingerprint: "old hash" });
     (historical.verifierCommands as any[]).push({ command: "false" });
-    const active = task(["true"], { id: "active" });
+    const active = await task(["true"], { id: "active" });
     (active.verifierCommands as any[]).push({ label: "bad", command: " " });
-    const invalidBinding = task(["true"], { id: "invalid-binding", requiredVerifierCommands: null as any });
+    const invalidBinding = await task(["true"], { id: "invalid-binding", requiredVerifierCommands: null as any });
     const path = join(f.dir, "roundtrip.json");
     writeFileSync(path, JSON.stringify([historical, active, invalidBinding]));
     const store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: path });
     (f.controller as any).store = store;
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
-    assert.throws(() => f.authorize("active"));
-    assert.throws(() => f.authorize("invalid-binding"), /binding/);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    await assert.rejects( f.authorize("active"));
+    await assert.rejects( f.authorize("invalid-binding"), /binding/);
     assert.deepEqual(JSON.parse(JSON.stringify(store.get("goal"))), historical);
     assert.deepEqual(store.get("active")?.verifierCommands, active.verifierCommands);
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8"))[0], historical);
   });
 
-  it("late turn events cannot resurrect a failed task", () => {
+  it("late turn events cannot resurrect a failed task", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    const current = await task(["true"]);
     f.store.upsert(current);
     const session = Object.assign(new EventEmitter(), createStubSession({ status: "running" }));
     (f.controller as any).attachSessionObservers(current, session);
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-    assert.throws(() => f.authorize(current.id));
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+    await assert.rejects( f.authorize(current.id));
     session.emit("turnEnd");
     assert.equal(current.status, "failed");
   });
@@ -374,41 +403,41 @@ describe("required suite execution and recovery", () => {
 describe("goal-owned session execution boundaries", () => {
   it("inherits canonical goal ownership for active and persisted nonfork resumes; conflicts cannot detach it", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
     const owner = createStubSession({ id: "owner", harnessSessionId: "thread", backendRef: { kind: "claude-code", conversationId: "thread" }, goalTaskId: current.id });
     (manager as any).sessions.set("owner", owner);
     const launch = { prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" };
-    assert.equal((manager as any).goalOwnedLaunch(launch).goalTaskId, "goal");
-    assert.throws(() => (manager as any).goalOwnedLaunch({ ...launch, goalTaskId: "other" }), /change its goal owner/);
-    assert.equal((manager as any).goalOwnedLaunch({ ...launch, forkSession: true }).goalTaskId, undefined);
-    assert.throws(() => (manager as any).goalOwnedLaunch({ ...launch, forkSession: true, goalTaskId: "goal" }), /fork/);
+    assert.equal((await (manager as any).goalOwnedLaunch(launch)).goalTaskId, "goal");
+    await assert.rejects( (manager as any).goalOwnedLaunch({ ...launch, goalTaskId: "other" }), /change its goal owner/);
+    assert.equal((await (manager as any).goalOwnedLaunch({ ...launch, forkSession: true })).goalTaskId, undefined);
+    await assert.rejects( (manager as any).goalOwnedLaunch({ ...launch, forkSession: true, goalTaskId: "goal" }), /fork/);
     (manager as any).sessions.clear();
     const originalGet = manager.getPersistedSession.bind(manager);
     manager.getPersistedSession = (ref) => ref === "thread" ? { sessionId: "owner", goalTaskId: "goal" } as any : originalGet(ref);
-    assert.equal((manager as any).goalOwnedLaunch(launch).goalTaskId, "goal");
+    assert.equal((await (manager as any).goalOwnedLaunch(launch)).goalTaskId, "goal");
     let preparation = 0;
     (manager as any).restore.prepareSpawn = () => { preparation += 1; throw new Error("must not prepare"); };
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-    await assert.rejects(manager.launchSession(launch), /policy changed/);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+    await assert.rejects(manager.launchSession(launch), /policy.*changed/);
     assert.equal(preparation, 0);
     assert.equal(current.status, "failed");
-    assert.throws(() => manager.assertGoalTaskAuthorized("missing"), /missing/);
-    assert.throws(() => manager.assertGoalTaskAuthorized("goal"), /already failed/);
-    assert.doesNotThrow(() => manager.assertGoalTaskAuthorized());
+    await assert.rejects( manager.assertGoalTaskAuthorized("missing"), /missing/);
+    await assert.rejects( manager.assertGoalTaskAuthorized("goal"), /already failed/);
+    await manager.assertGoalTaskAuthorized();
     (manager as any).sessions.clear();
   });
 
   it("generic response denies stale approval and resume before mutating permissions or launching", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
     for (const status of ["running", "killed"] as const) {
       let releases = 0;
       const owner = createStubSession({ status, goalTaskId: "goal", pendingPlanApproval: true,
@@ -424,19 +453,19 @@ describe("goal-owned session execution boundaries", () => {
 
   it("actual harness startup after a deferred teardown rechecks the live goal", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const harness = createFakeHarness("goal-delayed-start");
     registerHarness(harness);
     const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, goalTaskId: "goal", assertGoalTaskAuthorized: () => f.authorize("goal") }, "delayed");
     const barrier = Promise.withResolvers<void>();
     const bootstrap = new SessionRuntimeBootstrapService({ hydrateSpawnedSession: () => {}, markRunning: () => {}, handleTerminal: async () => {}, handleTurnEnd: async () => {}, formatLaunchWorkdirLabel: () => f.dir, notifySession: () => {} });
     await bootstrap.initializeSession(session, {} as any, {} as any, { startAfter: barrier.promise, notifyLaunch: false });
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     barrier.resolve();
     await barrier.promise;
-    await tick(10);
+    await waitUntil(() => session.status === "failed");
     assert.equal(harness.lastLaunchOptions, undefined);
     assert.equal(session.status, "failed");
     assert.equal(current.status, "failed");
@@ -444,9 +473,9 @@ describe("goal-owned session execution boundaries", () => {
 
   it("actual Session input, thread action and native plan release revalidate before backend work", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const harness = createFakeHarness("goal-input-guard", { nativePlanDecisions: true });
     registerHarness(harness);
     const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, goalTaskId: "goal", assertGoalTaskAuthorized: () => f.authorize("goal") }, "input");
@@ -458,11 +487,11 @@ describe("goal-owned session execution boundaries", () => {
     handle.submitPendingInputOption = async () => { submissions += 1; return true; };
     session.pendingInputState = { requestId: "request", kind: "question", promptText: "Continue?", options: [], allowsFreeText: true };
     session.pendingPlanApproval = true;
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     await assert.rejects(session.sendMessage("approve"));
     await assert.rejects(session.submitPendingInputText("yes"));
     await assert.rejects(session.submitPendingInputOption(0));
-    assert.throws(() => session.requestThreadAction({ kind: "compact" }));
+    await assert.rejects( session.requestThreadAction({ kind: "compact" }));
     assert.equal(submissions, 0);
     assert.deepEqual(harness.planDecisions, []);
     assert.equal(harness.lastSetPermissionMode, undefined);
@@ -471,21 +500,21 @@ describe("goal-owned session execution boundaries", () => {
 
   it("in-flight work rejects a goal end it discovers; a later explicit reply continues as an ordinary session", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const harness = createFakeHarness("goal-detach-after-end");
     registerHarness(harness);
     const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true, goalTaskId: "goal",
       assertGoalTaskAuthorized: () => f.authorize("goal"), isGoalTaskEnded: () => !f.isActive("goal") }, "detach");
     await session.start(); session.transition("running"); await tick(5);
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir), (id) => f.isActive(id));
     (manager as any).sessions.set(session.id, session);
     const before = harness.consumedPrompts.length;
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     // The action that discovers the policy change is rejected and fails the goal.
-    await assert.rejects(session.sendMessage("in flight"), /policy changed/);
+    await assert.rejects(session.sendMessage("in flight"), /policy.*changed/);
     assert.equal(current.status, "failed");
     assert.equal(harness.consumedPrompts.length, before);
     // The goal controller's own reply never detaches the session.
@@ -511,51 +540,51 @@ describe("goal-owned session execution boundaries", () => {
   });
 
   for (const [ending, policy] of [["failed", true], ["succeeded", true], ["stopped", true], ["missing", true], ["succeeded", false], ["missing", false]] as const) {
-    it(`a nonfork resume after the goal ${ending === "missing" ? "record is gone" : `${ending}`} launches as an ordinary session (${policy ? "required suite" : "no policy"})`, () => {
+    it(`a nonfork resume after the goal ${ending === "missing" ? "record is gone" : `${ending}`} launches as an ordinary session (${policy ? "required suite" : "no policy"})`, async () => {
       const f = fixture();
       const owner = ending === "missing" ? "gone" : "goal";
       // An active task named like the missing owner must not stand in for it.
-      const current = task(["true"], ending === "missing" ? { id: "actual", name: "gone" } : { status: ending });
+      if (policy) setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+      const current = await task(["true"], ending === "missing" ? { id: "actual", name: "gone" } : { status: ending });
       f.store.upsert(current);
-      if (policy) setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
       const manager = new SessionManager(5);
-      manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+      manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir), (id) => f.isActive(id));
       manager.getPersistedSession = (ref: string) => ref === "thread" ? { sessionId: "owner", goalTaskId: owner } as any : undefined;
       const evidence = JSON.stringify(f.store.list());
       const launch = { prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" };
-      const resumed = (manager as any).goalOwnedLaunch(launch);
+      const resumed = await (manager as any).goalOwnedLaunch(launch);
       assert.equal(resumed.goalTaskId, undefined);
       assert.equal(resumed.goalOwnership, "detached");
       assert.equal(resumed.assertGoalTaskAuthorized, undefined);
-      assert.equal((manager as any).goalOwnedLaunch(resumed).goalOwnership, "detached", "the decision is stable across launch checks");
+      assert.equal((await (manager as any).goalOwnedLaunch(resumed)).goalOwnership, "detached", "the decision is stable across launch checks");
       // An attached launch (goal controller work, or a launch that began attached) stays strict.
-      assert.throws(() => (manager as any).goalOwnedLaunch({ ...launch, goalOwnership: "attached" }), ending === "missing" ? /owner is missing/ : /already/);
+      await assert.rejects( (manager as any).goalOwnedLaunch({ ...launch, goalOwnership: "attached" }), ending === "missing" ? /owner is missing/ : /already/);
       assert.equal(JSON.stringify(f.store.list()), evidence);
     });
   }
 
-  it("a launch that began attached fails when the goal ends during preparation", () => {
+  it("a launch that began attached fails when the goal ends during preparation", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir), (id) => f.isActive(id));
     manager.getPersistedSession = (ref: string) => ref === "thread" ? { sessionId: "owner", goalTaskId: "goal" } as any : undefined;
-    const attached = (manager as any).goalOwnedLaunch({ prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" });
+    const attached = await (manager as any).goalOwnedLaunch({ prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" });
     assert.equal(attached.goalOwnership, "attached");
     assert.equal(attached.goalTaskId, "goal");
     assert.equal(attached.isGoalTaskEnded(), false, "the launch installs the live goal-end check");
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
-    assert.throws(() => (manager as any).goalOwnedLaunch(attached), /policy changed/);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
+    await assert.rejects( (manager as any).goalOwnedLaunch(attached), /policy.*changed/);
     assert.equal(current.status, "failed");
-    assert.throws(() => (manager as any).goalOwnedLaunch(attached), /already failed/);
+    await assert.rejects( (manager as any).goalOwnedLaunch(attached), /already failed/);
     assert.equal(attached.isGoalTaskEnded(), true);
   });
 
   it("goal work that began attached stays strict even if a concurrent action detaches the session", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    const current = await task(["true"]);
     f.store.upsert(current);
     const harness = createFakeHarness("goal-concurrent-detach");
     registerHarness(harness);
@@ -575,15 +604,15 @@ describe("goal-owned session execution boundaries", () => {
 
   it("with no operator policy, every explicit action continues an ended goal's live session", async () => {
     const f = fixture();
-    const current = task(["true"]);
+    const current = await task(["true"]);
     f.store.upsert(current);
-    assert.equal(pluginConfig.requiredGoalVerifierCommands, undefined);
+    assert.equal(pluginConfig.goalVerificationPolicies?.defaultRequiredCommands, undefined);
     const harness = createFakeHarness("goal-ended-default");
     registerHarness(harness);
     harness.capabilities.threadActions = ["compact"];
     (harness as any).buildThreadActionMessage = (action: { kind: string }) => ({ type: "thread-action", action });
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id), (id) => f.isActive(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir), (id) => f.isActive(id));
     const sessions: Record<string, Session> = {};
     for (const name of ["reply", "compact", "answer-text", "answer-option", "ask"]) {
       const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true, goalTaskId: "goal",
@@ -593,12 +622,12 @@ describe("goal-owned session execution boundaries", () => {
       sessions[name] = session;
     }
     // The sessions started under the active goal; the goal then succeeds.
-    (f.controller as any).markTaskSucceeded(current, "done");
+    await (f.controller as any).markTaskSucceeded(current, "done");
     assert.equal(f.store.get("goal")?.status, "succeeded");
     const evidence = JSON.stringify(f.store.get("goal"));
     assert.equal((await executeRespond(manager, { session: sessions.reply!.id, message: "One more tweak", userInitiated: true })).isError, undefined);
     assert.equal(sessions.reply!.goalTaskId, undefined);
-    assert.doesNotThrow(() => sessions.compact!.requestThreadAction({ kind: "compact" } as any));
+    await sessions.compact!.requestThreadAction({ kind: "compact" } as any);
     assert.equal(sessions.compact!.goalTaskId, undefined);
     for (const kind of ["text", "option"] as const) {
       const answered = sessions[`answer-${kind}`]!;
@@ -609,7 +638,7 @@ describe("goal-owned session execution boundaries", () => {
       assert.equal(answered.goalTaskId, undefined);
     }
     // A question-button answer goes through the manager's resolve path.
-    manager.resolveAskUserQuestion(sessions.ask!.id, 0);
+    await manager.resolveAskUserQuestion(sessions.ask!.id, 0);
     assert.equal(sessions.ask!.goalTaskId, undefined);
     assert.equal(JSON.stringify(f.store.get("goal")), evidence, "continued sessions cannot change the ended goal");
     for (const session of Object.values(sessions)) session.kill("user");
@@ -620,9 +649,9 @@ describe("goal-owned session execution boundaries", () => {
   for (const boundary of ["steer", "native-plan", "permission-mode"] as const) {
     it(`does not queue follow-up work after policy changes during ${boundary}`, async () => {
       const f = fixture();
-      const current = task(["true"]);
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+      const current = await task(["true"]);
       f.store.upsert(current);
-      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
       const harness = createFakeHarness(`goal-await-${boundary}`);
       registerHarness(harness);
       const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true,
@@ -642,7 +671,7 @@ describe("goal-owned session execution boundaries", () => {
       }
       const sending = session.sendMessage("approve and do more");
       await entered.promise;
-      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       pending.resolve(boundary === "native-plan");
       await assert.rejects(sending);
       await tick(5);
@@ -660,22 +689,22 @@ describe("independent M1 review regressions", () => {
       it(`rejects A -> B -> A in final proof await before ${loopMode} ${exit === "true" ? "success" : "repair"}`, async () => {
         const f = fixture();
         const command = `printf X >> proof; ${exit}`;
-        setPluginConfig({ requiredGoalVerifierCommands: [command] });
-        const current = task([command], { workdir: f.dir, maxIterations: 8, loopMode, completionPromise: "DONE" });
+        setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [command] } });
+        const current = await task([command], { workdir: f.dir, maxIterations: 8, loopMode, completionPromise: "DONE" });
         f.store.upsert(current);
         const run = (f.controller as any).runVerifiers.bind(f.controller);
         (f.controller as any).runVerifiers = (target: GoalTaskState) => {
           const pending = run(target);
           pending.then(() => {
-            setPluginConfig({ requiredGoalVerifierCommands: ["different-policy"] });
-            setPluginConfig({ requiredGoalVerifierCommands: [command] });
+            setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["different-policy"] } });
+            setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [command] } });
           });
           return pending;
         };
         await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
         assert.equal(readFileSync(join(f.dir, "proof"), "utf8"), "X", "real shell batch executed");
         assert.equal(current.status, "failed");
-        assert.match(current.failureReason ?? "", /before the check result was consumed/);
+        assert.match(current.failureReason ?? "", /policy.*changed/);
         assert.equal(f.counters().launches, 0, "stale failure proof cannot initiate repair either");
       });
     }
@@ -683,14 +712,14 @@ describe("independent M1 review regressions", () => {
 
   it("missing canonical goal IDs cannot authorize through a different task's name", async () => {
     const f = fixture();
-    const unrelated = task(["true"], { id: "actual", name: "missing-id" });
+    const unrelated = await task(["true"], { id: "actual", name: "missing-id" });
     f.store.upsert(unrelated);
     const evidence = JSON.stringify(unrelated);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
     assert.equal(f.controller.getTask("missing-id"), unrelated, "human-facing name lookup remains available");
-    assert.throws(() => f.authorize("missing-id"), /owner is missing/);
+    await assert.rejects( f.authorize("missing-id"), /owner is missing/);
     const manager = new SessionManager(5);
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
     const original = createStubSession({ id: "original", status: "killed", goalTaskId: "missing-id", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
     (manager as any).sessions.set(original.id, original);
     let preparation = 0;
@@ -705,11 +734,11 @@ describe("independent M1 review regressions", () => {
   for (const persistedOnly of [false, true]) {
     it(`fork cannot replace a ${persistedOnly ? "persisted-only" : "live"} goal stable identity; legitimate fork remains independent`, async () => {
       const f = fixture();
-      const current = task(["true"], { sessionId: "original" });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+      const current = await task(["true"], { sessionId: "original" });
       f.store.upsert(current);
-      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
       const manager = new SessionManager(5);
-      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
       const original = createStubSession({ id: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
       if (!persistedOnly) (manager as any).sessions.set(original.id, original);
       const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: original.backendRef };
@@ -742,13 +771,13 @@ describe("independent M1 review regressions", () => {
   }
 
   for (const persistedOnly of [false, true]) {
-    it(`direct Revise callback action denies ${persistedOnly ? "persisted-only" : "active"} goal workflow before side effects, while Reject stays available`, () => {
+    it(`direct Revise callback action denies ${persistedOnly ? "persisted-only" : "active"} goal workflow before side effects, while Reject stays available`, async () => {
       const f = fixture();
-      const current = task(["true"]);
+      const current = await task(["true"]);
       f.store.upsert(current);
-      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       const manager = new SessionManager(5);
-      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
       const original = createStubSession({ id: "original", name: "original", status: "running", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 });
       if (!persistedOnly) (manager as any).sessions.set(original.id, original);
       const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 };
@@ -758,14 +787,14 @@ describe("independent M1 review regressions", () => {
       manager.updatePersistedSession = () => { effects.push("persist"); return true; };
       manager.queueOrchestratorContext = () => { effects.push("context"); return true; };
       manager.kill = () => { effects.push("kill"); return true; };
-      const blocked = requestPlanDecisionChanges(manager, "original");
+      const blocked = await requestPlanDecisionChanges(manager, "original");
       assert.equal(blocked.isError, true);
-      assert.match(blocked.text, /policy changed/);
+      assert.match(blocked.text, /policy.*changed/);
       assert.deepEqual(effects, []);
       assert.equal(original.approvalState, "pending");
       assert.equal(saved.approvalState, "pending");
       assert.equal(current.status, "failed");
-      setPluginConfig({ requiredGoalVerifierCommands: [] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [] } });
       assert.equal(rejectPlanDecision(manager, "original").isError, undefined);
       assert.ok(effects.includes("tokens"));
       assert.ok(effects.includes("persist"));
@@ -782,8 +811,8 @@ describe("sparse runtime input admission (R5)", () => {
     for (const missing of [0, 1, 2]) {
       const strings = ["true", "true", "true"];
       delete strings[missing];
-      setPluginConfig({ requiredGoalVerifierCommands: ["true", "true", "true"] });
-      assert.equal(resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: strings }, ctx).kind, "error");
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true", "true", "true"] } });
+      assert.equal((await resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: strings }, ctx)).kind, "error");
       const entries = specs(["true", "true", "true"]);
       delete entries[missing];
       for (const verifierCommands of [entries, Array(3)]) {
@@ -792,36 +821,36 @@ describe("sparse runtime input admission (R5)", () => {
         assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
       }
     }
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
-    assert.equal(resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: Array(1) }, ctx).kind, "error");
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    assert.equal((await resolveGoalLaunchRequest({ goal: "Malformed", verifierCommands: Array(1) }, ctx)).kind, "error");
     await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph", verifierCommands: Array(1) }));
     assert.deepEqual(f.store.list(), []);
     const dense = await f.controller.launchTask({ goal: "Dense", workdir: f.dir, verifierCommands: specs(["true"]) });
-    assert.deepEqual(dense.requiredVerifierCommands, ["true"], "dense matching suite still admits");
+    assert.deepEqual(dense.goalVerificationBinding?.requiredCommands, ["true"], "dense matching suite still admits");
     assert.equal(f.counters().launches, 1);
   });
 
   it("fails closed for sparse operator config even when injected without config copying", async () => {
     const f = fixture();
     for (const inject of [false, true]) {
-      setPluginConfig({ requiredGoalVerifierCommands: Array(1) });
-      if (inject) pluginConfig.requiredGoalVerifierCommands = Array(1);
-      assert.equal(resolveGoalLaunchRequest({ goal: "Malformed" }, ctx).kind, "error");
-      await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph" }), /requiredGoalVerifierCommands/);
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: Array(1) } });
+      if (inject) pluginConfig.goalVerificationPolicies!.defaultRequiredCommands = Array(1);
+      assert.equal((await resolveGoalLaunchRequest({ goal: "Malformed" }, ctx)).kind, "error");
+      await assert.rejects(f.controller.launchTask({ goal: "Malformed", workdir: f.dir, loopMode: "ralph" }), /goalVerificationPolicies/);
       assert.deepEqual(f.store.list(), []);
       assert.deepEqual(f.counters(), { launches: 0, confirmations: 0 });
     }
   });
 
-  it("preserves sparse serialized binding evidence as null and denies active use without changing history", () => {
+  it("preserves sparse serialized binding evidence as null and denies active use without changing history", async () => {
     const f = fixture();
-    const active = task(["true"], { id: "active-sparse", requiredVerifierCommands: Array(1) });
-    const historical = task(["true"], { id: "terminal-sparse", status: "succeeded", requiredVerifierCommands: Array(1), lastVerifierSummary: "original evidence" });
+    const active = await task(["true"], { id: "active-sparse", requiredVerifierCommands: Array(1) });
+    const historical = await task(["true"], { id: "terminal-sparse", status: "succeeded", requiredVerifierCommands: Array(1), lastVerifierSummary: "original evidence" });
     const path = join(f.dir, "sparse-binding.json");
     writeFileSync(path, JSON.stringify([active, historical]));
     const store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: path });
     (f.controller as any).store = store;
-    assert.throws(() => f.authorize("active-sparse"), /binding/);
+    await assert.rejects( f.authorize("active-sparse"), /binding/);
     const saved = JSON.parse(readFileSync(path, "utf8"));
     assert.deepEqual(saved[0].requiredVerifierCommands, [null]);
     assert.equal(saved[0].status, "failed");
@@ -835,11 +864,12 @@ describe("canonical session identity precedes human aliases (R6)", () => {
     for (const permitted of [false, true]) {
       it(`${persistedOnly ? "persisted" : "active"} backend owner hidden by a name alias is ${permitted ? "inherited" : "denied before launch"}`, async () => {
         const f = fixture();
-        const current = task(["true"]);
+        setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+        const current = await task(["true"]);
         f.store.upsert(current);
-        setPluginConfig({ requiredGoalVerifierCommands: [permitted ? "true" : "false"] });
+        setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [permitted ? "true" : "false"] } });
         const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "sessions.json") } });
-        manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+        manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
         const source = createStubSession({ id: "original-session", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
         const mask = createStubSession({ id: "unrelated-session", name: "original-thread", status: "killed", backendRef: { kind: "claude-code", conversationId: "unrelated-thread" } });
         if (!persistedOnly) {
@@ -868,7 +898,7 @@ describe("canonical session identity precedes human aliases (R6)", () => {
           assert.equal(preparation, 1);
           assert.equal(initialization, 1);
         } else {
-          await assert.rejects(manager.launchSession(launch), /policy changed/);
+          await assert.rejects(manager.launchSession(launch), /policy.*changed/);
           assert.equal(preparation, 0);
           assert.equal(initialization, 0);
           assert.equal((manager as any).sessions.size, beforeCount, "no registration or replacement");
@@ -883,12 +913,12 @@ describe("canonical session identity precedes human aliases (R6)", () => {
   for (const persistedOnly of [false, true]) {
     it(`rejects conflicting ${persistedOnly ? "persisted" : "active"} stable/backend goal owners before preparation`, async () => {
       const f = fixture();
-      const first = task(["true"], { id: "first" });
-      const second = task(["true"], { id: "second" });
+      const first = await task(["true"], { id: "first" });
+      const second = await task(["true"], { id: "second" });
       f.store.upsert(first); f.store.upsert(second);
-      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
       const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "conflicts.json") } });
-      manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+      manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
       const sourceA = createStubSession({ id: "stable-a", name: "first", status: "killed", goalTaskId: "first", backendRef: { kind: "claude-code", conversationId: "backend-a" } });
       const sourceB = createStubSession({ id: "stable-b", name: "second", status: "killed", goalTaskId: "second", backendRef: { kind: "claude-code", conversationId: "backend-b" } });
       for (const source of [sourceA, sourceB]) {
@@ -911,11 +941,11 @@ describe("canonical session identity precedes human aliases (R6)", () => {
 describe("pending resume ownership before backend initialization (R7)", () => {
   async function deferredOwner() {
     const f = fixture();
-    const current = task(["true"]);
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
+    const current = await task(["true"]);
     f.store.upsert(current);
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
     const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "pending-sessions.json") } });
-    manager.setGoalTaskAuthorizer((id) => f.authorize(id));
+    manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
     const harness = createFakeHarness(`goal-pending-${f.dir}`);
     registerHarness(harness);
     const barrier = Promise.withResolvers<void>();
@@ -961,20 +991,20 @@ describe("pending resume ownership before backend initialization (R7)", () => {
         const beforeCount = (d.manager as any).sessions.size;
         const diskPath = join(d.f.dir, "pending-sessions.json");
         const diskBefore = existsSync(diskPath) ? readFileSync(diskPath, "utf8") : undefined;
-        if (!permitted) setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        if (!permitted) setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
         if (permitted) {
           const resumed = await d.manager.launchSession(d.launch);
           assert.equal(resumed.goalTaskId, "goal");
           assert.equal(resumed.resumeSessionId, "original-thread");
           assert.equal(resumed.status, "starting");
-          setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+          setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
           d.barrier.resolve();
-          await tick(10);
+          await waitUntil(() => resumed.status === "failed");
           assert.equal(resumed.status, "failed", "inherited live owner rejects policy revoked during deferred startup");
           assert.equal(d.source.status, "failed");
           assert.equal(d.harness.lastLaunchOptions, undefined, "neither backend starts after revocation");
         } else {
-          await assert.rejects(d.manager.launchSession(d.launch), /policy changed/);
+          await assert.rejects(d.manager.launchSession(d.launch), /policy.*changed/);
           assert.deepEqual(d.effects, before, "no repo lookup, worktree preparation, bootstrap or session writes");
           assert.equal((d.manager as any).sessions.size, beforeCount);
           assert.equal((d.manager as any).sessions.get(d.source.id), d.source);
@@ -989,7 +1019,7 @@ describe("pending resume ownership before backend initialization (R7)", () => {
   it("rejects conflicting pending and finalized owners before launch or goal mutation", async () => {
     const d = await deferredOwner();
     try {
-      const second = task(["true"], { id: "second", name: "second" });
+      const second = await task(["true"], { id: "second", name: "second" });
       d.f.store.upsert(second);
       const finalized = new Session({ ...d.launch, resumeSessionId: "previous-thread", goalTaskId: second.id,
         backendRef: { kind: "claude-code", conversationId: "original-thread" } }, "finalized-owner");
@@ -1010,7 +1040,7 @@ describe("pending resume ownership before backend initialization (R7)", () => {
     const d = await deferredOwner();
     try {
       d.source.backendRef = { kind: "claude-code", conversationId: "final-thread" };
-      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       const ordinary = await d.manager.launchSession(d.launch);
       assert.equal(ordinary.goalTaskId, undefined, "old request identity no longer claims the original goal");
       assert.equal(d.current.status, "running");
@@ -1022,14 +1052,15 @@ describe("pending resume ownership before backend initialization (R7)", () => {
 // Composed policy boundaries. Native handles are fake; controller, persistence,
 // Session authorization and opaque-token callback routing are production code.
 describe("relocated feature boundary coverage", () => {
-  it("rejects complete original A through the actual goal tool under B without launch effects", async () => {
+  it("complete A supplied under B is an untrusted addition, with no baseline replacement or launch", async () => {
     const f = fixture(), original = ["bash ci.sh", "bash lint.sh", "bash ci.sh"];
-    setGoalController(f.controller); setPluginConfig({ requiredGoalVerifierCommands: ["bash changed.sh"] });
-    const before = JSON.stringify(f.store.list()), counters = f.counters();
-    const denied = await makeAgentGoalTool({ ...ctx, workspaceDir: f.dir }).execute("complete-A", { action: "launch", goal: "Complete A denial", workdir: f.dir, verifier_commands: original });
-    assert.equal(denied.isError, true); assert.match(denied.content[0].text, /complete ordered|operator-required/);
-    assert.equal(JSON.stringify(f.store.list()), before); assert.deepEqual(f.counters(), counters);
-    assert.deepEqual(counters, { launches: 0, confirmations: 0 });
+    setGoalController(f.controller); setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["bash changed.sh"] } });
+    const waiting = await makeAgentGoalTool({ ...ctx, workspaceDir: f.dir }).execute("complete-A", { action: "launch", goal: "Complete A addition", workdir: f.dir, verifier_commands: original });
+    assert.equal(waiting.isError, false); assert.match(waiting.content[0].text, /confirmation/);
+    const current = f.store.list()[0]!;
+    assert.deepEqual(current.verifierCommands, specs(["bash changed.sh", ...original]));
+    assert.deepEqual(current.goalVerificationBinding?.requiredCommands, ["bash changed.sh"]);
+    assert.deepEqual(f.counters(), { launches: 0, confirmations: 1 });
   });
   for (const decision of ["run", "cancel"] as const) {
     it(`routes an original opaque ${decision} callback under changed policy and makes replay inert`, async () => {
@@ -1049,7 +1080,7 @@ describe("relocated feature boundary coverage", () => {
         auth: { isAuthorizedSender: true }, callback: { payload, data: `code-agent:${payload}`, chatId: "12345", messageId: 1 },
         respond: { acknowledge: async () => {}, clearButtons: async () => {}, editButtons: async () => {},
           reply: async ({ text }: { text: string }) => { replies.push(text); } } };
-      setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       // The controller's notice is the one answer to the button; the button itself replies nothing.
       const notices: string[] = [];
       (f.manager as any).emitGoalTaskUpdate = (_task: unknown, text: string) => { notices.push(text); };
@@ -1057,7 +1088,7 @@ describe("relocated feature boundary coverage", () => {
       assert.equal(current.status, decision === "run" ? "failed" : "stopped");
       assert.equal(notices.length, 1);
       assert.match(notices[0]!, decision === "run"
-        ? /^❌ \[[\w-]+\] Goal task failed\n\n[\s\S]*(?:policy changed|stored suite)/i
+        ? /^❌ \[[\w-]+\] Goal task failed\n\n[\s\S]*(?:policy.*changed|stored suite)/i
         : /^⛔ \[[\w-]+\] Goal task stopped\n\nThe user did not confirm the verifier commands\.$/);
       assert.deepEqual(replies, []);
       assert.equal(f.counters().launches, 0);
@@ -1073,7 +1104,7 @@ describe("relocated feature boundary coverage", () => {
 
   it("refuses an organically launched, saved A-bound goal in a fresh B controller before resume", async () => {
     const f = fixture();
-    setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
     const harness = createFakeHarness("organic-save"); registerHarness(harness);
     let live!: Session;
     (f.manager as any).launchAndAwaitRunning = async (config: any) => {
@@ -1091,18 +1122,18 @@ describe("relocated feature boundary coverage", () => {
     assert.equal(original.harnessSessionId, "organic-native-thread");
     assert.equal(original.iteration, launched.iteration);
     assert.equal(original.iteration, 0);
-    assert.deepEqual(original.requiredVerifierCommands, ["true"]);
+    assert.deepEqual(original.goalVerificationBinding?.requiredCommands, ["true"]);
     live.kill("shutdown"); harness.endMessages(); await live.waitForTeardown();
     const fresh = fixture();
     (fresh.controller as any).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(f.dir, "goals.json") });
-    setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     fresh.controller.start(); await (fresh.controller as any).restorePromise;
     const rejected = fresh.controller.getTask(launched.id)!;
     assert.equal(rejected.status, "failed");
-    assert.match(rejected.failureReason!, /policy changed|stored suite/i);
+    assert.match(rejected.failureReason!, /policy.*changed|binding/i);
     assert.equal(rejected.iteration, original.iteration);
     assert.equal(rejected.harnessSessionId, original.harnessSessionId);
-    assert.deepEqual(rejected.requiredVerifierCommands, original.requiredVerifierCommands);
+    assert.deepEqual(rejected.goalVerificationBinding, original.goalVerificationBinding);
     assert.deepEqual(rejected.verifierCommands, original.verifierCommands);
     assert.deepEqual(fresh.counters(), { launches: 0, confirmations: 0 });
     fresh.controller.stop();
@@ -1111,13 +1142,13 @@ describe("relocated feature boundary coverage", () => {
   for (const outcome of ["succeeded", "failed", "stopped"] as const) {
     it(`preserves a complete controller-produced ${outcome} row after awaited late events and later writes`, async () => {
       const f = fixture();
-      setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
       const current = await f.controller.launchTask({ goal: "Terminal", workdir: f.dir, maxIterations: 1 });
       const session = Object.assign(new EventEmitter(), createStubSession({ id: current.sessionId, status: "completed" }));
       (f.controller as any).attachSessionObservers(current, session);
       if (outcome === "stopped") f.controller.stopTask(current.id);
       else {
-        if (outcome === "failed") setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        if (outcome === "failed") setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
         await (f.controller as any).handleTerminalSession(current, session);
       }
       assert.equal(current.status, outcome);
@@ -1127,7 +1158,7 @@ describe("relocated feature boundary coverage", () => {
       session.emit("turnEnd", session); session.emit("statusChange", session, "completed");
       await tick(30);
       await (f.controller as any).reconcileTask(current, "late", current.sessionId);
-      f.store.upsert(task(["true"], { id: "unrelated", name: "unrelated" })); f.store.save();
+      f.store.upsert(await task(["true"], { id: "unrelated", name: "unrelated" })); f.store.save();
       const after = JSON.parse(readFileSync(join(f.dir, "goals.json"), "utf8")).find((row: any) => row.id === current.id);
       assert.deepEqual(after, before);
       assert.equal(f.counters().launches, 1, "late events did not spawn repair or resume");
@@ -1138,7 +1169,7 @@ describe("relocated feature boundary coverage", () => {
   for (const operation of ["compact", "review", "question-text", "question-option", "steer"] as const) {
     for (const allowed of [true, false]) {
       it(`${operation} independently ${allowed ? "admits current policy" : "denies changed policy before effects"}`, async () => {
-        const f = fixture(); setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+        const f = fixture(); setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
         const current = await f.controller.launchTask({ goal: operation, workdir: f.dir });
         const harness = createFakeHarness(`fresh-${operation}-${allowed}`); harness.steerResult = true;
         harness.capabilities.threadActions = ["compact", "review"];
@@ -1155,15 +1186,15 @@ describe("relocated feature boundary coverage", () => {
         if (operation === "steer") (session as any).turnInProgress = true;
         const before = harness.consumedPrompts.length;
         const perform = async () => {
-          if (operation === "compact" || operation === "review") session.requestThreadAction({ kind: operation } as any);
+          if (operation === "compact" || operation === "review") await session.requestThreadAction({ kind: operation } as any);
           else if (operation === "question-text") assert.equal(await session.submitPendingInputText("yes"), true);
           else if (operation === "question-option") assert.equal(await session.submitPendingInputOption(0), true);
           else await session.sendMessage("Additional work");
         };
-        if (!allowed) setPluginConfig({ requiredGoalVerifierCommands: ["false"] });
+        if (!allowed) setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
         try {
           if (allowed) await perform();
-          else await assert.rejects(perform(), /policy changed|stored suite/i);
+          else await assert.rejects(perform(), /policy.*changed|binding/i);
           await tick(5);
           if (allowed) {
             if (operation.startsWith("question")) assert.equal(submissions, 1);
@@ -1181,7 +1212,7 @@ describe("relocated feature boundary coverage", () => {
 
   for (const option of [false, true]) {
     it(`revalidates question ${option ? "option" : "text"} after its native submission await`, async () => {
-      const f = fixture(); setPluginConfig({ requiredGoalVerifierCommands: ["true"] });
+      const f = fixture(); setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
       const current = await f.controller.launchTask({ goal: "Pending", workdir: f.dir });
       const harness = createFakeHarness(`question-await-${option}`); registerHarness(harness);
       const session = new Session({ prompt: "Work", workdir: f.dir, harness: harness.name, multiTurn: true,
@@ -1192,10 +1223,10 @@ describe("relocated feature boundary coverage", () => {
       const entered = Promise.withResolvers<void>(), pending = Promise.withResolvers<boolean>();
       const handle = (session as any).harnessHandle;
       handle[option ? "submitPendingInputOption" : "submitPendingInputText"] = () => { entered.resolve(); return pending.promise; };
-      let answered = 0; session.on("pendingInputAnswered", () => { answered++; });
+      let answered = 0; session.on("pendingInputAnswered", async () => { answered++; });
       const submitting = option ? session.submitPendingInputOption(0) : session.submitPendingInputText("yes");
-      await entered.promise; setPluginConfig({ requiredGoalVerifierCommands: ["false"] }); pending.resolve(true);
-      await assert.rejects(submitting, /policy changed|stored suite/i);
+      await entered.promise; setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } }); pending.resolve(true);
+      await assert.rejects(submitting, /policy.*changed|binding/i);
       assert.equal(answered, 0); assert.deepEqual(session.pendingInputState, original);
       assert.equal(current.status, "failed");
       session.kill("user"); harness.endMessages(); await session.waitForTeardown();

@@ -1162,7 +1162,7 @@ export function createCallbackHandler(
             queueDecisionPressedNote(sessionManager, "plan-reject", sessionId, actionSessionName, tokenId);
           } else {
             // Also queues the orchestrator note that the next message is the change (N35).
-            const result = requestPlanDecisionChanges(sessionManager, sessionId);
+            const result = await requestPlanDecisionChanges(sessionManager, sessionId);
             await replyText(ctx, result.userText ?? (result.isError ? failureReply(actionSessionName, result.text) : `✏️ ${result.text}`));
           }
           return { handled: true };

@@ -27,7 +27,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `autoUpdate` | `true` (check and offer; install and restart only after a button press) |
 | `worktreeGitHooks` | `run` (repository hooks run during OCA's git operations) |
 | `trustedVerifierCommands` | unset (every orchestrator-supplied goal verifier needs one user confirmation) |
-| `requiredGoalVerifierCommands` | unset (callers choose goal verifiers); when set, the full ordered suite is mandatory |
+| `goalVerificationPolicies` | unset (caller verifiers); when configured, actual repository selects its complete required suite and task checks append |
 
 Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and stopped, completed, or suspended sessions that still have a backend conversation can also be continued with `agent_respond`.
 
@@ -374,7 +374,7 @@ These should remain manual or follow-up configuration:
 - `defaultWorktreeStrategy`
 - `worktreeDir`
 - `autoUpdate`
-- `worktreeGitHooks`, `trustedVerifierCommands`, and `requiredGoalVerifierCommands`
+- `worktreeGitHooks`, `trustedVerifierCommands`, and `goalVerificationPolicies`
 - session/concurrency/retention limits such as `maxSessions`, `idleTimeoutMinutes`, `sessionGcAgeMinutes`, `maxPersistedSessions`, and `maxAutoResponds`
 
 ### Removed Fields
@@ -681,24 +681,35 @@ One tool for explicit goal loops. `action` selects the operation.
 
 `launch` also accepts `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `max_cost_usd`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Supplied or operator-required verifier commands select verifier mode by default; otherwise Ralph-style completion-promise mode is used. `edit` changes goal text only: verifier commands, loop mode and completion promise cannot be edited.
 
-- **Verifier confirmation (default).** With `requiredGoalVerifierCommands` unset, verifier commands the orchestrator supplies run only after the user confirms them once: the task waits (`awaiting_verifier_confirmation`) and the user gets a message listing the exact commands with **Run these checks** / **Cancel** buttons; nothing runs before that. Commands the user typed in `/agent_goal` and commands listed in the `trustedVerifierCommands` config need no confirmation.
-- **Plan gate.** The first iteration uses the configured `permissionMode` (default `plan`), so its plan goes through the normal plan approval (`planApproval`); the goal loop never approves its own plan. Later iterations continue within the approved scope (`bypassPermissions`). A plan that waits past the idle timeout keeps the task waiting (`waiting_for_plan_approval`) until the decision resumes the session.
-- **Limits.** `max_iterations` defaults to 8 and is capped at 25; restarts after a Gateway restart or an idle suspension count as iterations. The task stops after the same failure fingerprint repeats 3 times in a row. `max_cost_usd` stops the task before the next iteration once its sessions cost that much. A session that bills nothing per token (Codex with a ChatGPT login) counts at the API-price estimate of the tokens it used, so the limit still bounds it; a session with neither a price nor token usage counts as $0.
-- **Verifier execution.** Each command runs with `bash -c` (no login profile) in the task workdir, with the minimal environment from [Child process environments](#child-process-environments), in its own process group. Only the last 64 KiB of output is kept (a noisy passing check still passes), and on timeout (default 10 minutes, bounded to 1 second..30 minutes) the whole process group is terminated.
+- **Verifier confirmation.** Operator-required checks are already approved. Additional checks the orchestrator supplies run only after the user confirms them once, unless every addition is listed in `trustedVerifierCommands`. The task waits (`awaiting_verifier_confirmation`) and nothing runs before confirmation. Commands typed in `/agent_goal` need no extra confirmation. Confirmation never substitutes for the required repository baseline.
 
-#### Operator-required goal checks
+### Repository goal verification policies
 
-To own every goal's finish line, configure the plugin with:
+Configure the operator-owned policy in `plugins.entries["openclaw-code-agent"].config`:
 
 ```json
 {
-  "requiredGoalVerifierCommands": ["bash ci.sh"]
+  "goalVerificationPolicies": {
+    "repositories": [
+      { "repository": "/srv/repos/web", "requiredCommands": ["bash ci.sh", "bash lint.sh"] },
+      { "repository": "/srv/repos/service", "requiredCommands": ["make check"] }
+    ],
+    "defaultRequiredCommands": ["bash verify-task.sh"]
+  },
+  "trustedVerifierCommands": ["bash check-accessibility.sh"]
 }
 ```
 
-`agent_goal(action="launch", goal="Ship the feature")` and `/agent_goal Ship the feature` automatically use the complete operator suite. Explicit `verifier_commands` or `--verify` must match every entry in the same order, including duplicates, after outer whitespace trimming. Subsets, extra checks, reordered checks, blank entries, shell suffixes and internal spacing differences are rejected before goal insertion, confirmation or session preparation. An empty, null or malformed configured suite fails closed. Remove the setting to restore the default for **new** goals. `trustedVerifierCommands` keeps its existing confirmation-only meaning; required checks already have operator approval and cannot be overridden by **Run these checks** or a typed command.
+The canonical Git common directory and its filesystem identity select the repository policy. Subdirectories, symlinks and linked worktrees select the same policy. Separate clones and submodules have distinct identities; changing a remote URL does not select another policy. Operator paths must be absolute paths inside Git repositories. Duplicate canonical identities, invalid/sparse/blank required command arrays, inaccessible or replaced repositories, broken or retargeted `.git` metadata and Git lookup failures deny goal work. An actual nonrepository or unmapped repository requires the explicit default when policies are configured. Without this configuration, normal caller-verifier and confirmation behavior remains available.
 
-Every step runs in order, and all steps must pass. Explicit Ralph mode requires its completion promise **and** the full passing suite. Existing tasks keep their original check selection: a bound goal remains obligated to its suite after config removal; changing the required suite blocks incompatible active goals with a new-goal diagnostic. Matching legacy tasks acquire a binding without replacing commands. Confirmation, restore, plan/input release, resume, continuation and verifier execution revalidate the current policy. Policy changes during a verifier batch invalidate that batch, even if changed back before it finishes. Historical terminal records keep their evidence and status. Already-started agent turns or commands are not retroactively undone; further OCA-controlled work and stale success decisions are denied. These checks apply while a goal is active. While it is active, a nonfork resume of its session stays part of the goal; fork the session to work on something independent. The action that discovers a policy change is rejected and fails the goal. After a goal has succeeded, failed or stopped, or its saved record is gone, any later explicit action on its session (a reply, plan decision, question answer, compact/review, or resume) continues it as an ordinary session that can no longer restart the goal or mark it succeeded. This holds with or without `requiredGoalVerifierCommands`. Goal-loop work itself never continues past the end of its goal.
+`agent_goal(..., verifier_commands=["bash check-accessibility.sh"])` in `/srv/repos/web` runs `bash ci.sh`, `bash lint.sh`, then `bash check-accessibility.sh`. The model supplies **additional** checks only; it cannot pass a policy/profile/binding override. `--verify` also appends. Outer whitespace is trimmed; command content, order and duplicates are retained. Every step runs and every step must pass. Ralph mode requires its completion promise **and** the full passing required-plus-additional suite.
+
+A new goal binds its original repository identity, selected policy provenance and effective ordered checks. Confirmation, restore, plan/input release, resume, continuation, verifier execution and success decisions revalidate that binding. Changes affecting the selected policy invalidate an in-flight batch even when changed back before completion, including temporarily adding/removing a repository mapping or duplicate alias. Changes only to another repository's checks leave an unaffected goal authorized. Removing policies does not silently downgrade active goals. Already-admitted commands or native turns may drain; further controlled work and stale success decisions are denied. Historical terminal records retain their original evidence unchanged.
+
+**Migration from `requiredGoalVerifierCommands` is required.** Remove that global field and put its complete suite under each intended `repositories` entry, or under an explicit `defaultRequiredCommands`. The legacy field grants no authority and denies goal work with a migration diagnostic. Previously active goals without the new versioned identity/policy binding cannot resume or acquire a binding automatically: start new goals. Existing terminal receipts are preserved.
+
+While a goal is active, a nonfork resume stays part of that goal; fork to work independently. An action that discovers an incompatible policy/identity change fails the goal. After a goal succeeds, fails or stops, or its saved record is gone, a later explicit reply, plan decision, question answer, compact/review or resume continues as an ordinary session that cannot restart the old goal or succeed it. Goal-loop work never continues past the end of its goal.
+
 
 This pins command **selection**, not check integrity or release authorization. The global suite runs in the caller-selected workdir; `defaultWorkdir` is not repository confinement. Agents may still modify scripts/tests, dependencies, PATH-selected executables, cwd-dependent inputs, HOME/XDG configuration or host setup within their harness/OS authority. Protect the operator config/state and authoritative checks through existing host permissions and protected CI. An operator-owned wrapper can validate repository identity and the complete gate, but pinning its command string does not make everything it loads immutable. Shell/pipeline exit semantics remain the check author's responsibility. Goal success does not authorize a release, package install or host change.
 

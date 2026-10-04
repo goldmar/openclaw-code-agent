@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { resolveRequiredGoalSelection } from "./goal-verifier-policy";
+import { effectiveGoalVerifiers, goalCommandStrings, resolveGoalVerification } from "./goal-verifier-policy";
 
 import {
   getDefaultHarnessName,
@@ -69,6 +69,7 @@ export type GoalLaunchResolution =
       originSessionKey?: string;
       route?: SessionRoute;
       verifierCommands: GoalVerifierSpec[];
+      additionalVerifierCommands: GoalVerifierSpec[];
       maxCostUsd?: number;
     };
 
@@ -81,10 +82,10 @@ function normalizeGoalVerifiers(commands: string[] = []): GoalVerifierSpec[] {
     .filter((command) => command.command.length > 0);
 }
 
-export function resolveGoalLaunchRequest(
+export async function resolveGoalLaunchRequest(
   request: GoalLaunchRequest,
   ctx: OpenClawPluginToolContext,
-): GoalLaunchResolution {
+): Promise<GoalLaunchResolution> {
   const goal = request.goal.trim();
   if (!goal) {
     return { kind: "error", text: "Error: goal must not be empty." };
@@ -98,13 +99,15 @@ export function resolveGoalLaunchRequest(
   if (request.maxCostUsd !== undefined && !(Number.isFinite(request.maxCostUsd) && request.maxCostUsd > 0)) {
     return { kind: "error", text: "Error: max_cost_usd must be a positive number." };
   }
-  let selected: string[] | undefined;
+  let verifierCommands: GoalVerifierSpec[];
+  let additionalVerifierCommands: GoalVerifierSpec[];
   try {
-    selected = resolveRequiredGoalSelection(request.verifierCommands);
+    additionalVerifierCommands = normalizeGoalVerifiers(goalCommandStrings(request.verifierCommands ?? [], true));
+    const selection = await resolveGoalVerification(workdir, additionalVerifierCommands);
+    verifierCommands = effectiveGoalVerifiers(selection.binding, additionalVerifierCommands);
   } catch (err) {
     return { kind: "error", text: `Error: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const verifierCommands = normalizeGoalVerifiers(selected ?? request.verifierCommands);
   const loopMode = request.goalMode ?? (verifierCommands.length > 0 ? "verifier" : "ralph");
   if (loopMode === "verifier" && verifierCommands.length === 0) {
     return { kind: "error", text: "Error: verifier mode requires at least one non-empty verifier command." };
@@ -171,6 +174,7 @@ export function resolveGoalLaunchRequest(
     originSessionKey,
     route: resolvedRoute,
     verifierCommands,
+    additionalVerifierCommands,
     ...(request.maxCostUsd !== undefined ? { maxCostUsd: request.maxCostUsd } : {}),
   };
 }
@@ -180,7 +184,6 @@ export function resolveGoalLaunchRequest(
  * from the orchestrator and are not all pre-approved in `trustedVerifierCommands`.
  */
 export function verifierCommandsNeedConfirmation(commands: readonly GoalVerifierSpec[]): boolean {
-  if (resolveRequiredGoalSelection(commands.map((command) => command.command))) return false;
   const trusted = new Set((pluginConfig.trustedVerifierCommands ?? [])
     .filter((command): command is string => typeof command === "string")
     .map((command) => command.trim())
@@ -219,7 +222,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,
     ...(task.loopMode === "ralph" ? [`  Completion promise: ${task.completionPromise}`] : []),
     ...(resolution.verifierCommands.length ? [
-      task.requiredVerifierCommands ? `  Operator-required verifiers:` : `  Verifiers:`,
+      task.goalVerificationBinding?.requiredCommands.length ? `  Operator-required verifiers:` : `  Verifiers:`,
       ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
     ] : []),
     ``,

@@ -17,10 +17,10 @@ import { GoalTaskStore } from "../src/goal-store";
 import { SessionRuntimeRegistry } from "../src/session-runtime-registry";
 import { SessionHarnessEventApplier } from "../src/session-harness-event-applier";
 import type { SessionManager } from "../src/session-manager";
-import type { SessionConfig } from "../src/types";
+import type { GoalVerificationBinding, SessionConfig } from "../src/types";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
-const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
+const receipt = (): any => ({ ...expected, format: "oca-repo-goal-slim-v1", complete: true, hostVersion: "2026.9.8", hostCommit: HOST_PIN, nativeVersion: "0.160.0", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
 describe("bounded representative host receipts", () => {
   it("requires exact external identity even on BLOCKED evidence", () => {
     const r = receipt(); r.disposition = "BLOCKED";
@@ -93,7 +93,8 @@ describe("bounded representative host receipts", () => {
     const verifierCommands = normalizeVerifierCommands(commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
     assert.ok(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")));
     assert.throws(() => frameReceipt({ ...receipt(), proofs: [{ verifierCommands }] }));
-    const goal = { id: "goal", status: "succeeded", sessionId: "session", sessionName: "own", requiredVerifierCommands: commands, verifierCommands, iteration: 0 };
+    const binding: GoalVerificationBinding = { version: 1, source: "default", requiredCommands: commands, additionalCommands: [], identity: { kind: "directory", path: "/tmp/own", device: "fixture", inode: "fixture" }, policyFingerprint: "fixture" };
+    const goal = { id: "goal", status: "succeeded", sessionId: "session", sessionName: "own", goalVerificationBinding: binding, verifierCommands, iteration: 0 };
     const row = { sessionId: goal.sessionId, name: goal.sessionName, workdir: "/tmp/own", goalTaskId: goal.id, backendRef: { conversationId: "thread" } };
     const listing = formatSessionListing({ id: row.sessionId, name: row.name, workdir: row.workdir, status: "completed", phase: "terminal", duration: 1, prompt: "Own", multiTurn: true, costUsd: 0 });
     let settled = false;
@@ -103,7 +104,7 @@ describe("bounded representative host receipts", () => {
     assert.equal(settled, true);
     const proof = decodeReceipt(frameReceipt({ ...receipt(), proofs: run.proofs }), expected).receipt.proofs[0];
     assert.deepEqual(proof.verifierCommands, commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
-    assert.deepEqual(proof.requiredVerifierCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
+    assert.deepEqual(proof.requiredCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
     assert.equal(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")), true, "Original full terminal specs remain untouched");
   });
   it("settles unchanged required tuples without historical process-local wait handles", async () => {

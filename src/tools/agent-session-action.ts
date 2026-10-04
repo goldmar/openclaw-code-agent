@@ -112,7 +112,7 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
         action = resolved.action;
       }
       try {
-        session.requestThreadAction(action);
+        await session.requestThreadAction(action);
       } catch (err: unknown) {
         return { isError: true, content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
       }

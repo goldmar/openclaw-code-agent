@@ -13,11 +13,9 @@ import { assignments, excluded, frameReceipt, HOST_PIN, sha, requiredFact } from
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const MODEL = "gpt-6-luna", A = ["bash ci.sh", "bash lint.sh", "bash ci.sh"], B = ["bash changed.sh"];
 const POLICY_FAILURES = [
-  "Goal verifier policy changed or its stored suite does not match. Start a new goal with the complete operator-required suite; stored checks are not replaced.",
-  "Required goal verifier policy changed while checks were running. Start a new goal; the old result cannot prove the current suite.",
-  "Required goal verifier policy changed before the check result was consumed. Start a new goal; the old result cannot prove the current suite.",
+  "Goal verification policy or repository identity changed. Start a new goal; stored required and additional checks are never replaced.",
 ];
-const FIELD = "plugins.entries.openclaw-code-agent.config.requiredGoalVerifierCommands";
+const FIELD = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const json = path => JSON.parse(readFileSync(path, "utf8"));
 const inside = (root, path) => { const r = relative(root, path);
@@ -159,10 +157,10 @@ export class FeatureRun {
     this.env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH = join(this.directory, "goals.json");
     for (const path of [this.workspace, this.env.CODEX_HOME, this.env.XDG_CACHE_HOME, this.env.XDG_DATA_HOME, this.env.XDG_STATE_HOME, this.env.XDG_CONFIG_HOME]) mkdirSync(path, { recursive: true, mode: 0o700 });
     this.keys = [randomBytes(24).toString("hex"), randomBytes(24).toString("hex")];
-    this.receipt = { format: "oca501-slim-v1", candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", scenario: options["--scenario"], assigned: assignments[options["--scenario"]], completed: [], disposition: "BLOCKED", complete: true, failure: null, cleanup: { complete: false, failures: [] }, excluded: this.raw, proofs: this.proofs, retiredHostClaims: ["Telegram/slash/callback interoperability", "idle/fork/pending native windows", "custody drain fence", "unprivileged archive EACCES", "debug producer/schema attribution", "late ABA generation pairing"] };
+    this.receipt = { format: "oca-repo-goal-slim-v1", candidateSha: options["--expected-sha"], nodeVersion: options["--node-version"], hostVersion: "2026.9.8", hostCommit: HOST_PIN, nativeVersion: "0.160.0", scenario: options["--scenario"], assigned: assignments[options["--scenario"]], completed: [], disposition: "BLOCKED", complete: true, failure: null, cleanup: { complete: false, failures: [] }, excluded: this.raw, proofs: this.proofs, retiredHostClaims: ["Telegram/slash/callback interoperability", "idle/fork/pending native windows", "custody drain fence", "unprivileged archive EACCES", "debug producer/schema attribution", "late ABA generation pairing"] };
   }
-  async command(program, args, { allowFailure = false, timeoutMs = 120_000, graceMs = 30_000, killMs = 5000 } = {}) {
-    const child = spawn(program, args, { cwd: ROOT, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  async command(program, args, { allowFailure = false, timeoutMs = 120_000, graceMs = 30_000, killMs = 5000, cwd = ROOT } = {}) {
+    const child = spawn(program, args, { cwd, env: this.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     this.children.add(child);
     childIdentities.set(child, processIdentity(child.pid));
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), timedOut = false;
@@ -220,7 +218,7 @@ export class FeatureRun {
     const hostRoot = realpathSync(join(ROOT, "node_modules/openclaw"));
     assert.equal(json(join(hostRoot, "package.json")).version, this.receipt.hostVersion);
     this.hostEntry = join(hostRoot, "openclaw.mjs");
-    const tagResponse = await fetch("https://api.github.com/repos/openclaw/openclaw/git/ref/tags/v2026.9.7", { signal: AbortSignal.timeout(30_000) });
+    const tagResponse = await fetch("https://api.github.com/repos/openclaw/openclaw/git/ref/tags/v2026.9.8", { signal: AbortSignal.timeout(30_000) });
     assert.equal(tagResponse.status, 200);
     let object = (await tagResponse.json()).object;
     if (object.type === "tag") { const tag = await fetch(object.url, { signal: AbortSignal.timeout(30_000) });
@@ -229,11 +227,13 @@ export class FeatureRun {
       }
     assert.equal(object.type, "commit");
     assert.equal(object.sha, HOST_PIN);
-    const validator = await import(join(hostRoot, "dist/schema-validator-BP6RVpTv.mjs"));
+    const validatorExport = json(join(hostRoot, "package.json")).exports["./plugin-sdk/json-schema-runtime"].default;
+    assert.equal(validatorExport, "./dist/plugin-sdk/json-schema-runtime.js");
+    const validator = await import(join(hostRoot, validatorExport));
     assert.equal(typeof validator.validateJsonSchemaValue, "function");
-    await this.command("npm", ["install", "--prefix", join(this.directory, "native"), "--no-audit", "--no-fund", "@openai/codex@0.159.3"]);
+    await this.command("npm", ["install", "--prefix", join(this.directory, "native"), "--no-audit", "--no-fund", "@openai/codex@0.160.0"]);
     this.native = realpathSync(join(this.directory, "native/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"));
-    assert.equal((await this.command(this.native, ["--version"])).stdout.trim(), "codex-cli 0.159.3");
+    assert.equal((await this.command(this.native, ["--version"])).stdout.trim(), "codex-cli 0.160.0");
     this.env.OPENCLAW_CODEX_APP_SERVER_COMMAND = this.native;
     this.fixture = await responsesFixture({ root: this.workspace, model: MODEL, key: this.keys[1], validate: validator.validateJsonSchemaValue, observeNative: (fixture, record) => this.nativeOwner(fixture, record) });
     const nativeConfig = `model = "${MODEL}"\nmodel_provider = "oca501"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n[model_providers.oca501]\nname = "OCA501 loopback fixture"\nbase_url = "${this.fixture.url}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`;
@@ -255,11 +255,15 @@ export class FeatureRun {
     await new Promise(done => reservation.close(done));
     this.url = `http://127.0.0.1:${this.port}`;
     this.env.OPENCLAW_GATEWAY_PORT = String(this.port);
+    this.repoA = this.workspace;
+    this.repoB = join(this.workspace, "repository-b");
+    await this.createRepository(this.repoA); await this.createRepository(this.repoB);
+    this.currentPolicies = this.repoPolicies();
     const config = { gateway: { mode: "local", bind: "loopback", port: this.port, auth: { mode: "token", token: this.keys[0] }, reload: { mode: "hybrid" } }, logging: { file: join(this.directory, "runtime.log") },
       models: { mode: "replace", catalogRefresh: { enabled: false }, providers: { oca501: { baseUrl: `${this.fixture.url}/host/v1`, api: "openai-responses", auth: "api-key", apiKey: this.keys[1], request: { allowPrivateNetwork: true }, models: [{ id: MODEL, name: "Fixture", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 131072, maxTokens: 4096 }] } } },
       agents: { defaults: { workspace: this.workspace, model: { primary: `oca501/${MODEL}`, fallbacks: [] }, modelPolicy: { allow: [`oca501/${MODEL}`] }, utilityModel: `oca501/${MODEL}`, decisionModel: "", experimental: { decisionAssistance: false }, thinkingDefault: "off", heartbeat: { every: "0m" }, embeddedAgent: { cyberFailover: { mode: "off" } }, compaction: { enabled: false, memoryFlush: { enabled: false }, postIndexSync: "off" } } },
       memory: { search: { enabled: false } }, cron: { enabled: false }, discovery: { mdns: { mode: "off" } }, tools: { profile: "full", allow: this.expectedTools, deny: ["agent_goal"] },
-      plugins: { allow: ["openclaw-code-agent"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", requiredGoalVerifierCommands: A, harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } } };
+      plugins: { allow: ["openclaw-code-agent"], slots: { memory: "none" }, entries: { "openclaw-code-agent": { enabled: true, config: { autoUpdate: false, defaultHarness: "codex", defaultWorktreeStrategy: "off", permissionMode: "bypassPermissions", goalVerificationPolicies: this.currentPolicies, trustedVerifierCommands: ["true", "bash ci.sh", "bash extra-a.sh", "bash extra-b.sh", "bash extra-fail.sh"], harnesses: { codex: { defaultModel: MODEL, allowedModels: [MODEL] } } } } } } };
     writeFileSync(this.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
     const bin = join(this.directory, "bin");
     mkdirSync(bin);
@@ -430,42 +434,55 @@ export class FeatureRun {
     this.proofs.push({ mutation: paths, beforeRevision: before.hash, afterRevision: ack.hash, appliedRevision: after.appliedConfigHash });
     return after;
   }
-  async suite(commands) {
-    const cfg = await this.rpc("config.get"), source = json(this.env.OPENCLAW_CONFIG_PATH).plugins.entries["openclaw-code-agent"].config;
-    if (JSON.stringify(source.requiredGoalVerifierCommands) === JSON.stringify(commands)) {
-      assert.deepEqual(cfg.config.plugins.entries["openclaw-code-agent"].config.requiredGoalVerifierCommands, commands);
-      assert.equal(cfg.valid, true);
-      assert.ok(cfg.appliedConfigHash);
-      assert.equal(cfg.configRevisionHash, cfg.appliedConfigHash);
-      const bytes = sha(readFileSync(this.env.OPENCLAW_CONFIG_PATH)), after = await this.rpc("config.get");
-      assert.equal(sha(readFileSync(this.env.OPENCLAW_CONFIG_PATH)), bytes);
-      assert.equal(after.hash, cfg.hash);
-      assert.equal(after.valid, true);
-      assert.equal(after.configRevisionHash, cfg.configRevisionHash);
-      assert.equal(after.appliedConfigHash, cfg.appliedConfigHash);
-      assert.ok(sameProcess(this.gatewayIdentity, processIdentity(this.gateway.pid)));
-      this.proofs.push({ alreadySetReadbackOnly: true, requiredVerifierCommands: commands, sourceSha256: bytes, unchangedRevision: cfg.hash });
-      return;
-    }
-    const after = await this.patch({ plugins: { entries: { "openclaw-code-agent": { config: { requiredGoalVerifierCommands: commands } } } } }, [FIELD]);
-    assert.deepEqual(after.config.plugins.entries["openclaw-code-agent"].config.requiredGoalVerifierCommands, commands);
+  async createRepository(path) {
+    mkdirSync(path, { recursive: true });
+    await this.command("git", ["init", "-b", "main"], { cwd: path });
+    writeFileSync(join(path, "identity-fixture.txt"), "owned native repository fixture\n");
+    await this.command("git", ["add", "identity-fixture.txt"], { cwd: path });
+    await this.command("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "core.hooksPath=/dev/null", "commit", "-m", "fixture identity"], { cwd: path });
   }
-  newCase(name, { ralph = false, hold = false, lintFailure = false, barrier = false } = {}) {
-    const tag = `OCA501_CASE_${name}`, workdir = join(this.workspace, name);
+  repoPolicies(a = A, b = B) {
+    return { repositories: [ { repository: this.repoA, requiredCommands: [...a] }, { repository: this.repoB, requiredCommands: [...b] } ] };
+  }
+  async setPolicies(policies) {
+    const cfg = await this.rpc("config.get"), source = json(this.env.OPENCLAW_CONFIG_PATH).plugins.entries["openclaw-code-agent"].config;
+    if (JSON.stringify(source.goalVerificationPolicies) === JSON.stringify(policies)) {
+      assert.deepEqual(cfg.config.plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies, policies);
+      assert.equal(cfg.valid, true); assert.equal(cfg.configRevisionHash, cfg.appliedConfigHash);
+      assert.ok(sameProcess(this.gatewayIdentity, processIdentity(this.gateway.pid)));
+      this.proofs.push({ alreadySetReadbackOnly: true, sourceSha256: sha(JSON.stringify(policies)), unchangedRevision: cfg.hash });
+    } else {
+      const after = await this.patch({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: policies } } } } }, [FIELD]);
+      assert.deepEqual(after.config.plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies, policies);
+    }
+    this.currentPolicies = structuredClone(policies);
+  }
+  async suite(commands, repository = "a") {
+    const policies = structuredClone(this.currentPolicies);
+    const path = repository === "a" ? this.repoA : this.repoB;
+    const selected = policies.repositories.find(policy => policy.repository === path);
+    assert.ok(selected); selected.requiredCommands = [...commands]; await this.setPolicies(policies);
+  }
+  newCase(name, { ralph = false, hold = false, lintFailure = false, barrier = false, repository = "a", root, additionalCommands = [] } = {}) {
+    const tag = `OCA501_CASE_${name}`, workdir = join(root ?? (repository === "b" ? this.repoB : this.repoA), name);
     mkdirSync(workdir);
     this.workdirs.push(workdir);
-    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold, barrier,
+    const fixture = { tag, name: `oca501-${name}`, workdir, ralph, hold, barrier, additionalCommands,
+      requiredCommands: [...this.currentPolicies.repositories.find(policy => policy.repository === (repository === "b" ? this.repoB : this.repoA)).requiredCommands],
       nativeSnapshot: { gateway: this.gatewayIdentity, processes: this.nativeProcesses() } };
     this.fixture.cases.set(tag, fixture);
     const script = kind => `index=$(wc -l < checks.jsonl 2>/dev/null || printf 0)\nindex=$((index+1))\nprintf '{"ordinal":%s,"kind":"${kind}","pid":%s,"event":"start"}\\n' "$index" "$$" >> starts.jsonl\n` + (barrier && kind === "CI" ? `if [ "$index" = 1 ]; then echo "$$" > barrier.pid; while [ ! -f release ]; do sleep 0.05; done; fi\n` : "") + `printf '{"ordinal":%s,"kind":"${kind}","exit":${lintFailure && kind === "LINT" ? 3 : 0}}\\n' "$index" >> checks.jsonl\nexit ${lintFailure && kind === "LINT" ? 3 : 0}\n`;
     writeFileSync(join(workdir, "ci.sh"), script("CI"));
     writeFileSync(join(workdir, "lint.sh"), script("LINT"));
-    writeFileSync(join(workdir, "changed.sh"), "exit 0\n");
+    writeFileSync(join(workdir, "changed.sh"), script("B"));
+    for (const [file, kind, exit] of [["extra-a.sh", "EXTRA_A", 0], ["extra-b.sh", "EXTRA_B", 0], ["extra-fail.sh", "EXTRA_FAIL", 7]]) {
+      writeFileSync(join(workdir, file), `index=$(wc -l < checks.jsonl 2>/dev/null || printf 0)\nindex=$((index+1))\nprintf '{"ordinal":%s,"kind":"${kind}","exit":${exit}}\\n' "$index" >> checks.jsonl\nexit ${exit}\n`);
+    }
     return fixture;
   }
   async launch(fixture, max = 1) {
     fixture.intent = { kind: "launch", ralph: fixture.ralph, goal: `${fixture.tag}: Run the harmless receipt command and finish.` };
-    await this.invoke("agent_goal", { action: "launch", name: fixture.name, goal: fixture.intent.goal, workdir: fixture.workdir, harness: "codex", permission_mode: "bypassPermissions", goal_mode: fixture.ralph ? "ralph" : "verifier", max_iterations: max, ...(fixture.ralph ? { completion_promise: "DONE" } : {}) });
+    await this.invoke("agent_goal", { action: "launch", name: fixture.name, goal: fixture.intent.goal, workdir: fixture.workdir, harness: "codex", permission_mode: "bypassPermissions", goal_mode: fixture.ralph ? "ralph" : "verifier", max_iterations: max, ...(fixture.additionalCommands.length ? { verifier_commands: fixture.additionalCommands } : {}), ...(fixture.ralph ? { completion_promise: "DONE" } : {}) });
     return until(() => this.goals().find(g => g.name === fixture.name));
   }
   async visible(runId) {
@@ -518,7 +535,11 @@ export class FeatureRun {
   async terminal(goal, fixture, status) {
     const current = await until(() => this.goals().find(g => g.id === goal.id && ["succeeded", "failed", "stopped"].includes(g.status)));
     assert.equal(current.status, status);
-    assert.deepEqual(current.requiredVerifierCommands, A);
+    const binding = current.goalVerificationBinding;
+    assert.equal(binding?.version, 1);
+    assert.deepEqual(binding.requiredCommands, fixture.requiredCommands ?? A);
+    assert.deepEqual(binding.additionalCommands, fixture.additionalCommands ?? []);
+    assert.deepEqual(current.verifierCommands.map(spec => spec.command), [...binding.requiredCommands, ...binding.additionalCommands]);
     assert.equal(fixture.executed, true);
     const row = await until(() => this.sessions().find(s => s.sessionId === current.sessionId && s.backendRef?.conversationId === fixture.threadId));
     assert.equal(row.goalTaskId, current.id); assert.equal(row.name, current.sessionName); assert.equal(row.workdir, fixture.workdir);
@@ -529,141 +550,152 @@ export class FeatureRun {
     const listing = await this.invoke("agent_sessions", { status: "all", full: true });
     const headers = listing.content.map(c => c.text ?? "").join("\n").split("\n").filter(line => line.includes(` ${row.name} [${row.sessionId}] — `));
     assert.equal(headers.length, 1);
-    this.proofs.push({ goalId: current.id, sessionId: row.sessionId, nativeThreadId: fixture.threadId, terminalStatus: current.status, terminalRowSha256: sha(JSON.stringify(current)), requiredVerifierCommands: current.requiredVerifierCommands, verifierCommands: current.verifierCommands.map(({ label, command }) => ({ label, command })), iteration: current.iteration });
+    this.proofs.push({ goalId: current.id, sessionId: row.sessionId, nativeThreadId: fixture.threadId, terminalStatus: current.status, terminalRowSha256: sha(JSON.stringify(current)), requiredCommands: binding.requiredCommands, additionalCommands: binding.additionalCommands, effectiveCommands: current.verifierCommands.map(spec => spec.command), bindingSha256: sha(JSON.stringify(binding)), policyFingerprint: binding.policyFingerprint, repositoryIdentitySha256: sha(JSON.stringify(binding.identity)), selectedPolicy: binding.source, operatorTrustedExtras: true, verifierCommands: current.verifierCommands.map(({ label, command }) => ({ label, command })), iteration: current.iteration });
     return current;
   }
   checks(fixture, expected) { const checks = readFileSync(join(fixture.workdir, "checks.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     assert.deepEqual(checks, expected.map(([kind, exit], i) => ({ ordinal: i + 1, kind, exit })));
     this.proofs.push({ case: fixture.tag, checks, nativeReceiptSha256: sha(readFileSync(join(fixture.workdir, "native-receipt.txt"))) });
     }
+  async releaseBarrier(fixture) {
+    const path = join(fixture.workdir, "barrier.pid");
+    await until(() => existsSync(path));
+    const identity = processIdentity(Number(readFileSync(path, "utf8"))); assert.ok(identity && identity.executable.endsWith("/bash"));
+    let ancestor = identity;
+    while (ancestor && ancestor.pid !== this.gateway.pid) ancestor = processIdentity(ancestor.parent);
+    assert.ok(ancestor && sameProcess(ancestor, this.gatewayIdentity));
+    fixture.barrierProcess = identity; fixture.barrierScriptSha256 = sha(readFileSync(join(fixture.workdir, "ci.sh")));
+    return identity;
+  }
+  async offlinePolicies(policies) {
+    assert.equal(this.gateway, undefined);
+    const source = json(this.env.OPENCLAW_CONFIG_PATH);
+    source.plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies = policies;
+    writeFileSync(this.env.OPENCLAW_CONFIG_PATH, JSON.stringify(source), { mode: 0o600 });
+    await this.cli(["config", "validate"]);
+    this.currentPolicies = structuredClone(policies);
+  }
+  async restartHeld(fixture, goal, policies) {
+    await until(() => fixture.held && fixture.threadId);
+    const original = structuredClone(this.goals().find(g => g.id === goal.id));
+    fixture.oldSessionId = original.sessionId; fixture.oldSessionName = original.sessionName;
+    fixture.shutdownExpected = true; await this.shutdown();
+    const saved = this.goals().find(g => g.id === goal.id);
+    assert.ok(["running", "waiting_for_session"].includes(saved.status));
+    assert.equal(saved.harnessSessionId, fixture.threadId);
+    assert.deepEqual(saved.goalVerificationBinding, original.goalVerificationBinding);
+    await this.offlinePolicies(policies);
+    fixture.intent = { ...fixture.intent, kind: "restore" };
+    fixture.oldTurns = [fixture.turnId]; fixture.turnId = undefined; fixture.call = undefined;
+    for (const previous of this.fixture.cases.values()) if (previous.nativeProcess) {
+      const current = processIdentity(previous.nativeProcess.pid);
+      assert.ok(current || !existsSync(`/proc/${previous.nativeProcess.pid}`));
+      assert.ok(!sameProcess(previous.nativeProcess, current) || current.state === "Z");
+    }
+    fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined; fixture.nativeSessionName = undefined;
+    fixture.nativeSnapshot = { processes: this.nativeProcesses(null) }; assert.equal(fixture.nativeSnapshot.processes.length, 0);
+    return original;
+  }
   async runCases() {
     const selected = this.receipt.scenario;
     if (selected === "smoke") return;
     if (["admission", "all"].includes(selected)) {
       this.stage = "admission";
       const cfg = await this.rpc("config.get"), before = this.effects();
-      const refused = await this.cli(["gateway", "call", "config.patch", "--params", JSON.stringify({ raw: JSON.stringify({ plugins: { entries: { "openclaw-code-agent": { config: { requiredGoalVerifierCommands: [] } } } } }), baseHash: cfg.hash, replacePaths: [FIELD] }), "--json"], { allowFailure: true });
-      assert.notEqual(refused.code, 0);
-      const error = JSON.parse(refused.stdout.slice(refused.stdout.indexOf("{")));
-      assert.equal(error.error.code, "INVALID_REQUEST");
-      assert.ok(JSON.stringify(error.error.details).includes("requiredGoalVerifierCommands"));
-      assert.equal((await this.rpc("config.get")).hash, cfg.hash);
-      const weak = await this.invoke("agent_goal", { action: "launch", goal: "Weak", workdir: this.workspace, verifier_commands: [A[0]] }, false);
-      assert.match(weak.content[0].text, /complete ordered/);
-      assert.deepEqual(this.effects(), before);
+      const refused = await this.cli(["gateway", "call", "config.patch", "--params", JSON.stringify({ raw: JSON.stringify({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: { repositories: [{ repository: this.repoA, requiredCommands: [] }] } } } } } }), baseHash: cfg.hash, replacePaths: [FIELD] }), "--json"], { allowFailure: true });
+      assert.notEqual(refused.code, 0); assert.equal(JSON.parse(refused.stdout.slice(refused.stdout.indexOf("{"))).error.code, "INVALID_REQUEST");
+      assert.equal((await this.rpc("config.get")).hash, cfg.hash); assert.deepEqual(this.effects(), before);
+      const unmatched = join(this.workspace, "unmapped-repository"); await this.createRepository(unmatched);
+      const denied = await this.invoke("agent_goal", { action: "launch", goal: "Unmapped repository", workdir: unmatched }, false);
+      assert.match(denied.content[0].text, /No goal verification policy matches/); assert.deepEqual(this.effects(), before);
+      const alias = join(this.workspace, "repository-alias"); symlinkSync(this.repoA, alias);
+      await this.setPolicies({ repositories: [ ...this.repoPolicies().repositories, { repository: alias, requiredCommands: A } ] });
+      const ambiguous = await this.invoke("agent_goal", { action: "launch", goal: "Duplicate identity", workdir: this.repoA }, false);
+      assert.match(ambiguous.content[0].text, /Duplicate canonical/); assert.deepEqual(this.effects(), before);
+      await this.setPolicies(this.repoPolicies());
+      this.proofs.push({ deniedBeforeEffects: true, case: "unmapped-and-duplicate-canonical" });
       this.receipt.completed.push("admission");
     }
     if (["gates", "all"].includes(selected)) {
-      this.stage = "whole-gate";
-      await this.suite(A);
-      for (const [name, ralph, lintFailure] of [["default", false, false], ["ralph", true, false], ["ralph-fail", true, true]]) { const fixture = this.newCase(name, { ralph, lintFailure });
-        const goal = await this.launch(fixture);
-        await this.terminal(goal, fixture, lintFailure ? "failed" : "succeeded");
-        this.checks(fixture, [["CI", 0], ["LINT", lintFailure ? 3 : 0], ["CI", 0]]);
-        }
+      this.stage = "whole-gate"; await this.setPolicies(this.repoPolicies());
+      const linked = join(this.workspace, "linked-a");
+      await this.command("git", ["-c", "core.hooksPath=/dev/null", "worktree", "add", "-b", "native-linked", linked], { cwd: this.repoA });
+      for (const options of [
+        { name: "a-addition", additionalCommands: ["bash extra-a.sh", "bash ci.sh", "bash extra-a.sh"] },
+        { name: "b-addition", repository: "b", additionalCommands: ["bash extra-b.sh"] },
+        { name: "linked-subdir", root: linked, additionalCommands: ["bash extra-a.sh"] },
+        { name: "caller-true", additionalCommands: ["true"] },
+        { name: "ralph-addition-fail", ralph: true, additionalCommands: ["bash extra-fail.sh"] },
+      ]) {
+        const fixture = this.newCase(options.name, options), goal = await this.launch(fixture);
+        const failed = options.name === "ralph-addition-fail";
+        const terminal = await this.terminal(goal, fixture, failed ? "failed" : "succeeded");
+        const required = options.repository === "b" ? [["B", 0]] : [["CI", 0], ["LINT", 0], ["CI", 0]];
+        const extra = options.additionalCommands.filter(command => command !== "true").map(command => [command === "bash ci.sh" ? "CI" : failed ? "EXTRA_FAIL" : options.repository === "b" ? "EXTRA_B" : "EXTRA_A", failed ? 7 : 0]);
+        this.checks(fixture, [...required, ...extra]);
+        if (options.name === "caller-true") assert.match(terminal.lastVerifierSummary, /PASS check-4/);
+        if (failed) assert.match(terminal.lastVerifierSummary, /FAIL check-4/);
+      }
       this.receipt.completed.push("whole-gate");
     }
     if (["live", "all"].includes(selected)) {
-      this.stage = "live-policy";
-      await this.suite(A);
-      const fixture = this.newCase("live", { barrier: true }), goal = await this.launch(fixture, 3);
-      await until(() => existsSync(join(fixture.workdir, "barrier.pid")));
-      const pid = Number(readFileSync(join(fixture.workdir, "barrier.pid"), "utf8")), check = processIdentity(pid);
-      assert.ok(check && check.executable.endsWith("/bash"));
-      let ancestor = check;
-      while (ancestor && ancestor.pid !== this.gateway.pid) ancestor = processIdentity(ancestor.parent);
-      assert.ok(ancestor && sameProcess(ancestor, this.gatewayIdentity));
-      fixture.barrierProcess = check; fixture.barrierScriptSha256 = sha(readFileSync(join(fixture.workdir, "ci.sh")));
-      const own = this.goals().find(g => g.id === goal.id);
-      assert.equal(own.status, "running"); assert.deepEqual(own.requiredVerifierCommands, A); assert.equal(own.harnessSessionId, fixture.threadId);
+      this.stage = "live-policy"; await this.setPolicies(this.repoPolicies());
+      const unrelated = this.newCase("live-unrelated", { barrier: true, additionalCommands: ["bash extra-a.sh"] });
+      const unrelatedGoal = await this.launch(unrelated, 3), unaffectedCheck = await this.releaseBarrier(unrelated);
+      const unaffected = structuredClone(this.goals().find(g => g.id === unrelatedGoal.id));
+      await this.suite(["bash changed.sh", "bash changed.sh"], "b");
+      assert.ok(sameProcess(unaffectedCheck, processIdentity(unaffectedCheck.pid)));
+      writeFileSync(join(unrelated.workdir, "release"), "release\n");
+      const passed = await this.terminal(unrelatedGoal, unrelated, "succeeded");
+      assert.deepEqual(passed.goalVerificationBinding, unaffected.goalVerificationBinding);
+      this.checks(unrelated, [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]]);
+      this.proofs.push({ unrelatedPolicyChanged: true, restoredBindingUnchanged: true, case: "live-unrelated-B" });
+      const fixture = this.newCase("live-affected", { barrier: true, additionalCommands: ["bash extra-a.sh"] });
+      const goal = await this.launch(fixture, 3), check = await this.releaseBarrier(fixture);
+      const own = structuredClone(this.goals().find(g => g.id === goal.id)), effects = this.effects();
       await this.publicOwner(own.sessionId, "completed", fixture);
-      const originalEffects = this.effects();
-      await this.suite(B);
-      this.stage = "live-policy:original-task-check-held";
-      assert.ok(sameProcess(check, processIdentity(pid)));
-      const before = this.effects();
-      this.stage = "live-policy:complete-A-denial";
-      const denied = await this.invoke("agent_goal", { action: "launch", goal: "Complete A denial", workdir: fixture.workdir, verifier_commands: A }, false);
-      assert.match(denied.content[0].text, /complete ordered|operator-required/);
-      this.stage = "live-policy:zero-effects";
-      assert.deepEqual(this.effects(), before);
-      this.stage = "live-policy:original-status";
-      const held = this.goals().find(g => g.id === goal.id);
-      assert.ok(held && ["running", "failed"].includes(held.status));
-      for (const [field, stage] of [["id", "identity"], ["name", "identity"], ["goal", "identity"], ["workdir", "identity"],
-        ["iteration", "iteration"], ["sessionId", "session"], ["sessionName", "session"], ["harnessSessionId", "native"]]) {
-        this.stage = `live-policy:original-${stage}`; assert.equal(held[field], own[field]);
-      }
-      this.stage = "live-policy:original-binding"; assert.deepEqual(held.requiredVerifierCommands, A);
-      this.stage = "live-policy:original-cause";
-      if (held.status === "failed") assert.ok(POLICY_FAILURES.includes(held.failureReason));
-      const earlyFailure = held.status === "failed" ? structuredClone(held) : undefined;
-      this.stage = "live-policy:original-check"; assert.ok(sameProcess(check, processIdentity(pid)));
-      this.stage = "live-policy:release";
+      await this.suite(B); await this.suite(A);
+      assert.ok(sameProcess(check, processIdentity(check.pid))); assert.deepEqual(this.effects(), effects);
       writeFileSync(join(fixture.workdir, "release"), "release\n");
-      this.stage = "live-policy:check-exit";
-      await until(() => {
-        const current = processIdentity(pid); assert.ok(current || !existsSync(`/proc/${pid}`));
-        if (current) { assert.ok(sameProcess(check, current)); return false; }
-        const path = join(fixture.workdir, "checks.jsonl");
-        return existsSync(path) && readFileSync(path, "utf8").endsWith("\n");
-      });
-      this.stage = "live-policy:ordered-checks"; this.checks(fixture, [["CI", 0]]);
-      this.stage = "live-policy:policy-terminal";
+      await until(() => !processIdentity(check.pid));
       const failed = await this.terminal(goal, fixture, "failed");
-      assert.ok(POLICY_FAILURES.includes(failed.failureReason));
+      assert.ok(POLICY_FAILURES.includes(failed.failureReason)); assert.deepEqual(failed.goalVerificationBinding, own.goalVerificationBinding);
       for (const field of ["id", "name", "goal", "workdir", "iteration", "sessionId", "sessionName", "harnessSessionId"]) assert.equal(failed[field], own[field]);
-      if (earlyFailure) assert.deepEqual(failed, earlyFailure);
-      this.stage = "live-policy:ordered-checks";
       this.checks(fixture, [["CI", 0]]);
-      const starts = readFileSync(join(fixture.workdir, "starts.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-      assert.deepEqual(starts, [{ ordinal: 1, kind: "CI", pid, event: "start" }]);
-      const finalEffects = this.effects();
-      for (const field of ["goals", "sessions", "nativeRequests"]) assert.deepEqual(finalEffects[field], originalEffects[field]);
-      this.proofs.push({ verifierProcess: check, policyFailure: true });
+      assert.deepEqual(readFileSync(join(fixture.workdir, "starts.jsonl"), "utf8").trim().split("\n").map(JSON.parse), [{ ordinal: 1, kind: "CI", pid: check.pid, event: "start" }]);
+      const finalEffects = this.effects(); for (const field of ["goals", "sessions", "nativeRequests"]) assert.deepEqual(finalEffects[field], effects[field]);
+      this.proofs.push({ verifierProcess: check, policyFailure: true, affectedPolicyABA: true });
       this.receipt.completed.push("live-policy");
     }
     if (["restore", "all"].includes(selected)) {
-      this.stage = "organic-restore";
-      await this.suite(A);
+      this.stage = "organic-restore"; await this.setPolicies(this.repoPolicies());
       const history = this.goals().filter(g => ["succeeded", "failed", "stopped"].includes(g.status));
-      const fixture = this.newCase("restore", { ralph: true, hold: true }), goal = await this.launch(fixture, 3);
-      await until(() => fixture.held && fixture.threadId);
-      const oldSession = goal.sessionId;
-      fixture.oldSessionId = oldSession; fixture.oldSessionName = goal.sessionName;
-      await this.publicOwner(oldSession, "running");
-      fixture.shutdownExpected = true;
-      await this.shutdown();
-      const saved = this.goals().find(g => g.id === goal.id);
-      assert.ok(["running", "waiting_for_session"].includes(saved.status));
-      assert.equal(saved.harnessSessionId, fixture.threadId);
-      assert.deepEqual(saved.requiredVerifierCommands, A);
-      await this.cli(["config", "unset", FIELD]);
-      await this.cli(["config", "validate"]);
-      assert.equal(Object.hasOwn(json(this.env.OPENCLAW_CONFIG_PATH).plugins.entries["openclaw-code-agent"].config, "requiredGoalVerifierCommands"), false);
-      fixture.hold = false;
-      fixture.intent = { ...fixture.intent, kind: "restore" };
-      fixture.oldTurns = [fixture.turnId]; fixture.turnId = undefined; fixture.call = undefined;
-      for (const previous of this.fixture.cases.values()) if (previous.nativeProcess) {
-        const current = processIdentity(previous.nativeProcess.pid);
-        assert.ok(current || !existsSync(`/proc/${previous.nativeProcess.pid}`), "NATIVE_PROCESS_IDENTITY_UNAVAILABLE");
-        assert.ok(!sameProcess(previous.nativeProcess, current) || current.state === "Z");
-      }
-      fixture.nativeProcess = undefined; fixture.nativeSessionId = undefined; fixture.nativeSessionName = undefined;
-      fixture.nativeSnapshot = { processes: this.nativeProcesses(null) };
-      assert.equal(fixture.nativeSnapshot.processes.length, 0);
-      await this.start();
-      const resumed = await until(() => { const current = this.goals().find(g => g.id === goal.id); return current?.sessionId !== oldSession && current; });
-      assert.equal(resumed.harnessSessionId, fixture.threadId);
-      assert.ok(resumed.sessionId);
+      const fixture = this.newCase("restore-unchanged", { ralph: true, hold: true, additionalCommands: ["bash extra-a.sh"] });
+      const goal = await this.launch(fixture, 3);
+      const original = await this.restartHeld(fixture, goal, this.repoPolicies(A, ["bash changed.sh", "bash changed.sh"]));
+      fixture.hold = false; await this.start();
+      const resumed = await until(() => { const current = this.goals().find(g => g.id === goal.id); return current?.sessionId !== original.sessionId && current; });
+      assert.equal(resumed.harnessSessionId, fixture.threadId); assert.deepEqual(resumed.goalVerificationBinding, original.goalVerificationBinding);
       await this.terminal(resumed, fixture, "succeeded");
-      this.checks(fixture, [["CI", 0], ["LINT", 0], ["CI", 0]]);
-      this.receipt.completed.push("organic-restore");
-      for (const previous of history) assert.deepEqual(this.goals().find(g => g.id === previous.id), previous);
-      this.proofs.push({ sameGoalId: goal.id, sameNativeThreadId: fixture.threadId, oldSessionId: oldSession, restoredSessionId: resumed.sessionId, historicalRowsCompared: history.map(g => ({ id: g.id, sha256: sha(JSON.stringify(g)) })) });
-      if (selected === "all") this.receipt.completed.push("immutable-history");
+      this.checks(fixture, [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]]);
+      this.proofs.push({ sameGoalId: goal.id, sameNativeThreadId: fixture.threadId, oldSessionId: original.sessionId, restoredSessionId: resumed.sessionId, restoredBindingUnchanged: true });
+      const immutable = [...history, structuredClone(this.goals().find(g => g.id === goal.id))];
+      const blockedFixture = this.newCase("restore-changed", { hold: true, additionalCommands: ["bash extra-a.sh"] });
+      const blockedGoal = await this.launch(blockedFixture, 3);
+      const blockedOriginal = await this.restartHeld(blockedFixture, blockedGoal, this.repoPolicies(B));
+      const nativeRequests = this.fixture.requests.filter(r => r.native).length;
+      blockedFixture.hold = false; await this.start();
+      const blocked = await until(() => this.goals().find(g => g.id === blockedGoal.id && g.status === "failed"));
+      assert.ok(POLICY_FAILURES.includes(blocked.failureReason)); assert.deepEqual(blocked.goalVerificationBinding, blockedOriginal.goalVerificationBinding);
+      assert.equal(blocked.sessionId, blockedOriginal.sessionId); assert.equal(this.fixture.requests.filter(r => r.native).length, nativeRequests);
+      assert.equal(existsSync(join(blockedFixture.workdir, "checks.jsonl")), false); assert.equal(existsSync(join(blockedFixture.workdir, "native-receipt.txt")), false);
+      this.proofs.push({ case: "changed-A-restore-refused", goalId: blocked.id, terminalStatus: blocked.status, bindingSha256: sha(JSON.stringify(blocked.goalVerificationBinding)), deniedBeforeEffects: true });
+      for (const previous of immutable) assert.deepEqual(this.goals().find(g => g.id === previous.id), previous);
+      this.proofs.push({ historicalRowsCompared: immutable.map(g => ({ id: g.id, sha256: sha(JSON.stringify(g)) })) });
+      this.receipt.completed.push("organic-restore"); if (selected === "all") this.receipt.completed.push("immutable-history");
     }
   }
+
   async shutdown() {
     const gateway = this.gateway;
     if (!gateway) return;

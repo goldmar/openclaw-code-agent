@@ -156,7 +156,7 @@ describe("follow-ups queued behind a running turn (turn-sequential harness)", ()
   it("runs a thread action queued during a turn before the session completes", async () => {
     const session = await startRunningSession();
     try {
-      session.requestThreadAction({ kind: "review", target: { type: "uncommittedChanges" } });
+      await session.requestThreadAction({ kind: "review", target: { type: "uncommittedChanges" } });
 
       harness.finishTurn();
       await tick(20);
@@ -166,8 +166,8 @@ describe("follow-ups queued behind a running turn (turn-sequential harness)", ()
       harness.finishTurn();
       await tick(20);
       assert.equal(session.status, "completed");
-      assert.throws(
-        () => session.requestThreadAction({ kind: "compact" }),
+      await assert.rejects(
+        session.requestThreadAction({ kind: "compact" }),
         /Session is not running \(status: completed\)/,
       );
     } finally {

@@ -3628,8 +3628,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(resolved, false);
   });
 
-  it("reports unresolved direct legacy AskUserQuestion resolution when no question is pending", () => {
-    const resolved = sm.resolveAskUserQuestion("missing-legacy-question", 0);
+  it("reports unresolved direct legacy AskUserQuestion resolution when no question is pending", async () => {
+    const resolved = await sm.resolveAskUserQuestion("missing-legacy-question", 0);
 
     assert.equal(resolved, false);
   });
@@ -4677,6 +4677,14 @@ describe("SessionManager.shouldRunWorktreeStrategy", () => {
   });
 });
 
+async function waitForQuestion(predicate: () => boolean): Promise<void> {
+  for (let count = 0; count < 400; count++) {
+    if (predicate()) return;
+    await tick(5);
+  }
+  assert.fail("Question authorization did not reach notification/registration");
+}
+
 describe("SessionManager.handleAskUserQuestion()", () => {
   let sm: SessionManager;
 
@@ -4695,8 +4703,9 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     let settled = false;
     void sm.handleAskUserQuestion(session.id, {
       questions: [{ question: "Pick one", options: [{ label: "A" }, { label: "B" }] }],
-    }).then(() => { settled = true; }, () => { settled = true; });
+    }).then(() => { settled = true; }, async () => { settled = true; });
 
+    await waitForQuestion(() => (sm as any).pendingAskUserQuestions.has(session.id));
     const questions = (sm as any).questions;
     assert.equal(questions.discardAskUserQuestion(session.id, "other-request"), false);
     assert.equal((sm as any).pendingAskUserQuestions.has(session.id), true);
@@ -4704,7 +4713,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal((sm as any).pendingAskUserQuestions.has(session.id), false);
     await tick(5);
     assert.equal(settled, false, "the discarded wait must not reject into the harness");
-    assert.equal(sm.resolveAskUserQuestion(session.id, 0), false);
+    assert.equal(await sm.resolveAskUserQuestion(session.id, 0), false);
   });
 
   it("renders explicit question options as buttons without bypassing them", async () => {
@@ -4726,6 +4735,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       }],
     });
 
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length === 1);
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "ask-user-question");
@@ -4769,6 +4779,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       }],
     });
 
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length === 1);
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
@@ -4783,7 +4794,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(request.wakeDelivery, "next-turn");
     assert.match(request.wakeMessageOnNotifySuccess, /Which environment should I target\?/);
 
-    sm.resolveAskUserQuestion(session.id, 0);
+    await sm.resolveAskUserQuestion(session.id, 0);
     await pending;
   });
 
@@ -4814,6 +4825,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       }],
     });
 
+    await waitForQuestion(() => (sm as any).pendingAskUserQuestions.has(session.id));
     const resolved = await sm.resolvePendingInputOption(session.id, 1, {
       requestId: "native-question-without-handler",
     });
@@ -4851,11 +4863,11 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       }],
     });
 
-    const invalidResolved = sm.resolveAskUserQuestion(session.id, 9);
+    const invalidResolved = await sm.resolveAskUserQuestion(session.id, 9);
     assert.equal(invalidResolved, false);
     assert.equal((sm as any).pendingAskUserQuestions.has(session.id), true);
 
-    const validResolved = sm.resolveAskUserQuestion(session.id, 1);
+    const validResolved = await sm.resolveAskUserQuestion(session.id, 1);
     assert.equal(validResolved, true);
     assert.deepEqual(await pending, {
       behavior: "allow",
@@ -4890,13 +4902,15 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     };
 
     const firstPending = sm.handleAskUserQuestion(session.id, input);
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length >= 1);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     const firstToken = (sm as any).interactions.getActionToken(firstRequest.buttons[0][0].callbackData);
 
-    assert.equal(sm.resolveAskUserQuestion(session.id, 0), true);
+    assert.equal(await sm.resolveAskUserQuestion(session.id, 0), true);
     await firstPending;
 
     const secondPending = sm.handleAskUserQuestion(session.id, input);
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length >= 2);
     const secondRequest = (sm as any).__dispatchCalls[1][1];
     const secondToken = (sm as any).interactions.getActionToken(secondRequest.buttons[0][0].callbackData);
 
@@ -4905,7 +4919,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(firstRequest.idempotencyKey, `ask-user-question:${session.id}:${firstToken.pendingInputRequestId}`);
     assert.equal(secondRequest.idempotencyKey, `ask-user-question:${session.id}:${secondToken.pendingInputRequestId}`);
 
-    assert.equal(sm.resolveAskUserQuestion(session.id, 1), true);
+    assert.equal(await sm.resolveAskUserQuestion(session.id, 1), true);
     await secondPending;
   });
 
@@ -4930,6 +4944,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       (): undefined => undefined,
       (error) => error,
     );
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length >= 1);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     const firstToken = (sm as any).interactions.getActionToken(firstRequest.buttons[0][0].callbackData);
 
@@ -4942,6 +4957,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
         ],
       }],
     });
+    await waitForQuestion(() => (sm as any).__dispatchCalls.length >= 2);
     const secondRequest = (sm as any).__dispatchCalls[1][1];
     const secondToken = (sm as any).interactions.getActionToken(secondRequest.buttons[0][1].callbackData);
 

@@ -9,6 +9,7 @@ import type {
   HarnessUsage,
 } from "./harness";
 import type {
+  GoalAuthorizationTicket,
   ApprovalExecutionState,
   PendingInputState,
   PlanArtifact,
@@ -208,7 +209,7 @@ export class Session extends EventEmitter {
   // Multi-turn
   readonly multiTurn: boolean;
   private readonly ownerGoalTaskId?: string;
-  private readonly goalTaskAuthorizer?: () => void;
+  private readonly goalTaskAuthorizer?: (workdir: string) => Promise<GoalAuthorizationTicket>;
   private readonly goalTaskEnded?: () => boolean;
   /** Set when an explicit action continued this session after its goal ended. */
   private goalOwnerDetached = false;
@@ -856,7 +857,7 @@ export class Session extends EventEmitter {
     this.dirtyWorktreeEntriesAtTurnEnd = undefined;
     if (dirtyEntries.length === 0) return false;
 
-    this.assertCurrentModelAllowed();
+    assertModelAllowedForHarness(this.harnessName, this.model, resolveAllowedModelsForHarness(this.harnessName));
     this.worktreeFinalizationPromptIssued = true;
     const dirtyPreview = dirtyEntries.slice(0, 20).map((entry) => `- ${entry}`).join("\n");
     const moreLine = dirtyEntries.length > 20 ? `\n- ...and ${dirtyEntries.length - 20} more` : "";
@@ -906,16 +907,22 @@ export class Session extends EventEmitter {
   private beginAction(): boolean {
     if (this.goalTaskId && this.goalTaskEnded?.()) this.detachGoal();
     const goalWork = this.goalTaskId !== undefined;
-    this.assertCurrentModelAllowed(goalWork);
     return goalWork;
   }
 
-  private assertCurrentModelAllowed(goalWork = this.goalTaskId !== undefined): void {
+  private async assertCurrentModelAllowed(goalWork = this.goalTaskId !== undefined): Promise<GoalAuthorizationTicket> {
+    const owner = this.goalTaskId;
+    let authorization: GoalAuthorizationTicket | undefined;
     if (goalWork) {
       if (!this.goalTaskAuthorizer) throw new Error("Goal controller authorization is unavailable for this session.");
-      this.goalTaskAuthorizer();
+      authorization = await this.goalTaskAuthorizer(this.workdir);
     }
     assertModelAllowedForHarness(this.harnessName, this.model, resolveAllowedModelsForHarness(this.harnessName));
+    return { isCurrent: () => {
+      if (this.abortController.signal.aborted) throw new Error("Session ended during authorization.");
+      assertModelAllowedForHarness(this.harnessName, this.model, resolveAllowedModelsForHarness(this.harnessName));
+      return !goalWork || (this.goalTaskId === owner && !this.goalDetached && authorization!.isCurrent());
+    } };
   }
 
   // -- Lifecycle --
@@ -930,7 +937,7 @@ export class Session extends EventEmitter {
       hasBackendRef: Boolean(this.backendRef),
     });
     try {
-      this.assertCurrentModelAllowed();
+      { let authorization; do { authorization = await this.assertCurrentModelAllowed(); } while (!authorization.isCurrent()); }
       let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
         this.messageStream = new MessageStream();
@@ -1000,46 +1007,61 @@ export class Session extends EventEmitter {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
 
+    const handle = this.harnessHandle;
+    let planSignature = this.planActionSignature();
+    const assertPlanCurrent = (): void => this.assertPlanActionCurrent(handle, planSignature);
     const goalWork = this.beginAction();
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    assertPlanCurrent();
     this.resetIdleTimer();
     const planDecisionPending = !!this.pendingModeSwitch
       || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
     if (this.turnInProgress && !planDecisionPending && this.harnessHandle?.steer) {
       const steered = await this.harnessHandle.steer(text);
-      this.assertCurrentModelAllowed(goalWork);
+      { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+      assertPlanCurrent();
       if (steered) {
         this.logDiagnostic("turn.steered", { chars: text.length });
         return "steered";
       }
     }
 
-    this.assertCurrentModelAllowed(goalWork);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    assertPlanCurrent();
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
+    planSignature = this.planActionSignature();
 
     const nativePlanDecisions = this.harness.capabilities.nativePlanDecisions === true;
     let effectiveText = text;
     if (this.pendingModeSwitch) {
       const newMode = this.pendingModeSwitch;
-      if (await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode }, goalWork)) {
+      const resolved = await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode }, goalWork);
+      assertPlanCurrent();
+      if (resolved) {
         // The backend received the approval as the native permission result
         // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
-        this.assertCurrentModelAllowed(goalWork);
+        { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+        assertPlanCurrent();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
+        planSignature = this.planActionSignature();
         if (isBareApprovalMessage(text)) return "queued";
       } else if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode(newMode);
         } catch (err: unknown) {
           log.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
+          assertPlanCurrent();
           // Preserve the pending approval state so callers can retry cleanly.
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
-        this.assertCurrentModelAllowed(goalWork);
+        { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+        assertPlanCurrent();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
+        planSignature = this.planActionSignature();
         if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
       } else {
         // Harness doesn't support setPermissionMode — inject text prefix as best-effort fallback
@@ -1049,22 +1071,29 @@ export class Session extends EventEmitter {
           this.applyControlEvent({ type: "plan.approved" });
         }
         if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
+        planSignature = this.planActionSignature();
         log.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
       }
     } else if ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved) {
       if (this.approvalState !== "changes_requested") {
         this.applyControlEvent({ type: "plan.changes_requested" });
+        planSignature = this.planActionSignature();
       }
       // Native backends receive the feedback as the plan request's denial
       // (Claude: ExitPlanMode deny message) and keep planning in the same turn.
-      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text }, goalWork)) return "queued";
+      const resolved = await this.resolveNativePlanDecision({ kind: "revise", feedback: text }, goalWork);
+      assertPlanCurrent();
+      if (resolved) return "queued";
       if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
-      this.assertCurrentModelAllowed(goalWork);
+      { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+      assertPlanCurrent();
       // Re-assert plan mode at the backend level so revision stays read-only.
       if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode("plan");
+          { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+          assertPlanCurrent();
           this.currentPermissionMode = "plan";
           this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: "plan" });
         } catch (err: unknown) {
@@ -1073,7 +1102,8 @@ export class Session extends EventEmitter {
       }
     }
 
-    this.assertCurrentModelAllowed(goalWork);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    assertPlanCurrent();
     if (this.multiTurn && this.messageStream) {
         this.messageStream.push(
           this.harness.buildUserMessage(effectiveText, this.backendConversationId ?? ""),
@@ -1093,11 +1123,12 @@ export class Session extends EventEmitter {
    * Only harnesses that list the action in `capabilities.threadActions` and
    * build control messages support it.
    */
-  requestThreadAction(action: ThreadAction): void {
+  async requestThreadAction(action: ThreadAction): Promise<void> {
     if (this._status !== "running") {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
     const goalWork = this.beginAction();
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
     const supported = this.harness.capabilities.threadActions ?? [];
     if (!supported.includes(action.kind) || !this.harness.buildThreadActionMessage) {
       throw new Error(`The ${this.harness.name} harness does not support the "${action.kind}" thread action.`);
@@ -1106,26 +1137,41 @@ export class Session extends EventEmitter {
       throw new Error("Session does not support follow-up actions (launched in single-turn mode).");
     }
     this.resetIdleTimer();
-    this.assertCurrentModelAllowed(goalWork);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
     this.messageStream.push(this.harness.buildThreadActionMessage(action));
+  }
+
+  private planActionSignature(): string {
+    return JSON.stringify([this.planDecisionVersion, this.actionablePlanDecisionVersion, this.pendingPlanApproval,
+      this.planModeApproved, this.approvalState, this.pendingModeSwitch, this.planApprovalContext]);
+  }
+
+  private assertPlanActionCurrent(handle: HarnessSession | undefined, signature: string): void {
+    if (this._status !== "running" || this.harnessHandle !== handle || this.planActionSignature() !== signature) {
+      throw new Error("The plan or session changed during authorization. Review the current plan before retrying.");
+    }
   }
 
   private async resolveNativePlanDecision(
     decision: Parameters<NonNullable<HarnessSession["resolvePlanDecision"]>>[0],
     goalWork: boolean,
   ): Promise<boolean> {
-    if (!this.harnessHandle?.resolvePlanDecision) return false;
-    this.assertCurrentModelAllowed(goalWork);
+    const handle = this.harnessHandle;
+    const signature = this.planActionSignature();
+    if (!handle?.resolvePlanDecision) return false;
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    this.assertPlanActionCurrent(handle, signature);
     let resolved: boolean;
     try {
-      resolved = await this.harnessHandle.resolvePlanDecision(decision);
+      resolved = await handle.resolvePlanDecision(decision);
     } catch (err: unknown) {
       log.warn(`[Session ${this.id}] native plan decision (${decision.kind}) failed: ${errorMessage(err)}`);
       resolved = false;
     }
-    this.assertCurrentModelAllowed(goalWork);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    this.assertPlanActionCurrent(handle, signature);
     return resolved;
   }
 
@@ -1187,13 +1233,21 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
+    const pending = this.pendingInputState;
+    const pendingSignature = JSON.stringify(pending);
+    const handle = this.harnessHandle;
+    const activeQuestionIndex = pending.activeQuestionIndex;
+    const questionCount = pending.questions?.length;
+    const requestId = pending.requestId;
     const goalWork = this.beginAction();
-    const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
-    const questionCount = this.pendingInputState.questions?.length;
-    const requestId = this.pendingInputState.requestId;
-    const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
-    this.assertCurrentModelAllowed(goalWork);
-    if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    if (this._status !== "running" || this.harnessHandle !== handle
+      || this.pendingInputState !== pending || JSON.stringify(pending) !== pendingSignature) return false;
+    const submitted = await handle.submitPendingInputOption!(optionIndex, context);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    if (submitted && (!this.pendingInputState || (this.pendingInputState === pending && JSON.stringify(pending) === pendingSignature))) {
+      this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
+    }
     return submitted;
   }
 
@@ -1216,13 +1270,21 @@ export class Session extends EventEmitter {
     if (this._status !== "running" || !this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;
     }
+    const pending = this.pendingInputState;
+    const pendingSignature = JSON.stringify(pending);
+    const handle = this.harnessHandle;
+    const activeQuestionIndex = pending.activeQuestionIndex;
+    const questionCount = pending.questions?.length;
+    const requestId = pending.requestId;
     const goalWork = this.beginAction();
-    const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
-    const questionCount = this.pendingInputState.questions?.length;
-    const requestId = this.pendingInputState.requestId;
-    const submitted = await this.harnessHandle.submitPendingInputText(text);
-    this.assertCurrentModelAllowed(goalWork);
-    if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    if (this._status !== "running" || this.harnessHandle !== handle
+      || this.pendingInputState !== pending || JSON.stringify(pending) !== pendingSignature) return false;
+    const submitted = await handle.submitPendingInputText!(text);
+    { let authorization; do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent()); }
+    if (submitted && (!this.pendingInputState || (this.pendingInputState === pending && JSON.stringify(pending) === pendingSignature))) {
+      this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
+    }
     return submitted;
   }
 
@@ -1378,7 +1440,7 @@ export class Session extends EventEmitter {
       count += 1;
       if (msg.type === "run_completed") {
         await this.prepareWorktreeFinalizationCheck();
-        if (!this.isActive) break;
+        { let authorization; do { authorization = await this.assertCurrentModelAllowed(); } while (this.isActive && !authorization.isCurrent()); if (!this.isActive) break; }
       }
       this.harnessEvents.applyMessage(msg, {
         pendingPlanApproval: this.pendingPlanApproval,

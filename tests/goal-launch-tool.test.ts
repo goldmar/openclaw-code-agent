@@ -14,12 +14,12 @@ describe("agent_goal action=launch", () => {
     setGoalController(null);
   });
 
-  it("canonicalizes a provider-qualified Claude default before starting a goal", () => {
+  it("canonicalizes a provider-qualified Claude default before starting a goal", async () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",
       allowedModels: ["sonnet", "opus"],
     } } });
-    const result = resolveGoalLaunchRequest(
+    const result = await resolveGoalLaunchRequest(
       { goal: "Check the default" },
       { workspaceDir: "/tmp", sessionKey: "agent:main:discord:channel:123456789", messageChannel: "discord" } as any,
     );
