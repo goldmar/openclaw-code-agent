@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { discoverExistingTargetPr, makeAgentPrTool } from "../src/tools/agent-pr";
 import { resolveLandingBaseBranch, resolveWorktreeLifecycle, worktreeLifecycleResolverInternals } from "../src/worktree-lifecycle-resolver";
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
-import { resetCanonicalRepoNamesForTests } from "../src/worktree-pr";
+import { repoNameForGh, resetCanonicalRepoNamesForTests } from "../src/worktree-pr";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { USER_BUTTON_TOOL_CALL_ID } from "../src/tools/worktree-tool-context";
 import { SessionManager } from "../src/session-manager";
@@ -907,6 +907,17 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       const statusText = status.content.map((entry) => entry.text).join("\n");
       assert.ok(statusText.includes(`${f.branch} → main`), statusText);
       assert.match(statusText, /PR base:\s+release/, statusText);
+      // The PR's own base is recorded next to its URL, not read from the lifecycle:
+      // a lifecycle base rewritten by something else is never shown as the PR's.
+      assert.equal(f.persisted()?.worktreePrBaseBranch, "release");
+      f.sm.updatePersistedSession(SESSION_ID, { worktreeLifecycle: { ...f.persisted()!.worktreeLifecycle!, baseBranch: "main" } });
+      const afterRewrite = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      assert.match(afterRewrite.content.map((entry) => entry.text).join("\n"), /PR base:\s+release/);
+      // A row from before the field existed shows no PR base rather than a guess.
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrBaseBranch: undefined, worktreeLifecycle: { ...f.persisted()!.worktreeLifecycle!, baseBranch: "release" } });
+      const oldRow = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      assert.doesNotMatch(oldRow.content.map((entry) => entry.text).join("\n"), /PR base:/);
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrBaseBranch: "release" });
 
       // A bare merge goes to the landing base, as the 🔀 prompt would say.
       const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
@@ -931,6 +942,12 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.match(text, /gone-branch/, text);
     assert.match(text, /^(?:❌|⚠️|Error)/, text);
     assert.equal(git(f.gh.repoDir, "rev-parse", "main"), mainBefore, "nothing was merged anywhere else");
+
+    // A session that already merged stays "Already merged" when its base was deleted afterwards.
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeMerged: true });
+    const repeat = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    assert.equal(repeat.content.map((entry) => entry.text).join("\n"), "ℹ️ [pr-flow] Already merged.");
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeMerged: undefined });
 
     // The resolver (status, retention) does not throw for a stored lifecycle base that is gone.
     const resolved = await resolveWorktreeLifecycle({
@@ -995,6 +1012,51 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       assert.equal(lookups, 3);
     } finally {
       worktreeLifecycleResolverInternals.lookupBranchPr = realLookup;
+    }
+  });
+
+  it("names a repository for gh with its host, and compares PR URLs by owner and repository", () => {
+    // github.com: the plain name, as before.
+    assert.deepEqual(repoNameForGh({ originUrl: "git@github.com:Acme/Widget.git" }), { ownerRepo: "acme/widget", ghName: "acme/widget" });
+    assert.deepEqual(repoNameForGh({ originUrl: "https://github.com/acme/widget" }), { ownerRepo: "acme/widget", ghName: "acme/widget" });
+    assert.deepEqual(repoNameForGh({ targetRepo: "upstream-org/widget" }), { ownerRepo: "upstream-org/widget", ghName: "upstream-org/widget" });
+    assert.deepEqual(repoNameForGh({ targetRepo: "github.com/upstream-org/widget" }), { ownerRepo: "upstream-org/widget", ghName: "upstream-org/widget" });
+    // GitHub Enterprise: the host stays in what gh is asked and in the cache key.
+    assert.deepEqual(repoNameForGh({ originUrl: "git@github.acme.internal:team/repo.git" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ originUrl: "https://token@GHE.acme.internal/team/repo.git" }), { ownerRepo: "team/repo", ghName: "ghe.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ originUrl: "ssh://git@github.acme.internal:22/team/repo.git" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ targetRepo: "github.acme.internal/team/repo" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    // A target repo wins over origin; nothing usable gives nothing.
+    assert.deepEqual(repoNameForGh({ targetRepo: "a/b", originUrl: "git@github.com:c/d.git" }), { ownerRepo: "a/b", ghName: "a/b" });
+    assert.equal(repoNameForGh({}), undefined);
+    assert.equal(repoNameForGh({ targetRepo: "just-a-name" }), undefined);
+  });
+
+  it("checks hook changes against the recorded PR's own base, whatever the lifecycle state is", async () => {
+    const f = await setup({ persisted: { worktreeBaseBranch: "main" } });
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    // The session's PR goes into a branch that already has the hook file; the session added one more commit.
+    git(f.gh.repoDir, "branch", "stacked-base", f.branch);
+    f.commit("more.txt", "more\n", "feat: more");
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: "stacked-base" });
+    // Back in the decision prompt (not `pr_open`), as after a later completion.
+    f.sm.updatePersistedSession(SESSION_ID, {
+      worktreePrUrl: pr.url,
+      worktreePrNumber: pr.number,
+      worktreeLifecycle: { state: "pending_decision", updatedAt: new Date().toISOString(), baseBranch: "main" },
+    });
+    let escalated = false;
+    f.sm.requestWorktreeDecisionFromUser = async () => { escalated = true; return "Decision queued"; };
+    try {
+      const result = await f.run();
+      // Against the PR's base the update adds no hook file: no escalation, the PR is updated.
+      assert.equal(escalated, false);
+      assert.equal(result.meta.success, true, textOf(result));
+      assert.equal(f.outcomes.at(-1)?.detailLines?.[0], `Updated PR for branch ${f.branch} into stacked-base.`);
+      assert.equal(f.persisted()?.worktreePrBaseBranch, "stacked-base");
+    } finally {
+      git(f.gh.repoDir, "branch", "-D", "stacked-base");
     }
   });
 

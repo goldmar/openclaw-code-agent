@@ -192,19 +192,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // merge, the status tool and a new PR compute it: the base this call
       // names, else the base recorded at launch (the merge target, not where
       // the worktree was created from), else the detected default branch.
-      const resolvedBaseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, effectiveWorkdir, params.base_branch);
+      const baseSource = persistedSession ?? targetSession;
+      const resolvedBaseBranch = await resolveLandingBaseBranch(baseSource, effectiveWorkdir, params.base_branch);
       const baseBranch = resolvedBaseBranch;
-      // A base named by the call or recorded for the session must exist: never
-      // fall through to an obscure git error, and never merge somewhere else.
-      const namedBaseBranch = params.base_branch ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch;
-      if (namedBaseBranch && !(await branchExists(effectiveWorkdir, namedBaseBranch))) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Merge blocked: base branch \`${namedBaseBranch}\` does not exist in ${effectiveWorkdir}.\nPass base_branch to name the branch to merge into.`,
-          }],
-        };
-      }
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
@@ -221,6 +211,20 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
         return { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
+      }
+
+      // A base named by the call or recorded for the session must exist: never
+      // fall through to an obscure git error, and never merge somewhere else.
+      // (After the guard above: a session that already merged stays "Already
+      // merged" when its base was deleted afterwards.)
+      const namedBaseBranch = params.base_branch ?? baseSource?.worktreeBaseBranch;
+      if (namedBaseBranch && !(await branchExists(effectiveWorkdir, namedBaseBranch))) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Merge blocked: base branch \`${namedBaseBranch}\` does not exist in ${effectiveWorkdir}.\nPass base_branch to name the branch to merge into.`,
+          }],
+        };
       }
 
       const branchAheadCount = existsSync(worktreePath)

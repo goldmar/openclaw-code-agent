@@ -78,7 +78,8 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
         lines.push(statusField("Cleanup", cleanup));
         if (resolved.evidence.prUrl) {
           lines.push(statusField("PR", `${resolved.evidence.prUrl} (${resolved.evidence.prState ?? "unknown"})`));
-          const prBase = persisted?.worktreeLifecycle?.baseBranch;
+          // The recorded PR's own base (rows from before it was recorded have none).
+          const prBase = persisted?.worktreePrBaseBranch;
           if (prBase && prBase !== landingBase) lines.push(statusField("PR base", prBase));
         }
         if (resolved.evidence.branchAheadCount != null || resolved.evidence.baseAheadCount != null) {

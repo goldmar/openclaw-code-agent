@@ -120,6 +120,31 @@ export function resetCanonicalRepoNamesForTests(): void {
  * passed explicitly (gh's own choice of remote may prefer `upstream`); GitHub
  * redirects a renamed or transferred repository, so the canonical name comes back.
  */
+/**
+ * How a repository is named for gh and for the PR-URL comparison: `ownerRepo`
+ * (lower case) is what a PR URL's path is compared with, and `ghName` is the
+ * host-qualified name gh takes (`OWNER/REPO` on github.com, `HOST/OWNER/REPO`
+ * elsewhere), which is also the cache key.
+ */
+export function repoNameForGh(source: { targetRepo?: string; originUrl?: string }): { ownerRepo: string; ghName: string } | undefined {
+  const target = source.targetRepo?.trim();
+  if (target) {
+    const parts = target.split("/").filter(Boolean);
+    if (parts.length < 2) return undefined;
+    const ownerRepo = parts.slice(-2).join("/").toLowerCase();
+    const host = parts.length >= 3 ? parts.slice(0, -2).join("/").toLowerCase() : undefined;
+    return { ownerRepo, ghName: host && host !== "github.com" ? `${host}/${ownerRepo}` : ownerRepo };
+  }
+  const origin = source.originUrl?.trim();
+  if (!origin) return undefined;
+  // `git@host:owner/repo.git`, `ssh://git@host[:port]/owner/repo.git`, `https://[user@]host/owner/repo.git`
+  const match = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]+(?:.*\/)?([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin);
+  if (!match) return undefined;
+  const host = match[1]!.toLowerCase();
+  const ownerRepo = match[2]!.toLowerCase();
+  return { ownerRepo, ghName: host === "github.com" ? ownerRepo : `${host}/${ownerRepo}` };
+}
+
 function canonicalRepoName(repoDir: string, expected: string): Promise<string | undefined> {
   const cached = canonicalRepoNames.get(expected);
   if (cached && (cached.failedAt === undefined || Date.now() - cached.failedAt < CANONICAL_REPO_FAILURE_TTL_MS)) return cached.name;
@@ -147,17 +172,17 @@ function canonicalRepoName(repoDir: string, expected: string): Promise<string | 
  */
 async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo: string | undefined): Promise<boolean> {
   const urlRepo = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\//i.exec(prUrl)?.[1]?.toLowerCase();
-  let expected = targetRepo?.split("/").slice(-2).join("/").toLowerCase();
+  let expected = repoNameForGh({ targetRepo });
   if (!expected) {
     try {
-      const originUrl = (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim();
-      expected = /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(originUrl)?.[1]?.toLowerCase();
+      expected = repoNameForGh({ originUrl: (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim() });
     } catch {
       expected = undefined;
     }
   }
-  if (!urlRepo || !expected || urlRepo === expected) return true;
-  const canonical = await canonicalRepoName(repoDir, expected);
+  if (!urlRepo || !expected || urlRepo === expected.ownerRepo) return true;
+  // Asked on the repository's own host (GitHub Enterprise too), and cached per host-qualified name.
+  const canonical = await canonicalRepoName(repoDir, expected.ghName);
   return canonical !== undefined && urlRepo === canonical;
 }
 

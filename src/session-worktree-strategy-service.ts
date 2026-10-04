@@ -1073,6 +1073,7 @@ export class SessionWorktreeStrategyService {
       worktreePath: undefined,
       worktreePrUrl: targetPrStatus.url,
       worktreePrNumber: targetPrStatus.number,
+      worktreePrBaseBranch: targetPrStatus.baseRefName,
       worktreePrTargetRepo: session.worktreePrTargetRepo,
       worktreeRemoteOutcome: "pr-updated",
     });

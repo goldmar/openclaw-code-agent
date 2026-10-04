@@ -676,6 +676,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
     worktreePrUrl: toOptionalString(raw.worktreePrUrl),
     worktreePrNumber: toOptionalNumber(raw.worktreePrNumber),
+    worktreePrBaseBranch: toOptionalString(raw.worktreePrBaseBranch),
     worktreePrClosed: raw.worktreePrClosed === true ? true : undefined,
     pendingWorktreeDecisionSince: toOptionalString(raw.pendingWorktreeDecisionSince),
     deferredCompletionCycle: toOptionalNumber(raw.deferredCompletionCycle),

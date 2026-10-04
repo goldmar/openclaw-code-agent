@@ -496,22 +496,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const existingPrBase = (status: PRStatus): string => status.baseRefName ?? baseBranch;
       const decisionRef = worktreeDecisionRef(sm, target);
       if (!decisionRef) return { content: [{ type: "text", text: "Error: The selected session changed before PR preparation." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      const hookRefusal = await refuseHookChangesWithoutUser({
-        sessionManager: sm,
-        toolCallId: _id,
-        sessionRef: decisionRef,
-        decisionRef: () => worktreeDecisionRef(sm, target),
-        repoDir: originalWorkdir,
-        branchName,
-        // An existing PR is the target: the hook changes that matter are those against its own base.
-        baseBranch: persistedSession?.worktreePrUrl && persistedSession.worktreeLifecycle?.state === "pr_open"
-          ? persistedSession.worktreeLifecycle.baseBranch ?? baseBranch
-          : baseBranch,
-        action: "pr",
-      });
-      if (hookRefusal) {
-        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
       const metadataProvider = options.metadataProvider ?? createRuntimePrMetadataProvider();
       /**
        * A PR that needed no new outcome (already merged, or up to date). When it
@@ -552,7 +536,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           },
         );
         // Every PR resolution consumes the `✅` owed to a deferred completion.
-        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined, worktreePrClosed: undefined })) {
+        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined, worktreePrClosed: undefined, worktreePrBaseBranch: args.prBase ?? baseBranch })) {
           throw new Error("PR operation completed, but its selected session state could not be updated. Reconcile before retrying.");
         }
       };
@@ -571,6 +555,25 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           }],
           meta: { success: false, state: "error" },
         } satisfies AgentPrExecuteResult;
+      }
+      // Hook and worktree-setup changes need the user. When the session's
+      // recorded PR is the target (open, whatever the lifecycle says), the
+      // changes that matter are those against that PR's own base; nothing has
+      // been pushed or changed yet at this point.
+      const hookRefusal = await refuseHookChangesWithoutUser({
+        sessionManager: sm,
+        toolCallId: _id,
+        sessionRef: decisionRef,
+        decisionRef: () => worktreeDecisionRef(sm, target),
+        repoDir: originalWorkdir,
+        branchName,
+        baseBranch: explicitTargetPrStatus?.exists && explicitTargetPrStatus.state === "open"
+          ? existingPrBase(explicitTargetPrStatus)
+          : baseBranch,
+        action: "pr",
+      });
+      if (hookRefusal) {
+        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
       const forceNewIgnoresClosedTargetPr = shouldIgnoreClosedTargetPrForForceNew(params.force_new, explicitTargetPrStatus);
       const effectiveTargetPrUrl = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrUrl;
@@ -635,7 +638,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         const adopt = foundByBranch && status.url !== undefined && status.url !== explicitTargetPrUrl && status.headRefName === branchName;
         const patch: Partial<PersistedSessionInfo> = {
           ...(persistedSession?.worktreePrClosed ? { worktreePrClosed: undefined } : {}),
-          ...(adopt ? { worktreePrUrl: status.url, worktreePrNumber: status.number } : {}),
+          ...(adopt ? { worktreePrUrl: status.url, worktreePrNumber: status.number, worktreePrBaseBranch: status.baseRefName } : {}),
         };
         if (Object.keys(patch).length > 0 && !patchWorktreeTarget(sm, target, patch)) {
           log.warn(`[agent_pr] Could not update the PR record of session ${sessionName} after a refused force_new`);
@@ -808,6 +811,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           }),
           worktreePrUrl: prStatus.url,
           worktreePrNumber: prStatus.number,
+          worktreePrBaseBranch: prStatus.baseRefName,
           worktreeDisposition: "merged",
           worktreeDecisionSnoozedUntil: undefined,
           deferredCompletionCycle: undefined,
