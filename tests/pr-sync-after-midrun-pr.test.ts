@@ -238,7 +238,7 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
 describe("planner: a resolved worktree with new commits is not resolved", () => {
   let counter = 0;
 
-  async function fixture(strategy: string, state: "pr_open" | "merged"): Promise<{ session: Session; branch: string; worktreePath: string; plan: () => Promise<PlannedWorktreeAction> }> {
+  async function fixture(strategy: string, state: "pr_open" | "merged"): Promise<{ session: Session; branch: string; worktreePath: string; plan: () => Promise<PlannedWorktreeAction>; recordPublishedPr: (head?: string) => void }> {
     counter += 1;
     const worktreePath = await createWorktree(github.repoDir, `planner-${counter}`);
     const branch = (await getBranchName(worktreePath))!;
@@ -271,12 +271,21 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
       isPrAvailable: () => true,
       resolveRepoPolicy: () => ({ policy: "pr-allowed", source: "stored", provider: "github", prAvailable: true }),
     });
-    return { session, branch, worktreePath, plan: () => service.plan(session) };
+    return {
+      session, branch, worktreePath, plan: () => service.plan(session),
+      recordPublishedPr: (head = branch) => {
+        const publishedHead = github.remoteHead(head);
+        assert.match(publishedHead, /^[a-f0-9]{40}$/, "the API head is an actually published commit");
+        const pr = github.seedPr({ headRefName: head, headRefOid: publishedHead });
+        session.worktreePrUrl = pr.url;
+      },
+    };
   }
 
   it("pr_open: pushed head equals the branch → still resolved; one more commit → a decision counting only that commit", async () => {
     const f = await fixture("ask", "pr_open");
     git(github.repoDir, "push", "origin", `${f.branch}:${f.branch}`);
+    f.recordPublishedPr();
     assert.equal((await f.plan()).kind, "skip");
 
     commit(f.worktreePath, "second.txt", "two\n", "add two");
@@ -305,6 +314,7 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
     const head = `${f.branch}-pr-head`;
     git(github.repoDir, "branch", head, f.branch);
     git(github.repoDir, "push", "origin", `${head}:${head}`);
+    f.recordPublishedPr(head);
     (f.session as { worktreePrHeadBranch?: string }).worktreePrHeadBranch = head;
     assert.equal((await f.plan()).kind, "skip", "nothing the PR does not have: no prompt");
 
@@ -318,9 +328,12 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
   });
 
   it("pr_open by strategy: delegate decides, auto-merge becomes the prompt, manual and off only note it, auto-pr is unchanged", async () => {
+    const expectedNotes = new Map<string, string>();
     const plan = async (strategy: string): Promise<PlannedWorktreeAction> => {
       const f = await fixture(strategy, "pr_open");
       git(github.repoDir, "push", "origin", `${f.branch}:${f.branch}`);
+      f.recordPublishedPr();
+      expectedNotes.set(strategy, `⚠️ 1 commit on \`${f.branch}\` is not in the PR: ${f.session.worktreePrUrl}`);
       commit(f.worktreePath, `more-${strategy}.txt`, "two\n", "add two");
       return await f.plan();
     };
@@ -334,7 +347,8 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
     for (const strategy of ["manual", "off"]) {
       const quiet = await plan(strategy);
       assert.equal(quiet.kind, "skip");
-      assert.match(quiet.kind === "skip" ? quiet.result.completionNote ?? "" : "", /^⚠️ 1 commit on `[^`]+` is not in the PR: https:\/\/github\.com\/acme\/widget\/pull\/7$/);
+      const note = quiet.kind === "skip" ? quiet.result.completionNote ?? "" : "";
+      assert.equal(note, expectedNotes.get(strategy));
     }
   });
 
