@@ -16,6 +16,7 @@ const POLICY_FAILURES = [
   "Goal verification policy or repository identity changed. Start a new goal; stored required and additional checks are never replaced.",
 ];
 const FIELD = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+const POLICY_ARRAY = `${FIELD}.repositories`;
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const json = path => JSON.parse(readFileSync(path, "utf8"));
 const inside = (root, path) => { const r = relative(root, path);
@@ -32,6 +33,25 @@ export function patchAcknowledgementProof(ack, previousHash, requestedPaths) {
       && changedPaths.some(changed => requestedPaths.some(requested =>
       changed === requested || changed.startsWith(`${requested}.`))),
     patchNoRestart: ack?.sentinel?.payload?.stats?.requiresRestart === false,
+  };
+}
+/** Preserve only fixed failure categories before a patch command can refuse. */
+export function configPatchFailureProof(result) {
+  let response;
+  try { response = JSON.parse(result.stdout.slice(result.stdout.indexOf("{"))); } catch {}
+  const parsed = !!response && typeof response === "object" && !Array.isArray(response);
+  const code = parsed ? response.error?.code : undefined;
+  const message = typeof response?.error?.message === "string" ? response.error.message : "";
+  const errorCode = ["INVALID_REQUEST", "UNAVAILABLE", "CONFLICT", "RATE_LIMITED"].includes(code) ? code
+    : parsed && !response.error && result.code === 0 ? "NONE" : "UNKNOWN";
+  return {
+    patchResponseParsed: parsed,
+    patchErrorCode: errorCode,
+    patchArrayIntentDenied: errorCode === "INVALID_REQUEST" && message.includes("would remove entries from array path(s)"),
+    patchRequiredCommandsSchemaDenied: errorCode === "INVALID_REQUEST" && /^invalid config(?::|$)/i.test(message)
+      && message.includes("requiredCommands"),
+    patchRateLimitDenied: /rate limit exceeded|rate-limited/i.test(message),
+    patchBaseHashDenied: /base hash.*(?:required|mismatch)|config changed since/i.test(message),
   };
 }
 export function optionsFor(args) {
@@ -198,8 +218,15 @@ export class FeatureRun {
     if (!allowFailure) assert.equal(code, 0);
     return { code, stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8") };
   }
-  async cli(args, options) { return this.command(process.execPath, [this.hostEntry, ...args], options);
+  async cli(args, options) {
+    if (args[0] !== "gateway" || args[1] !== "call" || args[2] !== "config.patch") {
+      return this.command(process.execPath, [this.hostEntry, ...args], options);
     }
+    const result = await this.command(process.execPath, [this.hostEntry, ...args], { ...options, allowFailure: true });
+    this.proofs.push(configPatchFailureProof(result));
+    if (!options?.allowFailure) assert.equal(result.code, 0, "CONFIG_PATCH_EXIT_REQUIRED");
+    return result;
+  }
   async rpc(method, params = {}) {
     this.proofs.push({ rpcMethod: method });
     const result = await this.cli(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
@@ -467,7 +494,7 @@ export class FeatureRun {
       assert.ok(sameProcess(this.gatewayIdentity, processIdentity(this.gateway.pid)));
       this.proofs.push({ alreadySetReadbackOnly: true, sourceSha256: sha(JSON.stringify(policies)), unchangedRevision: cfg.hash });
     } else {
-      const after = await this.patch({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: policies } } } } }, [FIELD]);
+      const after = await this.patch({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: policies } } } } }, [POLICY_ARRAY]);
       assert.deepEqual(after.config.plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies, policies);
     }
     this.currentPolicies = structuredClone(policies);
@@ -611,15 +638,24 @@ export class FeatureRun {
     fixture.nativeSnapshot = { processes: this.nativeProcesses(null) }; assert.equal(fixture.nativeSnapshot.processes.length, 0);
     return original;
   }
+  async rejectEmptyPolicy() {
+    const cfg = await this.rpc("config.get"), before = this.effects();
+    const refused = await this.cli(["gateway", "call", "config.patch", "--params", JSON.stringify({ raw: JSON.stringify({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: { repositories: [{ repository: this.repoA, requiredCommands: [] }] } } } } } }), baseHash: cfg.hash, replacePaths: [POLICY_ARRAY] }), "--json"], { allowFailure: true });
+    const failure = configPatchFailureProof(refused);
+    assert.notEqual(refused.code, 0);
+    assert.equal(failure.patchErrorCode, "INVALID_REQUEST");
+    assert.equal(failure.patchRequiredCommandsSchemaDenied, true, "EMPTY_REQUIRED_COMMANDS_SCHEMA_DENIAL_REQUIRED");
+    assert.equal(failure.patchArrayIntentDenied, false, "ARRAY_INTENT_DENIAL_IS_NOT_SCHEMA_PROOF");
+    assert.equal((await this.rpc("config.get")).hash, cfg.hash);
+    assert.deepEqual(this.effects(), before);
+  }
   async runCases() {
     const selected = this.receipt.scenario;
     if (selected === "smoke") return;
     if (["admission", "all"].includes(selected)) {
       this.stage = "admission";
-      const cfg = await this.rpc("config.get"), before = this.effects();
-      const refused = await this.cli(["gateway", "call", "config.patch", "--params", JSON.stringify({ raw: JSON.stringify({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: { repositories: [{ repository: this.repoA, requiredCommands: [] }] } } } } } }), baseHash: cfg.hash, replacePaths: [FIELD] }), "--json"], { allowFailure: true });
-      assert.notEqual(refused.code, 0); assert.equal(JSON.parse(refused.stdout.slice(refused.stdout.indexOf("{"))).error.code, "INVALID_REQUEST");
-      assert.equal((await this.rpc("config.get")).hash, cfg.hash); assert.deepEqual(this.effects(), before);
+      await this.rejectEmptyPolicy();
+      const before = this.effects();
       const unmatched = join(this.workspace, "unmapped-repository"); await this.createRepository(unmatched);
       const denied = await this.invoke("agent_goal", { action: "launch", goal: "Unmapped repository", workdir: unmatched }, false);
       assert.match(denied.content[0].text, /No goal verification policy matches/); assert.deepEqual(this.effects(), before);

@@ -2,7 +2,7 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -71,6 +71,92 @@ describe("bounded representative host receipts", () => {
       for (const invalid of [null, "true", 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], [field]: invalid }] }));
     }
     assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], rawAck: ack }] }), /Unknown feature proof field|Raw profile/);
+  });
+  it("declares exact repository-array replacement for removal and every selected-suite mutation", async () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const root = mkdtempSync(join(tmpdir(), "oca-policy-patch-")), configPath = join(root, "config.json");
+    const original = { repositories: [{ repository: "/fixture/a", requiredCommands: ["a", "a"] }, { repository: "/fixture/b", requiredCommands: ["b"] }] };
+    const alias = { repositories: [...original.repositories, { repository: "/fixture/alias", requiredCommands: ["a"] }] };
+    const changedA = structuredClone(original); changedA.repositories[0].requiredCommands = ["changed-a"];
+    const changedB = structuredClone(original); changedB.repositories[1].requiredCommands = ["changed-b"];
+    const identity = processIdentity(process.pid); assert.ok(identity);
+    try {
+      for (const [previous, next] of [[alias, original], [original, changedA], [original, changedB], [changedA, original]]) {
+        const wrap = (policies: unknown) => ({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: policies } } } } });
+        writeFileSync(configPath, JSON.stringify(wrap(previous)));
+        let patched = false;
+        const patches: any[] = [], proofs: any[] = [];
+        const run = Object.assign(Object.create(FeatureRun.prototype), { env: { OPENCLAW_CONFIG_PATH: configPath }, proofs, gatewayIdentity: identity, gateway: { pid: process.pid },
+          rpc: async (method: string, params?: any) => {
+            if (method === "config.patch") {
+              assert.equal(params.baseHash, "before");
+              assert.deepEqual(params.replacePaths, [`${field}.repositories`], "host array intent is exact, never its policy parent");
+              assert.deepEqual(JSON.parse(params.raw), wrap(next)); patches.push(params); patched = true;
+              return { ok: true, hash: "after", changedPaths: [`${field}.repositories`], sentinel: { payload: { stats: { requiresRestart: false } } } };
+            }
+            assert.equal(method, "config.get");
+            return { valid: true, hash: patched ? "after" : "before", configRevisionHash: patched ? "after" : "before", appliedConfigHash: patched ? "after" : "before", config: wrap(patched ? next : previous) };
+          } });
+        await run.setPolicies(next); assert.equal(patches.length, 1); assert.deepEqual(run.currentPolicies, next);
+        assert.equal(proofs[0].patchSelectedPathChanged, true); assert.deepEqual(proofs[1].mutation, [`${field}.repositories`]);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("proves an empty required suite reaches schema validation rather than an earlier patch refusal", async () => {
+    const path = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies.repositories";
+    const schema = { error: { code: "INVALID_REQUEST", message: "invalid config: plugins.entries.openclaw-code-agent.config: /goalVerificationPolicies/repositories/0/requiredCommands: must NOT have fewer than 1 items" } };
+    const make = (result: { code: number; stdout: string }, revision = "unchanged", changedEffects = false) => {
+      let reads = 0, effectReads = 0;
+      const run = Object.assign(Object.create(FeatureRun.prototype), { repoA: "/fixture/a",
+        effects: () => ({ launches: changedEffects && effectReads++ ? 1 : 0 }),
+        rpc: async () => ({ hash: ++reads > 1 ? revision : "unchanged" }),
+        cli: async (args: string[], options: any) => {
+          const params = JSON.parse(args[args.indexOf("--params") + 1]);
+          assert.equal(options.allowFailure, true); assert.equal(params.baseHash, "unchanged");
+          assert.deepEqual(params.replacePaths, [path]);
+          assert.deepEqual(JSON.parse(params.raw).plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies.repositories, [{ repository: "/fixture/a", requiredCommands: [] }]);
+          return result;
+        } });
+      return { run, reads: () => reads };
+    };
+    const actual = { code: 1, stdout: JSON.stringify(schema) };
+    const valid = make(actual); await valid.run.rejectEmptyPolicy(); assert.equal(valid.reads(), 2);
+    for (const result of [
+      { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "config.patch would remove entries from array path(s): private-path" } }) },
+      { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "invalid config: unrelatedField" } }) },
+      { code: 1, stdout: "not JSON" }, { code: 0, stdout: JSON.stringify(schema) },
+      { code: 1, stdout: JSON.stringify({ error: { code: "UNAVAILABLE", message: schema.error.message } }) },
+    ]) { const invalid = make(result); await assert.rejects(invalid.run.rejectEmptyPolicy()); assert.equal(invalid.reads(), 1); }
+    await assert.rejects(make(actual, "modified").run.rejectEmptyPolicy());
+    await assert.rejects(make(actual, "unchanged", true).run.rejectEmptyPolicy());
+  });
+  it("retains closed patch failure facts before the original CLI exit assertion without leaking error prose", async () => {
+    const privateValue = "SYNTHETIC_PRIVATE_CONFIG_PATH";
+    const output = { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: `config.patch would remove entries from array path(s): ${privateValue}` } }), stderr: privateValue };
+    const make = () => {
+      const proofs: any[] = [], calls: any[] = [];
+      const run = Object.assign(Object.create(FeatureRun.prototype), { hostEntry: "/fixture/host", proofs,
+        command: async (_command: string, _args: string[], options: any) => { calls.push(options); return output; } });
+      return { run, proofs, calls };
+    };
+    const args = ["gateway", "call", "config.patch", "--params", "{}", "--json"];
+    const denied = make(); await assert.rejects(denied.run.cli(args), /CONFIG_PATCH_EXIT_REQUIRED/);
+    assert.equal(denied.calls[0].allowFailure, true); assert.equal(denied.proofs[0].patchArrayIntentDenied, true);
+    const allowedFailure = make(); assert.deepEqual(await allowedFailure.run.cli(args, { allowFailure: true }), output);
+    assert.deepEqual(allowedFailure.proofs, denied.proofs);
+    assert.equal(configPatchFailureProof({ code: 1, stdout: "unknown private error" }).patchErrorCode, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "not JSON" }).patchErrorCode, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: JSON.stringify({ ok: true }) }).patchErrorCode, "NONE");
+    for (const code of ["INVALID_REQUEST", "UNAVAILABLE", "CONFLICT", "RATE_LIMITED"]) assert.equal(configPatchFailureProof({ code: 1, stdout: JSON.stringify({ error: { code } }) }).patchErrorCode, code);
+    assert.equal(configPatchFailureProof({ code: 1, stdout: JSON.stringify({ error: { code: privateValue } }) }).patchErrorCode, "UNKNOWN");
+    const r = receipt(); r.proofs = denied.proofs;
+    const encoded = frameReceipt(r); assert.equal(encoded.includes(privateValue), false);
+    assert.deepEqual(decodeReceipt(encoded, expected).receipt.proofs, denied.proofs);
+    for (const key of ["patchResponseParsed", "patchArrayIntentDenied", "patchRequiredCommandsSchemaDenied", "patchRateLimitDenied", "patchBaseHashDenied"]) {
+      for (const value of [null, "true", 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], [key]: value }] }));
+    }
+    for (const value of [null, privateValue, 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], patchErrorCode: value }] }));
+    assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], rawError: privateValue }] }));
   });
   it("requires exact external identity even on BLOCKED evidence", () => {
     const r = receipt(); r.disposition = "BLOCKED";
