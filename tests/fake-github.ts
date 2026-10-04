@@ -141,7 +141,8 @@ if (command === "create") {
     fail("fake gh: could not read origin: " + error.message);
   }
   if (!pushed) fail("pull request create failed: GraphQL: Head sha can't be blank, Head ref must be a branch (createPullRequest)");
-  const existing = state.prs.find((pr) => pr.repo === repo && pr.headRefName === headRefName && pr.state === "OPEN");
+  // Like GitHub: one open PR per head and base; a second PR into another base is allowed.
+  const existing = state.prs.find((pr) => pr.repo === repo && pr.headRefName === headRefName && pr.baseRefName === base && pr.state === "OPEN");
   if (existing) fail("a pull request for branch \"" + headRefName + "\" into branch \"" + existing.baseRefName + "\" already exists:\n" + existing.url);
   const number = state.nextNumber++;
   const pr = {

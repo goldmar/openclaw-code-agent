@@ -187,7 +187,13 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
-      const resolvedBaseBranch = params.base_branch ?? await detectDefaultBranch(effectiveWorkdir);
+      // The same base as `agent_pr` and the automatic merge: the base this call
+      // names, else the base the session's worktree was created from, else
+      // the detected default branch.
+      const resolvedBaseBranch = params.base_branch
+        ?? persistedSession?.worktreeBaseBranch
+        ?? targetSession?.worktreeBaseBranch
+        ?? await detectDefaultBranch(effectiveWorkdir);
       const baseBranch = resolvedBaseBranch;
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false

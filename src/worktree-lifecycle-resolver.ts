@@ -14,7 +14,7 @@ import {
   isBranchAncestorOfBase,
   wouldMergeBeNoop,
 } from "./worktree-repo";
-import { syncWorktreePR, syncWorktreePRByUrl } from "./worktree-pr";
+import { syncWorktreePR, syncWorktreePRByUrl, type PRStatus } from "./worktree-pr";
 import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
@@ -82,6 +82,13 @@ export async function resolveWorktreeLifecycle(
   let branchAheadCount: number | undefined;
   let baseAheadCount: number | undefined;
   let prState: WorktreeRepositoryEvidence["prState"] = "none";
+  let branchHasOpenPr = false;
+  // The session's recorded PR, read at most once per call.
+  let recordedPrLookup: Promise<PRStatus> | undefined;
+  const recordedPrStatus = (): Promise<PRStatus> => {
+    recordedPrLookup ??= syncWorktreePRByUrl(workdir!, session.worktreePrUrl!, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+    return recordedPrLookup;
+  };
   let prUrl = session.worktreePrUrl;
   let prNumber = session.worktreePrNumber;
 
@@ -132,7 +139,7 @@ export async function resolveWorktreeLifecycle(
     }
     const currentRepoBranch = await getBranchName(workdir);
     if (options.includePrSync && session.worktreePrUrl && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
-      const currentPrStatus = await syncWorktreePRByUrl(workdir, session.worktreePrUrl, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+      const currentPrStatus = await recordedPrStatus();
       representedByTargetPrBranch = Boolean(
         (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
         && currentPrStatus.headRefName === currentRepoBranch
@@ -151,11 +158,18 @@ export async function resolveWorktreeLifecycle(
   if (options.includePrSync && repoExists && workdir && branchName) {
     // Like `agent_pr`: the session's recorded PR first (when it is this
     // branch's PR), else the branch's PR into the session's base branch.
+    // A recorded URL is trusted only for this repository's own branch.
     const prTargetRepo = session.worktreePrTargetRepo ?? lifecycle.targetRepo;
-    const recordedPr = session.worktreePrUrl ? await syncWorktreePRByUrl(workdir, session.worktreePrUrl, prTargetRepo) : undefined;
-    const prStatus = recordedPr?.exists && recordedPr.headRefName === branchName
-      ? recordedPr
+    const recordedPr = session.worktreePrUrl ? await recordedPrStatus() : undefined;
+    const recordedIsBranchPr = Boolean(recordedPr?.exists && recordedPr.headRefName === branchName && recordedPr.ownHead !== false);
+    const branchPr = recordedIsBranchPr && recordedPr!.state === "open"
+      ? recordedPr!
       : await syncWorktreePR(workdir, branchName, prTargetRepo, session.worktreeBaseBranch ?? lifecycle.baseBranch);
+    const prStatus = recordedIsBranchPr ? recordedPr! : branchPr;
+    // Retention must not remove the worktree while any PR of this branch is
+    // open, also one that was opened by hand next to a closed recorded PR.
+    branchHasOpenPr = branchPr.state === "open";
+    if (branchHasOpenPr && prStatus.state !== "open") reasons.add("branch_pr_open");
     prState = prStatus.state;
     prUrl = prStatus.url ?? prUrl;
     prNumber = prStatus.number ?? prNumber;
@@ -189,6 +203,7 @@ export async function resolveWorktreeLifecycle(
     || (!resolvedByRepositoryEvidence && lifecycle.state === "pending_decision")
     || lifecycle.state === "merge_conflict_resolving"
     || prState === "open"
+    || branchHasOpenPr
     || reasons.has("pr_merged_not_reflected_locally");
   const cleanupSafe = !preserve && (
     derivedState === "merged"

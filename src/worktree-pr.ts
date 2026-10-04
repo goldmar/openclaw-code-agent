@@ -22,6 +22,8 @@ export interface PRStatus {
   body?: string;
   headRefName?: string;
   baseRefName?: string;
+  /** False when the PR's head is known not to be this repository's branch (another owner's or a deleted fork). */
+  ownHead?: boolean;
 }
 
 function normalizePrState(state: string): PRStatus["state"] {
@@ -89,8 +91,51 @@ function ghFailureReason(err: unknown): string {
   return "gh failed without an error message";
 }
 
+/**
+ * gh refused to create a duplicate: the GraphQL error (`A pull request already
+ * exists for …`, `createPullRequest`) or gh's own check before the request
+ * (`a pull request for branch "X" into branch "Y" already exists:`).
+ */
 function isExistingPullRequestError(message: string): boolean {
-  return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
+  return /pull request already exists/i.test(message)
+    || (/createPullRequest/i.test(message) && /already exists/i.test(message))
+    || /a pull request for branch .+ into branch .+ already exists/i.test(message);
+}
+
+/**
+ * Whether a PR URL names a PR of the repository PRs of this checkout go to: the
+ * target repo, else origin's repository. An unknown side counts as a match.
+ */
+async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo: string | undefined): Promise<boolean> {
+  const urlRepo = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\//i.exec(prUrl)?.[1]?.toLowerCase();
+  let expected = targetRepo?.split("/").slice(-2).join("/").toLowerCase();
+  if (!expected) {
+    try {
+      const originUrl = (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim();
+      expected = /[:/]([^/:]+\/[^/]+?)(?:\.git)?$/.exec(originUrl)?.[1]?.toLowerCase();
+    } catch {
+      expected = undefined;
+    }
+  }
+  return !urlRepo || !expected || urlRepo === expected;
+}
+
+/**
+ * Whether a PR's head is this repository's own branch. With a target repo (a
+ * PR from this fork into upstream) the head owner must be origin's owner.
+ * Without one, a PR from the repository itself always counts, whatever its
+ * owner is called (origin's URL may still carry the name from before a rename
+ * or transfer); a PR that GitHub marks as coming from another repository is
+ * left out when its head owner differs from origin's or is unknown (a deleted fork).
+ */
+function prHeadIsOwnBranch(
+  candidate: { headRepositoryOwner?: { login?: string } | null; isCrossRepository?: boolean },
+  originOwner: string | undefined,
+  targetRepo: string | undefined,
+): boolean {
+  const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
+  if (targetRepo) return !originOwner || headOwner === originOwner;
+  return !(candidate.isCrossRepository === true && (!headOwner || (originOwner !== undefined && headOwner !== originOwner)));
 }
 
 async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo: string | undefined, base: string): Promise<PRResult | undefined> {
@@ -246,18 +291,8 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     }>;
     // Only a PR whose head is this repository's branch counts: `--head <branch>`
     // also lists PRs from other owners' forks that use the same branch name.
-    // With a target repo (a PR from this fork into upstream) the head owner
-    // must be origin's owner. Without one, a PR from the repository itself
-    // always counts, whatever its owner is called (origin's URL may still carry
-    // the name from before a rename or transfer); a PR that GitHub marks as
-    // coming from another repository is left out when its head owner differs
-    // from origin's or is unknown (a deleted fork).
     const originOwner = (await inferOriginOwner(repoDir))?.toLowerCase();
-    const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => {
-      const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
-      if (targetRepo) return !originOwner || headOwner === originOwner;
-      return !(candidate.isCrossRepository === true && (!headOwner || (originOwner !== undefined && headOwner !== originOwner)));
-    };
+    const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => prHeadIsOwnBranch(candidate, originOwner, targetRepo);
     // Which PR, not whatever order gh lists them in: one into the session's
     // base branch before one into another base; then an open one; then the
     // newest (a newer closed PR on a reused branch counts, not an older merged one).
@@ -297,7 +332,7 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
   }
 
   try {
-    const ghArgs = ["pr", "view", prUrl, "--json", "url,number,title,state,headRefName,baseRefName"];
+    const ghArgs = ["pr", "view", prUrl, "--json", "url,number,title,state,headRefName,baseRefName,headRepositoryOwner,isCrossRepository"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -309,6 +344,8 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
       state: string;
       headRefName?: string;
       baseRefName?: string;
+      headRepositoryOwner?: { login?: string } | null;
+      isCrossRepository?: boolean;
     };
     const status: PRStatus = {
       exists: true,
@@ -316,6 +353,10 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
       url: pr.url,
       number: pr.number,
       title: pr.title,
+      // A recorded URL can name any PR: say whether it is a PR of this
+      // repository (or of the target repo) whose head is this repository's branch.
+      ownHead: prHeadIsOwnBranch(pr, (await inferOriginOwner(repoDir))?.toLowerCase(), targetRepo)
+        && await prUrlIsInExpectedRepo(repoDir, pr.url, targetRepo),
     };
     if (pr.headRefName !== undefined) {
       status.headRefName = pr.headRefName;
