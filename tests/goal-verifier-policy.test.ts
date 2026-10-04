@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { getGoalVerifierPolicyRevision, pluginConfig, setPluginConfig } from "../src/config";
 import { GoalController, runVerifierCommand } from "../src/goal-controller";
 import { GoalTaskStore } from "../src/goal-store";
-import { resolveGoalLaunchRequest } from "../src/goal-launch-resolution";
+import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../src/goal-launch-resolution";
 import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
 import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap-service";
@@ -81,6 +81,29 @@ describe("operator-required goal suite admission", () => {
       assert.equal(result.loopMode, goalMode ?? "verifier");
     }
   });
+
+  for (const requireVerifierConfirmation of [false, true]) {
+    it(`displays the actual bound suite after preflight policy changes (${requireVerifierConfirmation ? "waiting" : "launched"})`, async () => {
+      const f = fixture();
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["preflight baseline"] } });
+      const resolution = await resolveGoalLaunchRequest({ goal: "Ship", workdir: f.dir, verifierCommands: ["extra check"] }, ctx);
+      assert.equal(resolution.kind, "resolved");
+      if (resolution.kind !== "resolved") return;
+      assert.deepEqual(resolution.verifierCommands, specs(["preflight baseline", "extra check"]));
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["bound baseline"] } });
+      const launched = await f.controller.launchTask({
+        goal: resolution.goal, workdir: resolution.workdir,
+        verifierCommands: resolution.additionalVerifierCommands, requireVerifierConfirmation,
+      });
+      assert.equal(launched.status, requireVerifierConfirmation ? "awaiting_verifier_confirmation" : "running");
+      assert.deepEqual(launched.verifierCommands, specs(["bound baseline", "extra check"]));
+      const display = formatGoalLaunchResult(launched, resolution);
+      assert.match(display, /bound baseline/);
+      assert.match(display, /extra check/);
+      assert.doesNotMatch(display, /preflight baseline/);
+      assert.deepEqual(f.counters(), requireVerifierConfirmation ? { launches: 0, confirmations: 1 } : { launches: 1, confirmations: 0 });
+    });
+  }
 
   it("copies config arrays and tracks meaningful policy changes including A -> B -> A", () => {
     const commands = [" true "];

@@ -1667,6 +1667,7 @@ describe("createCallbackHandler()", () => {
   });
 
   it("marks request-changes immediately so stale approvals are blocked", async () => {
+    const session = createStubSession({ id: "test-id", name: "revise-me", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 });
     const patches: Array<Record<string, unknown>> = [];
     setSessionManager({
       getActionToken: () => ({
@@ -1679,13 +1680,7 @@ describe("createCallbackHandler()", () => {
         kind: "plan-request-changes",
         planDecisionVersion: 4,
       }),
-      resolve: () => createStubSession({
-        id: "test-id",
-        name: "revise-me",
-        pendingPlanApproval: true,
-        approvalState: "pending",
-        planDecisionVersion: 4,
-      }),
+      resolve: () => session,
       getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => {
@@ -1720,11 +1715,12 @@ describe("createCallbackHandler()", () => {
   });
 
   it("tells the orchestrator, for its next turn, that the user's next message is Revise feedback (N35)", async () => {
+    const session = createStubSession({ id: "test-id", name: "revise-me", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 });
     const queued: Array<{ ref: string; label: string; text: string; key?: string }> = [];
     setSessionManager({
       getActionToken: () => ({ sessionId: "test-id", kind: "plan-request-changes", planDecisionVersion: 4 }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-request-changes", planDecisionVersion: 4 }),
-      resolve: () => createStubSession({ id: "test-id", name: "revise-me", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 4 }),
+      resolve: () => session,
       getPersistedSession: (): undefined => undefined,
       clearPlanDecisionTokens: () => {},
       updatePersistedSession: () => true,

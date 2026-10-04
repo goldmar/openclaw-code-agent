@@ -193,7 +193,7 @@ export function verifierCommandsNeedConfirmation(commands: readonly GoalVerifier
 
 export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
   Extract<GoalLaunchResolution, { kind: "resolved" }>,
-  "goal" | "harness" | "model" | "fastMode" | "verifierCommands"
+  "goal" | "harness" | "model" | "fastMode"
 > & { maxIterations?: number }): string {
   if (task.status === "awaiting_verifier_confirmation") {
     return [
@@ -203,7 +203,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
       `  Dir: ${task.workdir}`,
       `  Max iterations: ${task.maxIterations}${resolution.maxIterations !== undefined && resolution.maxIterations > task.maxIterations ? ` (capped from ${resolution.maxIterations})` : ""}`,
       `  Verifiers to confirm:`,
-      ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
+      ...task.verifierCommands.map((command) => `  - ${command.command}`),
       ``,
       `The user got a message listing these exact commands with Run / Cancel buttons. Do not start the task another way; tell the user it is waiting for their confirmation.`,
     ].join("\n");
@@ -221,9 +221,9 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Max controller iterations: ${task.maxIterations}${resolution.maxIterations !== undefined && resolution.maxIterations > task.maxIterations ? ` (capped from ${resolution.maxIterations})` : ""}`,
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,
     ...(task.loopMode === "ralph" ? [`  Completion promise: ${task.completionPromise}`] : []),
-    ...(resolution.verifierCommands.length ? [
+    ...(task.verifierCommands.length ? [
       task.goalVerificationBinding?.requiredCommands.length ? `  Operator-required verifiers:` : `  Verifiers:`,
-      ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
+      ...task.verifierCommands.map((command) => `  - ${command.command}`),
     ] : []),
     ``,
     `Controller iteration progress advances only when the goal controller starts another agent turn; internal agent review passes are reported in the completion summary.`,

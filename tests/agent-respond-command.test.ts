@@ -58,24 +58,22 @@ describe("agent_respond command", () => {
 
   it("supports quoted session names and preserves the follow-up message text", async () => {
     let sentMessage: string | undefined;
-    setSessionManager({
-      resolve(ref: string) {
-        if (ref !== "agent command") return undefined;
-        return {
-          id: "sess-1",
-          name: "agent command",
-          status: "running",
-          lifecycle: "active",
-          currentPermissionMode: "default",
-          pendingPlanApproval: false,
-          autoRespondCount: 0,
-          resetAutoRespond() {},
-          async interrupt() { return false; },
-          async sendMessage(message: string) {
-            sentMessage = message;
-          },
-        };
+    const session = {
+      id: "sess-1",
+      name: "agent command",
+      status: "running",
+      lifecycle: "active",
+      currentPermissionMode: "default",
+      pendingPlanApproval: false,
+      autoRespondCount: 0,
+      resetAutoRespond() {},
+      async interrupt() { return false; },
+      async sendMessage(message: string) {
+        sentMessage = message;
       },
+    };
+    setSessionManager({
+      resolve: (ref: string) => ref === "agent command" ? session : undefined,
       getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
     } as any);
