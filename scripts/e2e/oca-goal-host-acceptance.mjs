@@ -17,6 +17,9 @@ const POLICY_FAILURES = [
 ];
 const FIELD = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
 const POLICY_ARRAY = `${FIELD}.repositories`;
+// The pinned host may spend 60s draining admitted plugin work, plus cleanup/activation.
+// Keep the patch RPC bounded below command()'s unchanged 120s process deadline.
+export const CONFIG_PATCH_RPC_TIMEOUT_MS = 90_000;
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const json = path => JSON.parse(readFileSync(path, "utf8"));
 const inside = (root, path) => { const r = relative(root, path);
@@ -44,9 +47,18 @@ export function configPatchFailureProof(result) {
   const message = typeof response?.error?.message === "string" ? response.error.message : "";
   const errorCode = ["INVALID_REQUEST", "UNAVAILABLE", "CONFLICT", "RATE_LIMITED"].includes(code) ? code
     : parsed && !response.error && result.code === 0 ? "NONE" : "UNKNOWN";
+  const errorType = ["gateway_request_error", "gateway_transport_error", "gateway_credentials_required", "cli_error"].includes(response?.error?.type)
+    ? response.error.type : errorCode === "NONE" ? "NONE" : "UNKNOWN";
+  const transportKind = errorType === "gateway_transport_error"
+    ? ["timeout", "closed"].includes(response.error.kind) ? response.error.kind : "UNKNOWN" : "NONE";
   return {
     patchResponseParsed: parsed,
     patchErrorCode: errorCode,
+    patchErrorType: errorType,
+    patchTransportKind: transportKind,
+    patchTransportTimeoutMs: transportKind === "timeout" && Number.isSafeInteger(response.error.timeoutMs)
+      && response.error.timeoutMs > 0 && response.error.timeoutMs <= 120_000 ? response.error.timeoutMs : null,
+    patchTransportCode: transportKind === "closed" && [1000, 1006, 1012].includes(response.error.code) ? response.error.code : null,
     patchArrayIntentDenied: errorCode === "INVALID_REQUEST" && message.includes("would remove entries from array path(s)"),
     patchRequiredCommandsSchemaDenied: errorCode === "INVALID_REQUEST" && /^invalid config(?::|$)/i.test(message)
       && message.includes("requiredCommands"),
@@ -240,7 +252,7 @@ export class FeatureRun {
     if (args[0] !== "gateway" || args[1] !== "call" || args[2] !== "config.patch") {
       return this.command(process.execPath, [this.hostEntry, ...args], options);
     }
-    const result = await this.command(process.execPath, [this.hostEntry, ...args], { ...options, allowFailure: true });
+    const result = await this.command(process.execPath, [this.hostEntry, ...args, "--timeout", String(CONFIG_PATCH_RPC_TIMEOUT_MS)], { ...options, allowFailure: true });
     this.proofs.push(configPatchFailureProof(result));
     if (!options?.allowFailure) assert.equal(result.code, 0, "CONFIG_PATCH_EXIT_REQUIRED");
     return result;

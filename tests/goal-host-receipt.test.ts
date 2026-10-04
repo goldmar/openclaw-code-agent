@@ -2,7 +2,7 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof, assertPolicyRestoreOwner } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof, assertPolicyRestoreOwner, CONFIG_PATCH_RPC_TIMEOUT_MS } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -157,6 +157,57 @@ describe("bounded representative host receipts", () => {
     }
     for (const value of [null, privateValue, 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], patchErrorCode: value }] }));
     assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], rawError: privateValue }] }));
+  });
+  it("uses a bounded reload-aware deadline only for patch RPCs and never retries uncertain writes", async () => {
+    assert.ok(CONFIG_PATCH_RPC_TIMEOUT_MS > 60_000 && CONFIG_PATCH_RPC_TIMEOUT_MS < 120_000);
+    const calls: { args: string[]; options: Record<string, unknown> }[] = [], proofs: any[] = [];
+    const timeout = { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "gateway_transport_error", kind: "timeout", timeoutMs: CONFIG_PATCH_RPC_TIMEOUT_MS, message: "gateway timeout after 90000ms" } }), stderr: "" };
+    const run = Object.assign(Object.create(FeatureRun.prototype), { hostEntry: "/fixture/host", proofs,
+      command: async (_program: string, args: string[], options: Record<string, unknown> = {}) => {
+        calls.push({ args, options }); return args[3] === "config.patch" ? timeout : { code: 0, stdout: "{}", stderr: "" };
+      } });
+    const params = JSON.stringify({ raw: "{}", baseHash: "current", replacePaths: ["selected.repositories"] });
+    await assert.rejects(run.rpc("config.patch", JSON.parse(params)), /CONFIG_PATCH_EXIT_REQUIRED/);
+    assert.equal(calls.length, 1, "transport uncertainty must not replay a mutation or proceed to readback");
+    assert.deepEqual(calls[0].args, ["/fixture/host", "gateway", "call", "config.patch", "--params", params, "--json", "--timeout", String(CONFIG_PATCH_RPC_TIMEOUT_MS)]);
+    assert.deepEqual(calls[0].options, { allowFailure: true }, "the owning 120s command deadline is unchanged");
+    assert.equal(proofs.at(-1).patchTransportKind, "timeout");
+    assert.equal(proofs.at(-1).patchTransportTimeoutMs, CONFIG_PATCH_RPC_TIMEOUT_MS);
+    await run.rpc("config.get");
+    assert.deepEqual(calls[1].args, ["/fixture/host", "gateway", "call", "config.get", "--params", "{}", "--json"], "ordinary RPC budgets are unchanged");
+    const allowed = await run.cli(["gateway", "call", "config.patch", "--params", params, "--json"], { allowFailure: true });
+    assert.deepEqual(allowed, timeout, "the intentional malformed-policy path still receives its actual failure");
+    assert.equal(calls.length, 3);
+  });
+  it("retains typed transport failures as closed facts without exporting connection details or error prose", () => {
+    const privateValue = "SYNTHETIC_PRIVATE_TRANSPORT_VALUE";
+    const project = (error: Record<string, unknown>, code = 1) => configPatchFailureProof({ code, stdout: JSON.stringify({ ok: false, error, gateway: { url: privateValue } }), stderr: privateValue });
+    const timeout = project({ type: "gateway_transport_error", kind: "timeout", timeoutMs: 10000, message: `gateway timeout after 10000ms ${privateValue}` });
+    assert.equal(timeout.patchErrorCode, "UNKNOWN");
+    assert.equal(timeout.patchErrorType, "gateway_transport_error");
+    assert.equal(timeout.patchTransportKind, "timeout");
+    assert.equal(timeout.patchTransportTimeoutMs, 10000); assert.equal(timeout.patchTransportCode, null);
+    for (const code of [1000, 1006, 1012]) {
+      const closed = project({ type: "gateway_transport_error", kind: "closed", code, reason: privateValue });
+      assert.equal(closed.patchTransportKind, "closed"); assert.equal(closed.patchTransportCode, code); assert.equal(closed.patchTransportTimeoutMs, null);
+    }
+    for (const error of [
+      { type: "cli_error", kind: "timeout", timeoutMs: 10000 }, { type: privateValue, kind: "timeout", timeoutMs: 10000 },
+      { type: "gateway_transport_error", kind: privateValue, timeoutMs: 10000 },
+    ]) assert.equal(project(error).patchTransportTimeoutMs, null);
+    for (const timeoutMs of [undefined, null, "10000", 0, -1, 1.5, 120001, privateValue]) assert.equal(project({ type: "gateway_transport_error", kind: "timeout", timeoutMs }).patchTransportTimeoutMs, null);
+    assert.equal(project({ type: "gateway_transport_error", kind: "closed", code: privateValue }).patchTransportCode, null);
+    const r = receipt(); r.proofs = [timeout];
+    const frame = frameReceipt(r); assert.deepEqual(decodeReceipt(frame, expected).receipt.proofs, [timeout]);
+    assert.equal(JSON.stringify(decodeReceipt(frame, expected).receipt).includes(privateValue), false);
+    const invalid: ReadonlyArray<readonly [string, unknown]> = [
+      ["patchErrorType", privateValue], ["patchErrorType", null], ["patchTransportKind", privateValue],
+      ["patchTransportTimeoutMs", "10000"], ["patchTransportTimeoutMs", 0], ["patchTransportTimeoutMs", 120001],
+      ["patchTransportCode", privateValue], ["patchTransportCode", 1001],
+    ];
+    for (const [key, value] of invalid) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...timeout, [key]: value }] }));
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "nonJSON" }).patchErrorType, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "{}" }).patchErrorType, "NONE");
   });
   it("requires exact external identity even on BLOCKED evidence", () => {
     const r = receipt(); r.disposition = "BLOCKED";

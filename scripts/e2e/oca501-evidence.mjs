@@ -31,6 +31,10 @@ function proof(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value));
   for (const [key, item] of Object.entries(value)) {
     if (key === "patchErrorCode") { assert.ok(["NONE", "INVALID_REQUEST", "UNAVAILABLE", "CONFLICT", "RATE_LIMITED", "UNKNOWN"].includes(item)); continue; }
+    if (key === "patchErrorType") { assert.ok(["NONE", "gateway_request_error", "gateway_transport_error", "gateway_credentials_required", "cli_error", "UNKNOWN"].includes(item)); continue; }
+    if (key === "patchTransportKind") { assert.ok(["NONE", "timeout", "closed", "UNKNOWN"].includes(item)); continue; }
+    if (key === "patchTransportTimeoutMs") { assert.ok(item === null || Number.isSafeInteger(item) && item > 0 && item <= 120_000); continue; }
+    if (key === "patchTransportCode") { assert.ok(item === null || [1000, 1006, 1012].includes(item)); continue; }
     if (patchProofFields.has(key)) { assert.equal(typeof item, "boolean"); continue; }
     if (proofScalars.has(key)) { assert.ok(item === null || ["string", "boolean", "number"].includes(typeof item)); continue; }
     if (["gateway", "verifierProcess"].includes(key)) { scalarObject(item, processFields); continue; }
