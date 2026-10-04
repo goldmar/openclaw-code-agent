@@ -441,7 +441,7 @@ describe("syncWorktreePR", () => {
       "  exit 0",
       "fi",
       "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
-      "  echo '[{\"url\":\"https://github.com/openai/codex/pull/10\",\"number\":10,\"title\":\"Other fork\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"other\"},\"headRefName\":\"agent/fix-lookup\"},{\"url\":\"https://github.com/openai/codex/pull/12\",\"number\":12,\"title\":\"Fix PR lookup\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"me\"},\"headRefName\":\"agent/fix-lookup\"}]'",
+      "  echo '[{\"url\":\"https://github.com/openai/codex/pull/20\",\"number\":20,\"title\":\"Other fork\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"other\"},\"headRefName\":\"agent/fix-lookup\",\"isCrossRepository\":true},{\"url\":\"https://github.com/openai/codex/pull/12\",\"number\":12,\"title\":\"Fix PR lookup\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"me\"},\"headRefName\":\"agent/fix-lookup\"}]'",
       "  exit 0",
       "fi",
       "exit 1",
@@ -506,7 +506,8 @@ describe("syncWorktreePR", () => {
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository");
       assert.equal(result.headRefName, "agent/fix-lookup");
-      // Both listed PRs are open: the newest one, not the first listed.
+      // gh lists another owner's fork PR with the same branch name (newer, and
+      // also open): it is not this repository's PR.
       assert.equal(result.number, 12);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

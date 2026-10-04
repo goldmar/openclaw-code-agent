@@ -149,7 +149,13 @@ export async function resolveWorktreeLifecycle(
   }
 
   if (options.includePrSync && repoExists && workdir && branchName) {
-    const prStatus = await syncWorktreePR(workdir, branchName, session.worktreePrTargetRepo ?? lifecycle.targetRepo, session.worktreeBaseBranch ?? lifecycle.baseBranch);
+    // Like `agent_pr`: the session's recorded PR first (when it is this
+    // branch's PR), else the branch's PR into the session's base branch.
+    const prTargetRepo = session.worktreePrTargetRepo ?? lifecycle.targetRepo;
+    const recordedPr = session.worktreePrUrl ? await syncWorktreePRByUrl(workdir, session.worktreePrUrl, prTargetRepo) : undefined;
+    const prStatus = recordedPr?.exists && recordedPr.headRefName === branchName
+      ? recordedPr
+      : await syncWorktreePR(workdir, branchName, prTargetRepo, session.worktreeBaseBranch ?? lifecycle.baseBranch);
     prState = prStatus.state;
     prUrl = prStatus.url ?? prUrl;
     prNumber = prStatus.number ?? prNumber;

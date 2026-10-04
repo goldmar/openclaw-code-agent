@@ -201,7 +201,7 @@ export async function discoverExistingTargetPr(args: {
 }): Promise<PRStatus | undefined> {
   const parentBranch = await getBranchName(args.repoDir);
   if (!parentBranch || parentBranch !== args.expectedParentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
-  const status = await syncWorktreePR(args.repoDir, parentBranch, args.targetRepo);
+  const status = await syncWorktreePR(args.repoDir, parentBranch, args.targetRepo, args.baseBranch);
   return status.exists
     && status.state === "open"
     && status.headRefName === parentBranch
@@ -548,6 +548,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // Resolve target repository for cross-repo PRs
       const targetRepo = await resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
       const explicitTargetPrUrl = persistedSession?.worktreePrUrl ?? targetSession?.worktreePrUrl;
+      // Which of the branch's PRs counts when the session recorded none (or
+      // its recorded one is ignored): the one into the base this call names,
+      // else into the session's recorded base branch, as the lifecycle
+      // resolver looks it up; only then into the detected default branch.
+      const lookupBaseBranch = params.base_branch
+        ?? persistedSession?.worktreeBaseBranch
+        ?? targetSession?.worktreeBaseBranch
+        ?? baseBranch;
       const explicitTargetPrStatus = explicitTargetPrUrl
         ? await syncWorktreePRByUrl(originalWorkdir, explicitTargetPrUrl, targetRepo)
         : undefined;
@@ -600,7 +608,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
         effectiveTargetPrStatus?.exists
           ? effectiveTargetPrStatus
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, lookupBaseBranch),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
@@ -652,7 +660,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const syncedPrStatus = normalizeForceNewReplacementPrStatus(
         resolvedTargetPrUrl
           ? await syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, lookupBaseBranch),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );

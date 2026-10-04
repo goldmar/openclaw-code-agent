@@ -93,8 +93,9 @@ function isExistingPullRequestError(message: string): boolean {
   return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
 }
 
-async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?: string): Promise<PRResult | undefined> {
-  const existingPr = await syncWorktreePR(repoDir, branch, targetRepo);
+async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo: string | undefined, base: string): Promise<PRResult | undefined> {
+  // The PR that "already exists" is the one into the base this PR was created for.
+  const existingPr = await syncWorktreePR(repoDir, branch, targetRepo, base);
   if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
     return {
       success: true,
@@ -169,7 +170,7 @@ export async function createPR(
   } catch (err) {
     const reason = ghFailureReason(err);
     if (isExistingPullRequestError(reason)) {
-      return (await recoverExistingPullRequest(repoDir, branch, targetRepo)) ?? { success: false, error: reason };
+      return (await recoverExistingPullRequest(repoDir, branch, targetRepo, base)) ?? { success: false, error: reason };
     }
     // Recovery: if we requested draft and gh reports that drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
@@ -192,7 +193,7 @@ export async function createPR(
       } catch (retryErr) {
         const retryReason = ghFailureReason(retryErr);
         if (isExistingPullRequestError(retryReason)) {
-          return (await recoverExistingPullRequest(repoDir, branch, targetRepo))
+          return (await recoverExistingPullRequest(repoDir, branch, targetRepo, base))
             ?? { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
         }
         return { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
@@ -203,8 +204,10 @@ export async function createPR(
 }
 
 /**
- * The PR of a branch. `baseBranch` (the session's base, when known) makes a PR
- * into that base win over a PR from the same branch into another base.
+ * The PR of a branch. `baseBranch` (the session's recorded base branch, or the
+ * base an `agent_pr` call names) makes a PR into that base win over a PR from
+ * the same branch into another base. A session's recorded PR is looked up by
+ * its URL (`syncWorktreePRByUrl`) before this is used.
  */
 export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string): Promise<PRStatus> {
   await assertBranchName(branchName);
@@ -243,14 +246,14 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     // With a target repo (a PR from this fork into upstream) the head owner
     // must be origin's owner. Without one, a PR from the repository itself
     // always counts, whatever its owner is called (origin's URL may still carry
-    // the name from before a rename or transfer); only a PR that GitHub marks
-    // as coming from another repository, with a known and different head
-    // owner, is left out.
+    // the name from before a rename or transfer); a PR that GitHub marks as
+    // coming from another repository is left out when its head owner differs
+    // from origin's or is unknown (a deleted fork).
     const originOwner = (await inferOriginOwner(repoDir))?.toLowerCase();
     const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => {
       const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
       if (targetRepo) return !originOwner || headOwner === originOwner;
-      return !(candidate.isCrossRepository === true && originOwner && headOwner && headOwner !== originOwner);
+      return !(candidate.isCrossRepository === true && (!headOwner || (originOwner !== undefined && headOwner !== originOwner)));
     };
     // Which PR, not whatever order gh lists them in: one into the session's
     // base branch before one into another base; then an open one; then the

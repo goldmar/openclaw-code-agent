@@ -113,7 +113,7 @@ export class SessionWorktreeStrategyService {
       makeDirtyWorktreeButtons?: (sessionId: string) => NotificationButton[][];
       isPrAvailable?: (repoDir: string) => Awaitable<boolean>;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => Awaitable<boolean>;
-      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => Awaitable<PRStatus>;
+      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string) => Awaitable<PRStatus>;
       getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => Awaitable<PRStatus>;
       fetchRemoteBranch?: (repoDir: string, branchName: string) => Awaitable<string | undefined>;
       resolveRepoPolicy?: (repoDir: string) => Awaitable<RepoPolicyResolution>;
@@ -533,8 +533,8 @@ export class SessionWorktreeStrategyService {
     const parentBranch = session.worktreeParentBranch;
     if (!parentBranch || (await getBranchName(repoDir)) !== parentBranch) return undefined;
     if (parentBranch === branchName || parentBranch === baseBranch) return undefined;
-    const discovered = (await this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo))
-      ?? await syncWorktreePR(repoDir, parentBranch, targetRepo);
+    const discovered = (await this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo, baseBranch))
+      ?? await syncWorktreePR(repoDir, parentBranch, targetRepo, baseBranch);
     return discovered.exists
       && discovered.state === "open"
       && discovered.headRefName === parentBranch
