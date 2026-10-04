@@ -424,12 +424,12 @@ export class SessionManager {
         manager.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
       ]],
       isPrAvailable: async (repoDir) => (await manager.resolveRepoPolicy(repoDir)).prAvailable,
-      hasOpenPrForBranch: async (repoDir, branchName, targetRepo) => {
-        const status = await syncWorktreePR(repoDir, branchName, targetRepo);
+      hasOpenPrForBranch: async (repoDir, branchName, targetRepo, pushRemote) => {
+        const status = await syncWorktreePR(repoDir, branchName, targetRepo, undefined, { pushRemote });
         return status.exists && status.state === "open";
       },
-      getPrStatusForBranch: (repoDir, branchName, targetRepo, baseBranch) => syncWorktreePR(repoDir, branchName, targetRepo, baseBranch),
-      getPrStatusForUrl: (repoDir, prUrl, targetRepo) => syncWorktreePRByUrl(repoDir, prUrl, targetRepo),
+      getPrStatusForBranch: (repoDir, branchName, targetRepo, baseBranch, pushRemote) => syncWorktreePR(repoDir, branchName, targetRepo, baseBranch, { pushRemote }),
+      getPrStatusForUrl: (repoDir, prUrl, targetRepo, pushRemote) => syncWorktreePRByUrl(repoDir, prUrl, targetRepo, pushRemote),
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,
@@ -463,11 +463,12 @@ export class SessionManager {
         const result = await makeAgentPrTool(undefined, { terminalCompletion: !retry }).execute("auto-pr", {
           session: session.id,
           base_branch: baseBranch,
-        }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean } };
+        }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean; decisionRequested?: boolean } };
         const success = result?.meta?.success === true;
         return {
           success,
           notificationSent: result?.meta?.outcomeNotified === true,
+          ...(result?.meta?.decisionRequested === true ? { decisionRequested: true } : {}),
           // The `Reason: …` line under `⚠️ [name] Completed — auto-PR failed`.
           ...(success ? {} : {
             error: result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").replace(/^Failed to /u, "could not ").trim() || undefined,

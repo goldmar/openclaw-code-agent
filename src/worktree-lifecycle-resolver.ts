@@ -114,7 +114,7 @@ export async function resolveWorktreeLifecycle(
   // The session's recorded PR, read at most once per call.
   let recordedPrLookup: Promise<PRStatus> | undefined;
   const recordedPrStatus = (): Promise<PRStatus> => {
-    recordedPrLookup ??= syncWorktreePRByUrl(workdir!, session.worktreePrUrl!, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+    recordedPrLookup ??= syncWorktreePRByUrl(workdir!, session.worktreePrUrl!, session.worktreePrTargetRepo ?? lifecycle.targetRepo, session.worktreePushRemote ?? lifecycle.pushRemote);
     return recordedPrLookup;
   };
   let prUrl = session.worktreePrUrl;
@@ -170,6 +170,7 @@ export async function resolveWorktreeLifecycle(
       const currentPrStatus = await recordedPrStatus();
       representedByTargetPrBranch = Boolean(
         (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
+        && currentPrStatus.ownHead !== false
         && currentPrStatus.headRefName === currentRepoBranch
         && currentPrStatus.baseRefName === baseBranch
         && await isBranchAncestorOfBase(workdir, branchName, currentRepoBranch)
@@ -192,9 +193,9 @@ export async function resolveWorktreeLifecycle(
     const recordedIsBranchPr = Boolean(recordedPr?.exists && recordedPr.headRefName === branchName && recordedPr.ownHead !== false);
     const lookupBranchPr = (): Promise<PRStatus> => {
       const lookupBase = session.worktreeBaseBranch ?? lifecycle.baseBranch;
-      const key = [workdir, branchName, prTargetRepo ?? "", lookupBase ?? ""].join("\0");
+      const key = [workdir, branchName, prTargetRepo ?? "", lookupBase ?? "", session.worktreePushRemote ?? lifecycle.pushRemote ?? "origin"].join("\0");
       const pending = options.prLookups?.get(key)
-        ?? worktreeLifecycleResolverInternals.lookupBranchPr(workdir, branchName, prTargetRepo, lookupBase);
+        ?? worktreeLifecycleResolverInternals.lookupBranchPr(workdir, branchName, prTargetRepo, lookupBase, { pushRemote: session.worktreePushRemote ?? lifecycle.pushRemote });
       options.prLookups?.set(key, pending);
       return pending;
     };

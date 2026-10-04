@@ -6,7 +6,7 @@ import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, resolveLandingBaseBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef, getUnpushedCommits } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, resolveLandingBaseBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef, getCommitsNotInPr, resolvePrBaseRemote } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
@@ -52,6 +52,7 @@ type AgentPrExecuteResult = {
     prState?: "open" | "merged";
     /** An outcome notice went to the user; otherwise a button press shows the tool text. */
     outcomeNotified?: boolean;
+    decisionRequested?: boolean;
   };
 };
 
@@ -133,6 +134,7 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   repoDir: string;
   sourceBranch: string;
   targetPrStatus: PRStatus;
+  remote?: string;
 }): Promise<ExistingTargetPrBranchResolution> {
   return withRepoLock(args.repoDir, () => resolveExistingTargetPrUpdateBranchLocked(args));
 }
@@ -141,6 +143,7 @@ async function resolveExistingTargetPrUpdateBranchLocked(args: {
   repoDir: string;
   sourceBranch: string;
   targetPrStatus: PRStatus;
+  remote?: string;
 }): Promise<ExistingTargetPrBranchResolution> {
   const { repoDir, sourceBranch, targetPrStatus } = args;
   await assertBranchName(sourceBranch);
@@ -150,7 +153,7 @@ async function resolveExistingTargetPrUpdateBranchLocked(args: {
 
   const targetBranch = targetPrStatus.headRefName;
   await assertBranchName(targetBranch);
-  const remoteTargetRef = await fetchRemoteBranchRef(repoDir, targetBranch);
+  const remoteTargetRef = await fetchRemoteBranchRef(repoDir, targetBranch, args.remote);
   const authoritativeTargetRef = remoteTargetRef ?? targetBranch;
   if (targetBranch === sourceBranch && !remoteTargetRef) {
     return { success: true, branchName: sourceBranch, alreadyRepresented: false };
@@ -198,10 +201,11 @@ export async function discoverExistingTargetPr(args: {
   expectedParentBranch?: string;
   baseBranch: string;
   targetRepo?: string;
+  pushRemote?: string;
 }): Promise<PRStatus | undefined> {
   const parentBranch = await getBranchName(args.repoDir);
   if (!parentBranch || parentBranch !== args.expectedParentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
-  const status = await syncWorktreePR(args.repoDir, parentBranch, args.targetRepo, args.baseBranch);
+  const status = await syncWorktreePR(args.repoDir, parentBranch, args.targetRepo, args.baseBranch, { pushRemote: args.pushRemote });
   return status.exists
     && status.state === "open"
     && status.headRefName === parentBranch
@@ -491,6 +495,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // recorded at launch, which is the target and not where the worktree was
       // created from, else the detected default branch). An existing PR keeps
       // its own base for everything said or counted about it: see `existingPrBase`.
+      const pushRemote = persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote ?? "origin";
       const baseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, originalWorkdir, params.base_branch);
       /** The base of the PR that is being updated or settled; never retargeted by this call. */
       const existingPrBase = (status: PRStatus): string => status.baseRefName ?? baseBranch;
@@ -546,13 +551,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const targetRepo = await resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
       const explicitTargetPrUrl = persistedSession?.worktreePrUrl ?? targetSession?.worktreePrUrl;
       const explicitTargetPrStatus = explicitTargetPrUrl
-        ? await syncWorktreePRByUrl(originalWorkdir, explicitTargetPrUrl, targetRepo)
+        ? await syncWorktreePRByUrl(originalWorkdir, explicitTargetPrUrl, targetRepo, pushRemote)
         : undefined;
-      if (explicitTargetPrUrl && !explicitTargetPrStatus?.exists) {
+      if (explicitTargetPrUrl && (!explicitTargetPrStatus?.exists || explicitTargetPrStatus.ownHead === false)) {
         return {
           content: [{
             type: "text",
-            text: `Error: Session is associated with ${explicitTargetPrUrl}, but that PR could not be resolved. Refusing to create a sibling PR from \`${branchName}\`.`,
+            text: `Error: Session is associated with ${explicitTargetPrUrl}, but ${explicitTargetPrStatus?.ownHead === false ? "that PR does not belong to the selected push remote" : "that PR could not be resolved"}. Refusing to create a sibling PR from \`${branchName}\`.`,
           }],
           meta: { success: false, state: "error" },
         } satisfies AgentPrExecuteResult;
@@ -566,6 +571,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             expectedParentBranch: persistedSession?.worktreeParentBranch ?? targetSession?.worktreeParentBranch,
             baseBranch,
             targetRepo,
+            pushRemote,
           })
         : undefined;
       const effectiveTargetPrStatus = forceNewIgnoresClosedTargetPr
@@ -575,11 +581,12 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // ---- 1. Find the PR this call acts on. Reads only: nothing is pushed,
       // moved or changed above this line or in this step.
       // The session's recorded (or discovered parent) PR; else the PR of this
-      // branch. An OPEN PR of this branch is the target in any case, also
-      // beside a merged one: it is what a push would update.
+      // branch. Beside a merged recorded PR an open PR of this branch wins:
+      // it is what a push would update. A recorded closed PR is kept until
+      // the user explicitly asks for its replacement.
       const recordedPr = effectiveTargetPrStatus?.exists ? effectiveTargetPrStatus : undefined;
       const branchLookup = !recordedPr || recordedPr.state === "merged"
-        ? await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true })
+        ? await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true, pushRemote })
         : undefined;
       if (branchLookup?.lookupFailed) {
         // "Could not look" is not "there is no PR": acting on it could push
@@ -634,6 +641,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
           }, {
             resolutionSource: "agent_pr",
+            mergedAt: prStatus.mergedAt,
+            resolvedAt: prStatus.mergedAt,
             clearResolverSessionId: true,
           }),
           worktreePrUrl: prStatus.url,
@@ -690,18 +699,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           return forceNewRefusal(existingPrBeforePush, targetFoundByBranch);
         }
         if (existingPrBeforePush.state === "merged") {
-          // A merged PR settles the call only while the branch has nothing its
-          // pushed head lacks. Commits made after the merge get a new PR:
-          // settling would leave them unpushed and stamp the branch "merged"
-          // after them. Local evidence (the tracking ref of the PR's head);
-          // unknown settles, as before.
-          const afterMerge = await getUnpushedCommits(
-            originalWorkdir,
-            branchName,
-            "origin",
-            existingPrBeforePush.headRefName ?? branchName,
-          );
-          if (!afterMerge?.count) return settleMerged(existingPrBeforePush);
+          // Only the immutable merged head proves what was merged: a pruned
+          // remote branch or an OCA settlement timestamp is not that boundary.
+          const afterMerge = await getCommitsNotInPr(originalWorkdir, branchName, existingPrBeforePush, pushRemote);
+          if (!afterMerge) return { content: [{ type: "text", text: "Error: Could not determine commits beyond the merged PR head. Nothing was pushed; reconcile the PR evidence and retry." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+          if (afterMerge.count === 0) return settleMerged(existingPrBeforePush);
           supersededMergedPrUrl = existingPrBeforePush.url;
         }
         // (With force_new a closed PR is replaced by a new one: that is a push, below.)
@@ -710,14 +712,36 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       /** The open PR this call updates, if any; otherwise a new PR is opened. */
       const openPrToUpdate = existingPrBeforePush.exists && existingPrBeforePush.state === "open" ? existingPrBeforePush : undefined;
 
+      const targetFingerprint = (status: PRStatus): string => JSON.stringify([status.exists, status.state, status.url, status.headRefName, status.baseRefName, status.ownHead]);
+      const revalidatePrTarget = async (): Promise<AgentPrExecuteResult | undefined> => {
+        const current = targetPrUrl
+          ? await syncWorktreePRByUrl(originalWorkdir, targetPrUrl, targetRepo, pushRemote)
+          : normalizeForceNewReplacementPrStatus(await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true, pushRemote }), explicitTargetPrStatus, { forceNewIgnoresClosedTargetPr });
+        if (current.lookupFailed || current.ownHead === false || targetFingerprint(current) !== targetFingerprint(existingPrBeforePush)) {
+          return { content: [{ type: "text", text: "Error: PR target changed during preparation or could not be revalidated. Nothing was pushed; retry to check the current PR's own base and head." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        }
+        return undefined;
+      };
+      const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
+      if (repoPolicy?.policy === "never-pr" && !openPrToUpdate) {
+        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
+      if (repoPolicy && !repoPolicy.prAvailable) {
+        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
+      const changedBeforeMovement = await revalidatePrTarget();
+      if (changedBeforeMovement) return changedBeforeMovement;
+
       // ---- 3. From here on the call pushes: to update the open PR found in
       // step 1, or to open a new one. Hook and worktree-setup changes need the
       // user first. They are judged against the base the push is reviewed
       // against: the open PR's own base, else the base the new PR goes into.
       // A check that cannot be computed counts as "changed".
+      const baseRemote = await resolvePrBaseRemote(originalWorkdir, targetRepo, pushRemote);
       const hookCheckBase = openPrToUpdate ? existingPrBase(openPrToUpdate) : baseBranch;
       /** Undefined when `branch` may be pushed; else the answer (the user was asked). */
       const refuseHookChanges = async (branch: string): Promise<AgentPrExecuteResult | undefined> => {
+        let decisionRequested = false;
         const refusal = await refuseHookChangesWithoutUser({
           sessionManager: sm,
           toolCallId: _id,
@@ -726,10 +750,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           repoDir: originalWorkdir,
           branchName: branch,
           baseBranch: hookCheckBase,
+          remote: baseRemote,
+          preferRemoteBase: targetRepo !== undefined || pushRemote !== "origin",
+          hookCheckUnavailable: baseRemote === undefined,
           action: "pr",
+          onDecisionRequested: () => { decisionRequested = true; },
         });
         if (!refusal) return undefined;
-        return { ...(typeof refusal === "string" ? { content: [{ type: "text", text: refusal }] } : refusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { ...(typeof refusal === "string" ? { content: [{ type: "text", text: refusal }] } : refusal), meta: { success: false, state: "error", ...(decisionRequested ? { decisionRequested: true } : {}) } } satisfies AgentPrExecuteResult;
       };
       // A PR the session recorded may be headed by another branch (a follow-up
       // session of that PR). The branch whose commits go into it is chosen
@@ -740,6 +768,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         : branchName;
       const sourceRefusal = await refuseHookChanges(sourceBranch);
       if (sourceRefusal) return sourceRefusal;
+      const changedAfterHookCheck = await revalidatePrTarget();
+      if (changedAfterHookCheck) return changedAfterHookCheck;
 
       // ---- 4. Local branch movement (the checked branch fast-forwarded into
       // the PR's head branch), policy, then the push.
@@ -749,6 +779,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           repoDir: originalWorkdir,
           sourceBranch,
           targetPrStatus: recordedOpenPr,
+          remote: pushRemote,
         });
         if ("error" in branchResolution) {
           return {
@@ -759,14 +790,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         branchName = branchResolution.branchName;
         targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
       }
-      const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
-      if (repoPolicy?.policy === "never-pr" && !openPrToUpdate) {
-        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
-      if (repoPolicy && !repoPolicy.prAvailable) {
-        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
-
       // ---- 5. The push. Every path that reaches this line updates an open PR
       // or opens a new one. The branch pushed is the branch checked: when the
       // PR's head branch is pushed instead of the one checked in step 3 (it
@@ -775,14 +798,16 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         const pushedBranchRefusal = await refuseHookChanges(branchName);
         if (pushedBranchRefusal) return pushedBranchRefusal;
       }
-      if (!targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
+      const changedBeforePush = await revalidatePrTarget();
+      if (changedBeforePush) return changedBeforePush;
+      if (!targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName, pushRemote))) {
         return { content: [{ type: "text", text: `❌ Failed to push \`${branchName}\` — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Sync PR state from GitHub
       const afterPush = targetPrUrl && !supersededMergedPrUrl
-        ? await syncWorktreePRByUrl(originalWorkdir, targetPrUrl, targetRepo)
-        : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true });
+        ? await syncWorktreePRByUrl(originalWorkdir, targetPrUrl, targetRepo, pushRemote)
+        : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true, pushRemote });
       if (afterPush.lookupFailed) {
         return {
           content: [{ type: "text", text: `❌ PR not created or updated: \`${branchName}\` was pushed, but existing pull requests could not be checked: ${afterPush.lookupFailed}` }],
@@ -962,11 +987,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
 
         // Open the PR after title/body generation is complete.
-        const prResult = await createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true });
+        const prResult = await createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true, pushRemote });
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number
-          const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch);
+          const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { pushRemote });
 
           // Persist PR URL and number
           const resolvesDeferredCompletion = owedCompletionCycle(sm, target.generation) !== undefined;

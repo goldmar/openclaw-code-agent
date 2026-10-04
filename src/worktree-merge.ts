@@ -66,8 +66,11 @@ export async function getDiffSummary(
   await assertBranchName(branch);
   await assertBranchName(base);
   const branchRef = await localBranchRef(branch);
-  if (options.sinceRef && !options.sinceRef.startsWith("refs/remotes/")) return undefined;
-  if (options.sinceRef) await assertBranchOrRemoteTrackingRef(options.sinceRef);
+  const exactCommit = options.sinceRef !== undefined && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(options.sinceRef);
+  if (options.sinceRef && !exactCommit) {
+    if (!options.sinceRef.startsWith("refs/remotes/")) return undefined;
+    await assertBranchOrRemoteTrackingRef(options.sinceRef);
+  }
   const baseRef = options.sinceRef ?? await localBranchRef(base);
 
   try {

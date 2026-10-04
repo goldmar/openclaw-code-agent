@@ -2,7 +2,7 @@ import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
 import { existsSync } from "node:fs";
-import { getCommitsAheadCount, getCommitsAheadCountSince, getDiffSummary, getUnpushedCommits, resolveLandingBaseBranch } from "./worktree";
+import { getCommitsAheadCount, getCommitsAheadCountSince, getDiffSummary, getUnpushedCommits, getCommitsNotInPr, syncWorktreePRByUrl, resolveLandingBaseBranch } from "./worktree";
 import { formatCount } from "./format";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
@@ -119,6 +119,15 @@ export class SessionWorktreeActionService {
     if (!worktreePath || !branchName || !existsSync(worktreePath)) return undefined;
     const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
     if (!repoDir) return undefined;
+    // The authenticated PR head survives branch pruning and includes the true
+    // merge boundary. It also hydrates legacy sessions with no recorded head branch.
+    if (session.worktreePrUrl && (state === "pr_open" || state === "merged")) {
+      const status = await syncWorktreePRByUrl(repoDir, session.worktreePrUrl, session.worktreePrTargetRepo, session.worktreePushRemote);
+      const compared = await getCommitsNotInPr(repoDir, branchName, status, session.worktreePushRemote ?? "origin");
+      if (compared?.count === 0) return undefined;
+      return { state: status.state === "merged" ? "merged" : state,
+        count: compared?.count, sinceRef: compared?.headRef };
+    }
     if (state === "pr_open") {
       // What the last push has: local evidence, nothing is fetched. Unknown
       // counts as new (fail towards asking). The push went to the PR's head
@@ -177,13 +186,15 @@ export class SessionWorktreeActionService {
     if (!strategy || strategy === "off" || strategy === "manual") {
       // Nobody is prompted under these strategies: the completion notice says
       // what the PR is missing.
-      if (newWork?.state === "pr_open" && newWork.count) {
+      if (newWork && (newWork.state === "pr_open" || session.worktreePrUrl)) {
         return {
           kind: "skip",
           result: {
             notificationSent: false,
             worktreeRemoved: false,
-            completionNote: `⚠️ ${formatCount(newWork.count, "commit")} on \`${session.worktreeBranch}\` ${newWork.count === 1 ? "is" : "are"} not in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`,
+            completionNote: newWork.count === undefined
+              ? `⚠️ Could not determine which commits on \`${session.worktreeBranch}\` are in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`
+              : `⚠️ ${formatCount(newWork.count, "commit")} on \`${session.worktreeBranch}\` ${newWork.count === 1 ? "is" : "are"} not in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`,
           },
         };
       }
@@ -262,7 +273,7 @@ export class SessionWorktreeActionService {
     }
 
     // With an open PR the prompt counts what the PR does not have yet.
-    const diffSummary = (newWork?.state === "pr_open" && newWork.sinceRef
+    const diffSummary = (newWork?.sinceRef
       ? await getDiffSummary(repoDir, branchName, baseBranch, { sinceRef: newWork.sinceRef })
       : undefined) ?? await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {

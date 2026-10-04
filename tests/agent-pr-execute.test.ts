@@ -3,7 +3,7 @@ import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { discoverExistingTargetPr, makeAgentPrTool } from "../src/tools/agent-pr";
 import { resolveLandingBaseBranch, resolveWorktreeLifecycle, worktreeLifecycleResolverInternals } from "../src/worktree-lifecycle-resolver";
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
@@ -252,7 +252,7 @@ describe("agent_pr execute(): new PRs", () => {
     const result = await f.run();
     assert.equal(originalRead(SESSION_NAME)?.sessionId, "foreign-b", "negative control: alias actually moved");
     assert.equal(escalated, SESSION_ID);
-    assert.deepEqual(result.meta, { success: false, state: "error" });
+    assert.deepEqual(result.meta, { success: false, state: "error", decisionRequested: true });
     assert.equal(f.gh.ghCalls("create").length, 0);
     assert.equal(originalRead("foreign-b")?.worktreePrUrl, undefined);
   });
@@ -1580,9 +1580,12 @@ describe("worktree outcome completion", () => {
           error: status === "failed" ? "QA failed" : undefined,
           getOutput: () => ["Execution finished; acceptance remains separate."],
         });
+        const { syncWorktreePRByUrl, getCommitsNotInPr } = await import("../src/worktree");
+        const recorded = await syncWorktreePRByUrl(f.gh.repoDir, f.persisted()!.worktreePrUrl!);
+        assert.equal((await getCommitsNotInPr(f.gh.repoDir, f.branch, recorded))?.count, 0, JSON.stringify(recorded));
         await f.sm["onSessionTerminal"](session);
         await f.sm["onSessionTerminal"](session);
-        assert.equal(f.dispatches.length, 1);
+        assert.equal(f.dispatches.length, 1, JSON.stringify(f.dispatches.map((request) => ({ label: request.label, message: request.userMessage }))));
         assert.equal(f.dispatches[0]?.label, status);
         assert.match(f.dispatches[0]?.userMessage ?? "", status === "completed" ? /^✅ \[pr-flow\] Completed/ : /QA failed/);
         assert.equal(f.outcomes.length, 1, "no repeated worktree milestone");
@@ -1962,7 +1965,7 @@ describe("worktree outcome completion", () => {
         f.sm["worktreeStrategy"]["deps"].runAutoPr = async () => result;
         f.sm["worktrees"].getCompletionState = async () => "has-commits";
         await f.sm["onSessionTerminal"](session);
-        assert.equal(f.dispatches.length, 0);
+        assert.equal(f.dispatches.length, 0, JSON.stringify(f.dispatches.map((notice) => ({ label: notice.label, message: notice.userMessage }))));
         return;
       }
       assert.deepEqual(result, { success: true, notificationSent: false });
@@ -2035,4 +2038,254 @@ describe("worktree outcome completion", () => {
       assert.equal(persisted?.status, "completed");
     });
   }
+});
+
+
+describe("5.2 follow-up evidence", () => {
+  async function plan(f: Fixture, strategy: "ask" | "manual" | "off" | "auto-merge" = "ask") {
+    const { SessionWorktreeActionService } = await import("../src/session-worktree-action-service");
+    const service = new SessionWorktreeActionService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => f.gh.repoDir,
+      getWorktreeCompletionState: () => "has-commits",
+      isPrAvailable: () => true,
+    });
+    return service.plan(createStubSession({ ...f.persisted(), id: SESSION_ID,
+      status: "completed", phase: "implementing", originalWorkdir: f.gh.repoDir,
+      workdir: f.worktreePath, worktreeStrategy: strategy }));
+  }
+  it("Task 2.1: auto-pr hook refusal sends only the deferred decision prompt", async () => {
+    const f = await setup();
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    git(f.gh.repoDir, "branch", "landing-with-hook", f.branch);
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "landing-with-hook"));
+    f.commit("feature.txt", "new feature after landing\n", "feature after landing base");
+    f.gh.seedPr({ headRefName: f.branch, baseRefName: "main" });
+    await f.sm.setRepoPolicy(f.gh.repoDir, "pr-allowed");
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeStrategy: "auto-pr", worktreeBaseBranch: "landing-with-hook" });
+    const session = createStubSession({ ...f.persisted(), id: SESSION_ID, status: "completed",
+      phase: "implementing", originalWorkdir: f.gh.repoDir, workdir: f.worktreePath,
+      startedAt: Date.now() - 60_000, duration: 60_000,
+      getOutput: () => ["Finished."] });
+    await f.sm["onSessionTerminal"](session);
+    assert.equal(f.dispatches.filter((notice) => notice.label === "worktree-auto-pr-failed").length, 0);
+    assert.equal(f.dispatches.filter((notice) => notice.label === "worktree-merge-ask").length, 1);
+    assert.ok(f.persisted()?.deferredCompletionCycle);
+    assert.equal(f.gh.remoteHead(f.branch), "");
+    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME, title: "Hooks", body: "Hooks." });
+    assert.equal(f.outcomes.filter((notice) => notice.line.startsWith("✅")).length, 1);
+  });
+  it("Task 2.2: pruned merged head still detects newer commits", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    git(f.gh.repoDir, "push", "origin", f.branch);
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    git(f.gh.remoteDir, "update-ref", "-d", `refs/heads/${f.branch}`);
+    git(f.gh.repoDir, "update-ref", "-d", `refs/remotes/origin/${f.branch}`);
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: pr.url });
+    f.commit("feature.txt", "new work\n", "follow-up after merge");
+    const result = await f.run({ title: "Follow-up", body: "New work after merge." });
+    assert.equal(result.meta.state, "created");
+    assert.equal(f.gh.ghCalls("create").length, 1);
+  });
+  it("Task 2.2: unavailable merged-head evidence does not settle or push", async () => {
+    const f = await setup();
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", headRefOid: "unavailable" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: pr.url });
+    const result = await f.run();
+    assert.equal(result.meta.success, false);
+    assert.match(textOf(result), /Could not determine commits beyond the merged PR head/);
+    assert.equal(f.persisted()?.worktreeMerged, undefined);
+    assert.equal(f.gh.remoteHead(f.branch), "");
+  });
+  it("Task 2.7: settlement stores GitHub's actual merge time", async () => {
+    const f = await setup();
+    const mergedAt = "2026-01-01T00:00:00Z";
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", mergedAt });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: pr.url });
+    assert.equal((await f.run()).meta.state, "merged");
+    assert.equal(f.persisted()?.worktreeMergedAt, mergedAt);
+    assert.equal(f.persisted()?.worktreeLifecycle?.resolvedAt, mergedAt);
+  });
+  it("Task 2.3: pr_open with a GitHub merge and pruned branch has no new work", async () => {
+    const f = await setup();
+    git(f.gh.repoDir, "push", "origin", f.branch);
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+    git(f.gh.remoteDir, "update-ref", "-d", `refs/heads/${f.branch}`);
+    git(f.gh.repoDir, "update-ref", "-d", `refs/remotes/origin/${f.branch}`);
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "pr_open", worktreePrUrl: pr.url });
+    assert.equal((await plan(f)).kind, "skip");
+  });
+  for (const strategy of ["manual", "off"] as const) {
+    it(`Task 2.4: ${strategy} reports unknown PR commit count`, async () => {
+      const f = await setup();
+      f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "pr_open", worktreePrUrl: "https://github.com/acme/widget/pull/999" });
+      const result = await plan(f, strategy);
+      assert.equal(result.kind, "skip");
+      if (result.kind === "skip") assert.match(result.result.completionNote ?? "", /could not.*PR/i);
+    });
+  }
+  for (const strategy of ["manual", "off"] as const) {
+    it(`Task 2.4: ${strategy} also warns when the authentic merged head is unavailable`, async () => {
+      const f = await setup();
+      const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", headRefOid: "unavailable" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "pr_open", worktreePrUrl: pr.url });
+      const result = await plan(f, strategy);
+      assert.equal(result.kind, "skip");
+      if (result.kind === "skip") assert.match(result.result.completionNote ?? "", /could not.*PR/i);
+    });
+  }
+  it("Task 2.5: push uses configured remote", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    git(f.gh.repoDir, "remote", "add", "push-target", git(f.gh.repoDir, "remote", "get-url", "origin"));
+    cleanups.push(() => git(f.gh.repoDir, "remote", "remove", "push-target"));
+    git(f.gh.repoDir, "remote", "set-url", "--push", "origin", "/nonexistent/origin");
+    cleanups.push(() => git(f.gh.repoDir, "config", "--unset", "remote.origin.pushurl"));
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePushRemote: "push-target" });
+    assert.equal((await f.run({ title: "Feature", body: "Feature." })).meta.success, true);
+    assert.equal(f.gh.remoteHead(f.branch), git(f.worktreePath, "rev-parse", "HEAD"));
+  });
+  it("Task 2.5: a custom remote base is not shadowed by a local namesake", async () => {
+    const f = await setup();
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    git(f.gh.repoDir, "branch", "custom-release", f.branch);
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "custom-release"));
+    git(f.gh.repoDir, "push", "origin", "main:refs/heads/custom-release");
+    git(f.gh.repoDir, "remote", "add", "push-target", git(f.gh.repoDir, "remote", "get-url", "origin"));
+    cleanups.push(() => git(f.gh.repoDir, "remote", "remove", "push-target"));
+    const { listHookPathChanges } = await import("../src/git-hooks");
+    assert.deepEqual(await listHookPathChanges(f.gh.repoDir, f.branch, "custom-release", "push-target"), [".openclaw/worktree-setup.sh"]);
+  });
+  it("Task 2.5: fork push remote and upstream PR base remain distinct", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    git(f.gh.repoDir, "branch", "target-release", f.branch);
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "target-release"));
+    git(f.gh.repoDir, "push", "origin", "target-release");
+    const upstreamDir = join(dirname(dirname(f.gh.remoteDir)), "upstream", "widget.git");
+    mkdirSync(upstreamDir, { recursive: true });
+    git(upstreamDir, "init", "--bare", "--initial-branch=main");
+    cleanups.push(() => rmSync(upstreamDir, { recursive: true, force: true }));
+    git(f.gh.repoDir, "push", upstreamDir, "main:refs/heads/target-release");
+    git(f.gh.repoDir, "remote", "add", "upstream", "git@github.com:upstream/widget.git");
+    cleanups.push(() => git(f.gh.repoDir, "remote", "remove", "upstream"));
+    f.gh.seedPr({ headRefName: f.branch, repo: "upstream/widget", headOwner: "acme", baseRefName: "target-release" });
+    let warning: string | undefined;
+    f.sm.requestWorktreeDecisionFromUser = async (_ref, _summary, options) => { warning = options?.hookWarning; return "Decision queued"; };
+    const result = await f.run({ target_repo: "upstream/widget" });
+    assert.equal(result.meta.success, false);
+    assert.match(warning ?? "", /worktree-setup\.sh/);
+    assert.equal(f.gh.remoteHead(f.branch), "", "upstream-only hook delta refuses before pushing to fork");
+  });
+  for (const explicitTarget of [false, true]) {
+    it(`Task 2.5: actual Bob fork owns lookup/create/update with ${explicitTarget ? "upstream target" : "default origin target"}`, async () => {
+      const f = await setup({ llmReplies: [LLM_METADATA] });
+      const bobDir = join(dirname(dirname(f.gh.remoteDir)), "bob", "widget.git");
+      mkdirSync(bobDir, { recursive: true });
+      git(bobDir, "init", "--bare", "--initial-branch=main");
+      cleanups.push(() => rmSync(bobDir, { recursive: true, force: true }));
+      git(f.gh.repoDir, "push", bobDir, "main:refs/heads/main");
+      git(f.gh.repoDir, "remote", "add", "push-bob", "git@github.com:bob/widget.git");
+      cleanups.push(() => git(f.gh.repoDir, "remote", "remove", "push-bob"));
+      const targetRepo = explicitTarget ? "upstream/widget" : undefined;
+      if (explicitTarget) {
+        const upstreamDir = join(dirname(dirname(f.gh.remoteDir)), "upstream", "widget.git");
+        mkdirSync(upstreamDir, { recursive: true });
+        git(upstreamDir, "init", "--bare", "--initial-branch=main");
+        cleanups.push(() => rmSync(upstreamDir, { recursive: true, force: true }));
+        git(f.gh.repoDir, "push", upstreamDir, "main:refs/heads/main");
+        git(f.gh.repoDir, "remote", "add", "upstream", "git@github.com:upstream/widget.git");
+        cleanups.push(() => git(f.gh.repoDir, "remote", "remove", "upstream"));
+      }
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePushRemote: "push-bob" });
+      const first = await f.run({ title: "Feature", body: "Feature.", ...(targetRepo ? { target_repo: targetRepo } : {}) });
+      assert.equal(first.meta.success, true, textOf(first));
+      assert.equal(argAfter(f.gh.ghCalls("create")[0]!.args, "--head"), `bob:${f.branch}`);
+      const own = f.gh.readState().prs.find((pr) => pr.headOwner === "bob")!;
+      assert.ok(own);
+      assert.equal(git(bobDir, "rev-parse", `refs/heads/${f.branch}`), git(f.worktreePath, "rev-parse", "HEAD"));
+      assert.equal(f.gh.remoteHead(f.branch), "", "origin receives no branch push");
+      const decoy = f.gh.seedPr({ headRefName: f.branch, headOwner: "acme", repo: targetRepo ?? "acme/widget" });
+      const { syncWorktreePR, syncWorktreePRByUrl } = await import("../src/worktree-pr");
+      assert.equal((await syncWorktreePR(f.gh.repoDir, f.branch, targetRepo, "main", { pushRemote: "push-bob" })).url, own.url);
+      assert.equal((await syncWorktreePRByUrl(f.gh.repoDir, own.url, targetRepo, "push-bob")).ownHead, true);
+      assert.equal((await syncWorktreePRByUrl(f.gh.repoDir, decoy.url, targetRepo, "push-bob")).ownHead, false);
+      f.commit("feature.txt", "new Bob work\n", "follow up for Bob fork");
+      const second = await f.run({ title: "Feature", body: "Feature." });
+      assert.equal(second.meta.state, "pr_updated", textOf(second));
+      assert.equal(f.persisted()?.worktreePrUrl, own.url);
+      assert.equal(git(bobDir, "rev-parse", `refs/heads/${f.branch}`), git(f.worktreePath, "rev-parse", "HEAD"));
+      assert.equal(f.gh.readState().comments.at(-1)?.number, own.number);
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: decoy.url });
+      f.commit("feature.txt", "work after foreign binding\n", "foreign PR must refuse");
+      const published = git(bobDir, "rev-parse", `refs/heads/${f.branch}`);
+      assert.equal((await f.run()).meta.success, false, "recorded PR from origin cannot be updated after pushing Bob");
+      assert.equal(git(bobDir, "rev-parse", `refs/heads/${f.branch}`), published);
+    });
+  }
+  it("Task 2.6: a real hand-open PR revalidates its hook base before push", async () => {
+    const f = await setup({ llmReplies: [LLM_METADATA] });
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    git(f.gh.repoDir, "branch", "race-landing", f.branch);
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "race-landing"));
+    git(f.gh.repoDir, "branch", "race-review-base", "main");
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "race-review-base"));
+    git(f.gh.repoDir, "push", "origin", "race-review-base", f.branch);
+    const publishedHead = f.gh.remoteHead(f.branch);
+    f.commit("feature.txt", "new work after publication\n", "new work after published head");
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeBaseBranch: "race-landing" });
+    let warning: string | undefined;
+    f.sm.requestWorktreeDecisionFromUser = async (_ref, _summary, options) => { warning = options?.hookWarning; return "Decision queued"; };
+    const original = worktreeToolContextInternals.listHookPathChanges;
+    let opened = false;
+    worktreeToolContextInternals.listHookPathChanges = async (...args) => {
+      const paths = await original(...args);
+      assert.deepEqual(paths, [], "the landing base already contains the hook");
+      if (!opened) {
+        opened = true;
+        f.gh.seedPr({ headRefName: f.branch, headRefOid: publishedHead, baseRefName: "race-review-base" });
+      }
+      return paths;
+    };
+    cleanups.push(() => { worktreeToolContextInternals.listHookPathChanges = original; });
+    const result = await f.run({ title: "Feature", body: "Feature." });
+    assert.equal(result.meta.success, false);
+    assert.equal(f.gh.remoteHead(f.branch), publishedHead, "changed target refuses before remote movement");
+    assert.match(textOf(result), /target changed/i);
+    worktreeToolContextInternals.listHookPathChanges = original;
+    const retry = await f.run();
+    assert.equal(retry.meta.success, false);
+    assert.match(warning ?? "", /worktree-setup\.sh/, "retry checks the actual PR base, which lacks the hook");
+    assert.equal(f.gh.remoteHead(f.branch), publishedHead);
+  });
+  it("Task 2.7: commits between GitHub merge and OCA settlement are new work", async () => {
+    const f = await setup();
+    const pr = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", mergedAt: "2026-01-01T00:00:00Z" });
+    f.commit("feature.txt", "new after merge\n", "work before OCA settlement");
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "merged", worktreePrUrl: pr.url,
+      worktreeMergedAt: "2099-01-01T00:00:00Z" });
+    assert.equal((await plan(f)).kind, "decision");
+  });
+  it("Task 2.9: a legacy helper compares to the PR head rather than itself", async () => {
+    const f = await setup();
+    git(f.gh.repoDir, "branch", "legacy-pr-head", f.branch);
+    cleanups.push(() => git(f.gh.repoDir, "branch", "-D", "legacy-pr-head"));
+    const pr = f.gh.seedPr({ headRefName: "legacy-pr-head" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "pr_open", worktreePrUrl: pr.url });
+    assert.equal((await plan(f)).kind, "skip");
+  });
+  it("Task 2.10: auto-merge with new PR commits keeps the ask choice", async () => {
+    const f = await setup();
+    git(f.gh.repoDir, "push", "origin", f.branch);
+    const pr = f.gh.seedPr({ headRefName: f.branch });
+    f.commit("feature.txt", "new for PR\n", "follow-up for PR");
+    f.sm.updatePersistedSession(SESSION_ID, { worktreeState: "pr_open", worktreePrUrl: pr.url });
+    const result = await plan(f, "auto-merge");
+    assert.equal(result.kind, "decision");
+    if (result.kind === "decision") assert.equal(result.strategy, "ask");
+  });
 });
