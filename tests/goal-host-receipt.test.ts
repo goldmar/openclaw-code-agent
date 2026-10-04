@@ -2,7 +2,7 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +22,56 @@ import { getSessionOutputText, getSessionsListingText } from "../src/application
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
 const receipt = (): any => ({ ...expected, format: "oca-repo-goal-slim-v1", complete: true, hostVersion: "2026.9.8", hostCommit: HOST_PIN, nativeVersion: "0.160.0", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
 describe("bounded representative host receipts", () => {
+  it("recognizes policy child acknowledgements without accepting unrelated lexical prefixes or parent paths", () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const ack = (paths: unknown) => ({ ok: true, hash: "changed", changedPaths: paths, sentinel: { payload: { stats: { requiresRestart: false } } } });
+    for (const path of [field, `${field}.repositories`, `${field}.defaultRequiredCommands`]) {
+      assert.deepEqual(patchAcknowledgementProof(ack([path]), "before", [field]), { patchAckOk: true, patchHashChanged: true, patchSelectedPathChanged: true, patchNoRestart: true });
+    }
+    for (const previousHash of [undefined, ""]) assert.equal(patchAcknowledgementProof(ack([field]), previousHash, [field]).patchHashChanged, false);
+    for (const paths of [[], undefined, [null], [field, null], Array(1), [field.slice(0, field.lastIndexOf("."))], [`${field}Other.repositories`], ["tools.deny"]]) {
+      assert.equal(patchAcknowledgementProof(ack(paths), "before", [field]).patchSelectedPathChanged, false);
+    }
+  });
+  it("requires changed hash, no restart, same process and complete applied readback after a real patch acknowledgement", async () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const identity = processIdentity(process.pid); assert.ok(identity);
+    const ack = { ok: true, hash: "changed", changedPaths: [`${field}.repositories`], sentinel: { payload: { stats: { requiresRestart: false } } } };
+    const after = { valid: true, hash: "changed", configRevisionHash: "applied", appliedConfigHash: "applied" };
+    const make = (override = {}, readback = after) => {
+      const calls: string[] = [], proofs: any[] = [];
+      const run = Object.assign(Object.create(FeatureRun.prototype), { gatewayIdentity: identity, gateway: { pid: process.pid }, proofs,
+        rpc: async (method: string) => { calls.push(method); return method === "config.patch" ? { ...ack, ...override } : calls.length === 1 ? { hash: "before" } : readback; } });
+      return { run, calls, proofs };
+    };
+    const valid = make(); assert.deepEqual(await valid.run.patch({}, [field]), after);
+    assert.deepEqual(valid.calls, ["config.get", "config.patch", "config.get"]);
+    assert.deepEqual(valid.proofs[0], { patchAckOk: true, patchHashChanged: true, patchSelectedPathChanged: true, patchNoRestart: true });
+    const invalidAcknowledgements: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
+      [{ ok: false }, "PATCH_ACK_OK_REQUIRED"], [{ hash: "before" }, "PATCH_ACK_HASH_CHANGE_REQUIRED"],
+      [{ hash: undefined }, "PATCH_ACK_HASH_CHANGE_REQUIRED"], [{ changedPaths: ["tools.deny"] }, "PATCH_ACK_SELECTED_PATH_REQUIRED"],
+      [{ changedPaths: [`${field}Other.repositories`] }, "PATCH_ACK_SELECTED_PATH_REQUIRED"],
+      [{ sentinel: { payload: { stats: { requiresRestart: true } } } }, "PATCH_ACK_NO_RESTART_REQUIRED"],
+      [{ sentinel: undefined }, "PATCH_ACK_NO_RESTART_REQUIRED"],
+    ];
+    for (const [override, label] of invalidAcknowledgements) {
+      const invalid = make(override); await assert.rejects(invalid.run.patch({}, [field]), new RegExp(label));
+      assert.deepEqual(invalid.calls, ["config.get", "config.patch"], "a refused acknowledgement cannot proceed to applied readback");
+      assert.equal(invalid.proofs.length, 1, "the closed acknowledgement facts survive before refusal");
+    }
+    for (const readback of [{ ...after, valid: false }, { ...after, hash: "stale" }, { ...after, appliedConfigHash: "stale" }, { ...after, configRevisionHash: "", appliedConfigHash: "" }]) {
+      await assert.rejects(make({}, readback).run.patch({}, [field]));
+    }
+    const replaced = make(); replaced.run.gatewayIdentity = { ...identity, startTicks: "0" };
+    await assert.rejects(replaced.run.patch({}, [field]));
+    const r = receipt(); r.proofs.push(valid.proofs[0]);
+    const decoded = decodeReceipt(frameReceipt(r), expected).receipt;
+    assert.deepEqual(decoded.proofs, r.proofs);
+    for (const field of ["patchAckOk", "patchHashChanged", "patchSelectedPathChanged", "patchNoRestart"]) {
+      for (const invalid of [null, "true", 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], [field]: invalid }] }));
+    }
+    assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], rawAck: ack }] }), /Unknown feature proof field|Raw profile/);
+  });
   it("requires exact external identity even on BLOCKED evidence", () => {
     const r = receipt(); r.disposition = "BLOCKED";
     const frame = frameReceipt(r); assert.deepEqual(decodeReceipt(frame, expected).receipt, r);

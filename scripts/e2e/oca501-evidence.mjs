@@ -24,11 +24,13 @@ export function requiredFact(fact) {
 }
 const scalarObject = (value, fields) => { closed(value, fields); for (const item of Object.values(value)) assert.ok(item === null || ["string", "number", "boolean"].includes(typeof item)); };
 const processFields = ["pid", "state", "parent", "group", "startTicks", "executable"];
+const patchProofFields = new Set(["patchAckOk", "patchHashChanged", "patchSelectedPathChanged", "patchNoRestart"]);
 const proofScalars = new Set("commandId exitCode signal timedOut stdioComplete rpcMethod invokedTool httpStatus toolError sourceArchiveSha256 hostEntrySha256 nativeExecutableSha256 packedSha256 installedEntrySha256 appliedRevision configRevision beforeRevision afterRevision alreadySetReadbackOnly sourceSha256 unchangedRevision setupOnly nativeThreadId nativeReceiptSha256 parentProof ownRunId responseId canonicalSha256 visible sessionId outcomeKey issuedAt succeededAt deliveryState publicOwnerId publicOwnerStatus activePublicView failedNotificationKey delivered goalId terminalStatus terminalRowSha256 iteration case policyFailure sameGoalId sameNativeThreadId oldSessionId restoredSessionId ownedShutdown listenerClosed bindingSha256 policyFingerprint repositoryIdentitySha256 selectedPolicy operatorTrustedExtras unrelatedPolicyChanged affectedPolicyABA restoredBindingUnchanged deniedBeforeEffects".split(" "));
 const proofArrays = { mutation: null, requiredVerifierCommands: null, requiredCommands: null, additionalCommands: null, effectiveCommands: null, verifierCommands: ["label", "command"], checks: ["ordinal", "kind", "exit"], notificationKeys: ["key", "label"], descendants: processFields, historicalRowsCompared: ["id", "sha256"], fixtureFailures: null };
 function proof(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value));
   for (const [key, item] of Object.entries(value)) {
+    if (patchProofFields.has(key)) { assert.equal(typeof item, "boolean"); continue; }
     if (proofScalars.has(key)) { assert.ok(item === null || ["string", "boolean", "number"].includes(typeof item)); continue; }
     if (["gateway", "verifierProcess"].includes(key)) { scalarObject(item, processFields); continue; }
     if (key === "requiredAdmissionFact") { closed(item, ["required", "producer", "outcomeKey"]); requiredFact(item); continue; }

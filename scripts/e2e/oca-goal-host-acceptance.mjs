@@ -21,6 +21,19 @@ const json = path => JSON.parse(readFileSync(path, "utf8"));
 const inside = (root, path) => { const r = relative(root, path);
   return r && !r.startsWith("..") && !isAbsolute(r);
   };
+/** Project only bounded acknowledgement facts; policy objects report changed child paths. */
+export function patchAcknowledgementProof(ack, previousHash, requestedPaths) {
+  const changedPaths = Array.isArray(ack?.changedPaths) ? Array.from(ack.changedPaths) : [];
+  return {
+    patchAckOk: ack?.ok === true,
+    patchHashChanged: typeof previousHash === "string" && previousHash.length > 0
+      && typeof ack?.hash === "string" && ack.hash.length > 0 && ack.hash !== previousHash,
+    patchSelectedPathChanged: changedPaths.every(changed => typeof changed === "string" && changed.length > 0)
+      && changedPaths.some(changed => requestedPaths.some(requested =>
+      changed === requested || changed.startsWith(`${requested}.`))),
+    patchNoRestart: ack?.sentinel?.payload?.stats?.requiresRestart === false,
+  };
+}
 export function optionsFor(args) {
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -421,10 +434,12 @@ export class FeatureRun {
   async patch(fields, paths) {
     const before = await this.rpc("config.get"), identity = this.gatewayIdentity;
     const ack = await this.rpc("config.patch", { raw: JSON.stringify(fields), baseHash: before.hash, replacePaths: paths });
-    assert.equal(ack.ok, true);
-    assert.notEqual(ack.hash, before.hash);
-    assert.ok(ack.changedPaths.some(path => paths.includes(path)));
-    assert.equal(ack.sentinel.payload.stats.requiresRestart, false);
+    const acknowledgement = patchAcknowledgementProof(ack, before.hash, paths);
+    this.proofs.push(acknowledgement);
+    assert.equal(acknowledgement.patchAckOk, true, "PATCH_ACK_OK_REQUIRED");
+    assert.equal(acknowledgement.patchHashChanged, true, "PATCH_ACK_HASH_CHANGE_REQUIRED");
+    assert.equal(acknowledgement.patchSelectedPathChanged, true, "PATCH_ACK_SELECTED_PATH_REQUIRED");
+    assert.equal(acknowledgement.patchNoRestart, true, "PATCH_ACK_NO_RESTART_REQUIRED");
     const after = await this.rpc("config.get");
     assert.equal(after.valid, true);
     assert.equal(after.hash, ack.hash);
