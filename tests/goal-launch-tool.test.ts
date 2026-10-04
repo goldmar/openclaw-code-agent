@@ -39,6 +39,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-1",
           name: "goal-auth",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-1",
           sessionName: "goal-auth",
           maxIterations: config.maxIterations ?? 8,
@@ -102,6 +103,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-2",
           name: "goal-routing",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-2",
           sessionName: "goal-routing",
           maxIterations: config.maxIterations ?? 8,
@@ -153,6 +155,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-codex-model",
           name: "goal-codex-model",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-codex-model",
           sessionName: "goal-codex-model",
           maxIterations: config.maxIterations ?? 8,
@@ -198,6 +201,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-4",
           name: "goal-agent-channel",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-4",
           sessionName: "goal-agent-channel",
           maxIterations: config.maxIterations ?? 8,
@@ -254,6 +258,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-cron",
           name: "goal-cron",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-cron",
           sessionName: "goal-cron",
           maxIterations: 8,
@@ -285,6 +290,7 @@ describe("agent_goal action=launch", () => {
           id: "goal-3",
           name: "goal-opencode",
           workdir: config.workdir,
+          verifierCommands: config.verifierCommands ?? [],
           sessionId: "sess-3",
           sessionName: "goal-opencode",
           maxIterations: config.maxIterations ?? 8,
@@ -314,7 +320,7 @@ describe("agent_goal action=launch verifier confirmation (D3)", () => {
     setGoalController({
       async launchTask(config: Record<string, unknown>) {
         configs.push(config);
-        return { id: "g", name: "g", workdir: "/tmp", maxIterations: 8, loopMode: "verifier", status: "running" };
+        return { id: "g", name: "g", workdir: "/tmp", maxIterations: 8, loopMode: "verifier", status: "running", verifierCommands: config.verifierCommands ?? [] };
       },
     } as any);
     const tool = makeAgentGoalTool({ workspaceDir: "/tmp", sessionKey: "agent:main:discord:channel:123456789", messageChannel: "discord", chatId: "123456789" } as any);
