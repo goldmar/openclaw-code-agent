@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PR follow-ups use the immutable GitHub head after branch pruning and merges, retain commits made before OCA records the merge, and resolve the head for legacy sessions. Unknown manual/off counts now warn.
+- PR pushes and head ownership honor the configured push remote, while hook checks use the target repository’s base; a concurrent PR target change stops before branch movement or push so a retry checks its own base.
+- Auto-PR hook refusals preserve the decision prompt's deferred completion without adding a second completion line.
+
 - The automatic merge retry after a conflict resolver no longer ends silently: when the retry itself sends nothing, the user gets `ℹ️ [name] Already merged; nothing left to do.`, `ℹ️ [name] PR: <url>` or `ℹ️ [name] Conflict resolved; nothing was merged automatically. The branch is kept.` ([#520](https://github.com/goldmar/openclaw-code-agent/pull/520)).
 - A completion notice is no longer sent for a session id that was resumed while its merge waited in the queue.
 - An `agent_pr` update whose PR comment could not be posted is now recorded as an open PR and reported (`PR updated: <url>`, then `⚠️ The PR comment could not be added.`); it used to leave the decision pending without buttons ([#520](https://github.com/goldmar/openclaw-code-agent/pull/520)).

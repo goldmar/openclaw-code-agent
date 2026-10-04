@@ -32,6 +32,7 @@ import {
   appendMergeWarnings,
   describeMergeType,
   fetchRemoteBranchRef,
+  resolvePrBaseRemote,
   resolveTargetRepo,
   syncWorktreePR,
   syncWorktreePRByUrl,
@@ -114,10 +115,10 @@ export class SessionWorktreeStrategyService {
       /** Commit changes (resume with a commit instruction) / View output / Discard for a dirty worktree (N44). */
       makeDirtyWorktreeButtons?: (sessionId: string) => NotificationButton[][];
       isPrAvailable?: (repoDir: string) => Awaitable<boolean>;
-      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => Awaitable<boolean>;
-      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string) => Awaitable<PRStatus>;
-      getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => Awaitable<PRStatus>;
-      fetchRemoteBranch?: (repoDir: string, branchName: string) => Awaitable<string | undefined>;
+      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string, pushRemote?: string) => Awaitable<boolean>;
+      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string, baseBranch?: string, pushRemote?: string) => Awaitable<PRStatus>;
+      getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string, pushRemote?: string) => Awaitable<PRStatus>;
+      fetchRemoteBranch?: (repoDir: string, branchName: string, remote?: string) => Awaitable<string | undefined>;
       resolveRepoPolicy?: (repoDir: string) => Awaitable<RepoPolicyResolution>;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -136,7 +137,7 @@ export class SessionWorktreeStrategyService {
         prompt: string;
       }) => Promise<SpawnedResolverSession>;
       /** `retry`: after this cycle's conflict resolver, so a PR outcome is a milestone, not the `✅`. */
-      runAutoPr: (session: Session, baseBranch: string, retry?: boolean) => Promise<{ success: boolean; notificationSent: boolean; error?: string }>;
+      runAutoPr: (session: Session, baseBranch: string, retry?: boolean) => Promise<{ success: boolean; notificationSent: boolean; decisionRequested?: boolean; error?: string }>;
       /**
        * Execution status of the session that currently owns this OCA id (the
        * live session first, then its stored row). A merge can wait in the
@@ -145,7 +146,7 @@ export class SessionWorktreeStrategyService {
        */
       getCurrentSessionStatus?: (session: Session) => SessionStatus | undefined;
       /** Changed hook / worktree-setup files on the branch (default: `listHookPathChanges`). */
-      listHookPathChanges?: (repoDir: string, branchName: string, baseBranch: string) => Awaitable<string[]>;
+      listHookPathChanges?: (repoDir: string, branchName: string, baseBranch: string, remote?: string, preferRemoteBase?: boolean) => Awaitable<string[]>;
     },
   ) {
     this.actions = new SessionWorktreeActionService({
@@ -382,7 +383,8 @@ export class SessionWorktreeStrategyService {
     // Hook or worktree-setup changes run code on later git operations: never
     // merge or open a PR for them automatically. The user decides, with the
     // changed files named in the prompt.
-    const hookWarning = await this.describeHookChanges(action.repoDir, action.branchName, action.baseBranch);
+    const hookWarning = await this.describeHookChanges(action.repoDir, action.branchName, action.baseBranch,
+      action.strategy === "auto-pr" ? session.worktreePushRemote : undefined, action.strategy === "auto-pr" ? await resolveTargetRepo(action.repoDir, session.worktreePrTargetRepo) : undefined);
     if (hookWarning) {
       if (action.strategy === "delegate" && !action.policyBlocked) {
         return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason, hookWarning, openPrUrl);
@@ -542,7 +544,7 @@ export class SessionWorktreeStrategyService {
   }
 
   private async hasCurrentlyOpenPrForBranch(session: Session, repoDir: string, branchName: string): Promise<boolean> {
-    return (await this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo)) === true;
+    return (await this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo, session.worktreePushRemote)) === true;
   }
 
   private getDeliveredRemoteOutcome(session: Session): "pr-updated" | "pr-opened" | undefined {
@@ -557,15 +559,15 @@ export class SessionWorktreeStrategyService {
   private async resolveExistingTargetPr(session: Session, repoDir: string, branchName: string, baseBranch: string): Promise<PRStatus | undefined> {
     const targetRepo = await resolveTargetRepo(repoDir, session.worktreePrTargetRepo);
     if (session.worktreePrUrl) {
-      const recorded = await this.getPrStatusForUrl(repoDir, session.worktreePrUrl, targetRepo);
-      if (recorded.exists && recorded.baseRefName === baseBranch) return recorded;
+      const recorded = await this.getPrStatusForUrl(repoDir, session.worktreePrUrl, targetRepo, session.worktreePushRemote);
+      if (recorded.exists && recorded.ownHead !== false && recorded.baseRefName === baseBranch) return recorded;
     }
 
     const parentBranch = session.worktreeParentBranch;
     if (!parentBranch || (await getBranchName(repoDir)) !== parentBranch) return undefined;
     if (parentBranch === branchName || parentBranch === baseBranch) return undefined;
-    const discovered = (await this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo, baseBranch))
-      ?? await syncWorktreePR(repoDir, parentBranch, targetRepo, baseBranch);
+    const discovered = (await this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo, baseBranch, session.worktreePushRemote))
+      ?? await syncWorktreePR(repoDir, parentBranch, targetRepo, baseBranch, { pushRemote: session.worktreePushRemote });
     return discovered.exists
       && discovered.state === "open"
       && discovered.headRefName === parentBranch
@@ -588,10 +590,12 @@ export class SessionWorktreeStrategyService {
   }
 
   /** The hook-change warning for a branch, or undefined when it changes no hook locations. */
-  private async describeHookChanges(repoDir: string, branchName: string, baseBranch: string): Promise<string | undefined> {
+  private async describeHookChanges(repoDir: string, branchName: string, baseBranch: string, remote?: string, targetRepo?: string): Promise<string | undefined> {
     try {
       const list = this.deps.listHookPathChanges ?? listHookPathChanges;
-      return describeHookPathChanges(await list(repoDir, branchName, baseBranch));
+      const baseRemote = await resolvePrBaseRemote(repoDir, targetRepo, remote);
+      if (!baseRemote) return HOOK_CHECK_UNAVAILABLE_WARNING;
+      return describeHookPathChanges(await list(repoDir, branchName, baseBranch, baseRemote, targetRepo !== undefined || (remote !== undefined && remote !== "origin")));
     } catch (err) {
       log.warn(`[worktree] Could not check ${branchName} for hook changes: ${err instanceof Error ? err.message : String(err)}`);
       // Unknown is treated as changed: a person decides.
@@ -1048,6 +1052,13 @@ export class SessionWorktreeStrategyService {
       worktreeState: "pr_in_progress",
     });
     const result = await this.deps.runAutoPr(session, baseBranch, retry);
+    // agent_pr can discover a different PR base and already send the deferred
+    // decision prompt. That prompt owns this cycle; do not also complete it as a failure.
+    if (result.decisionRequested) {
+      this.markPendingDecision(session);
+      if (!retry) this.updatePersistedSessionFor(session, { deferredCompletionCycle: session.startedAt });
+      return { notificationSent: true, worktreeRemoved: false };
+    }
     if (!result.success) {
       const releasedAfterFailure = await this.releaseIfRepresentedByTargetPrBranch(session, repoDir, worktreePath, branchName, baseBranch);
       if (releasedAfterFailure) return releasedAfterFailure;
@@ -1066,9 +1077,9 @@ export class SessionWorktreeStrategyService {
     return { notificationSent: result.success ? result.notificationSent : true, worktreeRemoved: false };
   }
 
-  private async getPrStatusForUrl(repoDir: string, prUrl: string, targetRepo?: string): Promise<PRStatus> {
-    return (await this.deps.getPrStatusForUrl?.(repoDir, prUrl, targetRepo))
-      ?? await syncWorktreePRByUrl(repoDir, prUrl, targetRepo);
+  private async getPrStatusForUrl(repoDir: string, prUrl: string, targetRepo?: string, pushRemote?: string): Promise<PRStatus> {
+    return (await this.deps.getPrStatusForUrl?.(repoDir, prUrl, targetRepo, pushRemote))
+      ?? await syncWorktreePRByUrl(repoDir, prUrl, targetRepo, pushRemote);
   }
 
   private async releaseIfRepresentedByTargetPrBranch(
@@ -1084,8 +1095,8 @@ export class SessionWorktreeStrategyService {
     const targetBranch = targetPrStatus?.headRefName;
     if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
     const authoritativeTargetRef = this.deps.fetchRemoteBranch
-      ? await this.deps.fetchRemoteBranch(repoDir, targetBranch)
-      : await fetchRemoteBranchRef(repoDir, targetBranch);
+      ? await this.deps.fetchRemoteBranch(repoDir, targetBranch, session.worktreePushRemote)
+      : await fetchRemoteBranchRef(repoDir, targetBranch, session.worktreePushRemote);
     if (!authoritativeTargetRef) return undefined;
     const representedByTargetPrBranch = Boolean(
       (targetPrStatus?.state === "open" || targetPrStatus?.state === "merged")

@@ -41,9 +41,9 @@ async function configuredHooksPrefix(repoDir: string): Promise<string | undefine
  * A merge or PR carrying such a change runs code on the next git operation or
  * worktree creation, so it is never automatic.
  */
-export async function listHookPathChanges(repoDir: string, branch: string, base: string, remote = "origin"): Promise<string[]> {
+export async function listHookPathChanges(repoDir: string, branch: string, base: string, remote = "origin", preferRemoteBase = false): Promise<string[]> {
   const branchRef = await localBranchRef(branch);
-  const baseRef = await resolveBaseRef(repoDir, base, remote);
+  const baseRef = await resolveBaseRef(repoDir, base, remote, preferRemoteBase);
   const output = await runGit(
     ["-C", repoDir, "diff", "--name-only", "--no-renames", "-z", `${baseRef}...${branchRef}`],
     { timeout: 15_000 },
@@ -64,7 +64,7 @@ export async function listHookPathChanges(repoDir: string, branch: string, base:
  * first when it is not there yet. Throws when neither exists; callers treat
  * that as "changed".
  */
-async function resolveBaseRef(repoDir: string, base: string, remote: string): Promise<string> {
+async function resolveBaseRef(repoDir: string, base: string, remote: string, preferRemoteBase: boolean): Promise<string> {
   const localRef = await localBranchRef(base);
   const exists = async (ref: string): Promise<boolean> => {
     try {
@@ -74,7 +74,8 @@ async function resolveBaseRef(repoDir: string, base: string, remote: string): Pr
       return false;
     }
   };
-  if (await exists(localRef)) return localRef;
+  // A custom push target owns its own base; an origin/local namesake must not mask it.
+  if (!preferRemoteBase && remote === "origin" && await exists(localRef)) return localRef;
   const remoteRef = `refs/remotes/${remote}/${localRef.replace(/^refs\/heads\//, "")}`;
   if (await exists(remoteRef)) return remoteRef;
   await runGit(["-C", repoDir, "fetch", "--no-tags", remote, `+${localRef}:${remoteRef}`], { timeout: 60_000 });

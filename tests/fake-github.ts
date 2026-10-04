@@ -31,6 +31,8 @@ export type FakePullRequest = {
   isDraft: boolean;
   headRefName: string;
   baseRefName: string;
+  headRefOid?: string;
+  mergedAt?: string;
   headOwner: string;
   /** Defaults to "the head owner is not the repository's owner". */
   isCrossRepository?: boolean;
@@ -93,10 +95,25 @@ const fail = (message, code = 1) => { save(); process.stderr.write(message + "\n
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 const has = (name) => args.includes(name);
 const repoOf = () => flag("--repo") || state.repo;
+// Resolve the API head from the actual owner's configured Git remote.
+const headRemote = (owner, repo) => {
+  const remotes = execFileSync("git", ["remote"], { encoding: "utf8" }).trim().split(/\s+/).filter(Boolean);
+  const matches = remotes.filter((remote) => {
+    const url = execFileSync("git", ["remote", "get-url", remote], { encoding: "utf8" }).trim();
+    return url.match(/[:/]([^/]+)\/[^/]+(?:\.git)?$/)?.[1]?.toLowerCase() === owner?.toLowerCase();
+  });
+  return matches.find((remote) => execFileSync("git", ["remote", "get-url", remote], { encoding: "utf8" }).trim().endsWith("/" + repo.split("/").at(-1) + ".git")) ?? matches[0] ?? "origin";
+};
 const pick = (pr, fields) => {
+  if (pr.state === "OPEN") {
+    try {
+      const pushed = execFileSync("git", ["ls-remote", "--heads", headRemote(pr.headOwner, pr.repo), pr.headRefName], { encoding: "utf8" }).trim();
+      if (pushed) pr.headRefOid = pushed.split(/\s+/)[0];
+    } catch { /* Retain the explicitly seeded API head. */ }
+  }
   const all = {
     url: pr.url, number: pr.number, title: pr.title, body: pr.body, state: pr.state, isDraft: pr.isDraft,
-    headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRepositoryOwner: { login: pr.headOwner },
+    headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRefOid: pr.headRefOid, mergedAt: pr.mergedAt, headRepositoryOwner: { login: pr.headOwner },
     isCrossRepository: pr.isCrossRepository ?? pr.headOwner !== pr.repo.split("/")[0],
   };
   const out = {};
@@ -149,18 +166,19 @@ if (command === "create") {
   if (!title || !body) fail("fake gh: --title and --body are required (OCA never uses --fill here)", 2);
   let pushed = "";
   try {
-    pushed = execFileSync("git", ["ls-remote", "--heads", "origin", headRefName], { encoding: "utf8" }).trim();
+    pushed = execFileSync("git", ["ls-remote", "--heads", headRemote(headOwner, repo), headRefName], { encoding: "utf8" }).trim();
   } catch (error) {
     fail("fake gh: could not read origin: " + error.message);
   }
   if (!pushed) fail("pull request create failed: GraphQL: Head sha can't be blank, Head ref must be a branch (createPullRequest)");
   // Like GitHub: one open PR per head and base; a second PR into another base is allowed.
-  const existing = state.prs.find((pr) => pr.repo === repo && pr.headRefName === headRefName && pr.baseRefName === base && pr.state === "OPEN");
+  const existing = state.prs.find((pr) => pr.repo === repo && pr.headOwner === headOwner && pr.headRefName === headRefName && pr.baseRefName === base && pr.state === "OPEN");
   if (existing) fail("a pull request for branch \"" + headRefName + "\" into branch \"" + existing.baseRefName + "\" already exists:\n" + existing.url);
   const number = state.nextNumber++;
   const pr = {
     number, url: "https://github.com/" + repo + "/pull/" + number, title, body, state: "OPEN", isDraft: draft,
     headRefName, baseRefName: base, headOwner, repo,
+    headRefOid: pushed.split(/\s+/)[0],
   };
   state.prs.push(pr);
   save();
@@ -305,6 +323,8 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
         headRefName: pr.headRefName,
         baseRefName: pr.baseRefName ?? "main",
         headOwner: pr.headOwner ?? owner,
+        headRefOid: pr.headRefOid ?? (() => { try { return git(repoDir, "rev-parse", `refs/heads/${pr.headRefName}`); } catch { return git(repoDir, "rev-parse", "main"); } })(),
+        ...(pr.state === "MERGED" ? { mergedAt: pr.mergedAt ?? new Date().toISOString() } : {}),
         ...(pr.isCrossRepository === undefined ? {} : { isCrossRepository: pr.isCrossRepository }),
         repo: fullRepo,
       };

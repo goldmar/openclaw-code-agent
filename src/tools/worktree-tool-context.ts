@@ -37,14 +37,21 @@ export async function refuseHookChangesWithoutUser(args: {
   repoDir: string;
   branchName: string;
   baseBranch: string;
+  remote?: string;
+  preferRemoteBase?: boolean;
+  hookCheckUnavailable?: boolean;
   action: "merge" | "pr";
   /** Revalidate supported resolution immediately before decision dispatch. */
   decisionRef?: () => string | undefined;
+  /** Called only when the canonical decision was accepted for delivery. */
+  onDecisionRequested?: () => void;
 }): Promise<string | ReturnType<typeof sessionToolError> | undefined> {
   if (args.toolCallId === USER_BUTTON_TOOL_CALL_ID) return undefined;
   let hookWarning: string | undefined;
   try {
-    hookWarning = describeHookPathChanges(await worktreeToolContextInternals.listHookPathChanges(args.repoDir, args.branchName, args.baseBranch));
+    hookWarning = args.hookCheckUnavailable
+      ? HOOK_CHECK_UNAVAILABLE_WARNING
+      : describeHookPathChanges(await worktreeToolContextInternals.listHookPathChanges(args.repoDir, args.branchName, args.baseBranch, args.remote, args.preferRemoteBase));
   } catch (err) {
     // Fail closed: a check that cannot be computed counts as "changed", so a
     // person decides (a push needs neither the base nor this diff, so "the
@@ -63,6 +70,7 @@ export async function refuseHookChangesWithoutUser(args: {
     "Changes git hook or worktree setup files; waiting for your decision.",
     { hookWarning },
   ) ?? "";
+  if (prompt && !prompt.startsWith("Error:")) args.onDecisionRequested?.();
   return [
     `❌ ${args.action === "merge" ? "Not merged" : "No PR opened"}: ${hookWarning.replace(/^⚠️\s*/u, "")}`,
     `Only the user's button can ${args.action === "merge" ? "merge" : "open a PR for"} this branch. ${prompt}`,
