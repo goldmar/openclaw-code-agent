@@ -8,7 +8,8 @@ import {
   mergeBranch,
   pushBranch,
   deleteBranch,
-  detectDefaultBranch,
+  resolveLandingBaseBranch,
+  branchExists,
   removeWorktree,
   pruneWorktrees,
   getDiffSummary,
@@ -133,7 +134,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
     description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID" }),
-      base_branch: Type.Optional(Type.String({ description: "Default: the repository's detected default branch" })),
+      base_branch: Type.Optional(Type.String({ description: "Default: the session's recorded base (worktree_base_branch at launch), else the repository's detected default branch" })),
       strategy: Type.Optional(
         Type.StringEnum(["merge", "squash"], {
           description: "merge (default): rebase onto base, then fast-forward. squash: one commit.",
@@ -187,7 +188,12 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
-      const resolvedBaseBranch = params.base_branch ?? await detectDefaultBranch(effectiveWorkdir);
+      // The session's landing base, as the decision prompt, the automatic
+      // merge, the status tool and a new PR compute it: the base this call
+      // names, else the base recorded at launch (the merge target, not where
+      // the worktree was created from), else the detected default branch.
+      const baseSource = persistedSession ?? targetSession;
+      const resolvedBaseBranch = await resolveLandingBaseBranch(baseSource, effectiveWorkdir, params.base_branch);
       const baseBranch = resolvedBaseBranch;
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
@@ -205,6 +211,20 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
         return { content: [{ type: "text", text: `ℹ️ [${target.sessionName}] Already merged.` }] };
+      }
+
+      // A base named by the call or recorded for the session must exist: never
+      // fall through to an obscure git error, and never merge somewhere else.
+      // (After the guard above: a session that already merged stays "Already
+      // merged" when its base was deleted afterwards.)
+      const namedBaseBranch = params.base_branch ?? baseSource?.worktreeBaseBranch;
+      if (namedBaseBranch && !(await branchExists(effectiveWorkdir, namedBaseBranch))) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Merge blocked: base branch \`${namedBaseBranch}\` does not exist in ${effectiveWorkdir}.\nPass base_branch to name the branch to merge into.`,
+          }],
+        };
       }
 
       const branchAheadCount = existsSync(worktreePath)

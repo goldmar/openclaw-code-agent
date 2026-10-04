@@ -198,7 +198,7 @@ describe("formatSessionListing", () => {
     assert.match(formatSessionListing(makeSession({ status: "running", phase: "awaiting_plan_decision" })), /📋 s \[x\] — waiting for plan approval ·/);
     assert.match(formatSessionListing(makeSession({ status: "running", phase: "awaiting_user_input" })), /— waiting for an answer ·/);
     assert.match(formatSessionListing(makeSession({ status: "killed", phase: "suspended" })), /— suspended \(a message resumes it\) ·/);
-    // The listing icon is the marker of `💤 [name] Suspended after idle timeout`, not `⏸️` (a completed turn).
+    // The listing icon is the marker of `💤 [name] Suspended after idle timeout`, not `⏸️`.
     assert.match(formatSessionListing(makeSession({ status: "killed", phase: "suspended" })), /^💤 /);
   });
 

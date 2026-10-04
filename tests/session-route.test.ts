@@ -6,11 +6,55 @@ import {
   canonicalizeSessionRoute,
   formatOriginRouteWakeBlock,
   isInternalChatProvider,
+  parseThreadIdFromSessionKey,
   ROUTED_REPLY_RULE,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
   sessionRouteInternals,
 } from "../src/session-route";
+
+describe("Telegram direct-messages topic routes", () => {
+  const canonical: SessionRoute = { provider: "telegram", accountId: "bot1", target: "1234:direct-topic:9", threadId: undefined };
+
+  it("keeps the topic inside the target and never as a thread id", () => {
+    assert.deepEqual(routeFromOriginMetadata("telegram|bot1|1234:direct-topic:9", undefined, "agent:main:main"), { ...canonical, sessionKey: "agent:main:main" });
+    // A thread id next to it (the host's `messageThreadId`, or a stored origin thread) is dropped.
+    assert.deepEqual(routeFromOriginMetadata("telegram|bot1|1234:direct-topic:9", 9, "agent:main:main"), { ...canonical, sessionKey: "agent:main:main" });
+  });
+
+  it("folds a thread id that names the direct topic into the target (session keys, routes stored before)", () => {
+    const key = "agent:main:main:thread:1234:direct-topic:9";
+    // From the session key's thread suffix.
+    assert.equal(parseThreadIdFromSessionKey(key), "1234:direct-topic:9");
+    assert.deepEqual(routeFromOriginMetadata("telegram|bot1|1234", parseThreadIdFromSessionKey(key), key), { ...canonical, sessionKey: key });
+    // From a stored route or origin thread id.
+    for (const threadId of ["1234:direct-topic:9", "direct-topic:9"]) {
+      assert.deepEqual(canonicalizeSessionRoute({ route: { provider: "telegram", accountId: "bot1", target: "1234", threadId } }), { ...canonical, sessionKey: undefined });
+      assert.deepEqual(canonicalizeSessionRoute({ originChannel: "telegram|bot1|1234", originThreadId: threadId }), { ...canonical, sessionKey: undefined });
+    }
+    // Idempotent, and the wake's origin route names the in-band target without a thread.
+    const route = canonicalizeSessionRoute({ route: { provider: "telegram", accountId: "bot1", target: "1234", threadId: "1234:direct-topic:9" } });
+    assert.deepEqual(canonicalizeSessionRoute({ route }), route);
+    const wake = formatOriginRouteWakeBlock({ route, originThreadId: "1234:direct-topic:9" });
+    assert.match(wake, /"target":"1234:direct-topic:9"/);
+    assert.doesNotMatch(wake.split("\n")[0]!, /threadId/);
+  });
+
+  it("leaves a thread id that names another chat, a forum topic and other providers alone", () => {
+    assert.deepEqual(
+      canonicalizeSessionRoute({ route: { provider: "telegram", target: "1234", threadId: "4321:direct-topic:9" } }),
+      { provider: "telegram", accountId: undefined, target: "1234", threadId: "4321:direct-topic:9", sessionKey: undefined },
+    );
+    assert.deepEqual(
+      canonicalizeSessionRoute({ route: { provider: "telegram", target: "-1001234567890", threadId: "42" } }),
+      { provider: "telegram", accountId: undefined, target: "-1001234567890", threadId: "42", sessionKey: undefined },
+    );
+    assert.deepEqual(
+      canonicalizeSessionRoute({ route: { provider: "slack", target: "C123", threadId: "direct-topic:9" } }),
+      { provider: "slack", accountId: undefined, target: "C123", threadId: "direct-topic:9", sessionKey: undefined },
+    );
+  });
+});
 
 describe("session-route", () => {
   it("defaults bare numeric discord targets to channel routes", () => {

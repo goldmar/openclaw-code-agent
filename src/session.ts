@@ -199,6 +199,7 @@ export class Session extends EventEmitter {
   worktreeDisposition?: string;
   worktreePrUrl?: string;
   worktreePrNumber?: number;
+  worktreePrHeadBranch?: string;
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
   worktreeLifecycle?: PersistedWorktreeLifecycle;

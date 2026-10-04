@@ -2,7 +2,7 @@ import { sessionManager } from "../singletons";
 import { formatHarnessModelLabel } from "../session-display";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
-import { isCommandInRouteChat } from "../config";
+import { hostHonoursSuppressReply, isCommandInRouteChat } from "../config";
 import { SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
 /** The host's command context fields that identify the chat a command was typed in. */
@@ -26,7 +26,7 @@ export interface AgentCommandContext {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
-  /** Raw "To" of the command; the chat itself only on Telegram (`telegram:<chat id>`). */
+  /** Raw "To" of the command; the chat itself only on Telegram (`telegram:<chat id>`, with `:topic:<n>` for a text command in a forum topic). */
   to?: string;
   /** The bot account that received the command. */
   accountId?: string;
@@ -127,7 +127,11 @@ export function registerAgentCommand(api: CommandApi): void {
           // by …`) is the answer and keeps its buttons. A stop whose notice an
           // `/agent_kill` reply replaced sends none, so this reply stays.
           const noticeFollows = session.status === "failed" || !session.stopNoticeReplaced;
-          if (noticeFollows && isCommandInRouteChat(ctx, session)) return { suppressReply: true };
+          if (noticeFollows && isCommandInRouteChat(ctx, session)) {
+            // Where the host would print its own "No response generated." for a
+            // suppressed reply, one short line goes with the notice instead.
+            return hostHonoursSuppressReply(ctx) ? { suppressReply: true } : { text: `❌ [${session.name}] Did not start.` };
+          }
           const reason = session.error?.trim();
           return { text: `❌ [${session.name}] Did not start${reason ? `: ${reason}` : "."}\nFix the problem and run /agent again.` };
         }

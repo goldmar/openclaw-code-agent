@@ -1,10 +1,62 @@
-import type { SessionManager } from "../session-manager";
-import type { SessionRoute } from "../types";
+import type { GoalStopReply, SessionManager } from "../session-manager";
+import type { GoalTaskStatus, SessionRoute } from "../types";
 import { formatSessionStatsSuffix, sessionStats } from "../session-notification-stats";
 
 /** A session status in the user's words: a killed session is "stopped". */
 export function userStatusWord(status: string): string {
   return status === "killed" ? "stopped" : status;
+}
+
+const GOAL_STATUS_WORDS: Record<GoalTaskStatus, string> = {
+  awaiting_verifier_confirmation: "waiting for your confirmation",
+  running: "running",
+  waiting_for_session: "waiting for the session",
+  waiting_for_plan_approval: "waiting for plan approval",
+  waiting_for_user: "waiting for your input",
+  succeeded: "succeeded",
+  failed: "failed",
+  stopped: "stopped",
+};
+
+/** A goal task status in the user's words; tool results keep the raw value. */
+export function userGoalStatusWord(status: GoalTaskStatus): string {
+  return GOAL_STATUS_WORDS[status] ?? String(status).replace(/_/gu, " ");
+}
+
+const PHASE_WORDS: Record<string, string> = {
+  starting: "starting",
+  active: "working",
+  awaiting_plan_decision: "waiting for a plan decision",
+  awaiting_user_input: "waiting for input",
+  awaiting_worktree_decision: "waiting for a merge / PR decision",
+  suspended: "suspended",
+  terminal: "ended",
+};
+
+/** A session phase (its lifecycle) in the user's words. */
+export function userPhaseWord(phase: string): string {
+  return PHASE_WORDS[phase] ?? phase.replace(/_/gu, " ");
+}
+
+type KillOptions = { replyIsStopNotice?: (session: { route?: SessionRoute; originSessionKey?: string }) => boolean };
+
+/** The goal notice as this command's reply when it is typed in the task's own chat (commands only). */
+function goalStopReply(options: KillOptions): GoalStopReply | undefined {
+  const sameChat = options.replyIsStopNotice;
+  return sameChat ? { sameChat: (task) => sameChat(task) === true } : undefined;
+}
+
+/** The branch of a worktree session that was neither merged, released nor discarded. */
+function openWorktreeBranch(target: {
+  worktreeBranch?: string;
+  worktreeStrategy?: string;
+  worktreeMerged?: boolean;
+  worktreeLifecycle?: { state?: string };
+}): string | undefined {
+  if (!target.worktreeBranch || !target.worktreeStrategy || target.worktreeStrategy === "off" || target.worktreeMerged) return undefined;
+  const state = target.worktreeLifecycle?.state;
+  if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change" || state === "pr_open") return undefined;
+  return target.worktreeBranch;
 }
 
 /**
@@ -23,39 +75,57 @@ export function getKillSessionText(
 ): string {
   const already = userStatusWord;
   const session = sm.resolve(ref);
-  if (!session) {
-    const persisted = sm.getPersistedSession(ref);
-    if (!persisted) return `❌ Session "${ref}" not found.`;
-    if (persisted.status === "killed" && persisted.lifecycle === "suspended") {
-      const completed = reason === "completed";
-      const updated = sm.updatePersistedSession(ref, {
-        status: completed ? "completed" : "killed",
-        lifecycle: "terminal",
-        runtimeState: "stopped",
-        resumable: false,
-        killReason: completed ? "done" : "user",
-      });
-      if (updated) {
-        // No live process and no user notice: the row is only closed.
-        return completed
-          ? `ℹ️ [${persisted.name}] Marked as completed (it was not running).`
-          : `⛔ [${persisted.name}] Stopped (it was not running).`;
-      }
+  const target = session ?? sm.getPersistedSession(ref);
+  if (!target) return `❌ Session "${ref}" not found.`;
+
+  // A suspended session (idle timeout, or recovered after a restart) has no
+  // live process: closing it only closes the row, loaded or not, and sends no
+  // user notice.
+  // (Also one stopped by the idle timeout while its plan waited: see `closeSuspendedSession`.)
+  if (target.status === "killed") {
+    const closed = sm.closeSuspendedSession(ref, reason === "completed");
+    // A goal task that owned the session stops with it: one goal notice,
+    // which is this command's reply when typed in the task's own chat.
+    const goalReply = goalStopReply(options);
+    const goalTask = closed === "completed" || closed === "killed" ? sm.stopGoalOfClosedSession?.(target.goalTaskId, closed, goalReply) : undefined;
+    if (closed === "completed") {
+      // Only the orchestrator's tool can ask for this. No completion handling
+      // runs for a session that was not running, so an open branch is named.
+      const branch = openWorktreeBranch(target);
+      return `ℹ️ [${target.name}] Marked as completed (it was not running).${goalTask ? ` Its goal task "${goalTask}" is stopped: the session was closed without running, so its verifiers did not run.` : ""}${branch
+        ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
+        : ""}`;
     }
-    return `ℹ️ [${persisted.name}] Already ${already(persisted.status)}; nothing to stop.`;
+    if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;
+    if (closed) {
+      if (!goalTask) return `⛔ [${target.name}] Stopped (it was not running).`;
+      return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${target.name}] Stopped (it was not running); goal task "${goalTask}" stopped.`;
+    }
   }
 
-  if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-    // A suspended session is left as it is (still resumable), so it is not called stopped.
-    return session.status === "killed" && session.lifecycle === "suspended"
-      ? `ℹ️ [${session.name}] Suspended, not running; nothing to stop.`
-      : `ℹ️ [${session.name}] Already ${already(session.status)}; nothing to stop.`;
+  if (!session || session.status === "completed" || session.status === "failed" || session.status === "killed") {
+    return `ℹ️ [${target.name}] Already ${already(target.status)}; nothing to stop.`;
   }
 
   if (reason === "completed") {
     // A real completion: the lifecycle sends the user `✅ [name] Completed`.
     session.complete();
     return `ℹ️ [${session.name}] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`;
+  }
+
+  // A goal's session is stopped through its goal task: the task's
+  // `⛔ [task] Goal task stopped` is the one stop message (the reply in the
+  // task's own chat, the notice in the task's chat otherwise).
+  const goalReply = goalStopReply(options);
+  const stoppedGoal = sm.stopGoalOfRunningSession?.(session.goalTaskId, goalReply);
+  if (stoppedGoal) {
+    // The session the user named may be newer than the one the task had
+    // recorded (an iteration that is still starting): it is stopped too.
+    if (session.status === "starting" || session.status === "running") {
+      session.stopNoticeReplaced = true;
+      sm.kill(session.id);
+    }
+    return goalReply?.text && !goalReply.posted ? goalReply.text : `⛔ [${session.name}] Stopped; goal task "${stoppedGoal}" stopped.`;
   }
 
   const replyIsStopNotice = options.replyIsStopNotice?.(session) === true;

@@ -54,7 +54,7 @@ function errorMessage(err: unknown): string {
 
 class DispatchTimeoutError extends Error {
   constructor() {
-    super(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
+    super(`Dispatch timed out after ${wakeDeliveryExecutorInternals.promiseTimeoutMs}ms`);
     this.name = "DispatchTimeoutError";
   }
 }
@@ -68,6 +68,8 @@ function createDispatchTimeoutError(): Error {
 export const wakeDeliveryExecutorInternals = {
   execFile: childProcess.execFile,
   callGatewayFromCli,
+  /** How long a promise-based delivery (a direct send) may take before its outcome counts as unknown. */
+  promiseTimeoutMs: WAKE_CLI_TIMEOUT_MS,
 };
 
 type RetryTimerEntry = {
@@ -553,7 +555,7 @@ export class WakeDeliveryExecutor {
         if (settled) return;
         settled = true;
         reject(createDispatchTimeoutError());
-      }, WAKE_CLI_TIMEOUT_MS);
+      }, wakeDeliveryExecutorInternals.promiseTimeoutMs);
       timer.unref?.();
 
       Promise.resolve()

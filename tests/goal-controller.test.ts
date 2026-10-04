@@ -187,6 +187,62 @@ describe("GoalController", () => {
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
+  it("ends a task whose session is no longer loaded by what the stored row says", async () => {
+    const reconcile = async (stored: Record<string, unknown> | undefined) => {
+      const notifications: string[] = [];
+      const controller = new GoalController({
+        resolve: (): undefined => undefined,
+        getPersistedSession: () => stored,
+        emitGoalTaskUpdate: (_task: GoalTaskState, _text: string, label: string) => { notifications.push(label); },
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+      const task = buildTask({ sessionId: "session-1", sessionName: "goal-task", verifierCommands: [{ label: "check-1", command: "true" }] });
+      store.upsert(task);
+      await (controller as any).reconcileTask(task);
+      return { status: task.status, reason: task.failureReason, notifications };
+    };
+
+    // A dormant session whose plan was rejected, or that the user stopped.
+    assert.deepEqual(await reconcile({ status: "killed", killReason: "idle-timeout", approvalState: "rejected" }),
+      { status: "stopped", reason: "The plan was rejected.", notifications: ["goal-task-stopped"] });
+    assert.deepEqual(await reconcile({ status: "killed", killReason: "user" }),
+      { status: "stopped", reason: "Stopped by user.", notifications: ["goal-task-stopped"] });
+    // A session that completed normally and was unloaded afterwards is not a
+    // "closed without running" session: its completion was handled when it
+    // happened, so finding it gone is the failure it always was.
+    for (const stored of [{ status: "completed", killReason: "done" }, { status: "completed", killReason: "done", approvalState: "rejected" }, undefined]) {
+      assert.deepEqual(await reconcile(stored),
+        { status: "failed", reason: "Underlying session could not be found.", notifications: ["goal-task-failed"] });
+    }
+  });
+
+  it("stops a task at once, with one notice, when its dormant session is closed", () => {
+    for (const [outcome, reason] of [["completed", "The session was closed as completed without running."], ["killed", "Stopped by user."]] as const) {
+      const notifications: string[] = [];
+      const controller = new GoalController({
+        resolve: (): undefined => undefined,
+        emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string, replyOnly?: boolean) => { notifications.push(`${label}:${replyOnly === true}`); return text; },
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+      const task = buildTask({ status: "waiting_for_plan_approval", sessionId: "session-1", sessionName: "goal-task" });
+      store.upsert(task);
+
+      // Typed in the task's own chat: the notice is returned as the reply, not sent.
+      const reply: { sameChat: () => boolean; text?: string; posted?: boolean } = { sameChat: () => true };
+      assert.equal(controller.sessionClosedWhileDormant(task.id, outcome, reply), "goal-task");
+      assert.equal(task.status, "stopped");
+      assert.equal(task.failureReason, reason);
+      assert.deepEqual(notifications, ["goal-task-stopped:true"]);
+      assert.equal(reply.posted, false);
+      assert.match(reply.text ?? "", /Goal task stopped/);
+      // A second close, or a finished task, does nothing more.
+      assert.equal(controller.sessionClosedWhileDormant(task.id, outcome), undefined);
+      assert.deepEqual(notifications, ["goal-task-stopped:true"]);
+    }
+  });
+
   it("drops attached session observers after the attached session reaches a terminal state", () => {
     const controller = new GoalController({} as any);
     const store = createStore();
@@ -296,8 +352,8 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
-  it("suppresses the session's stop notice only when the stop reply replaces it", () => {
-    for (const sameChat of [true, false]) {
+  it("suppresses the session's stop notice for every goal stop: the goal notice is the one stop message", () => {
+    for (const sameChat of [true, false, undefined]) {
       const session = createStubSession({ id: "session-1", name: "goal-task" });
       const killed: string[] = [];
       const controller = new GoalController({
@@ -311,13 +367,46 @@ describe("GoalController", () => {
       const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
       store.upsert(task);
 
-      const reply: { sameChat: () => boolean; text?: string } = { sameChat: () => sameChat };
+      // `undefined`: the agent_goal tool, which passes no reply.
+      const reply: { sameChat: () => boolean; text?: string; posted?: boolean; taskName?: string } | undefined =
+        sameChat === undefined ? undefined : { sameChat: () => sameChat };
       assert.equal(controller.stopTask(task.id, reply)?.action, "stopped");
 
-      assert.deepEqual(killed, [`session-1:${sameChat}`]);
-      assert.equal(session.stopNoticeReplaced === true, sameChat);
-      assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+      // In the task's chat the reply is the stop message; from another chat
+      // (or the tool) the goal notice in the task's chat is. Never both lines.
+      assert.deepEqual(killed, ["session-1:true"]);
+      assert.equal(session.stopNoticeReplaced, true);
+      if (reply) {
+        assert.match(reply.text ?? "", /Goal task stopped\n\nStopped by user\./);
+        assert.equal(reply.posted, !sameChat);
+        assert.equal(reply.taskName, task.name);
+      }
     }
+  });
+
+  it("stops the task's newest session too when it is still starting and not yet recorded on the task", () => {
+    // Every iteration is a new session; `task.sessionId` is updated only once it runs.
+    const previous = createStubSession({ id: "session-1", name: "goal-task", status: "killed", goalTaskId: "goal-1" });
+    const starting = createStubSession({ id: "session-2", name: "goal-task", status: "starting", goalTaskId: "goal-1" });
+    const foreign = createStubSession({ id: "session-3", name: "other", status: "running", goalTaskId: "goal-other" });
+    const killed: string[] = [];
+    const controller = new GoalController({
+      resolve: (id: string) => [previous, starting, foreign].find((session) => session.id === id),
+      list: () => [previous, starting, foreign],
+      kill: (id: string) => { killed.push(id); },
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string) => text,
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    const task = buildTask({ sessionId: "session-1", sessionName: "goal-task" });
+    store.upsert(task);
+
+    assert.equal(controller.stopTask(task.id)?.action, "stopped");
+
+    assert.deepEqual(killed, ["session-1", "session-2"], "the recorded session and the one that is starting; never another task's");
+    assert.equal(starting.stopNoticeReplaced, true, "one stop message: the goal's");
+    assert.equal(foreign.stopNoticeReplaced, undefined);
+    assert.equal(task.status, "stopped");
   });
 
   it("edits and persists an active goal without changing session lifecycle fields", () => {

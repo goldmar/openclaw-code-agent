@@ -32,6 +32,8 @@ export type FakePullRequest = {
   headRefName: string;
   baseRefName: string;
   headOwner: string;
+  /** Defaults to "the head owner is not the repository's owner". */
+  isCrossRepository?: boolean;
   repo: string;
 };
 
@@ -52,11 +54,15 @@ export type FakeGhFailures = {
   editBody?: boolean;
   /** `pr view` fails for every PR. */
   view?: boolean;
+  /** `pr list` fails with this stderr text (an outage, an expired login). */
+  list?: string;
 };
 
 export type FakeGhState = {
   /** Default `owner/repo` for PRs created without `--repo`. */
   repo: string;
+  /** What `gh repo view` reports as the repository's current `owner/repo` (after a rename); default: unchanged. */
+  canonicalRepo?: string;
   nextNumber: number;
   prs: FakePullRequest[];
   comments: Array<{ number: number; body: string; repo: string }>;
@@ -79,8 +85,9 @@ if (!statePath) {
   process.stderr.write("fake gh: OCA_FAKE_GH_STATE is not set\n");
   process.exit(4);
 }
+// One appended line per call: concurrent gh processes never lose each other's entry.
+fs.appendFileSync(statePath + ".calls", JSON.stringify({ args, cwd: process.cwd() }) + "\n");
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-state.calls.push({ args, cwd: process.cwd() });
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 const fail = (message, code = 1) => { save(); process.stderr.write(message + "\n"); process.exit(code); };
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -90,6 +97,7 @@ const pick = (pr, fields) => {
   const all = {
     url: pr.url, number: pr.number, title: pr.title, body: pr.body, state: pr.state, isDraft: pr.isDraft,
     headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRepositoryOwner: { login: pr.headOwner },
+    isCrossRepository: pr.isCrossRepository ?? pr.headOwner !== pr.repo.split("/")[0],
   };
   const out = {};
   for (const field of fields.split(",")) if (field in all) out[field] = all[field];
@@ -101,9 +109,17 @@ const findPr = (ref) => {
   return state.prs.find((pr) => pr.url === ref || (String(pr.number) === String(ref) && pr.repo === repo));
 };
 const [group, command, target] = args;
+if (group === "repo" && command === "view") {
+  // The repository's current name: differs from the remote's after a rename or transfer.
+  const named = target && !target.startsWith("--") ? target : state.repo;
+  save();
+  process.stdout.write(JSON.stringify({ nameWithOwner: state.canonicalRepo || named }) + "\n");
+  process.exit(0);
+}
 if (group !== "pr") fail("fake gh: unsupported command " + args.join(" "), 2);
 
 if (command === "list") {
+  if (state.failures.list) fail(state.failures.list);
   const head = flag("--head");
   const repo = repoOf();
   // Like GitHub, newest first.
@@ -138,7 +154,8 @@ if (command === "create") {
     fail("fake gh: could not read origin: " + error.message);
   }
   if (!pushed) fail("pull request create failed: GraphQL: Head sha can't be blank, Head ref must be a branch (createPullRequest)");
-  const existing = state.prs.find((pr) => pr.repo === repo && pr.headRefName === headRefName && pr.state === "OPEN");
+  // Like GitHub: one open PR per head and base; a second PR into another base is allowed.
+  const existing = state.prs.find((pr) => pr.repo === repo && pr.headRefName === headRefName && pr.baseRefName === base && pr.state === "OPEN");
   if (existing) fail("a pull request for branch \"" + headRefName + "\" into branch \"" + existing.baseRefName + "\" already exists:\n" + existing.url);
   const number = state.nextNumber++;
   const pr = {
@@ -252,8 +269,12 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
   // Drop any cached `gh --version` probe so the fake binary is the one found.
   setGitHubCliAvailabilityForTests(undefined);
 
-  const readState = (): FakeGhState => JSON.parse(readFileSync(statePath, "utf-8")) as FakeGhState;
-  const writeState = (state: FakeGhState): void => writeFileSync(statePath, JSON.stringify(state, null, 2));
+  const callsPath = `${statePath}.calls`;
+  writeFileSync(callsPath, "");
+  const readCalls = (): FakeGhCall[] => readFileSync(callsPath, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as FakeGhCall);
+  // Calls are logged in their own append-only file; everything else is one JSON document.
+  const readState = (): FakeGhState => ({ ...(JSON.parse(readFileSync(statePath, "utf-8")) as FakeGhState), calls: readCalls() });
+  const writeState = (state: FakeGhState): void => writeFileSync(statePath, JSON.stringify({ ...state, calls: [] }, null, 2));
 
   return {
     repoDir,
@@ -262,6 +283,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
     repo,
     readState,
     resetState() {
+      writeFileSync(callsPath, "");
       writeState({ ...initialState, prs: [], comments: [], calls: [], failures: {} });
     },
     updateState(update) {
@@ -283,6 +305,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
         headRefName: pr.headRefName,
         baseRefName: pr.baseRefName ?? "main",
         headOwner: pr.headOwner ?? owner,
+        ...(pr.isCrossRepository === undefined ? {} : { isCrossRepository: pr.isCrossRepository }),
         repo: fullRepo,
       };
       state.prs.push(seeded);
@@ -290,7 +313,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
       return seeded;
     },
     ghCalls(subcommand) {
-      const calls = readState().calls;
+      const calls = readCalls();
       return subcommand ? calls.filter((call) => call.args[1] === subcommand) : calls;
     },
     remoteHead(branch) {

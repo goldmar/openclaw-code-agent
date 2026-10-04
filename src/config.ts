@@ -183,7 +183,7 @@ interface OriginContextLike {
   senderId?: string | number;
   channelId?: string;
   messageThreadId?: string | number;
-  /** Raw "To" of a chat command; the chat itself only on Telegram (`telegram:<chat id>`). */
+  /** Raw "To" of a chat command; the chat itself only on Telegram (see `parseTelegramCommandTarget`). */
   to?: string;
   accountId?: string;
   messageChannel?: string;
@@ -275,6 +275,19 @@ export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | und
 }
 
 /**
+ * The chat a Telegram chat command was typed in, from the host's `to`:
+ * `telegram:<chat>` (native commands; text commands outside forum topics, and
+ * in the General topic), `telegram:<chat>:topic:<n>` (text commands in a forum
+ * topic) or `telegram:<chat>:direct-topic:<n>` (direct-messages topics, on both
+ * paths). Any other shape is not understood.
+ */
+function parseTelegramCommandTarget(to: unknown): { chat: string; topic?: string; directTopic?: boolean } | undefined {
+  const match = /^telegram:(-?\d+)(?::(topic|direct-topic):(\d+))?$/.exec(toOptionalText(to) ?? "");
+  if (!match) return undefined;
+  return { chat: match[1]!, ...(match[3] ? { topic: match[3], directTopic: match[2] === "direct-topic" } : {}) };
+}
+
+/**
  * Resolve origin channel from command/tool context with fallback chain.
  */
 export function resolveOriginChannel(ctx: OriginContextLike | undefined, explicitChannel?: string): string {
@@ -289,13 +302,19 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   if (ctx?.channelId && String(ctx.channelId).includes("|")) {
     return String(ctx.channelId);
   }
-  // A Telegram chat command names its chat (`to: "telegram:<chat id>"`) and the
+  // A Telegram chat command names its chat (`to: "telegram:<chat id>"`, or
+  // `telegram:<chat id>:topic:<n>` for a text command in a forum topic) and the
   // bot account that received it. Keeping that account makes the session's
   // notices leave through the bot the user typed to, and lets a later command
-  // in the same chat be recognised (`isCommandInRouteChat`). Other providers'
-  // `to` is not the chat, and a topic address inside `to` is left to the
-  // fallbacks below.
-  const commandChat = /^telegram:(-?\d+)$/.exec(toOptionalText(ctx?.to) ?? "")?.[1];
+  // in the same chat be recognised (`isCommandInRouteChat`). The topic itself
+  // comes from `messageThreadId` (`resolveOriginThreadId`). A direct-messages
+  // topic (`telegram:<chat id>:direct-topic:<n>`) stays inside the target: the
+  // host delivers that form with `direct_messages_topic_id`, and it is never a
+  // thread id. Other providers' `to` is not the chat.
+  const commandTarget = parseTelegramCommandTarget(ctx?.to);
+  const commandChat = commandTarget?.directTopic
+    ? `${commandTarget.chat}:direct-topic:${commandTarget.topic}`
+    : commandTarget?.chat;
   const commandAccount = toOptionalText(ctx?.accountId);
   if (commandChat && commandAccount && toOptionalText(ctx?.channel)?.toLowerCase() === "telegram" && !ctx?.messageChannel) {
     return `telegram|${commandAccount}|${commandChat}`;
@@ -331,7 +350,12 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
 
 /** Resolve Telegram thread/forum topic ID from command context. */
 export function resolveOriginThreadId(ctx: OriginContextLike | undefined): string | number | undefined {
-  return getTrustedDeliveryRoute(ctx).threadId ?? ctx?.messageThreadId ?? undefined;
+  const trusted = getTrustedDeliveryRoute(ctx).threadId;
+  if (trusted !== undefined) return trusted;
+  // In a direct-messages topic the host's `messageThreadId` is that topic's id,
+  // which is not a thread id (see `resolveOriginChannel`).
+  if (parseTelegramCommandTarget(ctx?.to)?.directTopic) return undefined;
+  return ctx?.messageThreadId ?? undefined;
 }
 
 /** Build the explicit session route used for notifications and wakes. */
@@ -353,25 +377,49 @@ export function resolveSessionRoute(
  * Compared on the address the host gives the command (`channel`, `to`,
  * `accountId`, `messageThreadId`), never on the session key: with the default
  * DM scope every DM on every channel shares `agent:<id>:main`. Telegram only:
- * there `to` is the chat (`telegram:<chat id>`). Elsewhere it is not (WhatsApp:
- * the bot's own number; Discord and Slack: `slash:<user>`), so every other
- * provider and every unknown chat is never "the same chat".
+ * there `to` is the chat (`telegram:<chat id>`; a text command in a forum topic
+ * has `telegram:<chat id>:topic:<n>` with the same `<n>` in `messageThreadId`).
+ * Elsewhere it is not (WhatsApp: the bot's own number; Discord and Slack:
+ * `slash:<user>`), so every other provider and every unknown chat is never
+ * "the same chat". A command typed in a direct-messages topic
+ * (`telegram:<chat id>:direct-topic:<n>`) matches only a route into that same
+ * direct topic (`<chat id>:direct-topic:<n>` as the target, no thread). A wrong
+ * "yes" would drop a notice from the chat that should get it, so every form
+ * that is not understood is a "no": another `to` shape, or a topic in `to` that
+ * differs from `messageThreadId`.
  */
 export function isCommandInRouteChat(
   ctx: OriginContextLike | undefined,
   target: { route?: SessionRoute } | undefined,
 ): boolean {
   const route = target?.route;
-  const own = ctx?.deliveryContext
-    ?? { channel: ctx?.channel, to: ctx?.to, accountId: ctx?.accountId, threadId: ctx?.messageThreadId };
+  if (!route || route.provider !== "telegram" || toOptionalText(ctx?.channel)?.toLowerCase() !== "telegram") return false;
+  const own = parseTelegramCommandTarget(ctx?.to);
+  if (!own) return false;
+  const thread = toOptionalText(ctx?.messageThreadId);
+  if (own.topic && thread && thread !== own.topic) return false;
+  const accountId = toOptionalText(ctx?.accountId);
+  // A command's bot account must be the route's: a route without one is
+  // delivered through the default bot, which need not be the command's.
+  if (accountId && accountId !== route.accountId) return false;
   // The host addresses the chat as `telegram:<id>`; stored targets are bare.
-  const chat = (value?: string) => value?.trim().replace(/^telegram:/, "");
-  return Boolean(route && own.channel === "telegram" && route.provider === "telegram"
-    && chat(own.to) && chat(own.to) === chat(route.target)
-    // A command's bot account must be the route's: a route without one is
-    // delivered through the default bot, which need not be the command's.
-    && !(own.accountId && own.accountId !== route.accountId)
-    && String(own.threadId ?? "") === String(route.threadId ?? ""));
+  const routeTarget = route.target?.trim().replace(/^telegram:/, "");
+  if (own.directTopic) {
+    return routeTarget === `${own.chat}:direct-topic:${own.topic}` && String(route.threadId ?? "") === "";
+  }
+  return own.chat === routeTarget && (thread ?? own.topic ?? "") === String(route.threadId ?? "");
+}
+
+/**
+ * Whether the host sends nothing for a command that returns `suppressReply`.
+ * Observed host difference (OpenClaw 2026.9.8), not a documented contract:
+ * Telegram's native command path honours it, while the text-command path
+ * (`channels.telegram.commands.native: false`, or a command typed as plain
+ * text) ignores it and prints its own "No response generated. Please try
+ * again." Only the text path puts `channelId` on the command context.
+ */
+export function hostHonoursSuppressReply(ctx: { channelId?: unknown } | undefined): boolean {
+  return ctx?.channelId === undefined || ctx.channelId === null;
 }
 
 /** Extract agentId from "channel|account|target" string. */

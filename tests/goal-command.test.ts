@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { setPluginConfig } from "../src/config";
 import { registerGoalCommand } from "../src/commands/goal";
 import { setGoalController } from "../src/singletons";
+import { nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 describe("goal command", () => {
   beforeEach(() => {
@@ -73,13 +74,7 @@ describe("goal command", () => {
     const result = await handler?.({
       args: '--harness codex --max-iterations 3 --verify "pnpm test" ship the feature',
       workspaceDir: "/tmp",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
-      deliveryContext: {
-        channel: "telegram",
-        to: "-1001234567890",
-        accountId: "bot1",
-        threadId: 13832,
-      },
+      ...nativeTopicCommand({ topic: 13832 }),
     });
 
     assert.ok(launchConfig, "launchTask should be called");
@@ -105,15 +100,25 @@ describe("goal command", () => {
         handler = command.handler;
       },
     });
-    const ctx = { args: '--verify "pnpm test" ship the feature', workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "-1001234567890" } };
+    const ctx = { args: '--verify "pnpm test" ship the feature', workspaceDir: "/tmp", ...nativeTopicCommand({ topic: 42 }) };
 
+    // In the task's own chat the controller's notice is the reply (not posted).
     setGoalController({
-      async launchTask(_config: unknown, reply: { text?: string }) {
-        reply.text = "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness";
+      async launchTask(_config: unknown, reply: { text?: string; posted?: boolean; taskName?: string }) {
+        Object.assign(reply, { text: "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness", posted: false, taskName: "ship-the-feature" });
         throw new Error("no harness");
       },
     } as any);
     assert.equal((await handler?.(ctx))?.text, "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness");
+
+    // From another chat the notice was posted to the task's chat: a short line here.
+    setGoalController({
+      async launchTask(_config: unknown, reply: { text?: string; posted?: boolean; taskName?: string }) {
+        Object.assign(reply, { text: "❌ [ship-the-feature] Goal task failed\n\nFailed to start the goal task: no harness", posted: true, taskName: "ship-the-feature" });
+        throw new Error("no harness");
+      },
+    } as any);
+    assert.equal((await handler?.(ctx))?.text, "❌ [ship-the-feature] Goal task did not start.");
 
     setGoalController({ async launchTask() { throw new Error("no verifiers"); } } as any);
     assert.equal((await handler?.(ctx))?.text, "❌ Goal task did not start: no verifiers");
@@ -176,16 +181,8 @@ describe("goal command", () => {
     );
   });
 
-  // The host's PluginCommandContext: top-level `channel`, `to`, `accountId`,
-  // `messageThreadId`, `senderId` and `sessionKey`; no `deliveryContext`.
-  const TOPIC_COMMAND = {
-    channel: "telegram",
-    to: "telegram:-1001234567890",
-    accountId: "bot1",
-    messageThreadId: 42,
-    senderId: "1234",
-    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-  };
+  // The host's PluginCommandContext shape (see ./command-contexts).
+  const TOPIC_COMMAND = nativeTopicCommand({ topic: 42 });
 
   function goalHandler(): (ctx: any) => Promise<{ text: string }> {
     let handler: ((ctx: any) => Promise<{ text: string }>) | undefined;
@@ -269,5 +266,23 @@ describe("goal command", () => {
     assert.equal((await handler({ ...TOPIC_COMMAND, args: "stop topic-goal" })).text, "⛔ [topic-goal] Goal task stopped | $0.25 | 1m1s\n\nStopped by user.");
     assert.equal((await handler({ ...TOPIC_COMMAND, args: "edit topic-goal ship it faster" })).text, "✏️ [topic-goal] Goal task edited\n\nGoal:\nship it faster");
     assert.deepEqual(sameChat.slice(3), [true, true]);
+
+    // A text command in the task's topic (`to` carries the topic) is the same chat;
+    // one whose `to` and thread disagree, or a direct-messages topic, is not.
+    assert.equal((await handler({ ...textTopicCommand({ topic: 42 }), args: "stop topic-goal" })).text, "⛔ [topic-goal] Goal task stopped | $0.25 | 1m1s\n\nStopped by user.");
+    assert.equal((await handler({ ...textTopicCommand({ topic: 42 }), messageThreadId: 7, args: "stop topic-goal" })).text, "⛔ [topic-goal] Stopped.");
+    assert.equal((await handler({ ...textTopicCommand({ topic: 7 }), args: "stop topic-goal" })).text, "⛔ [topic-goal] Stopped.");
+    assert.deepEqual(sameChat.slice(5), [true, false, false]);
+  });
+
+  it("words a goal status for the user in stop and edit replies", async () => {
+    const task = { id: "goal-w", name: "waiting-goal", status: "awaiting_verifier_confirmation" };
+    setGoalController({
+      stopTask: () => ({ action: "already_terminal", task: { ...task, status: "stopped" } }),
+      editTask: () => ({ action: "not_editable", task }),
+    } as any);
+    const handler = goalHandler();
+    assert.equal((await handler({ args: "stop waiting-goal" })).text, "ℹ️ [waiting-goal] Already stopped; nothing to stop.");
+    assert.equal((await handler({ args: "edit waiting-goal ship it" })).text, "ℹ️ [waiting-goal] Already waiting for your confirmation; nothing to edit.");
   });
 });

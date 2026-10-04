@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { registerGoalCommand } from "../src/commands/goal";
 import { setGoalController } from "../src/singletons";
 import { makeAgentGoalTool } from "../src/tools/agent-goal";
+import { nativeTopicCommand } from "./command-contexts";
 
 describe("agent_goal stop surfaces already-terminal tasks clearly", () => {
   afterEach(() => {
@@ -39,7 +40,7 @@ describe("agent_goal stop surfaces already-terminal tasks clearly", () => {
 
   it("command answers a stop with the task's one stop notice in its own chat", async () => {
     let handler: ((ctx: any) => Promise<{ text: string }>) | undefined;
-    const task = { id: "goal-1", name: "goal-task", status: "stopped", route: { provider: "telegram", target: "12345", threadId: "42" } };
+    const task = { id: "goal-1", name: "goal-task", status: "stopped", route: { provider: "telegram", accountId: "bot1", target: "12345", threadId: "42" } };
     const sameChat: boolean[] = [];
     setGoalController({
       stopTask(ref: string, reply: { sameChat: (task: unknown) => boolean; text?: string }) {
@@ -55,8 +56,8 @@ describe("agent_goal stop surfaces already-terminal tasks clearly", () => {
       },
     });
 
-    const inChat = await handler?.({ args: "stop goal-1", deliveryContext: { channel: "telegram", to: "12345", threadId: 42 } });
-    const elsewhere = await handler?.({ args: "stop goal-1", deliveryContext: { channel: "telegram", to: "12345", threadId: 7 } });
+    const inChat = await handler?.({ args: "stop goal-1", ...nativeTopicCommand({ chat: "12345", topic: 42 }) });
+    const elsewhere = await handler?.({ args: "stop goal-1", ...nativeTopicCommand({ chat: "12345", topic: 7 }) });
     const missing = await handler?.({ args: "stop missing" });
 
     // In the task's chat the notice is not sent as well; elsewhere it stays there.

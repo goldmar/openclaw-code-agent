@@ -266,6 +266,55 @@ export async function getCommitsAheadCount(repoDir: string, branch: string, base
   }
 }
 
+/**
+ * Commits on the local branch that the remote-tracking ref of `pushedBranch`
+ * does not have: what the last push (and so the PR) is missing. `pushedBranch`
+ * is the PR's head branch, which is not the session's branch when the session
+ * follows up on another branch's PR. Local evidence only, nothing is fetched.
+ * Undefined when it cannot be told (that branch was never pushed from here, or
+ * git fails).
+ */
+export async function getUnpushedCommits(
+  repoDir: string,
+  branch: string,
+  remote = "origin",
+  pushedBranch = branch,
+): Promise<{ count: number; remoteRef: string } | undefined> {
+  try {
+    await assertBranchName(branch);
+    await assertBranchName(remote);
+    await assertBranchName(pushedBranch);
+    const remoteRef = `refs/remotes/${remote}/${pushedBranch}`;
+    const result = await runGit(
+      ["-C", repoDir, "rev-list", "--count", `${remoteRef}..${await localBranchRef(branch)}`],
+      { timeout: 10_000 },
+    );
+    const count = parseInt(result.trim(), 10);
+    return Number.isFinite(count) ? { count, remoteRef } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Commits on `branch` that `base` does not have and that were committed after
+ * `sinceIso`. Undefined when it cannot be told.
+ */
+export async function getCommitsAheadCountSince(repoDir: string, branch: string, base: string, sinceIso: string): Promise<number | undefined> {
+  try {
+    const since = new Date(sinceIso);
+    if (Number.isNaN(since.getTime())) return undefined;
+    const result = await runGit(
+      ["-C", repoDir, "rev-list", "--count", `--since=${since.toISOString()}`, `${await localBranchRef(base)}..${await localBranchRef(branch)}`],
+      { timeout: 10_000 },
+    );
+    const count = parseInt(result.trim(), 10);
+    return Number.isFinite(count) ? count : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function hasCommitsAhead(repoDir: string, branch: string, base: string): Promise<boolean> {
   return ((await getCommitsAheadCount(repoDir, branch, base)) ?? 0) > 0;
 }

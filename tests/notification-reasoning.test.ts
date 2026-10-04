@@ -14,7 +14,7 @@ import { SessionNotificationService } from "../src/session-notifications";
 import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { formatHarnessModelLabel, formatReasoningMetadataSuffix } from "../src/session-display";
-import { buildCompletedPayload, buildFailedPayload, buildTurnCompletePayload, buildWaitingForInputPayload } from "../src/session-notification-builder";
+import { buildCompletedPayload, buildFailedPayload, buildWaitingForInputPayload } from "../src/session-notification-builder";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import { resolveWorktreeToolTarget } from "../src/tools/worktree-tool-context";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
@@ -152,7 +152,6 @@ describe("notification reasoning visibility", () => {
       for (const [label, payload] of [
         ["completed", buildCompletedPayload({ session, preview: "Done", originThreadLine: "" })],
         ["failed", buildFailedPayload({ session, preview: "", originThreadLine: "", errorSummary: "Failure", worktreeAutoCleaned: false })],
-        ["turn-complete", buildTurnCompletePayload({ session, preview: "Next", originThreadLine: "" })],
       ] as const) {
         assert.match(payload.userMessage, /\| reasoning: medium(?:\n|$)/);
         service.dispatch(session, { label, ...payload });
@@ -287,6 +286,18 @@ describe("notification reasoning visibility", () => {
       manager.emitGoalTaskUpdate(task, "Goal update", label);
       assert.match(requests.at(-1)!.userMessage!, /reasoning: medium(?:\n|$)/);
     }
+
+    // A terminal line returned as a chat command's reply is not dispatched and
+    // carries the footer of the dispatched notice; other replies get no suffix.
+    for (const label of ["goal-task-failed", "goal-task-stopped"]) {
+      manager.emitGoalTaskUpdate(task, "Goal update\n\nReason.", label);
+      const dispatched = requests.at(-1)!.userMessage!;
+      const sent = requests.length;
+      assert.equal(manager.emitGoalTaskUpdate(task, "Goal update\n\nReason.", label, true), dispatched);
+      assert.match(dispatched, /^Goal update \| codex \| gpt-6-astra \| reasoning: medium\n\nReason\.$/);
+      assert.equal(requests.length, sent, "a reply is not sent as a notice too");
+    }
+    assert.equal(manager.emitGoalTaskUpdate(task, "Goal update", "goal-task-started", true), "Goal update");
   });
 
   it("passes explicit tool overrides to spawn and rejects invalid effort before launching", async () => {

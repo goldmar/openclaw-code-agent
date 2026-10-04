@@ -320,6 +320,8 @@ export interface SessionActionToken {
   repoPolicy?: RepoIntegrationPolicy;
   repoPolicyWorkdir?: string;
   pluginUpdateVersion?: string;
+  /** A PR button that opens a fresh PR (`agent_pr(force_new=true)`): its earlier PR was closed without merging. */
+  prForceNew?: boolean;
 }
 
 export interface SessionNotificationDedupeRecord {
@@ -634,6 +636,12 @@ export interface PersistedSessionInfo {
   worktreePrUrl?: string;
   /** PR number for commenting and state checks. */
   worktreePrNumber?: number;
+  /** The base branch of the recorded PR (`worktreePrUrl`), set when a PR is opened, updated, found merged or adopted. Rows from before this field have none. */
+  worktreePrBaseBranch?: string;
+  /** The head branch of the recorded PR: the branch `agent_pr` pushed. Differs from `worktreeBranch` for a follow-up session of another branch's PR. Rows from before this field have none. */
+  worktreePrHeadBranch?: string;
+  /** `agent_pr` found the branch's PR closed without merging: the decision buttons offer New PR. Cleared when a PR is open or merged. */
+  worktreePrClosed?: boolean;
   /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge or PR. */
   pendingWorktreeDecisionSince?: string;
   /**

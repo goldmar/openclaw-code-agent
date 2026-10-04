@@ -21,6 +21,8 @@ export function buildDelegateWorktreeWakeMessage(args: {
   allowedActions?: { merge: boolean; pr: boolean };
   policyReason?: string;
   hookWarning?: string;
+  /** The session's open PR; the counted commits were made after it and are not in it. */
+  openPrUrl?: string;
 }): string {
   const {
     sessionName,
@@ -35,13 +37,15 @@ export function buildDelegateWorktreeWakeMessage(args: {
     allowedActions,
     policyReason,
     hookWarning,
+    openPrUrl,
   } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
   const mergeAllowed = allowedActions?.merge !== false && !hookWarning;
 
   const escalateCall = `agent_escalate(session='${sessionName}', kind='worktree', summary='<why>')`;
   return [
-    `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
+    `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${openPrUrl ? " not yet in its PR" : ""}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
+    ...(openPrUrl ? [`Open PR: ${openPrUrl}. These commits were made after it was opened and are not pushed.`] : []),
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
     `Task (start): ${promptSnippet}`,
     ...(commitLines.length > 0 ? [fenceAgentOutput([...commitLines, ...(moreNote ? [moreNote] : [])].join("\n"), "commit messages")] : []),
@@ -51,7 +55,12 @@ export function buildDelegateWorktreeWakeMessage(args: {
     ...(mergeAllowed
       ? [`- In scope and low risk: agent_merge(session='${sessionName}', summary='<one or two lines for the user on what changed>'). The summary is shown with the merge notice; send no other message.`]
       : [`- Do not merge: ${hookWarning ? "the branch changes hook files" : "repo policy does not allow a direct merge"}.`]),
-    `- A PR${allowedActions?.pr === false ? " (not available here)" : ""}, a risky change, or unclear scope: ${escalateCall}, then wait for the user. Do not call agent_pr yourself.`,
+    ...(openPrUrl
+      ? [
+          ...(hookWarning ? [] : [`- In scope and low risk, and the PR should have them: agent_pr(session='${sessionName}', summary='<one or two lines for the user on what changed>') pushes them and updates the PR.`]),
+          `- A risky change or unclear scope: ${escalateCall}, then wait for the user.`,
+        ]
+      : [`- A PR${allowedActions?.pr === false ? " (not available here)" : ""}, a risky change, or unclear scope: ${escalateCall}, then wait for the user. Do not call agent_pr yourself.`]),
   ].join("\n");
 }
 

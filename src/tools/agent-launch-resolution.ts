@@ -12,7 +12,7 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "../config";
-import { parseThreadIdFromSessionKey } from "../session-route";
+import { canonicalizeSessionRoute, isDirectSessionRoute, parseThreadIdFromSessionKey } from "../session-route";
 import {
   canonicalAllowedModelForHarness,
   canonicalizeModelForHarness,
@@ -22,7 +22,7 @@ import {
 import { resolveRequiredAsyncLaunchRoute } from "../async-launch-route";
 import { userStatusWord } from "../application/session-control";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
-import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
+import type { OpenClawPluginToolContext, PersistedSessionInfo, SessionRoute } from "../types";
 
 export interface AgentLaunchParams {
   prompt: string;
@@ -61,6 +61,7 @@ type SessionManagerLike = {
     lifecycle?: string;
     isExplicitlyResumable?: boolean;
     workdir: string;
+    route?: SessionRoute;
     originSessionKey?: string;
     originChannel?: string;
     originThreadId?: string | number;
@@ -130,9 +131,19 @@ function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a session belongs to the chat (and thread) a launch comes from.
+ * Without a shared session key the chats are compared as routes, not as
+ * `originChannel` strings: the same chat is stored with a bot account
+ * (`telegram|<account>|<chat>`) or without one, depending on how the session
+ * was launched. A stored session without an account (an older launch) matches
+ * the chat whatever bot the launch names; when the stored session has one, the
+ * launch must name the same: the same user's DM with another bot is another chat.
+ */
 function routeMatchesSession(
   session: {
     workdir?: string;
+    route?: SessionRoute;
     originSessionKey?: string;
     originChannel?: string;
     originThreadId?: string | number;
@@ -149,8 +160,17 @@ function routeMatchesSession(
     return session.originSessionKey === route.originSessionKey;
   }
   if (!route.originChannel || !session.originChannel) return false;
-  return session.originChannel === route.originChannel
-    && normalizeThreadId(session.originThreadId) === normalizeThreadId(route.originThreadId);
+  if (
+    session.originChannel === route.originChannel
+    && normalizeThreadId(session.originThreadId) === normalizeThreadId(route.originThreadId)
+  ) return true;
+  const own = canonicalizeSessionRoute(session);
+  const launch = canonicalizeSessionRoute(route);
+  if (!own || !launch || !isDirectSessionRoute(own) || !isDirectSessionRoute(launch)) return false;
+  return own.provider === launch.provider
+    && own.target === launch.target
+    && normalizeThreadId(own.threadId) === normalizeThreadId(launch.threadId)
+    && (!own.accountId || own.accountId === launch.accountId);
 }
 
 function summarizeLinkedSessions(matches: LinkedSessionMatch[]): string {

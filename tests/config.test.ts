@@ -14,6 +14,7 @@ import {
   resolveToolChannel,
 } from "../src/config";
 import { canonicalizeSessionRoute, parseThreadIdFromSessionKey } from "../src/session-route";
+import { directTopicCommand, dmCommand as dmCommandContext, nativeTopicCommand, textTopicCommand } from "./command-contexts";
 
 beforeEach(() => {
   setPluginConfig({});
@@ -794,15 +795,111 @@ describe("a Telegram chat command's origin and route", () => {
     assert.equal(route?.threadId, "42");
   });
 
+  it("gives a text command the route of the native command in the same chat (both production shapes)", () => {
+    // Before `to`'s topic form was understood, a text command in a forum topic
+    // fell back to `fallbackChannel ?? "unknown"` and took chat and topic from
+    // the session key. It now has the same chat and topic, plus the bot account.
+    const sessionKeyOnly = (command: { messageThreadId?: number; sessionKey: string }) =>
+      canonicalizeSessionRoute({ originChannel: "unknown", originThreadId: command.messageThreadId, originSessionKey: command.sessionKey });
+    for (const topic of [42, 1]) {
+      const native = nativeTopicCommand({ topic });
+      const text = textTopicCommand({ topic });
+      assert.equal(text.to, topic === 1 ? "telegram:-1001234567890" : "telegram:-1001234567890:topic:42");
+      const expected = { provider: "telegram", accountId: "bot1", target: "-1001234567890", threadId: String(topic), sessionKey: native.sessionKey };
+      assert.equal(resolveOriginChannel(text), "telegram|bot1|-1001234567890");
+      assert.deepEqual(resolveSessionRoute(native), expected);
+      assert.deepEqual(resolveSessionRoute(text), expected);
+      // Same chat and thread as the old session-key route; only the account is new.
+      assert.deepEqual({ ...sessionKeyOnly(text), accountId: "bot1" }, expected);
+      for (const command of [native, text]) {
+        assert.equal(isCommandInRouteChat(command, { route: expected }), true);
+        assert.equal(isCommandInRouteChat({ ...command, accountId: "bot2" }, { route: expected }), false);
+        assert.equal(isCommandInRouteChat(command, { route: { ...expected, threadId: "7" } }), false);
+        assert.equal(isCommandInRouteChat(command, { route: { ...expected, target: "-1009876543210" } }), false);
+      }
+    }
+    // With a configured fallback the old route already carried an account; chat and topic are unchanged.
+    setPluginConfig({ fallbackChannel: "telegram|fallback-bot|-1009876543210" });
+    assert.deepEqual(resolveSessionRoute(textTopicCommand({ topic: 42 })), {
+      provider: "telegram", accountId: "bot1", target: "-1001234567890", threadId: "42", sessionKey: nativeTopicCommand({ topic: 42 }).sessionKey,
+    });
+    setPluginConfig({});
+
+    // A DM: both paths carry the bare chat.
+    for (const path of ["native", "text"] as const) {
+      const dm = dmCommandContext({}, path);
+      const route = resolveSessionRoute(dm);
+      assert.deepEqual(route, { provider: "telegram", accountId: "bot1", target: "1234", threadId: undefined, sessionKey: "agent:main:main" });
+      assert.equal(isCommandInRouteChat(dm, { route }), true);
+    }
+
+  });
+
+  it("routes a command typed in a direct-messages topic into that topic, on both paths", () => {
+    for (const path of ["native", "text"] as const) {
+      for (const threadSessionKey of [false, true]) {
+        const direct = directTopicCommand({ topic: 9, threadSessionKey }, path);
+        // The topic is inside the target (the form the host delivers with
+        // `direct_messages_topic_id`) and is never a thread id.
+        assert.equal(resolveOriginChannel(direct), "telegram|bot1|1234:direct-topic:9");
+        assert.equal(resolveOriginThreadId(direct), undefined);
+        const route = resolveSessionRoute(direct);
+        assert.deepEqual(route, { provider: "telegram", accountId: "bot1", target: "1234:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey });
+        assert.deepEqual(canonicalizeSessionRoute({ route }), route, "canonical");
+
+        // Only a command in that same direct topic, through the same bot, is the session's chat.
+        assert.equal(isCommandInRouteChat(direct, { route }), true);
+        assert.equal(isCommandInRouteChat({ ...direct, messageThreadId: undefined }, { route }), true);
+        assert.equal(isCommandInRouteChat({ ...direct, accountId: "bot2" }, { route }), false);
+        assert.equal(isCommandInRouteChat(directTopicCommand({ topic: 8, threadSessionKey }, path), { route }), false);
+        assert.equal(isCommandInRouteChat(directTopicCommand({ chat: "4321", topic: 9, threadSessionKey }, path), { route }), false);
+        assert.equal(isCommandInRouteChat({ ...direct, messageThreadId: 8 }, { route }), false, "`to` and thread id disagree");
+        // The plain DM, or a forum topic with the same numbers, is another place.
+        assert.equal(isCommandInRouteChat(dmCommandContext({}, path), { route }), false);
+        assert.equal(isCommandInRouteChat({ ...textTopicCommand({ chat: "1234", topic: 9 }) }, { route }), false);
+        assert.equal(isCommandInRouteChat({ ...nativeTopicCommand({ chat: "1234", topic: 9 }) }, { route }), false);
+        // And a direct-topic command is not in the plain DM or in a forum topic with the same numbers.
+        assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234" } }), false);
+        assert.equal(isCommandInRouteChat(direct, { route: { provider: "telegram", accountId: "bot1", target: "1234", threadId: "9" } }), false);
+        assert.equal(isCommandInRouteChat(direct, { route: { ...route!, threadId: "9" } }), false);
+      }
+    }
+    // The host's key for a channel's Direct Messages chat names the topic in-band
+    // (`agent:<id>:telegram:group:-100…:direct-topic:<n>`): the route from the
+    // command and the one from the session key are the same place.
+    for (const path of ["native", "text"] as const) {
+      const direct = directTopicCommand({ chat: "-1001234567890", topic: 9, groupSessionKey: true }, path);
+      assert.equal(direct.sessionKey, "agent:main:telegram:group:-1001234567890:direct-topic:9");
+      assert.equal(parseThreadIdFromSessionKey(direct.sessionKey), undefined, "a direct topic is not a thread id");
+      const expected: { provider: string; accountId: string; target: string; threadId: string | undefined; sessionKey: string } = {
+        provider: "telegram", accountId: "bot1", target: "-1001234567890:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey,
+      };
+      assert.deepEqual(resolveSessionRoute(direct), expected);
+      assert.equal(isCommandInRouteChat(direct, { route: expected }), true);
+      // `shouldPreferTelegramSessionKeyRoute`: when `to` names another place, the key's direct topic wins, with the command's account.
+      assert.deepEqual(resolveSessionRoute({ ...direct, to: "telegram:-1009876543210:direct-topic:9" }), expected);
+      assert.deepEqual(resolveSessionRoute({ ...direct, to: "telegram:-1001234567890" }), expected);
+      // Without an account the route comes from the session key alone: the same direct topic, no thread.
+      assert.deepEqual(resolveSessionRoute({ ...direct, accountId: undefined }), { provider: "telegram", target: "-1001234567890:direct-topic:9", threadId: undefined, sessionKey: direct.sessionKey });
+      // A command in the channel's forum-style topic 9 or in another direct topic is elsewhere.
+      assert.equal(isCommandInRouteChat(nativeTopicCommand({ topic: 9 }), { route: expected }), false);
+      assert.equal(isCommandInRouteChat(directTopicCommand({ chat: "-1001234567890", topic: 8, groupSessionKey: true }, path), { route: expected }), false);
+    }
+    // Without a bot account the old fallbacks apply (no account-bearing route).
+    assert.equal(resolveOriginChannel({ ...directTopicCommand({ topic: 9 }), accountId: undefined }), "unknown");
+  });
+
   it("leaves an explicit channel, a command without an account and other shapes as before", () => {
     // `agentChannels` (passed as the explicit channel) still wins.
     assert.equal(resolveOriginChannel(topicCommand, "telegram|ops|-1009876543210"), "telegram|ops|-1009876543210");
     // No account: the old sender / session-key fallbacks.
     assert.equal(resolveOriginChannel({ ...dmCommand, accountId: undefined }), "telegram|1234");
     assert.equal(resolveOriginChannel({ ...topicCommand, accountId: undefined }), "unknown");
-    // A topic address inside `to` (text-command path, DM topics) is not a chat id.
-    assert.equal(resolveOriginChannel({ ...topicCommand, to: "telegram:-1001234567890:topic:42" }), "unknown");
-    assert.equal(resolveOriginChannel({ ...dmCommand, to: "telegram:1234:direct-topic:9" }), "telegram|1234");
+    // A direct-messages topic stays inside the target. Other shapes of `to` are not understood.
+    assert.equal(resolveOriginChannel({ ...dmCommand, to: "telegram:1234:direct-topic:9" }), "telegram|default|1234:direct-topic:9");
+    for (const to of ["telegram:-1001234567890:topic:", "telegram:-1001234567890:topic:42:extra", "telegram:-1001234567890:thread:42", "telegram:group:-1001234567890", "-1001234567890"]) {
+      assert.equal(resolveOriginChannel({ ...topicCommand, to }), "unknown", to);
+    }
     // A tool context keeps its own resolution.
     assert.equal(
       resolveOriginChannel({ ...topicCommand, deliveryContext: { channel: "telegram", to: "-1001234567890", accountId: "tool-bot" } }),
@@ -904,9 +1001,38 @@ describe("isCommandInRouteChat", () => {
     );
   });
 
-  it("is false for a forum-topic address inside `to` (text-command path)", () => {
+  it("reads a forum-topic address inside `to` (text-command path)", () => {
+    const text = { ...topicCommand, channelId: "telegram", to: "telegram:-1001234567890:topic:42" };
+    assert.equal(isCommandInRouteChat(text, { route: topicRoute }), true);
+    assert.equal(isCommandInRouteChat({ ...text, messageThreadId: undefined }, { route: topicRoute }), true);
+    // Another topic, or a `to` and a thread id that disagree.
+    assert.equal(isCommandInRouteChat({ ...text, to: "telegram:-1001234567890:topic:7", messageThreadId: 7 }, { route: topicRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...text, messageThreadId: 7 }, { route: topicRoute }), false);
+    assert.equal(isCommandInRouteChat({ ...text, to: "telegram:-1001234567890:topic:7" }, { route: topicRoute }), false);
+    assert.equal(isCommandInRouteChat(text, { route: { ...topicRoute, threadId: undefined } }), false);
+    assert.equal(isCommandInRouteChat(text, { route: { ...topicRoute, target: "-1009876543210" } }), false);
+  });
+
+  it("is false for every `to` it does not understand", () => {
+    for (const to of [
+      "-1001234567890",
+      "telegram:-1001234567890:direct-topic:42",
+      "telegram:-1001234567890:direct-topic:",
+      "telegram:-1001234567890:topic:",
+      "telegram:-1001234567890:topic:42:topic:42",
+      "telegram:-1001234567890:thread:42",
+      "telegram:group:-1001234567890",
+      "TELEGRAM:-1001234567890",
+    ]) {
+      assert.equal(isCommandInRouteChat({ ...topicCommand, to }, { route: topicRoute }), false, to);
+    }
+    // A `deliveryContext` is not a command address: commands never carry one.
     assert.equal(
-      isCommandInRouteChat({ ...topicCommand, to: "telegram:-1001234567890:topic:42" }, { route: topicRoute }),
+      isCommandInRouteChat({ deliveryContext: { channel: "telegram", to: "-1001234567890", threadId: 42 } }, { route: topicRoute }),
+      false,
+    );
+    assert.equal(
+      isCommandInRouteChat({ channel: "telegram", deliveryContext: { channel: "telegram", to: "telegram:-1001234567890", threadId: 42 } }, { route: topicRoute }),
       false,
     );
   });

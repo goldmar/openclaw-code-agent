@@ -229,7 +229,7 @@ agent_launch / /agent
 
 - Real question: emit `❓ [name] The agent asks` with the question under it
 - Plan approval pending: emit `📋 [name] Plan vN ready for approval`
-- Plain turn completion: emit `⏸️ [name] Turn completed — session idle, waiting for a follow-up`
+- A turn that ends without a question or a plan decision completes the session: the terminal path sends `✅ [name] Completed` (or the worktree outcome); there is no separate turn-completed notice
 
 Plan approval behavior depends on `planApproval`:
 
@@ -249,7 +249,7 @@ When a session completes with worktree metadata:
 - `auto-pr`: attempt PR creation/update automatically; fall back to explicit pending decision state on failure
 - `manual`: keep the branch and the worktree (lifecycle `provisioned`) for explicit follow-up
 
-`ask` and `delegate` suppress the normal turn-complete wake because the worktree decision message is the completion signal.
+Under `ask` and `delegate` the worktree decision message is the completion signal.
 
 The worktree model is lifecycle-first:
 

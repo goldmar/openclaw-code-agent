@@ -2829,32 +2829,6 @@ describe("SessionManager turn-end wake", () => {
     stubDispatch(sm);
   });
 
-  it("fires wake deterministically on turn end", async () => {
-    const s = fakeSession({
-      id: "s-turn",
-      name: "deterministic",
-      status: "running",
-      startedAt: 1700000000000,
-      originChannel: "telegram|bot|123",
-      originThreadId: 26,
-      getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
-    });
-
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-
-    const calls = (sm as any).__dispatchCalls;
-    assert.equal(calls.length, 1);
-    const [sessionArg, request] = calls[0];
-    assert.equal(sessionArg.id, "s-turn");
-    assert.equal(request.label, "turn-complete");
-    assert.equal(request.idempotencyKey, "turn-complete:s-turn:1700000000000:unknown-backend-session:0");
-    assert.equal(request.notifyUser, "always");
-    assert.match(request.wakeMessage, /Name: deterministic/);
-    assert.match(request.wakeMessage, /Status: running/);
-    assert.match(request.wakeMessage, /Last output/);
-    assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed — session idle, waiting for a follow-up/);
-  });
-
   it("routes explicit question turns to waiting wake path", async () => {
     const s = fakeSession({
       id: "s-wait",
@@ -3680,56 +3654,6 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][0].label, "Approve");
   });
 
-  it("de-dupes duplicate turn-end wake for the same turn marker", async () => {
-    const s = fakeSession({
-      id: "s-dup-turn",
-      name: "dup-turn",
-      status: "running",
-      startedAt: 1700000001000,
-      originChannel: "telegram|bot|123",
-      result: {
-        session_id: "thread-1",
-        num_turns: 3,
-        duration_ms: 1200,
-      },
-      getOutput: () => ["Turn output."],
-    });
-
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-
-    const calls = (sm as any).__dispatchCalls;
-    assert.equal(calls.length, 1);
-    const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "turn-complete");
-  });
-
-  it("de-dupes duplicate turn-end wake when only duration metadata changes", async () => {
-    const s = fakeSession({
-      id: "s-duration-turn",
-      name: "duration-turn",
-      status: "running",
-      startedAt: 1700000002000,
-      originChannel: "telegram|bot|123",
-      result: {
-        session_id: "thread-duration",
-        num_turns: 7,
-        duration_ms: 1200,
-      },
-      getOutput: () => ["Turn output."],
-    });
-
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-    s.result.duration_ms = 2400;
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-
-    const calls = (sm as any).__dispatchCalls;
-    assert.equal(calls.length, 1);
-    const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "turn-complete");
-    assert.equal(request.idempotencyKey, "turn-complete:s-duration-turn:1700000002000:thread-duration:7");
-  });
-
   it("preserves plan approvals as normal ask-mode buttons", async () => {
     const s = fakeSession({
       id: "s-plan-mode",
@@ -3876,7 +3800,7 @@ describe("SessionManager turn-end wake", () => {
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
-  it("suppresses turn-complete when the session is already terminal and relies on the final completed notification", async () => {
+  it("sends nothing for the turn end of a session that is already terminal: the completed notification is the one message", async () => {
     const s = fakeSession({
       id: "s-terminal-race",
       name: "terminal-race",
@@ -3902,45 +3826,6 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.userMessage, "✅ [terminal-race] Completed | $0.00 | 5s");
   });
 
-  it("sends one ✅ when the ⏸️ line could not be delivered and the session is completed later", async () => {
-    const s = fakeSession({
-      id: "s-idle-then-done",
-      name: "idle-then-done",
-      status: "running",
-      duration: 5_000,
-      result: { session_id: "thread-idle", num_turns: 1, duration_ms: 5_000 },
-      getOutput: () => ["Turn finished."],
-    });
-    // The host refuses the `⏸️` line: the dispatcher then runs the request's
-    // failure callbacks, as WakeDispatcher does after a failed user delivery.
-    const record = (sm as any).notifications.dispatch;
-    (sm as any).notifications.dispatch = (session: unknown, request: any) => {
-      record(session, request);
-      if (request.label !== "turn-complete") return;
-      request.hooks?.onNotifyFailed?.();
-      request.onUserNotifyFailed?.();
-    };
-    await (sm as any).lifecycle.handleTurnEnd(s, false);
-
-    const calls = (sm as any).__dispatchCalls;
-    // The failed delivery sent nothing else: no `✅ Completed` stands in for the
-    // idle line of a session that is still running.
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0][1].label, "turn-complete");
-    assert.match(calls[0][1].userMessage, /^⏸️ \[idle-then-done\] Turn completed/);
-    assert.equal(calls[0][1].onUserNotifyFailed, undefined);
-    // The orchestrator wake is unconditional.
-    assert.equal(typeof calls[0][1].wakeMessage, "string");
-
-    // agent_kill(reason='completed') closes the idle session.
-    Object.assign(s, { status: "completed", killReason: "done", completedAt: Date.now() });
-    await (sm as any).onSessionTerminal(s);
-
-    const completed = calls.filter(([, request]: [unknown, { label: string }]) => request.label === "completed");
-    assert.equal(completed.length, 1);
-    assert.match(completed[0][1].userMessage, /^✅ \[idle-then-done\] Completed/);
-    assert.equal(calls.length, 2);
-  });
 });
 
 describe("SessionManager restored button parity", () => {

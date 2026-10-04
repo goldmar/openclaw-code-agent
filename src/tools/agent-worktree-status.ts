@@ -8,6 +8,7 @@ import {
   matchesWorktreeToolRef,
   resolveWorktreeToolLifecycle,
 } from "./worktree-tool-context";
+import { resolveLandingBaseBranch } from "../worktree";
 
 interface AgentWorktreeStatusParams {
   session?: string;
@@ -66,7 +67,9 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
           : (resolved.preserve ? "preserve" : "blocked");
 
         lines.push(`Session: ${target.name} [${target.id}]`);
-        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${resolved.lifecycle.baseBranch ?? persisted?.worktreeBaseBranch ?? "main"}`));
+        // The landing base (where a merge or a new PR goes); an existing PR keeps its own base.
+        const landingBase = await resolveLandingBaseBranch(persisted, target.workdir).catch(() => "(unknown)");
+        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${landingBase}`));
         lines.push(statusField("Repo", target.workdir));
         lines.push(statusField("Lifecycle", formatWorktreeLifecycleState(resolved.lifecycle.state)));
         if (resolved.derivedState !== resolved.lifecycle.state) {
@@ -75,6 +78,11 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
         lines.push(statusField("Cleanup", cleanup));
         if (resolved.evidence.prUrl) {
           lines.push(statusField("PR", `${resolved.evidence.prUrl} (${resolved.evidence.prState ?? "unknown"})`));
+          // The recorded PR's own base (rows from before it was recorded have
+          // none), shown only when the PR above is that recorded PR and not
+          // another one found by branch.
+          const prBase = resolved.evidence.prUrl === persisted?.worktreePrUrl ? persisted?.worktreePrBaseBranch : undefined;
+          if (prBase && prBase !== landingBase) lines.push(statusField("PR base", prBase));
         }
         if (resolved.evidence.branchAheadCount != null || resolved.evidence.baseAheadCount != null) {
           lines.push(statusField("Ahead", `${resolved.evidence.branchAheadCount ?? 0} ahead / ${resolved.evidence.baseAheadCount ?? 0} behind`));

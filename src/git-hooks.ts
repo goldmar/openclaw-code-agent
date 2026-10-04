@@ -41,9 +41,9 @@ async function configuredHooksPrefix(repoDir: string): Promise<string | undefine
  * A merge or PR carrying such a change runs code on the next git operation or
  * worktree creation, so it is never automatic.
  */
-export async function listHookPathChanges(repoDir: string, branch: string, base: string): Promise<string[]> {
+export async function listHookPathChanges(repoDir: string, branch: string, base: string, remote = "origin"): Promise<string[]> {
   const branchRef = await localBranchRef(branch);
-  const baseRef = await localBranchRef(base);
+  const baseRef = await resolveBaseRef(repoDir, base, remote);
   const output = await runGit(
     ["-C", repoDir, "diff", "--name-only", "--no-renames", "-z", `${baseRef}...${branchRef}`],
     { timeout: 15_000 },
@@ -57,6 +57,49 @@ export async function listHookPathChanges(repoDir: string, branch: string, base:
     .filter((path) => HOOK_FILES.includes(path) || prefixes.some((prefix) => path.startsWith(prefix)))
     .sort();
 }
+
+/**
+ * The ref to diff against for `base`: the local branch, else its
+ * remote-tracking ref (a PR's base need not be checked out locally), fetched
+ * first when it is not there yet. Throws when neither exists; callers treat
+ * that as "changed".
+ */
+async function resolveBaseRef(repoDir: string, base: string, remote: string): Promise<string> {
+  const localRef = await localBranchRef(base);
+  const exists = async (ref: string): Promise<boolean> => {
+    try {
+      await runGit(["-C", repoDir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { timeout: 10_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (await exists(localRef)) return localRef;
+  const remoteRef = `refs/remotes/${remote}/${localRef.replace(/^refs\/heads\//, "")}`;
+  if (await exists(remoteRef)) return remoteRef;
+  await runGit(["-C", repoDir, "fetch", "--no-tags", remote, `+${localRef}:${remoteRef}`], { timeout: 60_000 });
+  if (await exists(remoteRef)) return remoteRef;
+  throw new Error(`base branch ${base} was not found locally or on ${remote}`);
+}
+
+/**
+ * True only when git positively reports that the local branch does not exist
+ * (a listing that succeeds and is empty). Such a branch has no commits to
+ * merge or push. Any failure to find out is "not known missing".
+ */
+export async function localBranchIsKnownMissing(repoDir: string, branch: string): Promise<boolean> {
+  try {
+    const ref = await localBranchRef(branch);
+    const listed = await runGit(["-C", repoDir, "for-each-ref", "--format=%(refname)", ref], { timeout: 10_000 });
+    return !listed.split("\n").some((line) => line.trim() === ref);
+  } catch {
+    return false;
+  }
+}
+
+/** The warning when the hook-change check itself could not be computed: unknown counts as changed, so a person decides. */
+export const HOOK_CHECK_UNAVAILABLE_WARNING =
+  "⚠️ Could not check this branch for git hook or worktree setup changes, so merging or opening a PR needs your confirmation.";
 
 /** One line naming hook-path changes for a user prompt, or undefined when there are none. */
 export function describeHookPathChanges(paths: readonly string[]): string | undefined {

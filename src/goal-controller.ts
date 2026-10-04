@@ -161,7 +161,13 @@ function classifyGoalAutoReply(text: string): string | undefined {
  * command did is put in `text`; when the command was typed in the task's own
  * chat (`sameChat`) it is not sent as well, so the user gets one message.
  */
-export type GoalReplyNotice = { sameChat: (task: GoalTaskState) => boolean; text?: string };
+/**
+ * A chat command's view of the controller's notice: `text` is the notice,
+ * `posted` whether it was sent to the task's chat (the command was typed
+ * elsewhere) instead of being left to the command as its reply, and
+ * `taskName` the task it is about.
+ */
+export type GoalReplyNotice = { sameChat: (task: GoalTaskState) => boolean; text?: string; posted?: boolean; taskName?: string };
 
 export type GoalTaskEditResult =
   | { action: "updated"; task: GoalTaskState; previousGoal: string }
@@ -519,6 +525,16 @@ export class GoalController {
     this.sessionManager = sessionManager;
     this.store = new GoalTaskStore();
     this.sessionManager.setGoalTaskAuthorizer?.((id) => this.assertTaskAuthorized(id), (id) => this.isTaskActive(id));
+    this.sessionManager.setGoalSessionStopHandlers?.({
+      closedWhileDormant: (id, outcome, reply) => this.sessionClosedWhileDormant(id, outcome, reply),
+      // A retired controller stops nothing: the session is then stopped directly.
+      stopRunning: (id, reply) => {
+        try {
+          const stopped = this.stopTask(id, reply);
+          return stopped?.action === "stopped" ? stopped.task.name : undefined;
+        } catch { return undefined; }
+      },
+    });
   }
 
   start(): void {
@@ -556,6 +572,9 @@ export class GoalController {
   getTask(ref: string): GoalTaskState | undefined {
     return this.store.get(ref);
   }
+
+  /** How often a goal whose suspended session waits for a plan decision is checked again. */
+  planDecisionRecheckMs = PLAN_DECISION_RECHECK_MS;
 
   async launchTask(config: GoalTaskConfig, reply?: GoalReplyNotice): Promise<GoalTaskState> {
     const generation = this.generation; this.assertCurrent(generation);
@@ -643,6 +662,26 @@ export class GoalController {
     }
   }
 
+  /**
+   * The task's dormant session (suspended, or waiting for its plan decision
+   * after an idle timeout) was closed without running again. Nothing more can
+   * happen in it, and nothing was done that verifiers could check, so the task
+   * stops now, with its one stop notice; later rechecks see a finished task.
+   */
+  sessionClosedWhileDormant(taskId: string, outcome: "completed" | "killed", reply?: GoalReplyNotice): string | undefined {
+    if (!this.isCurrent(this.generation)) return undefined;
+    const task = this.store.get(taskId);
+    if (!task || isTerminalGoalTaskStatus(task.status)) return undefined;
+    if (task.sessionId) this.removeSessionObserver(task.sessionId);
+    const scheduled = this.scheduledEvaluations.get(task.id);
+    if (scheduled) clearTimeout(scheduled.timer);
+    this.scheduledEvaluations.delete(task.id);
+    this.markTaskStopped(task, outcome === "completed"
+      ? "The session was closed as completed without running."
+      : "Stopped by user.", reply);
+    return task.name;
+  }
+
   /** The user declined the verifier commands of a waiting task. */
   declineVerifierCommands(ref: string): { task: GoalTaskState; action: "stopped" | "not_waiting" } | undefined {
     this.assertCurrent();
@@ -680,11 +719,20 @@ export class GoalController {
     }
 
     if (task.sessionId) {
-      // In the task's own chat the reply is the one message: the session's
-      // `⛔ [name] Stopped by user` does not follow it.
-      const session = reply?.sameChat(task) ? this.sessionManager.resolve?.(task.sessionId) : undefined;
+      // One stop message: `⛔ [task] Goal task stopped` (the command's reply in
+      // the task's own chat, the notice in the task's chat otherwise). The
+      // session's `⛔ [name] Stopped by user` does not follow it.
+      const session = this.sessionManager.resolve?.(task.sessionId);
       if (session) session.stopNoticeReplaced = true;
       this.sessionManager.kill(task.sessionId, "user");
+    }
+    // The task's newest session may not be `task.sessionId` yet: every
+    // iteration is a new session, recorded on the task only once it runs.
+    for (const session of this.sessionManager.list?.("all") ?? []) {
+      if (session.goalTaskId !== task.id || session.id === task.sessionId) continue;
+      if (session.status !== "starting" && session.status !== "running") continue;
+      session.stopNoticeReplaced = true;
+      this.sessionManager.kill(session.id, "user");
     }
 
     this.markTaskStopped(task, "Stopped by user.", reply);
@@ -943,8 +991,9 @@ export class GoalController {
   }
 
   private notify(task: GoalTaskState, text: string, label: string, reply?: GoalReplyNotice): void {
-    const notice = this.sessionManager.emitGoalTaskUpdate(task, text, label, reply?.sameChat(task) === true);
-    if (reply) reply.text = notice;
+    const replyOnly = reply?.sameChat(task) === true;
+    const notice = this.sessionManager.emitGoalTaskUpdate(task, text, label, replyOnly);
+    if (reply) Object.assign(reply, { text: notice, posted: !replyOnly, taskName: task.name });
   }
 
   private notifyIterationStatus(task: GoalTaskState, heading: string, _session?: Session, iterationSummary?: string): void {
@@ -1235,7 +1284,7 @@ export class GoalController {
         return;
       }
       this.schedulePlanDecisionRecheck(taskId, suspended);
-    }, PLAN_DECISION_RECHECK_MS);
+    }, this.planDecisionRecheckMs);
     timer.unref?.();
   }
 
@@ -1473,7 +1522,16 @@ export class GoalController {
         return;
       }
       if (!session) {
-        this.markTaskFailed(task, "Underlying session could not be found.");
+        // The session is no longer loaded (for example a dormant session that
+        // was stopped): its stored row says how it ended.
+        const stored = task.sessionId ? this.sessionManager.getPersistedSession?.(task.sessionId) : undefined;
+        // (A dormant session closed with agent_kill stops its task directly,
+        // `sessionClosedWhileDormant`. A session that completed normally and
+        // was then unloaded is not one of these cases: its completion was
+        // handled when it happened, so finding it gone here is a failure.)
+        if (stored?.status !== "completed" && stored?.approvalState === "rejected") this.markTaskStopped(task, "The plan was rejected.");
+        else if (stored?.status === "killed" && stored.killReason === "user") this.markTaskStopped(task, "Stopped by user.");
+        else this.markTaskFailed(task, "Underlying session could not be found.");
         return;
       }
 

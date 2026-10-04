@@ -532,7 +532,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("ignores closed or merged persisted target PR metadata only for force_new", () => {
+  it("ignores a closed (unmerged) persisted target PR only for force_new; a merged or open one still counts", () => {
     assert.equal(
       shouldIgnoreClosedTargetPrForForceNew(true, {
         exists: true,
@@ -547,7 +547,7 @@ describe("agent_pr existing target PR branch resolution", () => {
         state: "merged",
         url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
       }),
-      true,
+      false,
     );
     assert.equal(
       shouldIgnoreClosedTargetPrForForceNew(true, {

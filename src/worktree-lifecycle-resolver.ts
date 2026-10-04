@@ -14,7 +14,7 @@ import {
   isBranchAncestorOfBase,
   wouldMergeBeNoop,
 } from "./worktree-repo";
-import { syncWorktreePR, syncWorktreePRByUrl } from "./worktree-pr";
+import { syncWorktreePR, syncWorktreePRByUrl, type PRStatus } from "./worktree-pr";
 import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
@@ -33,6 +33,32 @@ function buildDefaultLifecycle(session: Pick<
     pushRemote: session.worktreePushRemote,
   };
 }
+
+/**
+ * The base branch a session lands on: the base this call names; else the base
+ * recorded at launch (`worktree_base_branch`); else the repository's detected
+ * default branch. `agent_merge` and the Merge button, the decision prompt, the
+ * delegate wake, the automatic merge, the status tool, and where a new PR
+ * goes all use this one order, so they always name the same base. The base of
+ * an existing PR is not part of it: that PR keeps its own base for everything
+ * about the PR, and the lifecycle's base (which a pending-decision patch
+ * rewrites, and a resumed session does not carry) only answers "has this
+ * branch landed".
+ */
+export async function resolveLandingBaseBranch(
+  session: Pick<PersistedSessionInfo, "worktreeBaseBranch"> | undefined,
+  repoDir: string,
+  explicitBaseBranch?: string,
+): Promise<string> {
+  return explicitBaseBranch
+    ?? session?.worktreeBaseBranch
+    ?? await detectDefaultBranch(repoDir);
+}
+
+/** Test seam: the branch PR lookup the resolver uses. */
+export const worktreeLifecycleResolverInternals = {
+  lookupBranchPr: syncWorktreePR,
+};
 
 async function getEffectiveBaseBranch(
   session: Pick<PersistedSessionInfo, "workdir" | "worktreeBaseBranch" | "worktreeLifecycle">,
@@ -63,6 +89,8 @@ export async function resolveWorktreeLifecycle(
   options: {
     activeSession?: boolean;
     includePrSync?: boolean;
+    /** Branch PR lookups shared by the calls of one pass (for example a maintenance pass over all sessions). */
+    prLookups?: Map<string, Promise<PRStatus>>;
   } = {},
 ): Promise<ResolvedWorktreeLifecycle> {
   const lifecycle = buildDefaultLifecycle(session);
@@ -82,6 +110,13 @@ export async function resolveWorktreeLifecycle(
   let branchAheadCount: number | undefined;
   let baseAheadCount: number | undefined;
   let prState: WorktreeRepositoryEvidence["prState"] = "none";
+  let branchHasOpenPr = false;
+  // The session's recorded PR, read at most once per call.
+  let recordedPrLookup: Promise<PRStatus> | undefined;
+  const recordedPrStatus = (): Promise<PRStatus> => {
+    recordedPrLookup ??= syncWorktreePRByUrl(workdir!, session.worktreePrUrl!, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+    return recordedPrLookup;
+  };
   let prUrl = session.worktreePrUrl;
   let prNumber = session.worktreePrNumber;
 
@@ -132,7 +167,7 @@ export async function resolveWorktreeLifecycle(
     }
     const currentRepoBranch = await getBranchName(workdir);
     if (options.includePrSync && session.worktreePrUrl && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
-      const currentPrStatus = await syncWorktreePRByUrl(workdir, session.worktreePrUrl, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+      const currentPrStatus = await recordedPrStatus();
       representedByTargetPrBranch = Boolean(
         (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
         && currentPrStatus.headRefName === currentRepoBranch
@@ -149,7 +184,34 @@ export async function resolveWorktreeLifecycle(
   }
 
   if (options.includePrSync && repoExists && workdir && branchName) {
-    const prStatus = await syncWorktreePR(workdir, branchName, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+    // Like `agent_pr`: the session's recorded PR first (when it is this
+    // branch's PR), else the branch's PR into the session's base branch.
+    // A recorded URL is trusted only for this repository's own branch.
+    const prTargetRepo = session.worktreePrTargetRepo ?? lifecycle.targetRepo;
+    const recordedPr = session.worktreePrUrl ? await recordedPrStatus() : undefined;
+    const recordedIsBranchPr = Boolean(recordedPr?.exists && recordedPr.headRefName === branchName && recordedPr.ownHead !== false);
+    const lookupBranchPr = (): Promise<PRStatus> => {
+      const lookupBase = session.worktreeBaseBranch ?? lifecycle.baseBranch;
+      const key = [workdir, branchName, prTargetRepo ?? "", lookupBase ?? ""].join("\0");
+      const pending = options.prLookups?.get(key)
+        ?? worktreeLifecycleResolverInternals.lookupBranchPr(workdir, branchName, prTargetRepo, lookupBase);
+      options.prLookups?.set(key, pending);
+      return pending;
+    };
+    let prStatus: PRStatus;
+    if (recordedIsBranchPr) {
+      prStatus = recordedPr!;
+      // Retention must not remove the worktree while any PR of this branch is
+      // open, into whatever base, also one opened by hand next to a closed
+      // recorded PR. No lookup is needed when the recorded PR is open (it
+      // preserves by itself) or merged (the branch landed), or when no
+      // worktree is left to keep.
+      if (prStatus.state === "closed" && worktreeExists) branchHasOpenPr = (await lookupBranchPr()).anyOpen === true;
+    } else {
+      prStatus = await lookupBranchPr();
+      branchHasOpenPr = prStatus.anyOpen === true;
+    }
+    if (branchHasOpenPr && prStatus.state !== "open") reasons.add("branch_pr_open");
     prState = prStatus.state;
     prUrl = prStatus.url ?? prUrl;
     prNumber = prStatus.number ?? prNumber;
@@ -183,6 +245,7 @@ export async function resolveWorktreeLifecycle(
     || (!resolvedByRepositoryEvidence && lifecycle.state === "pending_decision")
     || lifecycle.state === "merge_conflict_resolving"
     || prState === "open"
+    || branchHasOpenPr
     || reasons.has("pr_merged_not_reflected_locally");
   const cleanupSafe = !preserve && (
     derivedState === "merged"

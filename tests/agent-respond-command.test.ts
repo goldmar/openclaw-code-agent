@@ -6,12 +6,13 @@ import { registerAgentRespondCommand } from "../src/commands/agent-respond";
 import { SessionManager } from "../src/session-manager";
 import { setSessionManager } from "../src/singletons";
 import { createStubSession } from "./helpers";
+import { nativeTopicCommand } from "./command-contexts";
 
 type AgentRespondCommandHandler = (ctx: Record<string, unknown>) => Promise<{ text: string }>;
 
 /** The chat of `createStubSession`'s route, and another topic of the same group. */
-const SESSION_CHAT = { deliveryContext: { channel: "telegram", to: "12345", accountId: "bot", threadId: 42 } };
-const OTHER_CHAT = { deliveryContext: { channel: "telegram", to: "12345", accountId: "bot", threadId: 7 } };
+const SESSION_CHAT = nativeTopicCommand({ chat: "12345", topic: 42, accountId: "bot" });
+const OTHER_CHAT = nativeTopicCommand({ chat: "12345", topic: 7, accountId: "bot" });
 
 /** A real SessionManager with one session and recorded user notices. */
 function managerWith(session: Record<string, unknown>): { sm: SessionManager; notices: string[] } {

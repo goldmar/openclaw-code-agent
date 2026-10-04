@@ -1,4 +1,5 @@
 import type { GoalTaskState } from "./types";
+import { userGoalStatusWord, userPhaseWord } from "./application/session-control";
 
 export interface GoalTaskRuntimeSnapshot {
   phase?: string;
@@ -100,11 +101,20 @@ export function buildGoalTaskRuntimeSnapshot(session: {
   };
 }
 
-export function formatGoalTask(task: GoalTaskState, runtime?: GoalTaskRuntimeSnapshot, iterationSummary?: string): string {
+/**
+ * `forUser` (the `/agent_goal status` command): status and phase in the user's
+ * words. The `agent_goal` tool result keeps the raw values.
+ */
+export function formatGoalTask(
+  task: GoalTaskState,
+  runtime?: GoalTaskRuntimeSnapshot,
+  iterationSummary?: string,
+  options: { forUser?: boolean } = {},
+): string {
   const loopMode = task.loopMode ?? "verifier";
   const lines = [
     `${task.name} [${task.id}]`,
-    `  Status: ${task.status}`,
+    `  Status: ${options.forUser ? userGoalStatusWord(task.status) : task.status}`,
     ...(loopMode === "ralph"
       ? [`  Loop mode: ralph`, `  Iteration: ${task.iteration}/${task.maxIterations}`]
       : [`  Repair iteration: ${task.iteration}/${task.maxIterations}`]),
@@ -126,7 +136,7 @@ export function formatGoalTask(task: GoalTaskState, runtime?: GoalTaskRuntimeSna
     lines.push(`  Session: ${task.sessionName ?? "(unknown)"} [${task.sessionId}]`);
   }
   if (runtime?.phase) {
-    lines.push(`  Phase: ${runtime.phase}`);
+    lines.push(`  Phase: ${options.forUser ? userPhaseWord(runtime.phase) : runtime.phase}`);
   }
   if (runtime?.awaitingInput !== undefined) {
     lines.push(`  Awaiting input: ${runtime.awaitingInput ? "yes" : "no"}`);

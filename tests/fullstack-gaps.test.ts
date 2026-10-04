@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import type { Session } from "../src/session";
+import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { nativeTopicCommand } from "./command-contexts";
 import { waitUntil } from "./harness-backends";
 import { DISCORD_THREAD, sessionsIndexPath, startFullStack, TELEGRAM_TOPIC, type FullStack, type SentButton } from "./fullstack-fixture";
 
@@ -87,7 +89,7 @@ describe("failed worktree actions", () => {
       assert.deepEqual(failed.replies, []);
       assert.ok(failed.cleared > 0, "the spent controls are cleared");
       const retry = await s.waitForMessage(/still open/, prompt.index + 1);
-      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
+      assert.match(retry.text, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually in `[^`]+`\. The decision for `[^`]+` is still open\.( \|[^\n]*)?$/);
       assert.equal(retry.to, surface.to);
       assert.equal(String(retry.threadId), String(surface.threadId));
       assert.deepEqual(retry.buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
@@ -123,7 +125,7 @@ describe("failed worktree actions when the retry prompt cannot be delivered", ()
     const merge = await s.waitForButton("Merge");
     const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
     const failed = await s.click(merge);
-    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually\.$/);
+    assert.match(failed.replies.join("\n"), /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually in `[^`]+`\.$/);
     assert.equal(failed.cleared, 0, "the original controls stay while no replacement arrived");
     const later = await s.click(buttonIn(prompt, "Later"));
     assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
@@ -161,6 +163,346 @@ describe("overlapping worktree retries", () => {
     assert.ok(s.sm.getActionToken(buttonIn(newer!, "Merge").payload), "the newest prompt keeps working buttons");
     assert.equal(s.sm.getActionToken(buttonIn(older!, "Merge").payload), undefined, "the older retry prompt was superseded");
     assert.equal(s.sm.getActionToken(original.payload), undefined, "the original controls were retired");
+  });
+});
+
+describe("a worktree retry prompt whose delivery outcome stays unknown", () => {
+  type RetryRequest = { label?: string; buttons?: Array<Array<{ callbackData: string; url?: string }>>; hooks?: { onNotifyAmbiguous?: () => void } };
+
+  /** Hold the retry prompt's dispatch back and hand its request to the test. */
+  function captureRetry(s: FullStack): { request: () => RetryRequest | undefined } {
+    const notifications = (s.sm as unknown as { notifications: { dispatch: (session: unknown, request: RetryRequest) => void } }).notifications;
+    const dispatch = notifications.dispatch.bind(notifications);
+    let captured: RetryRequest | undefined;
+    notifications.dispatch = (session, request) => {
+      if (request.label === "worktree-decision-retry") captured = request;
+      else dispatch(session, request);
+    };
+    return { request: () => captured };
+  }
+  const freshTokens = (request: RetryRequest): string[] => (request.buttons ?? []).flat().filter((button) => !button.url).map((button) => button.callbackData);
+
+  it("reports it as not delivered within the wait and keeps both button sets", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    const original = await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const retry = captureRetry(s);
+
+    const lateResults: boolean[] = [];
+    const reoffer = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } });
+    await waitUntil(() => Boolean(retry.request()), "the retry prompt dispatch");
+    // The direct send timed out: nobody knows whether the prompt arrived.
+    retry.request()!.hooks!.onNotifyAmbiguous!();
+
+    // Not "delivered": the caller sends its plain failure line (no silence).
+    assert.equal(await reoffer, false);
+    assert.deepEqual(lateResults, [], "the result came within the wait");
+    // The prompt may have arrived: its buttons stay valid, and so do the older ones.
+    const fresh = freshTokens(retry.request()!);
+    assert.ok(fresh.length > 0);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+    assert.ok(s.sm.getActionToken(original.payload), "the original controls stay usable");
+    // The entry is settled: a later delivered retry retires the older controls.
+    const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers.get(session.id);
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false]);
+  });
+
+  it("answers a pending prompt whose outcome never arrives with the late failure, once", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    const original = await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    // The dispatch is swallowed: no success, failure or unknown outcome is ever
+    // reported (the plugin stopped mid-send, or the decision closed meanwhile).
+    const retry = captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+    s.sm.reofferLateFallbackMs = 80;
+
+    const lateResults: boolean[] = [];
+    assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } }), "pending");
+    assert.deepEqual(lateResults, []);
+    await waitUntil(() => lateResults.length > 0, "the bounded fallback");
+    assert.deepEqual(lateResults, [false]);
+    const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers.get(session.id);
+    // The prompt may still land: its entry stays in flight, so its buttons stay valid
+    // and a newer re-offer cannot retire them.
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [true]);
+    assert.ok(s.sm.getActionToken(original.payload), "the older controls stay usable while the outcome is unknown");
+    const fresh = freshTokens(retry.request()!);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+    // An outcome that still arrives afterwards settles the entry and is not reported a second time.
+    (retry.request()!.hooks as { onNotifySucceeded?: () => void }).onNotifySucceeded?.();
+    assert.deepEqual(lateResults, [false]);
+    assert.deepEqual([...(reoffers?.values() ?? [])].map((entry) => entry.inFlight), [false]);
+    for (const tokenId of fresh) assert.ok(s.sm.getActionToken(tokenId), "the delivered prompt keeps its buttons");
+    // The older controls were kept until then and are retired by the delivery.
+    assert.equal(s.sm.getActionToken(original.payload), undefined, "the original controls are retired once the prompt is delivered");
+  });
+
+  it("cancels the fallback when the outcome arrives, and answers a still-pending press on dispose", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const retry = captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+    s.sm.reofferLateFallbackMs = 60_000;
+    const timers = (s.sm as unknown as { reofferLateFallbacks: Map<unknown, unknown> }).reofferLateFallbacks;
+
+    const lateResults: boolean[] = [];
+    assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } }), "pending");
+    assert.equal(timers.size, 1);
+    (retry.request()!.hooks as { onNotifySucceeded?: () => void }).onNotifySucceeded?.();
+    assert.deepEqual(lateResults, [true]);
+    assert.equal(timers.size, 0, "the outcome cancels the fallback");
+
+    assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } }), "pending");
+    assert.equal(timers.size, 1);
+    s.sm.dispose();
+    assert.equal(timers.size, 0, "dispose clears the fallback");
+    assert.deepEqual(lateResults, [true, false], "the pending press gets its plain failure line at dispose");
+  });
+
+  it("sends the plain failure line when the real direct send times out (dispatcher and executor chain)", async () => {
+    const held = Promise.withResolvers<void>();
+    const originalTimeout = wakeDeliveryExecutorInternals.promiseTimeoutMs;
+    try {
+      const s = stack = await startFullStack({
+        backend: "codex",
+        // The host never answers the retry prompt's send.
+        sendResult: async (params) => {
+          if (params.payloads.some((payload) => /still open/.test(payload.text ?? ""))) await held.promise;
+          return { status: "sent", results: params.payloads.map((_, index) => ({ channel: params.channel, messageId: `m-${index}` })) } as never;
+        },
+      });
+      const { session } = await finishConflictingSession(s, "ask");
+      const merge = await s.waitForButton("Merge");
+      await s.sm.whenStorePersisted();
+      s.sm.userDeliveryResultWaitMs = 30;
+      wakeDeliveryExecutorInternals.promiseTimeoutMs = 150;
+
+      const click = await s.click(merge);
+      // Still in delivery after the bounded wait: the button sends nothing yet.
+      assert.deepEqual(click.replies, []);
+      // The send times out: its outcome is unknown, so the user gets the plain line.
+      await waitUntil(() => click.replies.length > 0, "the late failure line");
+      assert.equal(click.replies.length, 1);
+      assert.match(click.replies[0]!, /^❌ \[[\w-]+\] Merge failed: rebase of `[^`]+` onto `[^`]+` hit conflicts; resolve them manually in `[^`]+`\.$/);
+      const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>> }).worktreeReoffers.get(session.id);
+      const entries = [...(reoffers?.values() ?? [])];
+      assert.deepEqual(entries.map((entry) => entry.inFlight), [false]);
+      for (const tokenId of entries[0]!.tokens) assert.ok(s.sm.getActionToken(tokenId), "the prompt's buttons stay valid in case it did arrive");
+    } finally {
+      wakeDeliveryExecutorInternals.promiseTimeoutMs = originalTimeout;
+      held.resolve();
+    }
+  });
+
+  it("answers a press whose prompt is still in delivery when the plugin stops", async () => {
+    const held = Promise.withResolvers<void>();
+    try {
+      const s = stack = await startFullStack({
+        backend: "codex",
+        sendResult: async (params) => {
+          if (params.payloads.some((payload) => /still open/.test(payload.text ?? ""))) await held.promise;
+          return { status: "sent", results: params.payloads.map((_, index) => ({ channel: params.channel, messageId: `m-${index}` })) } as never;
+        },
+      });
+      await finishConflictingSession(s, "ask");
+      const merge = await s.waitForButton("Merge");
+      await s.sm.whenStorePersisted();
+      s.sm.userDeliveryResultWaitMs = 30;
+
+      const click = await s.click(merge);
+      assert.deepEqual(click.replies, [], "the prompt is still in delivery");
+
+      // The Gateway stops the plugin: the press gets its plain line before anything is torn down.
+      await s.host.stopServices();
+      assert.equal(click.replies.length, 1);
+      assert.match(click.replies[0]!, /^❌ \[[\w-]+\] Merge failed: /);
+      await s.host.startServices({});
+    } finally {
+      held.resolve();
+    }
+  });
+
+  it("forgets a pending re-offer when the decision closes", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+    s.sm.reofferLateFallbackMs = 60_000;
+    const reoffers = (s.sm as unknown as { worktreeReoffers: Map<string, Map<number, { inFlight: boolean }>> }).worktreeReoffers;
+
+    assert.equal(await s.sm.reofferWorktreeDecision(session.id, "Merge failed: test."), "pending");
+    assert.deepEqual([...(reoffers.get(session.id)?.values() ?? [])].map((entry) => entry.inFlight), [true]);
+
+    // The user discards the branch: the decision is closed, so nothing stays in flight.
+    await s.sm.dismissWorktree(session.id);
+    await s.sm.whenStorePersisted();
+    assert.equal(reoffers.has(session.id), false);
+  });
+
+  it("reports a late unknown outcome as a late failure, once", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { session } = await finishConflictingSession(s, "ask");
+    await s.waitForButton("Merge");
+    await s.sm.whenStorePersisted();
+    const retry = captureRetry(s);
+    s.sm.userDeliveryResultWaitMs = 20;
+
+    const lateResults: boolean[] = [];
+    const reoffer = s.sm.reofferWorktreeDecision(session.id, "Merge failed: test.", { onLateResult: (delivered) => { lateResults.push(delivered); } });
+    // The bounded wait ends first: the button sends nothing yet.
+    assert.equal(await reoffer, "pending");
+    assert.deepEqual(lateResults, []);
+
+    // The send then ends without a known outcome: the caller is told to send its plain line.
+    retry.request()!.hooks!.onNotifyAmbiguous!();
+    assert.deepEqual(lateResults, [false]);
+    for (const tokenId of freshTokens(retry.request()!)) assert.ok(s.sm.getActionToken(tokenId), "a fresh button stays usable");
+  });
+});
+
+describe("the merge target of a session", () => {
+  const exists = (repo: string, branch: string, file: string): boolean => {
+    try { git(repo, "cat-file", "-e", `${branch}:${file}`); return true; } catch { return false; }
+  };
+
+  /** A finished worktree session with one commit; `develop` is a non-default branch of the repository. */
+  async function finishedSession(
+    s: FullStack,
+    options: { strategy: "ask" | "delegate"; launchFrom: "develop" | "main"; recordBase: boolean },
+  ): Promise<{ repo: string; session: Session; heads: () => { main: string; develop: string } }> {
+    const repo = createRepo();
+    git(repo, "branch", "develop");
+    git(repo, "switch", "develop");
+    commit(repo, "develop.txt", "develop work\n", "develop work");
+    git(repo, "switch", options.launchFrom);
+    await s.sm.setRepoPolicy(repo, "never-pr");
+    const before = new Set(s.sm.list("all").map((session) => session.id));
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_launch", {
+      prompt: "Start the task",
+      workdir: repo,
+      name: "merge-target",
+      harness: "codex",
+      worktree_strategy: options.strategy,
+      permission_mode: "default",
+      ...(options.recordBase ? { worktree_base_branch: "develop" } : {}),
+    });
+    await waitUntil(() => s.sm.list("all").some((candidate) => !before.has(candidate.id)), "a launched session");
+    const session = s.sm.list("all").find((candidate) => !before.has(candidate.id))!;
+    await s.backend.waitForTurns(turnsBefore + 1);
+    await waitUntil(() => session.status === "running", "session running");
+    commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
+    const heads = () => ({ main: git(repo, "rev-parse", "main"), develop: git(repo, "rev-parse", "develop") });
+    await s.backend.endTurn("Added feature.txt.");
+    await waitUntil(() => session.status === "completed", "session completed");
+    return { repo, session, heads };
+  }
+
+  it("the 🔀 prompt, the Merge button and the outcome line all name the session's recorded base", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
+    const prompt = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const before = heads();
+    const merge = buttonIn(prompt, "Merge");
+
+    await s.click(merge);
+    await waitUntil(() => exists(repo, "develop", "feature.txt"), "merged into the recorded base", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
+
+    assert.match(outcome.text, /^✅ \[merge-target\] Completed — Merged: `[^`]+` → `develop`/);
+    assert.equal(heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(repo, "main", "feature.txt"), false);
+  });
+
+  it("agent_merge without base_branch lands on the recorded base; an explicit base_branch overrides it", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const recorded = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
+    const before = recorded.heads();
+
+    const text = await s.runTool("agent_merge", { session: recorded.session.id });
+    assert.match(text, /Merged: `[^`]+` → `develop`/, text);
+    assert.equal(exists(recorded.repo, "develop", "feature.txt"), true);
+    assert.equal(recorded.heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(recorded.repo, "main", "feature.txt"), false);
+
+    // An explicit base wins over the recorded one for that call.
+    const explicit = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
+    git(explicit.repo, "switch", "main");
+    const explicitBefore = explicit.heads();
+    const overridden = await s.runTool("agent_merge", { session: explicit.session.id, base_branch: "main" });
+    assert.match(overridden, /Merged: `[^`]+` → `main`/, overridden);
+    assert.equal(exists(explicit.repo, "main", "feature.txt"), true);
+    assert.equal(explicit.heads().develop, explicitBefore.develop, "the recorded base is untouched");
+  });
+
+  it("a base recorded for an existing PR does not move the prompt or the Merge button: both name the landing base", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    // No recorded base. The session's lifecycle carries another base (as an earlier PR into `develop` leaves it).
+    const repo = createRepo();
+    git(repo, "branch", "develop");
+    await s.sm.setRepoPolicy(repo, "never-pr");
+    const session = await s.launch({ workdir: repo, worktreeStrategy: "ask", name: "merge-pr-base" });
+    Object.assign(session, {
+      worktreeLifecycle: { ...(session.worktreeLifecycle ?? { state: "provisioned", updatedAt: new Date().toISOString() }), baseBranch: "develop" },
+    });
+    assert.equal(session.worktreeLifecycle?.baseBranch, "develop");
+    commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
+    const developBefore = git(repo, "rev-parse", "develop");
+    await s.backend.endTurn("Added feature.txt.");
+
+    const prompt = await s.waitForMessage(/^🔀 \[merge-pr-base\] Finished on `[^`]+` → `[^`]+`/);
+    assert.match(prompt.text, /^🔀 \[merge-pr-base\] Finished on `[^`]+` → `main`/);
+    await s.click(buttonIn(prompt, "Merge"));
+    await waitUntil(() => exists(repo, "main", "feature.txt"), "merged where the prompt said", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
+    assert.match(outcome.text, /Merged: `[^`]+` → `main`/);
+    assert.equal(git(repo, "rev-parse", "develop"), developBefore);
+  });
+
+  it("a resumed session keeps its recorded base: the second prompt and its Merge button name it again", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, session, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
+    const first = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const before = heads();
+
+    // The user continues the session instead of deciding; it completes again.
+    const turnsBefore = s.backend.turns.length;
+    const resumedText = await s.runTool("agent_respond", { session: session.id, message: "Add one more file." });
+    assert.doesNotMatch(resumedText, /^(?:Error|❌)/, resumedText);
+    await s.backend.waitForTurns(turnsBefore + 1);
+    await waitUntil(() => s.sm.resolve(session.id)?.status === "running", "resumed session running");
+    const resumed = s.sm.resolve(session.id)!;
+    assert.equal(resumed.worktreeBaseBranch, "develop");
+    commit(resumed.worktreePath!, "more.txt", "more\n", "add more");
+    await s.backend.endTurn("Added more.txt.");
+
+    const second = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `[^`]+`/, first.index + 1);
+    assert.match(second.text, /→ `develop`/);
+    await s.click(buttonIn(second, "Merge"));
+    await waitUntil(() => exists(repo, "develop", "more.txt"), "merged into the recorded base", 10_000);
+    const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, second.index + 1);
+    assert.match(outcome.text, /Merged: `[^`]+` → `develop`/);
+    assert.equal(heads().main, before.main, "the default branch is untouched");
+    assert.equal(exists(repo, "main", "more.txt"), false);
+  });
+
+  it("agent_merge for a session with no recorded base lands on the detected default branch", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const { repo, session, heads } = await finishedSession(s, { strategy: "delegate", launchFrom: "main", recordBase: false });
+    assert.equal(s.sm.getPersistedSession(session.id)?.worktreeBaseBranch, undefined);
+    const before = heads();
+
+    const text = await s.runTool("agent_merge", { session: session.id });
+    assert.match(text, /Merged: `[^`]+` → `main`/, text);
+    assert.equal(exists(repo, "main", "feature.txt"), true);
+    assert.equal(heads().develop, before.develop);
   });
 });
 
@@ -450,6 +792,118 @@ describe("goal loop", () => {
     await s.backend.endTurn("Plan: create done.txt.");
     await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
     assert.equal(s.backend.turns.length, turnsBefore + 1, "the loop does not approve its own plan");
+  });
+
+  for (const controllerSawSuspension of [true, false]) it(`stops the goal when its session, suspended while the plan waits, is stopped with agent_kill (${controllerSawSuspension ? "after" : "before"} the controller noticed the suspension)`, async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const workdir = goalWorkdir();
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.backend.waitForTurns(turnsBefore + 1);
+    const task = s.gc.listTasks()[0]!;
+    await s.backend.endTurn("Plan: create done.txt.");
+    await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+    s.gc.planDecisionRecheckMs = 50;
+    const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+
+    // The idle timeout suspends the session; its plan decision survives.
+    session.kill("idle-timeout");
+    await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+    await s.sm.whenStorePersisted();
+    assert.equal(s.sm.getPersistedSession(session.id)?.pendingPlanApproval, true);
+    // Its lifecycle stays "waiting for the plan decision", not "suspended".
+    assert.equal(s.sm.resolve(session.id)?.lifecycle, "awaiting_plan_decision");
+    if (controllerSawSuspension) {
+      // The goal controller sees the suspension and waits for the plan decision.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assert.equal(s.gc.getTask(task.id)?.status, "waiting_for_plan_approval");
+    }
+    // Otherwise the stop lands first: the controller then finds the session
+    // unloaded and reads how it ended from the stored row.
+
+    assert.match(await s.runTool("agent_kill", { session: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\); goal task "[\w-]+" stopped\.$/);
+
+    // The plan is rejected with the session, so nothing keeps waiting for it.
+    const row = s.sm.getPersistedSession(session.id);
+    assert.equal(row?.pendingPlanApproval, false);
+    assert.equal(row?.approvalState, "rejected");
+    assert.equal(row?.lifecycle, "terminal");
+    assert.equal(s.sm.resolve(session.id), undefined);
+    await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
+    assert.equal(s.gc.getTask(task.id)?.failureReason, "Stopped by user.");
+    assert.equal(s.backend.turns.length, turnsBefore + 1, "nothing was resumed");
+    // Exactly one goal notice, also after the controller's own rechecks ran.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(s.messages().filter((message) => /Goal task (?:stopped|failed)/.test(message.text)).length, 1);
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped");
+  });
+
+  for (const dormant of [false, true]) {
+    it(`/agent_kill on a goal's ${dormant ? "dormant" : "running"} session, typed in its own chat, is one message: the goal's stop notice`, async () => {
+      const s = stack = await startFullStack({ backend: "codex" });
+      const workdir = goalWorkdir();
+      const turnsBefore = s.backend.turns.length;
+      await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+      await s.backend.waitForTurns(turnsBefore + 1);
+      const task = s.gc.listTasks()[0]!;
+      await waitUntil(() => Boolean(s.gc.getTask(task.id)?.sessionId), "the goal session");
+      const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+      if (dormant) {
+        await s.backend.endTurn("Plan: create done.txt.");
+        await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+        session.kill("idle-timeout");
+        await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+        await s.sm.whenStorePersisted();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+
+      const before = s.host.durableSends.length;
+      const reply = await s.host.runCommand("agent_kill", {
+        ...nativeTopicCommand({ chat: TELEGRAM_TOPIC.to, topic: Number(TELEGRAM_TOPIC.threadId), accountId: TELEGRAM_TOPIC.accountId }),
+        args: session.name,
+      } as never) as { text?: string };
+      await waitUntil(() => s.gc.getTask(task.id)?.status === "stopped", "the goal task stops");
+      await s.sm.whenStorePersisted();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      assert.match(reply.text ?? "", /^⛔ \[[\w-]+\] Goal task stopped[^\n]*\n\nStopped by user\.$/);
+      assert.deepEqual(
+        s.messages().filter((message) => message.index >= before && /Stopped|stopped/.test(message.text)).map((message) => message.text),
+        [],
+        "no second stop message in the same chat",
+      );
+      assert.equal(s.gc.getTask(task.id)?.failureReason, "Stopped by user.");
+    });
+  }
+
+  it("stops the goal when its dormant session is closed as completed", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    const workdir = goalWorkdir();
+    const turnsBefore = s.backend.turns.length;
+    await s.runTool("agent_goal", { action: "launch", goal: "Create done.txt", workdir, harness: "codex", goal_mode: "ralph" });
+    await s.backend.waitForTurns(turnsBefore + 1);
+    const task = s.gc.listTasks()[0]!;
+    await s.backend.endTurn("Plan: create done.txt.");
+    await waitUntil(() => s.gc.getTask(task.id)?.status === "waiting_for_plan_approval", "goal waits for the plan decision");
+    s.gc.planDecisionRecheckMs = 50;
+    const session = s.sm.resolve(s.gc.getTask(task.id)!.sessionId!)!;
+    session.kill("idle-timeout");
+    await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
+    await s.sm.whenStorePersisted();
+
+    const text = await s.runTool("agent_kill", { session: session.id, reason: "completed" });
+    assert.match(text, /Marked as completed \(it was not running\)\. Its goal task "[\w-]+" is stopped: the session was closed without running, so its verifiers did not run\./);
+
+    assert.equal(s.sm.getPersistedSession(session.id)?.status, "completed");
+    await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");
+    assert.equal(s.gc.getTask(task.id)?.status, "stopped", s.gc.getTask(task.id)?.failureReason);
+    assert.equal(s.gc.getTask(task.id)?.failureReason, "The session was closed as completed without running.");
+    // The task stopped at once, with exactly one goal notice.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const notices = s.messages().filter((message) => /Goal task (?:stopped|failed)|goal succeeded/.test(message.text));
+    assert.equal(notices.length, 1, notices.map((message) => message.text).join(" | "));
+    assert.match(notices[0]!.text, /^⛔ \[[\w-]+\] Goal task stopped[^\n]*\n\nThe session was closed as completed without running\.$/);
   });
 
   it("fails the goal when the session waits for a user answer it cannot give itself", async () => {

@@ -57,6 +57,39 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("recognises a linked session whose stored channel differs only in the bot account", () => {
+    const launch = (session: Record<string, unknown>) => resolveAgentLaunchRequest(
+      { prompt: "Continue work" },
+      // No session key on either side: the chats are compared as routes.
+      { workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "123", accountId: "bot1", threadId: 42 } },
+      {
+        list: () => [{ id: "sess-1", name: "linked", status: "running", workdir: "/tmp", ...session }],
+        listPersistedSessions: () => [],
+      },
+    ).kind;
+
+    // The same chat and topic, stored without the account (an older launch).
+    assert.equal(launch({ originChannel: "telegram|123", originThreadId: 42 }), "blocked");
+    assert.equal(launch({ originChannel: "telegram|bot1|123", originThreadId: "42" }), "blocked");
+    // Another topic, another chat, or another bot account is another conversation.
+    assert.equal(launch({ originChannel: "telegram|123", originThreadId: 7 }), "resolved");
+    assert.equal(launch({ originChannel: "telegram|999", originThreadId: 42 }), "resolved");
+    assert.equal(launch({ originChannel: "telegram|bot2|123", originThreadId: 42 }), "resolved");
+    assert.equal(launch({ originChannel: "discord|123", originThreadId: 42 }), "resolved");
+
+    // A launch that names no account does not match a session stored with one
+    // (the same user's DM with another bot is another chat).
+    const accountless = resolveAgentLaunchRequest(
+      { prompt: "Continue work" },
+      { workspaceDir: "/tmp", deliveryContext: { channel: "telegram", to: "123", threadId: 42 } },
+      {
+        list: () => [{ id: "sess-1", name: "linked", status: "running", workdir: "/tmp", originChannel: "telegram|bot1|123", originThreadId: 42 }],
+        listPersistedSessions: () => [],
+      },
+    ).kind;
+    assert.equal(accountless, "resolved");
+  });
+
   it("uses deliveryContext when resolving linked-session routing", () => {
     const result = resolveAgentLaunchRequest(
       { prompt: "Continue work" },

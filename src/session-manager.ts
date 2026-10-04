@@ -4,7 +4,7 @@ import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } f
 import { assertModelAllowedForHarness } from "./harness-models";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
-import { formatHarnessModelLabel } from "./session-display";
+import { appendStatusMetadata, formatHarnessModelLabel, formatReasoningMetadataSuffix } from "./session-display";
 import { formatSessionStatsSuffix } from "./session-notification-stats";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
@@ -70,7 +70,7 @@ import {
   isCurrentPendingPlanDecision as isCurrentPendingPlanDecisionState,
 } from "./session-plan-approval-delivery";
 import {
-  detectDefaultBranch,
+  resolveLandingBaseBranch,
   getDiffSummary,
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
@@ -233,6 +233,46 @@ interface SessionManagerServiceBundle {
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
+/**
+ * Stopping a session whose plan still waits for a decision rejects that plan:
+ * the decision is closed and no prompt for it stays actionable.
+ */
+function pendingPlanRejectedPatch(
+  session: Pick<PersistedSessionInfo, "approvalState" | "planDecisionVersion">,
+): Partial<PersistedSessionInfo> {
+  return {
+    lifecycle: "terminal",
+    runtimeState: "stopped",
+    pendingPlanApproval: false,
+    planApprovalContext: undefined,
+    approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
+    planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
+    actionablePlanDecisionVersion: undefined,
+    canonicalPlanPromptVersion: undefined,
+    approvalPromptRequiredVersion: undefined,
+    approvalPromptVersion: undefined,
+    approvalPromptStatus: "not_sent",
+    approvalPromptTransport: "none",
+    approvalPromptMessageKind: "none",
+    approvalPromptLastAttemptAt: undefined,
+    approvalPromptDeliveredAt: undefined,
+    approvalPromptFailedAt: undefined,
+  };
+}
+
+/** A chat command's view of a goal notice (the goal controller's `GoalReplyNotice`). */
+export type GoalStopReply = {
+  sameChat: (task: { route?: SessionRoute; originSessionKey?: string }) => boolean;
+  text?: string;
+  posted?: boolean;
+  taskName?: string;
+};
+
+export type GoalSessionStopHandlers = {
+  closedWhileDormant: (goalTaskId: string, outcome: "completed" | "killed", reply?: GoalStopReply) => string | undefined;
+  stopRunning: (goalTaskId: string, reply?: GoalStopReply) => string | undefined;
+};
+
 export class SessionManager {
   private readonly registry: SessionRuntimeRegistry;
   private sessions: Map<string, Session>;
@@ -240,7 +280,6 @@ export class SessionManager {
   maxPersistedSessions: number;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
-  private lastTurnCompleteMarkers: Map<string, string> = new Map();
   private lastTerminalWakeMarkers: Map<string, string> = new Map();
   private readonly mergeQueue = new KeyedOperationQueue();
   private spawnTail: Promise<void> = Promise.resolve();
@@ -252,6 +291,14 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   /** How long a tool waits for a prompt's direct delivery result before reporting it as in progress. */
   userDeliveryResultWaitMs = 10_000;
+  /**
+   * After a re-offered prompt was reported as still in delivery: how long its
+   * outcome may stay out (a little over the direct-send timeout) before the
+   * press is answered with the plain failure line anyway.
+   */
+  reofferLateFallbackMs = 45_000;
+  /** Pending re-offers: their fallback timer, and how to answer the press now. */
+  private readonly reofferLateFallbacks = new Map<ReturnType<typeof setTimeout>, () => void | Promise<void>>();
   /** Worktree-decision re-offers per session, by generation (see `reofferWorktreeDecision`). */
   private readonly worktreeReoffers = new Map<string, Map<number, { tokens: Set<string>; inFlight: boolean }>>();
   private worktreeReofferGeneration = 0;
@@ -381,7 +428,7 @@ export class SessionManager {
         const status = await syncWorktreePR(repoDir, branchName, targetRepo);
         return status.exists && status.state === "open";
       },
-      getPrStatusForBranch: (repoDir, branchName, targetRepo) => syncWorktreePR(repoDir, branchName, targetRepo),
+      getPrStatusForBranch: (repoDir, branchName, targetRepo, baseBranch) => syncWorktreePR(repoDir, branchName, targetRepo, baseBranch),
       getPrStatusForUrl: (repoDir, prUrl, targetRepo) => syncWorktreePRByUrl(repoDir, prUrl, targetRepo),
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
@@ -453,14 +500,16 @@ export class SessionManager {
       persistSession: (session, persistOptions) => manager.persistSession(session, persistOptions),
       clearRuntimeSessionState: (sessionId) => {
         manager.clearWaitingTimestampsForSession(sessionId);
-        manager.lastTurnCompleteMarkers.delete(sessionId);
         manager.lastTerminalWakeMarkers.delete(sessionId);
       },
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
       updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
       getMaxPersistedSessions: () => manager.maxPersistedSessions,
     });
-    store.onActionTokensChanged(() => manager.syncActionTokenExpiryDeadline());
+    store.onActionTokensChanged(() => {
+      manager.syncActionTokenExpiryDeadline();
+      manager.pruneWorktreeReoffers();
+    });
     const lifecycle = new SessionLifecycleService({
       persistSession: (session) => manager.persistSession(session),
       clearWaitingTimestamp: (sessionId) => { manager.clearWaitingTimestampsForSession(sessionId); },
@@ -470,8 +519,6 @@ export class SessionManager {
       dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
       clearRetryTimersForSession: (sessionId) => wakeDispatcher.clearRetryTimersForSession(sessionId),
-      hasTurnCompleteWakeMarker: (sessionId) => manager.lastTurnCompleteMarkers.has(sessionId),
-      shouldEmitTurnCompleteWake: (session) => manager.shouldEmitTurnCompleteWake(session),
       shouldEmitTerminalWake: (session) => manager.shouldEmitTerminalWake(session),
       getCurrentSessionStatus: (session) => (
         manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
@@ -561,6 +608,7 @@ export class SessionManager {
   }
 
   private onPersistedSessionChanged(session?: PersistedSessionInfo): void {
+    this.pruneWorktreeReoffers();
     if (!session) return;
     this.syncPersistedSessionMaintenance(session);
     this.enforcePersistedRetention();
@@ -594,11 +642,37 @@ export class SessionManager {
 
   private goalTaskAuthorizer?: (id: string) => void;
   private goalTaskIsActive?: (id: string) => boolean;
+  private goalSessionStopHandlers?: GoalSessionStopHandlers;
 
   /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
   setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
     this.goalTaskAuthorizer = authorizer;
     this.goalTaskIsActive = isActive;
+  }
+
+  /** Internal owner callbacks for stopping a goal through its session (see the two methods below). */
+  setGoalSessionStopHandlers(handlers: GoalSessionStopHandlers): void {
+    this.goalSessionStopHandlers = handlers;
+  }
+
+  /**
+   * Tell the goal task that owned a dormant session how the session was
+   * closed. The task stops at once with its one `⛔ [task] Goal task stopped`
+   * notice (returned in `reply` instead of sent when the command was typed in
+   * the task's own chat). Returns the task's name, or undefined when no active
+   * task owned the session.
+   */
+  stopGoalOfClosedSession(goalTaskId: string | undefined, outcome: "completed" | "killed", reply?: GoalStopReply): string | undefined {
+    return goalTaskId ? this.goalSessionStopHandlers?.closedWhileDormant(goalTaskId, outcome, reply) : undefined;
+  }
+
+  /**
+   * Stop the goal task that owns a running session, which also stops the
+   * task's sessions: one stop message, the goal's. Returns the task's name,
+   * or undefined when no active task owns the session.
+   */
+  stopGoalOfRunningSession(goalTaskId: string | undefined, reply?: GoalStopReply): string | undefined {
+    return goalTaskId ? this.goalSessionStopHandlers?.stopRunning(goalTaskId, reply) : undefined;
   }
 
   /** A goal that finished or whose record is gone can no longer be driven or succeed. */
@@ -793,7 +867,6 @@ export class SessionManager {
         this.registry.remove(existing.id, "session-id-override-replacement");
       }
       this.clearWaitingTimestampsForSession(config.sessionIdOverride);
-      this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
       this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
       this.maintenance.cancelRuntimeGc(config.sessionIdOverride);
     }
@@ -1408,17 +1481,20 @@ export class SessionManager {
 
   private async getWorktreeDecisionButtons(
     sessionId: string,
-    options: { allowDelegate?: boolean } = {},
+    options: { allowDelegate?: boolean; newPr?: boolean } = {},
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
   ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
-    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions);
+    // A PR found closed without merging is recorded on the row, so the 🔀
+    // prompt, the reminders and the re-offer all show New PR.
+    const newPr = options.newPr === true || this.getPersistedSession(sessionId)?.worktreePrClosed === true;
+    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions, { newPr });
   }
 
   private async getPolicyAwareWorktreeDecisionButtons(
     sessionId: string,
-    options: { allowDelegate?: boolean } = {},
+    options: { allowDelegate?: boolean; newPr?: boolean } = {},
     session?: Session,
     persistedSession?: PersistedSessionInfo,
   ): Promise<NotificationButton[][] | undefined> {
@@ -1648,9 +1724,7 @@ export class SessionManager {
     if (!branchName) return `Error: Session "${ref}" has no managed worktree branch.`;
     if (!repoDir) return `Error: Session "${ref}" has no resolvable repository root for worktree ${worktreePath}.`;
 
-    const baseBranch = activeSession?.worktreeBaseBranch
-      ?? persistedSession?.worktreeBaseBranch
-      ?? await detectDefaultBranch(repoDir);
+    const baseBranch = await resolveLandingBaseBranch(persistedSession ?? activeSession, repoDir);
     const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;
@@ -1770,6 +1844,14 @@ export class SessionManager {
             hooks?.onDuplicateSkipped?.(reason);
             settle("skipped");
           },
+          // Outcome unknown (for example a send that timed out): a caller that
+          // handles it stops waiting; it decides what the user still gets.
+          ...(hooks?.onNotifyAmbiguous ? {
+            onNotifyAmbiguous: () => {
+              hooks.onNotifyAmbiguous?.();
+              settle("pending");
+            },
+          } : {}),
         },
       });
     });
@@ -1813,6 +1895,32 @@ export class SessionManager {
     return this.worktreeDecisions.snoozeWorktreeDecision(ref, options);
   }
 
+  private worktreeDecisionIsOpen(ref: string): boolean {
+    const persisted = this.getPersistedSession(ref);
+    if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
+    const state = persisted.worktreeLifecycle?.state;
+    if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
+    if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
+    return Boolean(persisted.worktreePath || persisted.worktreeBranch);
+  }
+
+  /**
+   * Forget re-offer entries that can no longer matter: the decision closed,
+   * the session is gone, or none of the entry's button tokens exists any more
+   * (expired or deleted; a used token still exists until it is deleted).
+   * Without this an entry whose delivery outcome never arrives would stay in
+   * flight forever.
+   */
+  private pruneWorktreeReoffers(): void {
+    for (const [ref, reoffers] of this.worktreeReoffers) {
+      const open = this.worktreeDecisionIsOpen(ref);
+      for (const [generation, entry] of reoffers) {
+        if (!open || ![...entry.tokens].some((tokenId) => this.getActionToken(tokenId))) reoffers.delete(generation);
+      }
+      if (reoffers.size === 0) this.worktreeReoffers.delete(ref);
+    }
+  }
+
   /**
    * Re-offer an open worktree decision after a button action failed (merge, PR,
    * or discard). A callback consumes its token before acting, so another writer
@@ -1821,21 +1929,23 @@ export class SessionManager {
    * buttons and, once that message is delivered, retires the older decision
    * buttons. If the new message cannot be delivered, its buttons are dropped and
    * the older ones stay usable. Resolves true only when the new controls were
-   * delivered, so the caller may clear the spent ones.
+   * delivered, so the caller may clear the spent ones, and `"pending"` when the
+   * delivery is still in flight after the bounded wait: the prompt is then the
+   * answer, and `onLateResult` reports how it ended (false also when the
+   * outcome stays unknown, so the caller never leaves the user without a message). `closedPr` (the PR action
+   * found its PR closed without merging) replaces Open PR / Sync PR by a
+   * **New PR** button, which opens a fresh pull request.
    */
-  async reofferWorktreeDecision(ref: string, failure: string): Promise<boolean> {
-    const decisionIsOpen = (): boolean => {
-      const persisted = this.getPersistedSession(ref);
-      if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
-      const state = persisted.worktreeLifecycle?.state;
-      if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
-      if (persisted.worktreeMerged || persisted.worktreeDismissedAt) return false;
-      return Boolean(persisted.worktreePath || persisted.worktreeBranch);
-    };
+  async reofferWorktreeDecision(
+    ref: string,
+    failure: string,
+    options: { closedPr?: boolean; onLateResult?: (delivered: boolean) => void | Promise<void> } = {},
+  ): Promise<boolean | "pending"> {
+    const decisionIsOpen = (): boolean => this.worktreeDecisionIsOpen(ref);
     if (!decisionIsOpen()) return false;
     const active = this.resolve(ref);
     const persisted = this.getPersistedSession(ref);
-    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true }, active, persisted);
+    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(ref, { allowDelegate: true, newPr: options.closedPr }, active, persisted);
     const fresh = new Set((buttons ?? []).flat().filter((button) => !button.url).map((button) => button.callbackData));
     if (fresh.size === 0) return false;
     // Several re-offers of one decision can overlap (a second failed action
@@ -1876,11 +1986,34 @@ export class SessionManager {
       backendRef: persisted?.backendRef,
       route: persisted?.route,
     });
+    // Set once the bounded wait is over: a result after that is a late one.
+    let waitEnded = false;
+    // The send ended without a known outcome (it timed out): the prompt may or
+    // may not have arrived.
+    let ambiguous = false;
+    // The outcome of a prompt reported as "pending" is passed on exactly once.
+    // When none arrives (the plugin stopped mid-send, or the decision closed
+    // while the send was in flight), a bounded timer, or the plugin's dispose,
+    // reports "not delivered", so the press is never left without a message.
+    // The entry stays in flight then: its buttons remain valid, and a newer
+    // re-offer cannot retire them, in case the prompt still lands.
+    let lateFallback: ReturnType<typeof setTimeout> | undefined;
+    let lateReported = false;
+    const reportLate = (delivered: boolean): void | Promise<void> => {
+      if (lateFallback) {
+        clearTimeout(lateFallback);
+        this.reofferLateFallbacks.delete(lateFallback);
+        lateFallback = undefined;
+      }
+      if (!waitEnded || lateReported) return;
+      lateReported = true;
+      return options.onLateResult?.(delivered);
+    };
     const delivery = await this.dispatchAndAwaitUserDelivery(target, {
       label: "worktree-decision-retry",
       idempotencyKey: `worktree-decision-retry:${ref}:${Date.now()}`,
       // After a failed button: `❌ [name] Merge failed: <reason>. The decision for `b` is still open.`
-      userMessage: `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.`,
+      userMessage: `❌ [${name}] ${failure}${failure.endsWith(".") ? " " : "\n"}The decision${branch ? ` for \`${branch}\`` : ""} is still open.${options.closedPr ? " New PR opens a fresh pull request." : ""}`,
       notifyUser: "always",
       requireDirectUserNotification: true,
       buttons,
@@ -1889,15 +2022,31 @@ export class SessionManager {
         onNotifySucceeded: () => {
           settleEntry();
           retireOlder();
+          void reportLate(true);
         },
         onNotifyFailed: () => {
           settleEntry();
           dropFresh();
+          void reportLate(false);
+        },
+        // Unknown outcome: the fresh buttons stay valid in case the prompt did
+        // arrive, the older ones stay too, and the caller sends its plain
+        // failure line. A duplicate is acceptable; silence is not.
+        onNotifyAmbiguous: () => {
+          settleEntry();
+          ambiguous = true;
+          void reportLate(false);
         },
       },
     });
+    waitEnded = true;
+    if (ambiguous) return false;
     if (delivery === "failed" || delivery === "skipped") dropFresh();
-    return delivery === "delivered";
+    if (delivery !== "pending") return delivery === "delivered";
+    lateFallback = setTimeout(() => { void reportLate(false); }, this.reofferLateFallbackMs);
+    lateFallback.unref?.();
+    this.reofferLateFallbacks.set(lateFallback, () => reportLate(false));
+    return "pending";
   }
 
   /**
@@ -2197,7 +2346,18 @@ export class SessionManager {
       canonicalStatusDelivered,
     });
     const userMessage = requiresGoalSuccessFollowup ? goalSuccessUserMessage : userText;
-    if (replyOnly && !requiresGoalSuccessFollowup) return userMessage;
+    if (replyOnly && !requiresGoalSuccessFollowup) {
+      // A dispatched notice gets harness, model and reasoning from the
+      // dispatcher. A terminal line returned as the command's reply carries
+      // the same footer; other replies have no short suffix.
+      return label === "goal-task-failed" || label === "goal-task-stopped"
+        ? appendStatusMetadata(userMessage, formatReasoningMetadataSuffix({
+            harness: routingProxy.harnessName ?? saved?.harness,
+            model: routingProxy.model ?? saved?.model,
+            reasoningEffort: routingProxy.reasoningEffort ?? saved?.reasoningEffort,
+          }))
+        : userMessage;
+    }
     this.dispatchSessionNotification(routingProxy, {
       label,
       idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
@@ -2290,20 +2450,6 @@ export class SessionManager {
     return session.planApproval ?? pluginConfig.planApproval ?? "delegate";
   }
 
-  private shouldEmitTurnCompleteWake(session: Session): boolean {
-    const marker = `${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}`;
-    const prev = this.lastTurnCompleteMarkers.get(session.id);
-    if (prev === marker) {
-      log.info(
-        `[SessionManager] shouldEmitTurnCompleteWake: debounced for session ${session.id} ` +
-        `(marker unchanged: ${marker})`,
-      );
-      return false;
-    }
-    this.lastTurnCompleteMarkers.set(session.id, marker);
-    return true;
-  }
-
   private shouldEmitTerminalWake(session: Session): boolean {
     const marker = `${session.status}|${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
     const prev = this.lastTerminalWakeMarkers.get(session.id);
@@ -2342,30 +2488,76 @@ export class SessionManager {
     // user's Approve / Revise / Reject resumes the session like an idle-suspended one.
     if (session.pendingPlanApproval && reason !== "shutdown") {
       this.clearPlanDecisionTokens(session.id);
-      const patch: Partial<PersistedSessionInfo> = {
-        lifecycle: "terminal",
-        runtimeState: "stopped",
-        pendingPlanApproval: false,
-        planApprovalContext: undefined,
-        approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
-        planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
-        actionablePlanDecisionVersion: undefined,
-        canonicalPlanPromptVersion: undefined,
-        approvalPromptRequiredVersion: undefined,
-        approvalPromptVersion: undefined,
-        approvalPromptStatus: "not_sent",
-        approvalPromptTransport: "none",
-        approvalPromptMessageKind: "none",
-        approvalPromptLastAttemptAt: undefined,
-        approvalPromptDeliveredAt: undefined,
-        approvalPromptFailedAt: undefined,
-      };
+      const patch = pendingPlanRejectedPatch(session);
       session.applyControlPatch(patch);
       Object.assign(session, patch);
       this.updatePersistedSession(session.id, patch);
     }
     session.kill(reason ?? "user");
     return true;
+  }
+
+  /**
+   * Close a suspended session (stopped by the idle timeout, or recovered after
+   * a Gateway restart): nothing is running, so only its record is closed and
+   * no user notice is sent. A plan that still waits for a decision is rejected
+   * and its buttons are retired, as `kill()` does for a running session, so a
+   * goal task that waits for it stops. Question and Resume buttons are left as
+   * `kill()` leaves them: a stopped session stays resumable. A session that is
+   * still loaded is persisted and unloaded first, as runtime GC does, so the
+   * stored row is the one record and a later re-persist cannot reopen it.
+   * Returns the status the session was closed with (a session that was never
+   * persisted can only be stopped), undefined when it is not suspended, and
+   * `"unsaved"` when its row could not be updated (it is still dormant; the
+   * call can be repeated).
+   */
+  closeSuspendedSession(ref: string, completed: boolean): "completed" | "killed" | "unsaved" | undefined {
+    const active = this.resolve(ref);
+    const target = active ?? this.getPersistedSession(ref);
+    // Suspended, or stopped by the idle timeout or a shutdown while its plan
+    // waited (that one keeps the lifecycle `awaiting_plan_decision`; a user
+    // stop would have rejected the plan).
+    const dormant = target?.status === "killed"
+      && (target.lifecycle === "suspended" || (target.lifecycle === "awaiting_plan_decision" && target.pendingPlanApproval === true));
+    if (!target || !dormant) return undefined;
+    const closedPatch = (asCompleted: boolean): Partial<PersistedSessionInfo> => ({
+      ...(target.pendingPlanApproval ? pendingPlanRejectedPatch(target) : {}),
+      status: asCompleted ? "completed" : "killed",
+      lifecycle: "terminal",
+      runtimeState: "stopped",
+      resumable: false,
+      killReason: asCompleted ? "done" : "user",
+    });
+    // The plan's buttons are retired only once the close is recorded: an
+    // unsaved close leaves the dormant plan with working buttons.
+    const planRef = active?.id ?? ("sessionId" in target ? target.sessionId : undefined) ?? ref;
+    const hadPendingPlan = target.pendingPlanApproval === true;
+    const saved = (updateRef: string): "completed" | "killed" | "unsaved" => {
+      if (!this.updatePersistedSession(updateRef, closedPatch(completed))) return "unsaved";
+      if (hadPendingPlan) this.clearPlanDecisionTokens(planRef);
+      return completed ? "completed" : "killed";
+    };
+    if (!active) return saved(ref);
+    this.persistSession(active, { scheduleRuntimeGc: false });
+    if (this.store.getPersistedSession(active.id)?.sessionId !== active.id) {
+      // Never persisted (no backend conversation yet): there is no row to mark
+      // completed, and a loaded session's status cannot change, so it is stopped.
+      const controlPatch: Partial<PersistedSessionInfo> = {
+        ...(active.pendingPlanApproval ? pendingPlanRejectedPatch(active) : {}),
+        lifecycle: "terminal",
+        runtimeState: "stopped",
+      };
+      active.killReason = "user";
+      active.applyControlPatch(controlPatch);
+      Object.assign(active, controlPatch);
+      if (hadPendingPlan) this.clearPlanDecisionTokens(planRef);
+      return "killed";
+    }
+    this.registry.remove(active.id, "closed-while-suspended");
+    this.maintenance.cancelRuntimeGc(active.id);
+    this.clearWaitingTimestampsForSession(active.id);
+    this.lastTerminalWakeMarkers.delete(active.id);
+    return saved(active.id);
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */
@@ -2540,6 +2732,8 @@ export class SessionManager {
   }
 
   dispose(): void {
+    // Normally empty: `shutdown()` answered pending presses first.
+    void this.answerPendingReoffers();
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
@@ -2552,9 +2746,31 @@ export class SessionManager {
     await this.runtimeBootstrap.drain();
   }
 
+  /**
+   * A press whose re-offered prompt is still in delivery gets its plain failure
+   * line now: once the plugin stops, no delivery outcome is reported any more.
+   * The line is a reply through the host's callback responder (the channel's
+   * own send), so it does not depend on this plugin's transports. Waits,
+   * bounded, until those replies were handed to the host.
+   */
+  async answerPendingReoffers(): Promise<void> {
+    const answers = [...this.reofferLateFallbacks.values()].map((answerNow) => answerNow());
+    this.reofferLateFallbacks.clear();
+    const pending = answers.filter((answer): answer is Promise<void> => answer instanceof Promise);
+    if (pending.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); timer.unref?.(); }),
+    ]);
+    clearTimeout(timer);
+  }
+
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     try {
+      // First, while the channels are still up: answer presses that still wait.
+      await this.answerPendingReoffers();
       this.disposeMaintenance();
       // Stop active sessions first: a launch still preparing (for example running
       // a worktree setup script) must not delay their termination.

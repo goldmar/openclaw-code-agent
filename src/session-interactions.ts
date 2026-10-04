@@ -149,11 +149,15 @@ export class SessionInteractionService {
    * Merge / PR / Later / Discard in one fixed layout (N48): the first row holds
    * the actions that land the branch, the second row Later and Discard. An
    * existing PR turns Open PR into Sync PR and adds a View PR link button.
+   * `newPr` (that PR was closed without merging, so neither can succeed)
+   * offers New PR instead: the same action with `prForceNew`, which opens a
+   * fresh pull request.
    */
   async getWorktreeDecisionButtons(
     sessionId: string,
     session: Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource | undefined,
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
+    options: { newPr?: boolean } = {},
   ): Promise<NotificationButton[][]> {
     if (!session) return [];
 
@@ -162,7 +166,9 @@ export class SessionInteractionService {
     if (allowedActions.merge) {
       landRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
     }
-    if (prButtons) {
+    if (prButtons && options.newPr) {
+      landRow.push(this.makeActionButton(sessionId, "worktree-create-pr", "New PR", { prForceNew: true }));
+    } else if (prButtons) {
       landRow.push(session.worktreePrUrl
         ? this.makeActionButton(sessionId, "worktree-update-pr", "Sync PR")
         : this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"));

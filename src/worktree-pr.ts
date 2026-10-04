@@ -1,6 +1,6 @@
 import { assertBranchName } from "./worktree-ref-validation";
 import { runGh, runGit, type CommandError } from "./git-exec";
-import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
+import { hasGitHubRemote, isGitHubCLIAvailable, knownGitHubHosts } from "./worktree-repo";
 import { createLogger } from "./logger";
 import { formatCount } from "./format";
 
@@ -22,6 +22,12 @@ export interface PRStatus {
   body?: string;
   headRefName?: string;
   baseRefName?: string;
+  /** False when the PR's head is known not to be this repository's branch (another owner's or a deleted fork). */
+  ownHead?: boolean;
+  /** Branch lookup only: whether any PR of this repository's branch is open, into whatever base. */
+  anyOpen?: boolean;
+  /** Branch lookup only: gh could not be asked (the reason). `exists: false` then means "unknown", not "no PR". */
+  lookupFailed?: string;
 }
 
 function normalizePrState(state: string): PRStatus["state"] {
@@ -89,12 +95,130 @@ function ghFailureReason(err: unknown): string {
   return "gh failed without an error message";
 }
 
+/**
+ * gh refused to create a duplicate: the GraphQL error (`A pull request already
+ * exists for …`, `createPullRequest`) or gh's own check before the request
+ * (`a pull request for branch "X" into branch "Y" already exists:`).
+ */
 function isExistingPullRequestError(message: string): boolean {
-  return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
+  return /pull request already exists/i.test(message)
+    || (/createPullRequest/i.test(message) && /already exists/i.test(message))
+    || /a pull request for branch .+ into branch .+ already exists/i.test(message);
 }
 
-async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?: string): Promise<PRResult | undefined> {
-  const existingPr = await syncWorktreePR(repoDir, branch, targetRepo);
+/** How long a failed canonical-name lookup is remembered, so a gh outage costs one call, not one per session. */
+const CANONICAL_REPO_FAILURE_TTL_MS = 5 * 60_000;
+
+/** Canonical `owner/repo` per named repository, as GitHub names it now; shared while a lookup is in flight. */
+const canonicalRepoNames = new Map<string, { name: Promise<string | undefined>; failedAt?: number }>();
+
+/** Test hook: forget the cached canonical repository names. */
+export function resetCanonicalRepoNamesForTests(): void {
+  canonicalRepoNames.clear();
+}
+
+/**
+ * GitHub's current `owner/repo` for a repository named `expected`. The name is
+ * passed explicitly (gh's own choice of remote may prefer `upstream`); GitHub
+ * redirects a renamed or transferred repository, so the canonical name comes back.
+ */
+/**
+ * How a repository is named for gh and for the PR-URL comparison: `ownerRepo`
+ * (lower case) is what a PR URL's path is compared with, and `ghName` is the
+ * name gh takes, which is also the cache key: `HOST/OWNER/REPO` only for a
+ * GitHub host gh is configured for other than github.com (GitHub Enterprise),
+ * and plain `OWNER/REPO` otherwise. `ssh.github.com` and SSH config aliases
+ * are not hosts gh knows, so they keep the plain name, as before.
+ */
+export function repoNameForGh(
+  source: { targetRepo?: string; originUrl?: string },
+  gitHubHosts: ReadonlySet<string> = knownGitHubHosts(),
+): { ownerRepo: string; ghName: string } | undefined {
+  const qualify = (host: string | undefined, ownerRepo: string): string =>
+    (host && host !== "github.com" && gitHubHosts.has(host) ? `${host}/${ownerRepo}` : ownerRepo);
+  const target = source.targetRepo?.trim();
+  if (target) {
+    const parts = target.split("/").filter(Boolean);
+    if (parts.length < 2) return undefined;
+    const ownerRepo = parts.slice(-2).join("/").toLowerCase();
+    const host = parts.length >= 3 ? parts.slice(0, -2).join("/").toLowerCase() : undefined;
+    return { ownerRepo, ghName: qualify(host, ownerRepo) };
+  }
+  const origin = source.originUrl?.trim();
+  if (!origin) return undefined;
+  // `git@host:owner/repo.git`, `ssh://git@host[:port]/owner/repo.git`, `https://[user@]host/owner/repo.git`
+  const match = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]+(?:.*\/)?([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin);
+  if (!match) return undefined;
+  const host = match[1]!.toLowerCase();
+  const ownerRepo = match[2]!.toLowerCase();
+  return { ownerRepo, ghName: qualify(host, ownerRepo) };
+}
+
+function canonicalRepoName(repoDir: string, expected: string): Promise<string | undefined> {
+  const cached = canonicalRepoNames.get(expected);
+  if (cached && (cached.failedAt === undefined || Date.now() - cached.failedAt < CANONICAL_REPO_FAILURE_TTL_MS)) return cached.name;
+  const entry: { name: Promise<string | undefined>; failedAt?: number } = {
+    name: runGh(["repo", "view", expected, "--json", "nameWithOwner"], { cwd: repoDir, timeout: 10_000 })
+      .then((out) => (JSON.parse(out.trim()) as { nameWithOwner?: string }).nameWithOwner?.toLowerCase())
+      .catch((): undefined => undefined)
+      .then((name) => {
+        if (!name) entry.failedAt = Date.now();
+        return name;
+      }),
+  };
+  canonicalRepoNames.set(expected, entry);
+  return entry.name;
+}
+
+/**
+ * Whether a PR URL names a PR of the repository that PRs of this checkout go
+ * to: the target repo, else origin's repository. gh answers with the PR's
+ * canonical URL, while origin's URL (or a configured target repo) may still
+ * carry the owner or name from before a rename or transfer. So when the names
+ * differ, the repository's identity decides: gh is asked for the canonical
+ * name of the expected repository. An unknown side counts as a match; when gh
+ * cannot say, differing names are a mismatch.
+ */
+async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo: string | undefined): Promise<boolean> {
+  const urlRepo = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\//i.exec(prUrl)?.[1]?.toLowerCase();
+  let expected = repoNameForGh({ targetRepo });
+  if (!expected) {
+    try {
+      expected = repoNameForGh({ originUrl: (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim() });
+    } catch {
+      expected = undefined;
+    }
+  }
+  if (!urlRepo || !expected || urlRepo === expected.ownerRepo) return true;
+  // Asked on the repository's own host (GitHub Enterprise too), and cached per host-qualified name.
+  const canonical = await canonicalRepoName(repoDir, expected.ghName);
+  return canonical !== undefined && urlRepo === canonical;
+}
+
+/**
+ * Whether a PR's head is this repository's own branch. With a target repo (a
+ * PR from this fork into upstream) the head owner must be origin's owner.
+ * Without one, a PR from the repository itself always counts, whatever its
+ * owner is called (origin's URL may still carry the name from before a rename
+ * or transfer); a PR that GitHub marks as coming from another repository is
+ * left out when its head owner differs from origin's or is unknown (a deleted fork).
+ */
+function prHeadIsOwnBranch(
+  candidate: { headRepositoryOwner?: { login?: string } | null; isCrossRepository?: boolean },
+  originOwner: string | undefined,
+  targetRepo: string | undefined,
+): boolean {
+  const headOwner = candidate.headRepositoryOwner?.login?.toLowerCase();
+  if (targetRepo) return !originOwner || headOwner === originOwner;
+  return !(candidate.isCrossRepository === true && (!headOwner || (originOwner !== undefined && headOwner !== originOwner)));
+}
+
+async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo: string | undefined, base: string): Promise<PRResult | undefined> {
+  // The PR that "already exists" is the one into the base this PR was created for.
+  const existingPr = await syncWorktreePR(repoDir, branch, targetRepo, base);
+  // The lookup only prefers that base: a PR into another base is not the one
+  // gh refused to duplicate, so it is neither reused nor reported.
+  if (existingPr.exists && existingPr.baseRefName !== undefined && existingPr.baseRefName !== base) return undefined;
   if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
     return {
       success: true,
@@ -169,7 +293,7 @@ export async function createPR(
   } catch (err) {
     const reason = ghFailureReason(err);
     if (isExistingPullRequestError(reason)) {
-      return (await recoverExistingPullRequest(repoDir, branch, targetRepo)) ?? { success: false, error: reason };
+      return (await recoverExistingPullRequest(repoDir, branch, targetRepo, base)) ?? { success: false, error: reason };
     }
     // Recovery: if we requested draft and gh reports that drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
@@ -192,7 +316,7 @@ export async function createPR(
       } catch (retryErr) {
         const retryReason = ghFailureReason(retryErr);
         if (isExistingPullRequestError(retryReason)) {
-          return (await recoverExistingPullRequest(repoDir, branch, targetRepo))
+          return (await recoverExistingPullRequest(repoDir, branch, targetRepo, base))
             ?? { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
         }
         return { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
@@ -202,7 +326,20 @@ export async function createPR(
   }
 }
 
-export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): Promise<PRStatus> {
+/**
+ * The PR of a branch. `baseBranch` (the session's recorded base branch, or the
+ * base an `agent_pr` call names) makes a PR into that base win over a PR from
+ * the same branch into another base. A session's recorded PR is looked up by
+ * its URL (`syncWorktreePRByUrl`) before this is used.
+ */
+export async function syncWorktreePR(
+  repoDir: string,
+  branchName: string,
+  targetRepo?: string,
+  baseBranch?: string,
+  /** `preferOpen`: an open PR comes before any other, whatever its base (the PR a push would update). */
+  options: { preferOpen?: boolean } = {},
+): Promise<PRStatus> {
   await assertBranchName(branchName);
   // Without a GitHub remote gh can serve (and no explicit target repo) there is no PR to find.
   if (!targetRepo && !(await hasGitHubRemote(repoDir))) {
@@ -213,7 +350,7 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
   }
 
   try {
-    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName"];
+    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName,isCrossRepository"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -232,12 +369,20 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
       headRepositoryOwner?: { login?: string };
       headRefName?: string;
       baseRefName?: string;
+      isCrossRepository?: boolean;
     }>;
-    const expectedOwner = targetRepo ? (await inferOriginOwner(repoDir))?.toLowerCase() : undefined;
-    const pr = prs.find((candidate) => (
-      candidate.headRefName === branchName
-      && (!expectedOwner || candidate.headRepositoryOwner?.login?.toLowerCase() === expectedOwner)
-    ));
+    // Only a PR whose head is this repository's branch counts: `--head <branch>`
+    // also lists PRs from other owners' forks that use the same branch name.
+    const originOwner = (await inferOriginOwner(repoDir))?.toLowerCase();
+    const headOwnerMatches = (candidate: (typeof prs)[number]): boolean => prHeadIsOwnBranch(candidate, originOwner, targetRepo);
+    // Which PR, not whatever order gh lists them in: one into the session's
+    // base branch before one into another base; then an open one; then the
+    // newest (a newer closed PR on a reused branch counts, not an older merged
+    // one). With `preferOpen` an open PR comes first, whatever its base.
+    const baseRank = (candidate: (typeof prs)[number]): number => (baseBranch && candidate.baseRefName !== baseBranch ? 1 : 0);
+    const openRank = (candidate: (typeof prs)[number]): number => (normalizePrState(candidate.state) === "open" ? 0 : 1);
+    const own = prs.filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate));
+    const pr = [...own].sort((a, b) => (options.preferOpen ? openRank(a) - openRank(b) : 0) || baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
     if (!pr) {
       return { exists: false, state: "none" };
     }
@@ -246,6 +391,7 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     const status: PRStatus = {
       exists: true,
       state,
+      anyOpen: own.some((candidate) => openRank(candidate) === 0),
       url: pr.url,
       number: pr.number,
       title: pr.title,
@@ -258,8 +404,9 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     }
     return status;
   } catch (err) {
-    log.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
-    return { exists: false, state: "none" };
+    const reason = err instanceof Error ? err.message : String(err);
+    log.warn(`[worktree] Failed to sync PR status for ${branchName}: ${reason}`);
+    return { exists: false, state: "none", lookupFailed: reason.split("\n")[0]!.slice(0, 200) };
   }
 }
 
@@ -269,7 +416,7 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
   }
 
   try {
-    const ghArgs = ["pr", "view", prUrl, "--json", "url,number,title,state,headRefName,baseRefName"];
+    const ghArgs = ["pr", "view", prUrl, "--json", "url,number,title,state,headRefName,baseRefName,headRepositoryOwner,isCrossRepository"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -281,6 +428,8 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
       state: string;
       headRefName?: string;
       baseRefName?: string;
+      headRepositoryOwner?: { login?: string } | null;
+      isCrossRepository?: boolean;
     };
     const status: PRStatus = {
       exists: true,
@@ -288,6 +437,10 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
       url: pr.url,
       number: pr.number,
       title: pr.title,
+      // A recorded URL can name any PR: say whether it is a PR of this
+      // repository (or of the target repo) whose head is this repository's branch.
+      ownHead: prHeadIsOwnBranch(pr, (await inferOriginOwner(repoDir))?.toLowerCase(), targetRepo)
+        && await prUrlIsInExpectedRepo(repoDir, pr.url, targetRepo),
     };
     if (pr.headRefName !== undefined) {
       status.headRefName = pr.headRefName;

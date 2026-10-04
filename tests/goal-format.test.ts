@@ -46,6 +46,38 @@ describe("goal-format", () => {
     assert.match(text, /running tests/);
   });
 
+  it("words status and phase for the user only in the command variant", () => {
+    const task: GoalTaskState = {
+      id: "goal-2",
+      name: "ship",
+      goal: "Ship it.",
+      workdir: "/tmp/project",
+      status: "waiting_for_plan_approval",
+      createdAt: 1,
+      updatedAt: 2,
+      iteration: 0,
+      maxIterations: 4,
+      verifierCommands: [],
+      repeatedFailureCount: 0,
+      loopMode: "verifier",
+    };
+    const runtime = { phase: "awaiting_plan_decision", awaitingInput: false };
+
+    // The agent_goal tool result keeps the raw values.
+    assert.match(formatGoalTask(task, runtime), /^ {2}Status: waiting_for_plan_approval$/m);
+    assert.match(formatGoalTask(task, runtime), /^ {2}Phase: awaiting_plan_decision$/m);
+
+    const forUser = formatGoalTask(task, runtime, undefined, { forUser: true });
+    assert.match(forUser, /^ {2}Status: waiting for plan approval$/m);
+    assert.match(forUser, /^ {2}Phase: waiting for a plan decision$/m);
+    assert.doesNotMatch(forUser, /_/);
+    assert.equal(
+      formatGoalTask(task, runtime, undefined, { forUser: true }).replace("waiting for plan approval", "waiting_for_plan_approval").replace("waiting for a plan decision", "awaiting_plan_decision"),
+      formatGoalTask(task, runtime),
+      "only the two worded fields differ",
+    );
+  });
+
   it("formats concise iteration summaries from prior output and verifier state", () => {
     const ralphSummary = buildGoalIterationSummary({
       completionPromise: "DONE",
