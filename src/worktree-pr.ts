@@ -1,6 +1,6 @@
 import { assertBranchName } from "./worktree-ref-validation";
 import { runGh, runGit, type CommandError } from "./git-exec";
-import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
+import { hasGitHubRemote, isGitHubCLIAvailable, knownGitHubHosts } from "./worktree-repo";
 import { createLogger } from "./logger";
 import { formatCount } from "./format";
 
@@ -123,17 +123,24 @@ export function resetCanonicalRepoNamesForTests(): void {
 /**
  * How a repository is named for gh and for the PR-URL comparison: `ownerRepo`
  * (lower case) is what a PR URL's path is compared with, and `ghName` is the
- * host-qualified name gh takes (`OWNER/REPO` on github.com, `HOST/OWNER/REPO`
- * elsewhere), which is also the cache key.
+ * name gh takes, which is also the cache key: `HOST/OWNER/REPO` only for a
+ * GitHub host gh is configured for other than github.com (GitHub Enterprise),
+ * and plain `OWNER/REPO` otherwise. `ssh.github.com` and SSH config aliases
+ * are not hosts gh knows, so they keep the plain name, as before.
  */
-export function repoNameForGh(source: { targetRepo?: string; originUrl?: string }): { ownerRepo: string; ghName: string } | undefined {
+export function repoNameForGh(
+  source: { targetRepo?: string; originUrl?: string },
+  gitHubHosts: ReadonlySet<string> = knownGitHubHosts(),
+): { ownerRepo: string; ghName: string } | undefined {
+  const qualify = (host: string | undefined, ownerRepo: string): string =>
+    (host && host !== "github.com" && gitHubHosts.has(host) ? `${host}/${ownerRepo}` : ownerRepo);
   const target = source.targetRepo?.trim();
   if (target) {
     const parts = target.split("/").filter(Boolean);
     if (parts.length < 2) return undefined;
     const ownerRepo = parts.slice(-2).join("/").toLowerCase();
     const host = parts.length >= 3 ? parts.slice(0, -2).join("/").toLowerCase() : undefined;
-    return { ownerRepo, ghName: host && host !== "github.com" ? `${host}/${ownerRepo}` : ownerRepo };
+    return { ownerRepo, ghName: qualify(host, ownerRepo) };
   }
   const origin = source.originUrl?.trim();
   if (!origin) return undefined;
@@ -142,7 +149,7 @@ export function repoNameForGh(source: { targetRepo?: string; originUrl?: string 
   if (!match) return undefined;
   const host = match[1]!.toLowerCase();
   const ownerRepo = match[2]!.toLowerCase();
-  return { ownerRepo, ghName: host === "github.com" ? ownerRepo : `${host}/${ownerRepo}` };
+  return { ownerRepo, ghName: qualify(host, ownerRepo) };
 }
 
 function canonicalRepoName(repoDir: string, expected: string): Promise<string | undefined> {

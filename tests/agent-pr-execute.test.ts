@@ -918,6 +918,16 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       const oldRow = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
       assert.doesNotMatch(oldRow.content.map((entry) => entry.text).join("\n"), /PR base:/);
       f.sm.updatePersistedSession(SESSION_ID, { worktreePrBaseBranch: "release" });
+      // The recorded URL is not this branch's PR: the PR shown is the one found by
+      // branch, and the recorded PR's base is not printed under it.
+      const ownPrUrl = f.persisted()!.worktreePrUrl!;
+      const other = f.gh.seedPr({ headRefName: "another-branch", state: "OPEN", baseRefName: "hotfix" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: other.url, worktreePrBaseBranch: "hotfix" });
+      const foundByBranch = (await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> })
+        .content.map((entry) => entry.text).join("\n");
+      assert.ok(foundByBranch.includes(ownPrUrl), foundByBranch);
+      assert.doesNotMatch(foundByBranch, /PR base:/);
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: ownPrUrl, worktreePrBaseBranch: "release" });
 
       // A bare merge goes to the landing base, as the 🔀 prompt would say.
       const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
@@ -1021,15 +1031,71 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.deepEqual(repoNameForGh({ originUrl: "https://github.com/acme/widget" }), { ownerRepo: "acme/widget", ghName: "acme/widget" });
     assert.deepEqual(repoNameForGh({ targetRepo: "upstream-org/widget" }), { ownerRepo: "upstream-org/widget", ghName: "upstream-org/widget" });
     assert.deepEqual(repoNameForGh({ targetRepo: "github.com/upstream-org/widget" }), { ownerRepo: "upstream-org/widget", ghName: "upstream-org/widget" });
-    // GitHub Enterprise: the host stays in what gh is asked and in the cache key.
-    assert.deepEqual(repoNameForGh({ originUrl: "git@github.acme.internal:team/repo.git" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
-    assert.deepEqual(repoNameForGh({ originUrl: "https://token@GHE.acme.internal/team/repo.git" }), { ownerRepo: "team/repo", ghName: "ghe.acme.internal/team/repo" });
-    assert.deepEqual(repoNameForGh({ originUrl: "ssh://git@github.acme.internal:22/team/repo.git" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
-    assert.deepEqual(repoNameForGh({ targetRepo: "github.acme.internal/team/repo" }), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    // GitHub Enterprise (a host gh is configured for): the host stays in what gh is asked and in the cache key.
+    const hosts = new Set(["github.com", "github.acme.internal", "ghe.acme.internal"]);
+    assert.deepEqual(repoNameForGh({ originUrl: "git@github.acme.internal:team/repo.git" }, hosts), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ originUrl: "https://token@GHE.acme.internal/team/repo.git" }, hosts), { ownerRepo: "team/repo", ghName: "ghe.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ originUrl: "ssh://git@github.acme.internal:22/team/repo.git" }, hosts), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    assert.deepEqual(repoNameForGh({ targetRepo: "github.acme.internal/team/repo" }, hosts), { ownerRepo: "team/repo", ghName: "github.acme.internal/team/repo" });
+    // Hosts gh does not know keep the plain name, as before: github.com over SSH port 443, SSH config aliases.
+    assert.deepEqual(repoNameForGh({ originUrl: "ssh://git@ssh.github.com:443/acme/widget.git" }, hosts), { ownerRepo: "acme/widget", ghName: "acme/widget" });
+    assert.deepEqual(repoNameForGh({ originUrl: "git@github-work:acme/widget.git" }, hosts), { ownerRepo: "acme/widget", ghName: "acme/widget" });
+    assert.deepEqual(repoNameForGh({ originUrl: "git@github.acme.internal:team/repo.git" }, new Set(["github.com"])), { ownerRepo: "team/repo", ghName: "team/repo" });
+    assert.deepEqual(repoNameForGh({ targetRepo: "some-alias/team/repo" }, hosts), { ownerRepo: "team/repo", ghName: "team/repo" });
     // A target repo wins over origin; nothing usable gives nothing.
     assert.deepEqual(repoNameForGh({ targetRepo: "a/b", originUrl: "git@github.com:c/d.git" }), { ownerRepo: "a/b", ghName: "a/b" });
     assert.equal(repoNameForGh({}), undefined);
     assert.equal(repoNameForGh({ targetRepo: "just-a-name" }), undefined);
+  });
+
+  for (const variant of ["asked", "not asked"] as const) {
+    it(`checks hook changes against the base of a PR found by branch: the user is ${variant}`, async () => {
+      // The session did not record a PR; one was opened by hand from its branch.
+      // "asked": the landing base already has the hook file, the PR's base does not.
+      // "not asked": the opposite.
+      const f = await setup({ persisted: { worktreeBaseBranch: variant === "asked" ? "with-hook" : "main" } });
+      mkdirSync(join(f.worktreePath, ".openclaw"));
+      f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+      git(f.gh.repoDir, "branch", "with-hook", f.branch);
+      git(f.gh.repoDir, "branch", "release", "main");
+      f.commit("more.txt", "more\n", "feat: more");
+      f.gh.seedPr({ headRefName: f.branch, state: "OPEN", baseRefName: variant === "asked" ? "release" : "with-hook" });
+      let escalated = false;
+      f.sm.requestWorktreeDecisionFromUser = async () => { escalated = true; return "Decision queued"; };
+      try {
+        const result = await f.run();
+        if (variant === "asked") {
+          assert.equal(escalated, true, "the update would add a hook file to the PR's base");
+          assert.equal(result.meta.success, false);
+          assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
+        } else {
+          assert.equal(escalated, false);
+          assert.equal(result.meta.success, true, textOf(result));
+          assert.equal(f.outcomes.at(-1)?.detailLines?.[0], `Updated PR for branch ${f.branch} into with-hook.`);
+        }
+      } finally {
+        git(f.gh.repoDir, "branch", "-D", "with-hook");
+        git(f.gh.repoDir, "branch", "-D", "release");
+      }
+    });
+  }
+
+  it("settles a recorded PR that was merged into another base without a hook-change prompt", async () => {
+    const f = await setup({ persisted: { worktreeBaseBranch: "main" } });
+    mkdirSync(join(f.worktreePath, ".openclaw"));
+    f.commit(".openclaw/worktree-setup.sh", "#!/bin/sh\ntrue\n", "add setup hook");
+    const merged = f.gh.seedPr({ headRefName: f.branch, state: "MERGED", baseRefName: "release" });
+    f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: merged.url, worktreePrNumber: merged.number });
+    let escalated = false;
+    f.sm.requestWorktreeDecisionFromUser = async () => { escalated = true; return "Decision queued"; };
+
+    const result = await f.run();
+
+    assert.equal(escalated, false, "nothing is pushed for a merged PR: no hook decision");
+    assert.equal(result.meta.state, "merged");
+    assert.match(textOf(result), new RegExp(`PR was already merged: ${merged.url}`));
+    assert.equal(f.gh.remoteHead(f.branch), "");
+    assert.equal(f.persisted()?.worktreePrBaseBranch, "release");
   });
 
   it("checks hook changes against the recorded PR's own base, whatever the lifecycle state is", async () => {

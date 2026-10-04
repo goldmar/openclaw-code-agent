@@ -556,25 +556,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           meta: { success: false, state: "error" },
         } satisfies AgentPrExecuteResult;
       }
-      // Hook and worktree-setup changes need the user. When the session's
-      // recorded PR is the target (open, whatever the lifecycle says), the
-      // changes that matter are those against that PR's own base; nothing has
-      // been pushed or changed yet at this point.
-      const hookRefusal = await refuseHookChangesWithoutUser({
-        sessionManager: sm,
-        toolCallId: _id,
-        sessionRef: decisionRef,
-        decisionRef: () => worktreeDecisionRef(sm, target),
-        repoDir: originalWorkdir,
-        branchName,
-        baseBranch: explicitTargetPrStatus?.exists && explicitTargetPrStatus.state === "open"
-          ? existingPrBase(explicitTargetPrStatus)
-          : baseBranch,
-        action: "pr",
-      });
-      if (hookRefusal) {
-        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
       const forceNewIgnoresClosedTargetPr = shouldIgnoreClosedTargetPrForForceNew(params.force_new, explicitTargetPrStatus);
       const effectiveTargetPrUrl = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrUrl;
       const discoveredTargetPrStatus = !explicitTargetPrUrl && !params.force_new
@@ -590,6 +571,37 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         ? undefined
         : (explicitTargetPrStatus ?? discoveredTargetPrStatus);
       const resolvedTargetPrUrl = effectiveTargetPrUrl ?? discoveredTargetPrStatus?.url;
+      // The PR this call acts on, known before anything is changed: the
+      // recorded or discovered one, else the branch's own PR.
+      const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
+        effectiveTargetPrStatus?.exists
+          ? effectiveTargetPrStatus
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
+        explicitTargetPrStatus,
+        { forceNewIgnoresClosedTargetPr },
+      );
+      // Hook and worktree-setup changes need the user. The changes that matter
+      // are those against the base the push will be reviewed against: the
+      // existing open PR's own base, else the base a new PR goes into. A PR
+      // that is already merged is only settled (nothing is pushed), and a
+      // force_new that will be refused changes nothing: no check for those.
+      const settlesWithoutPush = existingPrBeforePush.exists
+        && (existingPrBeforePush.state === "merged" || (params.force_new === true && existingPrBeforePush.state === "open"));
+      const hookRefusal = settlesWithoutPush ? undefined : await refuseHookChangesWithoutUser({
+        sessionManager: sm,
+        toolCallId: _id,
+        sessionRef: decisionRef,
+        decisionRef: () => worktreeDecisionRef(sm, target),
+        repoDir: originalWorkdir,
+        branchName,
+        baseBranch: existingPrBeforePush.exists && existingPrBeforePush.state === "open"
+          ? existingPrBase(existingPrBeforePush)
+          : baseBranch,
+        action: "pr",
+      });
+      if (hookRefusal) {
+        return { ...(typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal), meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
       let targetBranchAlreadyRepresented = false;
       if (effectiveTargetPrStatus?.exists && effectiveTargetPrStatus.state === "open") {
         const sourceBranch = await resolveExistingTargetPrUpdateSourceBranch({
@@ -612,13 +624,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
       }
       const repoPolicy = await sm.resolveRepoPolicy(originalWorkdir);
-      const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
-        effectiveTargetPrStatus?.exists
-          ? effectiveTargetPrStatus
-          : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch),
-        explicitTargetPrStatus,
-        { forceNewIgnoresClosedTargetPr },
-      );
       const updatingExistingOpenPr = existingPrBeforePush.exists && existingPrBeforePush.state === "open";
       if (repoPolicy?.policy === "never-pr" && !updatingExistingOpenPr) {
         return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
