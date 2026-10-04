@@ -24,6 +24,8 @@ export interface PRStatus {
   baseRefName?: string;
   /** False when the PR's head is known not to be this repository's branch (another owner's or a deleted fork). */
   ownHead?: boolean;
+  /** Branch lookup only: whether any PR of this repository's branch is open, into whatever base. */
+  anyOpen?: boolean;
 }
 
 function normalizePrState(state: string): PRStatus["state"] {
@@ -102,9 +104,22 @@ function isExistingPullRequestError(message: string): boolean {
     || /a pull request for branch .+ into branch .+ already exists/i.test(message);
 }
 
+/** Canonical `owner/repo` per checkout and target repo, as GitHub names it now. */
+const canonicalRepoNames = new Map<string, string>();
+
+/** Test hook: forget the cached canonical repository names. */
+export function resetCanonicalRepoNamesForTests(): void {
+  canonicalRepoNames.clear();
+}
+
 /**
- * Whether a PR URL names a PR of the repository PRs of this checkout go to: the
- * target repo, else origin's repository. An unknown side counts as a match.
+ * Whether a PR URL names a PR of the repository that PRs of this checkout go
+ * to: the target repo, else origin's repository. gh answers with the PR's
+ * canonical URL, while origin's URL (or a configured target repo) may still
+ * carry the owner or name from before a rename or transfer. So when the names
+ * differ, the repository's identity decides: gh is asked once per checkout for
+ * the canonical name. An unknown side counts as a match; when gh cannot say,
+ * differing names are a mismatch.
  */
 async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo: string | undefined): Promise<boolean> {
   const urlRepo = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\//i.exec(prUrl)?.[1]?.toLowerCase();
@@ -117,7 +132,19 @@ async function prUrlIsInExpectedRepo(repoDir: string, prUrl: string, targetRepo:
       expected = undefined;
     }
   }
-  return !urlRepo || !expected || urlRepo === expected;
+  if (!urlRepo || !expected || urlRepo === expected) return true;
+  const cacheKey = `${repoDir}\0${targetRepo ?? ""}`;
+  let canonical = canonicalRepoNames.get(cacheKey);
+  if (!canonical) {
+    try {
+      const out = await runGh(["repo", "view", ...(targetRepo ? [targetRepo] : []), "--json", "nameWithOwner"], { cwd: repoDir, timeout: 10_000 });
+      canonical = (JSON.parse(out.trim()) as { nameWithOwner?: string }).nameWithOwner?.toLowerCase();
+      if (canonical) canonicalRepoNames.set(cacheKey, canonical);
+    } catch {
+      canonical = undefined;
+    }
+  }
+  return canonical !== undefined && urlRepo === canonical;
 }
 
 /**
@@ -298,9 +325,8 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     // newest (a newer closed PR on a reused branch counts, not an older merged one).
     const baseRank = (candidate: (typeof prs)[number]): number => (baseBranch && candidate.baseRefName !== baseBranch ? 1 : 0);
     const openRank = (candidate: (typeof prs)[number]): number => (normalizePrState(candidate.state) === "open" ? 0 : 1);
-    const pr = prs
-      .filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate))
-      .sort((a, b) => baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
+    const own = prs.filter((candidate) => candidate.headRefName === branchName && headOwnerMatches(candidate));
+    const pr = [...own].sort((a, b) => baseRank(a) - baseRank(b) || openRank(a) - openRank(b) || b.number - a.number)[0];
     if (!pr) {
       return { exists: false, state: "none" };
     }
@@ -309,6 +335,7 @@ export async function syncWorktreePR(repoDir: string, branchName: string, target
     const status: PRStatus = {
       exists: true,
       state,
+      anyOpen: own.some((candidate) => openRank(candidate) === 0),
       url: pr.url,
       number: pr.number,
       title: pr.title,

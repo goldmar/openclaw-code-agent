@@ -480,6 +480,8 @@ describe("syncWorktreePR", () => {
       assert.deepEqual(result, {
         exists: true,
         state: "open",
+        // Whether any PR of the branch is open (here: this one).
+        anyOpen: true,
         url: "https://github.com/openai/codex/pull/12",
         number: 12,
         title: "Fix PR lookup",

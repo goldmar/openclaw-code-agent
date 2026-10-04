@@ -14,6 +14,8 @@ import { assertTestSafeStatePath } from "./test-state-guard";
 
 const log = createLogger("session-maintenance-service");
 
+type PrLookups = NonNullable<NonNullable<Parameters<typeof resolveWorktreeLifecycle>[1]>["prLookups"]>;
+
 const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
 const SESSION_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
@@ -60,8 +62,10 @@ export class SessionMaintenanceService {
   bootstrapMaintenanceSchedules(): void {
     const now = Date.now();
     this.runSessionOutputCleanup(now);
+    // One pass: sessions that share a repository and branch share one PR lookup.
+    const prLookups: PrLookups = new Map();
     for (const session of this.deps.store.listPersistedSessions()) {
-      this.syncPersistedSessionMaintenance(session);
+      this.syncPersistedSessionMaintenance(session, prLookups);
     }
     this.syncActionTokenExpiryDeadline();
     this.deps.store.cleanupOrphanOutputFiles();
@@ -103,11 +107,11 @@ export class SessionMaintenanceService {
    * them needs git evidence, so the work runs asynchronously; only the most
    * recent request for a ref applies its schedule.
    */
-  syncPersistedSessionMaintenance(session: PersistedSessionInfo): void {
+  syncPersistedSessionMaintenance(session: PersistedSessionInfo, prLookups?: PrLookups): void {
     const ref = this.persistedMaintenanceRef(session);
     if (!ref) return;
     const generation = this.nextPersistedSyncGeneration(ref);
-    this.track(this.syncPersistedSessionMaintenanceNow(session, ref, generation), `maintenance sync for ${ref}`);
+    this.track(this.syncPersistedSessionMaintenanceNow(session, ref, generation, prLookups), `maintenance sync for ${ref}`);
   }
 
   /** Resolve once every maintenance sync and scheduled callback started so far has settled. */
@@ -135,7 +139,7 @@ export class SessionMaintenanceService {
     this.pendingWork.add(pending);
   }
 
-  private async syncPersistedSessionMaintenanceNow(session: PersistedSessionInfo, ref: string, generation: number): Promise<void> {
+  private async syncPersistedSessionMaintenanceNow(session: PersistedSessionInfo, ref: string, generation: number, prLookups?: PrLookups): Promise<void> {
     const nextReminderAt = await this.deps.reminders.getNextReminderAt(session);
     if (!this.isCurrentPersistedSync(ref, generation)) return;
     this.cancel(this.persistedMaintenanceKey(ref, "worktree-reminder"));
@@ -149,6 +153,7 @@ export class SessionMaintenanceService {
     const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
+      prLookups,
     });
     if (!this.isCurrentPersistedSync(ref, generation)) return;
     this.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));

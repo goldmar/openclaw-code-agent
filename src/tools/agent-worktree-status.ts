@@ -8,6 +8,7 @@ import {
   matchesWorktreeToolRef,
   resolveWorktreeToolLifecycle,
 } from "./worktree-tool-context";
+import { resolveLandingBaseBranch } from "../worktree";
 
 interface AgentWorktreeStatusParams {
   session?: string;
@@ -66,7 +67,7 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
           : (resolved.preserve ? "preserve" : "blocked");
 
         lines.push(`Session: ${target.name} [${target.id}]`);
-        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${resolved.lifecycle.baseBranch ?? persisted?.worktreeBaseBranch ?? "main"}`));
+        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${await resolveLandingBaseBranch(persisted ?? { worktreeLifecycle: resolved.lifecycle }, target.workdir).catch(() => "(unknown)")}`));
         lines.push(statusField("Repo", target.workdir));
         lines.push(statusField("Lifecycle", formatWorktreeLifecycleState(resolved.lifecycle.state)));
         if (resolved.derivedState !== resolved.lifecycle.state) {

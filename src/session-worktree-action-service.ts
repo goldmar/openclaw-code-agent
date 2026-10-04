@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
-import { detectDefaultBranch, getCommitsAheadCount, getDiffSummary } from "./worktree";
+import { getCommitsAheadCount, getDiffSummary, resolveLandingBaseBranch } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { RepoIntegrationPolicy } from "./types";
@@ -140,7 +140,7 @@ export class SessionWorktreeActionService {
       };
     }
 
-    const baseBranch = session.worktreeBaseBranch ?? await detectDefaultBranch(repoDir);
+    const baseBranch = await resolveLandingBaseBranch(session, repoDir);
     const completionState = await this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
     if (completionState === "no-change") {

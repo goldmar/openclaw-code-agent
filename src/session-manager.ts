@@ -70,7 +70,7 @@ import {
   isCurrentPendingPlanDecision as isCurrentPendingPlanDecisionState,
 } from "./session-plan-approval-delivery";
 import {
-  detectDefaultBranch,
+  resolveLandingBaseBranch,
   getDiffSummary,
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
@@ -1724,9 +1724,7 @@ export class SessionManager {
     if (!branchName) return `Error: Session "${ref}" has no managed worktree branch.`;
     if (!repoDir) return `Error: Session "${ref}" has no resolvable repository root for worktree ${worktreePath}.`;
 
-    const baseBranch = activeSession?.worktreeBaseBranch
-      ?? persistedSession?.worktreeBaseBranch
-      ?? await detectDefaultBranch(repoDir);
+    const baseBranch = await resolveLandingBaseBranch(persistedSession ?? activeSession, repoDir);
     const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;

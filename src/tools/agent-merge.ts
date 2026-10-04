@@ -8,7 +8,7 @@ import {
   mergeBranch,
   pushBranch,
   deleteBranch,
-  detectDefaultBranch,
+  resolveLandingBaseBranch,
   removeWorktree,
   pruneWorktrees,
   getDiffSummary,
@@ -133,7 +133,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
     description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID" }),
-      base_branch: Type.Optional(Type.String({ description: "Default: the repository's detected default branch" })),
+      base_branch: Type.Optional(Type.String({ description: "Default: the base of the session's existing PR or merge, else its recorded base (worktree_base_branch at launch), else the repository's detected default branch" })),
       strategy: Type.Optional(
         Type.StringEnum(["merge", "squash"], {
           description: "merge (default): rebase onto base, then fast-forward. squash: one commit.",
@@ -187,13 +187,12 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
-      // The same base as `agent_pr` and the automatic merge: the base this call
-      // names, else the base the session's worktree was created from, else
-      // the detected default branch.
-      const resolvedBaseBranch = params.base_branch
-        ?? persistedSession?.worktreeBaseBranch
-        ?? targetSession?.worktreeBaseBranch
-        ?? await detectDefaultBranch(effectiveWorkdir);
+      // The session's landing base, as `agent_pr`, the decision prompt, the
+      // automatic merge and the status tool compute it: the base this call
+      // names, else the base an existing PR or merge fixed, else the base
+      // recorded at launch (the merge target, not where the worktree was
+      // created from), else the detected default branch.
+      const resolvedBaseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, effectiveWorkdir, params.base_branch);
       const baseBranch = resolvedBaseBranch;
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false

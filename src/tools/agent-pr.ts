@@ -6,7 +6,7 @@ import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, resolveLandingBaseBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
@@ -422,7 +422,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       title: Type.Optional(Type.String({ description: "Default: generated" })),
       body: Type.Optional(Type.String({ description: "Default: generated. On an open PR, replaces the body." })),
       update_metadata: Type.Optional(Type.Boolean({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
-      base_branch: Type.Optional(Type.String({ description: "Default: detected" })),
+      base_branch: Type.Optional(Type.String({ description: "Base for a new PR. Default: the base of the session's existing PR or merge, else its recorded base (worktree_base_branch at launch), else the detected default branch. An existing PR keeps its own base" })),
       force_new: Type.Optional(Type.Boolean({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
       target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
@@ -486,13 +486,15 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         log.info(`[agent_pr] Worktree directory ${worktreePath} no longer exists; proceeding with branch "${branchName}" via originalWorkdir (${originalWorkdir})`);
       }
 
-      // One base for the whole call (lookup, creation, recovery, diff counts,
-      // detail lines, hook check): the base this call names, else the base the
-      // session's worktree was created from, else the detected default branch.
-      const baseBranch = params.base_branch
-        ?? persistedSession?.worktreeBaseBranch
-        ?? targetSession?.worktreeBaseBranch
-        ?? await detectDefaultBranch(originalWorkdir);
+      // Where a NEW PR goes and which of the branch's PRs a lookup prefers: the
+      // session's landing base (the base this call names, else the base an
+      // existing PR or merge fixed, else the base recorded at launch, which is
+      // the target and not where the worktree was created from, else the
+      // detected default branch). An existing PR keeps its own base for
+      // everything said or counted about it: see `existingPrBase`.
+      const baseBranch = await resolveLandingBaseBranch(persistedSession ?? targetSession, originalWorkdir, params.base_branch);
+      /** The base of the PR that is being updated or settled; never retargeted by this call. */
+      const existingPrBase = (status: PRStatus): string => status.baseRefName ?? baseBranch;
       const decisionRef = worktreeDecisionRef(sm, target);
       if (!decisionRef) return { content: [{ type: "text", text: "Error: The selected session changed before PR preparation." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       const hookRefusal = await refuseHookChangesWithoutUser({
@@ -530,17 +532,19 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         prNumber?: number;
         targetRepo?: string;
         disposition?: "pr-opened";
+        /** The PR's own base (an existing PR), else the base the new PR was created into. */
+        prBase?: string;
       }) => {
         const patch = buildPrOpenPatch(
           {
-            worktreeBaseBranch: persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            worktreeBaseBranch: args.prBase ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
             worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
             worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
           },
           {
             prUrl: args.prUrl,
             prNumber: args.prNumber,
-            baseBranch,
+            baseBranch: args.prBase ?? baseBranch,
             targetRepo: args.targetRepo,
             disposition: args.disposition,
           },
@@ -674,8 +678,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
       // PR Lifecycle Handling
       if (prStatus.exists && prStatus.state === "open") {
-        // Case: Open PR exists
-        const diffSummary = await getDiffSummary(originalWorkdir, branchName, baseBranch);
+        // Case: Open PR exists. Its own base is the base for counts, comments,
+        // detail lines and the recorded lifecycle.
+        const openPrBase = existingPrBase(prStatus);
+        const diffSummary = await getDiffSummary(originalWorkdir, branchName, openPrBase);
         const metadataRefresh = await refreshOpenPrMetadata({
           repoDir: originalWorkdir,
           prStatus,
@@ -717,7 +723,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           // record it as open so state, buttons and the owed `✅` agree.
           const commentFailedLine = commented ? "" : "\n⚠️ The PR comment could not be added.";
           const resolvesDeferredCompletion = owedCompletionCycle(sm, target.generation) !== undefined;
-          persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
+          persistPrOpen({ prBase: openPrBase, prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
           const updateOutcomeLine = formatWorktreeOutcomeLine({
             kind: "pr-updated",
             sessionCompleted: isTerminalCompletion() || resolvesDeferredCompletion,
@@ -744,7 +750,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               detailLines: buildPrOutcomeDetailLines({
                 action: "updated",
                 branchName,
-                baseBranch,
+                baseBranch: openPrBase,
                 prUrl: prStatus.url,
                 prNumber: prStatus.number,
                 targetRepo,
@@ -772,7 +778,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         } else {
           // No new commits
           const owedCycle = owedCompletionCycle(sm, target.generation);
-          persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
+          persistPrOpen({ prBase: openPrBase, prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
           const upToDateLine = settledPrLine("PR is up to date", prStatus.url!, owedCycle);
           const metadataRefreshLine = formatMetadataRefreshLine(metadataRefresh);
           return {
@@ -790,7 +796,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         // Case: PR was merged
         const mergedPatch: Partial<PersistedSessionInfo> = {
           ...buildMergedPatch({
-            worktreeBaseBranch: persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            // The base the PR was merged into is the base the session landed on.
+            worktreeBaseBranch: prStatus.baseRefName ?? persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
             worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
             worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
           }, {

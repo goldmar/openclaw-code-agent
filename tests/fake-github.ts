@@ -59,6 +59,8 @@ export type FakeGhFailures = {
 export type FakeGhState = {
   /** Default `owner/repo` for PRs created without `--repo`. */
   repo: string;
+  /** What `gh repo view` reports as the repository's current `owner/repo` (after a rename); default: unchanged. */
+  canonicalRepo?: string;
   nextNumber: number;
   prs: FakePullRequest[];
   comments: Array<{ number: number; body: string; repo: string }>;
@@ -104,6 +106,13 @@ const findPr = (ref) => {
   return state.prs.find((pr) => pr.url === ref || (String(pr.number) === String(ref) && pr.repo === repo));
 };
 const [group, command, target] = args;
+if (group === "repo" && command === "view") {
+  // The repository's current name: differs from the remote's after a rename or transfer.
+  const named = target && !target.startsWith("--") ? target : state.repo;
+  save();
+  process.stdout.write(JSON.stringify({ nameWithOwner: state.canonicalRepo || named }) + "\n");
+  process.exit(0);
+}
 if (group !== "pr") fail("fake gh: unsupported command " + args.join(" "), 2);
 
 if (command === "list") {
