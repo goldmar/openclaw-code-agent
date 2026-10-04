@@ -509,7 +509,7 @@ describe("bounded representative host receipts", () => {
       const goal = await controller.launchTask({ name: fixture.name, goal: fixture.intent.goal, workdir: directory, verifierCommands: [{ label: "check", command: "true" }],
         loopMode: "verifier", permissionMode: "bypassPermissions", route: { provider: "webchat", target: "owned-parent" } });
       assert.equal(goal.sessionId, live.id); assert.equal(goal.sessionName, live.name); assert.notEqual(live.name, fixture.name);
-      const row = store.getPersistedSession(live.id)!; assert.equal(Object.hasOwn(row, "goalTaskId"), false);
+      const row = store.getPersistedSession(live.id)!; assert.equal(row.goalTaskId, goal.id);
       const listing = getSessionsListingText({ list: () => [live], listPersistedSessions: () => store.listPersistedSessions() } as unknown as SessionManager, "running", undefined, { full: true });
       const bound = { ...fixture, goalId: goal.id, nativeSessionId: live.id };
       assert.equal(currentOwner([row], listing, bound, "thread", goal), row);
