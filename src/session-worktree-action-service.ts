@@ -121,8 +121,9 @@ export class SessionWorktreeActionService {
     if (!repoDir) return undefined;
     if (state === "pr_open") {
       // What the last push has: local evidence, nothing is fetched. Unknown
-      // counts as new (fail towards asking).
-      const unpushed = await getUnpushedCommits(repoDir, branchName, session.worktreePushRemote ?? "origin");
+      // counts as new (fail towards asking). The push went to the PR's head
+      // branch, which is another branch for a follow-up session of that PR.
+      const unpushed = await getUnpushedCommits(repoDir, branchName, session.worktreePushRemote ?? "origin", session.worktreePrHeadBranch ?? branchName);
       if (unpushed?.count === 0) return undefined;
       return { state, count: unpushed?.count, sinceRef: unpushed?.remoteRef };
     }

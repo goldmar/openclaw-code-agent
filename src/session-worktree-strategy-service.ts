@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import { describeHookPathChanges, HOOK_CHECK_UNAVAILABLE_WARNING, listHookPathChanges } from "./git-hooks";
 import type { NotificationButton } from "./session-interactions";
-import type { PersistedSessionInfo, SessionStatus } from "./types";
+import type { PersistedSessionInfo, PersistedWorktreeLifecycle, SessionStatus } from "./types";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PRStatus } from "./worktree-pr";
@@ -351,11 +351,31 @@ export class SessionWorktreeStrategyService {
     }
 
     if (action.reopenedFrom === "merged" || action.reopenedFrom === "released") {
-      // New commits after the merge: the branch is open again, so the merge
-      // tools and buttons must not answer "already merged".
+      // New commits after the merge: the branch is open again, so the
+      // strategies, merge tools and buttons must not answer "already merged".
+      // Every "merged" record goes, the lifecycle state included (it alone
+      // makes `isAlreadyMerged` true, and auto-merge would return without
+      // merging the new commits).
+      const reopenedLifecycle: PersistedWorktreeLifecycle = {
+        state: "provisioned",
+        updatedAt: new Date().toISOString(),
+        baseBranch: session.worktreeBaseBranch,
+        targetRepo: session.worktreePrTargetRepo,
+        pushRemote: session.worktreePushRemote,
+        notes: [`reopened_after:${action.reopenedFrom}`],
+      };
+      const clearMergedDisposition = session.worktreeDisposition === "merged";
       session.worktreeMerged = undefined;
       session.worktreeMergedAt = undefined;
-      this.updatePersistedSessionFor(session, { worktreeMerged: undefined, worktreeMergedAt: undefined });
+      session.worktreeLifecycle = reopenedLifecycle;
+      if (clearMergedDisposition) session.worktreeDisposition = undefined;
+      this.updatePersistedSessionFor(session, {
+        worktreeMerged: undefined,
+        worktreeMergedAt: undefined,
+        worktreeState: "provisioned",
+        worktreeLifecycle: reopenedLifecycle,
+        ...(clearMergedDisposition ? { worktreeDisposition: undefined } : {}),
+      });
     }
     const openPrUrl = action.reopenedFrom === "pr_open" ? session.worktreePrUrl : undefined;
 

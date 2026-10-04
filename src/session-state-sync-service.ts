@@ -182,6 +182,7 @@ export class SessionStateSyncService {
     this.assignIfDefined(session, "worktreeBranch", patch.worktreeBranch);
     this.assignIfDefined(session, "worktreePrUrl", patch.worktreePrUrl);
     this.assignIfDefined(session, "worktreePrNumber", patch.worktreePrNumber);
+    this.assignIfDefined(session, "worktreePrHeadBranch", patch.worktreePrHeadBranch);
     this.assignIfDefined(session, "worktreeMerged", patch.worktreeMerged);
     this.assignIfDefined(session, "worktreeMergedAt", patch.worktreeMergedAt);
     this.assignIfDefined(session, "worktreeDisposition", patch.worktreeDisposition);

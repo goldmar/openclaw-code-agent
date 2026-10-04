@@ -6,7 +6,7 @@ import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, resolveLandingBaseBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, resolveLandingBaseBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getCheckoutPathForBranch, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef, getUnpushedCommits } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
@@ -536,7 +536,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           },
         );
         // Every PR resolution consumes the `✅` owed to a deferred completion.
-        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined, worktreePrClosed: undefined, worktreePrBaseBranch: args.prBase ?? baseBranch })) {
+        // `branchName` is the branch that was pushed: the PR's head.
+        if (!patchWorktreeTarget(sm, target, { ...patch, deferredCompletionCycle: undefined, worktreePrClosed: undefined, worktreePrBaseBranch: args.prBase ?? baseBranch, worktreePrHeadBranch: branchName })) {
           throw new Error("PR operation completed, but its selected session state could not be updated. Reconcile before retrying.");
         }
       };
@@ -608,7 +609,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         const adopt = foundByBranch && status.url !== undefined && status.url !== explicitTargetPrUrl && status.headRefName === branchName;
         const patch: Partial<PersistedSessionInfo> = {
           ...(persistedSession?.worktreePrClosed ? { worktreePrClosed: undefined } : {}),
-          ...(adopt ? { worktreePrUrl: status.url, worktreePrNumber: status.number, worktreePrBaseBranch: status.baseRefName } : {}),
+          ...(adopt ? { worktreePrUrl: status.url, worktreePrNumber: status.number, worktreePrBaseBranch: status.baseRefName, worktreePrHeadBranch: status.headRefName } : {}),
         };
         if (Object.keys(patch).length > 0 && !patchWorktreeTarget(sm, target, patch)) {
           log.warn(`[agent_pr] Could not update the PR record of session ${sessionName} after a refused force_new`);
@@ -679,6 +680,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         };
       };
 
+      /** The merged PR that commits made after its merge replace with a new PR. */
+      let supersededMergedPrUrl: string | undefined;
       // ---- 2. Outcomes that push and move nothing return here, before any
       // local branch movement, push or PR change (and so before the hook
       // check, which guards exactly those).
@@ -686,7 +689,21 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         if (params.force_new && (existingPrBeforePush.state === "open" || existingPrBeforePush.state === "merged")) {
           return forceNewRefusal(existingPrBeforePush, targetFoundByBranch);
         }
-        if (existingPrBeforePush.state === "merged") return settleMerged(existingPrBeforePush);
+        if (existingPrBeforePush.state === "merged") {
+          // A merged PR settles the call only while the branch has nothing its
+          // pushed head lacks. Commits made after the merge get a new PR:
+          // settling would leave them unpushed and stamp the branch "merged"
+          // after them. Local evidence (the tracking ref of the PR's head);
+          // unknown settles, as before.
+          const afterMerge = await getUnpushedCommits(
+            originalWorkdir,
+            branchName,
+            "origin",
+            existingPrBeforePush.headRefName ?? branchName,
+          );
+          if (!afterMerge?.count) return settleMerged(existingPrBeforePush);
+          supersededMergedPrUrl = existingPrBeforePush.url;
+        }
         // (With force_new a closed PR is replaced by a new one: that is a push, below.)
         if (existingPrBeforePush.state === "closed" && !params.force_new) return answerClosed(existingPrBeforePush);
       }
@@ -763,7 +780,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Sync PR state from GitHub
-      const afterPush = targetPrUrl
+      const afterPush = targetPrUrl && !supersededMergedPrUrl
         ? await syncWorktreePRByUrl(originalWorkdir, targetPrUrl, targetRepo)
         : await syncWorktreePR(originalWorkdir, branchName, targetRepo, baseBranch, { preferOpen: true });
       if (afterPush.lookupFailed) {
@@ -776,7 +793,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // force_new replaces a PR that was closed without merging, whether the
       // session recorded it or it was found by branch: GitHub accepts a new PR
       // from the same branch.
-      const prStatus: PRStatus = params.force_new && syncedPrStatus.exists && syncedPrStatus.state === "closed"
+      // The same holds for a merged PR that has commits made after its merge.
+      const prStatus: PRStatus = (params.force_new && syncedPrStatus.exists && syncedPrStatus.state === "closed")
+        || (supersededMergedPrUrl !== undefined && syncedPrStatus.exists && syncedPrStatus.state === "merged" && syncedPrStatus.url === supersededMergedPrUrl)
         ? { exists: false, state: "none" }
         : syncedPrStatus;
 

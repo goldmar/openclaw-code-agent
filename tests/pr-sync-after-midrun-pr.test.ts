@@ -7,6 +7,7 @@ import type { Session } from "../src/session";
 import { SessionWorktreeActionService, type PlannedWorktreeAction } from "../src/session-worktree-action-service";
 import { SessionWorktreeController } from "../src/session-worktree-controller";
 import { createWorktree, getBranchName } from "../src/worktree";
+import { buildMergedPatch } from "../src/worktree-session-patches";
 import { createFakeGitHub, git, type FakeGitHub } from "./fake-github";
 import { startFullStack, type FullStack, type SentButton, type SentMessage } from "./fullstack-fixture";
 import { waitUntil } from "./harness-backends";
@@ -155,6 +156,85 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
   });
 });
 
+describe("commits after a merge (fullstack, real git, fake gh)", () => {
+  // Commit times have one-second resolution: the new commit is clearly after the merge.
+  const afterTheMerge = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 2_100));
+
+  it("auto-merge: commits made after the branch was merged are merged at completion, with one ✅", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    await s.sm.setRepoPolicy(github.repoDir, "never-pr");
+    try {
+      const session = await s.launch({ workdir: github.repoDir, worktreeStrategy: "auto-merge", name: "merge-again" });
+      const branch = session.worktreeBranch!;
+      commit(session.worktreePath!, "merge-again-one.txt", "one\n", "add one");
+      // The branch is merged while the session runs, and the worktree is kept.
+      git(github.repoDir, "merge", "-q", "--no-ff", "-m", "merge the first commit", branch);
+      const mergedAt = new Date().toISOString();
+      assert.equal(s.sm.updatePersistedSession(session.id, {
+        ...buildMergedPatch({ worktreeBaseBranch: "main" }, { mergedAt, resolvedAt: mergedAt, updatedAt: mergedAt }),
+        worktreeDisposition: "merged",
+      }), true);
+
+      await afterTheMerge();
+      commit(session.worktreePath!, "merge-again-two.txt", "two\n", "add two");
+      await s.backend.endTurn("Added both files.");
+
+      await s.waitForMessage(/^✅ \[merge-again\] Completed — Merged: /);
+      assert.equal(git(github.repoDir, "show", "main:merge-again-two.txt"), "two", "the commit made after the merge is on main");
+      const persisted = s.sm.getPersistedSession(session.id);
+      assert.equal(persisted?.worktreeLifecycle?.state, "merged");
+      assert.equal(persisted?.worktreeMerged, true);
+      assert.deepEqual(completionLines(s, "merge-again").length, 1, "exactly one completion line for the cycle");
+      assert.equal(about(s, "merge-again").some((message) => message.text.startsWith("🔀")), false);
+    } finally {
+      git(github.repoDir, "reset", "-q", "--hard", "origin/main");
+    }
+  });
+
+  it("auto-pr: commits made after the PR was merged get a new PR, with one ✅", async () => {
+    const s = stack = await startFullStack({ backend: "codex" });
+    await s.sm.setRepoPolicy(github.repoDir, "pr-allowed");
+    const session = await s.launch({ workdir: github.repoDir, worktreeStrategy: "auto-pr", name: "pr-again" });
+    const branch = session.worktreeBranch!;
+    commit(session.worktreePath!, "pr-again-one.txt", "one\n", "add one");
+    await s.runTool("agent_pr", { session: session.id });
+    await s.waitForMessage(/^ℹ️ \[pr-again\] PR opened: /);
+    const first = github.readState().prs.at(-1)!;
+    assert.equal(s.sm.getPersistedSession(session.id)?.worktreePrHeadBranch, branch, "the pushed branch is recorded as the PR's head");
+
+    // The PR is merged on GitHub, and the session learns it while it runs.
+    github.updateState((state) => {
+      state.prs.find((pr) => pr.number === first.number)!.state = "MERGED";
+    });
+    assert.match(await s.runTool("agent_pr", { session: session.id }), /PR was already merged/);
+    assert.equal(s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state, "merged");
+
+    await afterTheMerge();
+    const second = commit(session.worktreePath!, "pr-again-two.txt", "two\n", "add two");
+    await s.backend.endTurn("Added both files.");
+
+    const done = await s.waitForMessage(/^✅ \[pr-again\] Completed — PR opened: /);
+    const latest = github.readState().prs.at(-1)!;
+    assert.notEqual(latest.number, first.number, "a new PR, not the merged one");
+    assert.equal(latest.state, "OPEN");
+    assert.ok(done.text.includes(latest.url), done.text);
+    assert.equal(github.remoteHead(branch), second, "add two was pushed");
+    assert.equal(github.ghCalls("create").length, 2);
+    const persisted = s.sm.getPersistedSession(session.id);
+    assert.equal(persisted?.worktreeLifecycle?.state, "pr_open");
+    assert.equal(persisted?.worktreePrUrl, latest.url);
+    assert.equal(persisted?.worktreeMerged, undefined, "not stamped merged after the new commit");
+    assert.equal(completionLines(s, "pr-again").length, 1, "exactly one completion line for the cycle");
+
+    // Nothing new since: the merged PR settles the call as before.
+    github.updateState((state) => {
+      state.prs.find((pr) => pr.number === latest.number)!.state = "MERGED";
+    });
+    assert.match(await s.runTool("agent_pr", { session: session.id }), /PR was already merged/);
+    assert.equal(github.ghCalls("create").length, 2);
+  });
+});
+
 describe("planner: a resolved worktree with new commits is not resolved", () => {
   let counter = 0;
 
@@ -216,6 +296,25 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
     if (action.kind !== "decision") return;
     assert.equal(action.reopenedFrom, "pr_open");
     assert.equal(action.diffSummary.commits, 1);
+  });
+
+  it("pr_open on another branch's PR: the branch is compared with the PR's head, which is what was pushed", async () => {
+    // A follow-up session of an existing PR: agent_pr pushes the PR's head
+    // branch, never the session's own, which has no tracking ref.
+    const f = await fixture("ask", "pr_open");
+    const head = `${f.branch}-pr-head`;
+    git(github.repoDir, "branch", head, f.branch);
+    git(github.repoDir, "push", "origin", `${head}:${head}`);
+    (f.session as { worktreePrHeadBranch?: string }).worktreePrHeadBranch = head;
+    assert.equal((await f.plan()).kind, "skip", "nothing the PR does not have: no prompt");
+
+    commit(f.worktreePath, "follow-up.txt", "two\n", "add two");
+    const action = await f.plan();
+    assert.equal(action.kind, "decision");
+    if (action.kind !== "decision") return;
+    assert.equal(action.reopenedFrom, "pr_open");
+    assert.equal(action.diffSummary.commits, 1);
+    assert.deepEqual(action.diffSummary.commitMessages.map((entry) => entry.message), ["add two"]);
   });
 
   it("pr_open by strategy: delegate decides, auto-merge becomes the prompt, manual and off only note it, auto-pr is unchanged", async () => {

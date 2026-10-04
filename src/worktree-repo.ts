@@ -267,20 +267,24 @@ export async function getCommitsAheadCount(repoDir: string, branch: string, base
 }
 
 /**
- * Commits on the local branch that its remote-tracking ref does not have: what
- * the last push (and so an open PR) is missing. Local evidence only, nothing is
- * fetched. Undefined when it cannot be told (the branch was never pushed from
- * here, or git fails).
+ * Commits on the local branch that the remote-tracking ref of `pushedBranch`
+ * does not have: what the last push (and so the PR) is missing. `pushedBranch`
+ * is the PR's head branch, which is not the session's branch when the session
+ * follows up on another branch's PR. Local evidence only, nothing is fetched.
+ * Undefined when it cannot be told (that branch was never pushed from here, or
+ * git fails).
  */
 export async function getUnpushedCommits(
   repoDir: string,
   branch: string,
   remote = "origin",
+  pushedBranch = branch,
 ): Promise<{ count: number; remoteRef: string } | undefined> {
   try {
     await assertBranchName(branch);
     await assertBranchName(remote);
-    const remoteRef = `refs/remotes/${remote}/${branch}`;
+    await assertBranchName(pushedBranch);
+    const remoteRef = `refs/remotes/${remote}/${pushedBranch}`;
     const result = await runGit(
       ["-C", repoDir, "rev-list", "--count", `${remoteRef}..${await localBranchRef(branch)}`],
       { timeout: 10_000 },
