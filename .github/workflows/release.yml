@@ -140,9 +140,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # The tag exists before ClawHub records `--source-ref`. It is created only
-  # after an approval of the protected `release` environment, so a rejected
-  # run leaves no tag behind.
+  # The tag exists before ClawHub records `--source-ref`. The manually
+  # dispatched release creates it only after verification succeeds.
   tag:
     name: Create release tag
     needs: verify
