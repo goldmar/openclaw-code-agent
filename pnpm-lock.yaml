@@ -15,7 +15,7 @@ overrides:
   brace-expansion@>=4.0.0 <5.0.7: '>=5.0.7'
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   '@anthropic-ai/sdk@<0.93.0': 0.93.0
-  ip-address@<10.7.2: 10.7.2
+  ip-address@<10.7.3: 10.7.3
   fast-uri@<3.1.8: 3.1.8
   qs@<6.16.0: 6.16.0
   hono@<4.13.11: 4.13.11
@@ -48,8 +48,8 @@ importers:
         specifier: 4.13.11
         version: 4.13.11
       ip-address:
-        specifier: 10.7.2
-        version: 10.7.2
+        specifier: 10.7.3
+        version: 10.7.3
       qs:
         specifier: 6.16.0
         version: 6.16.0
@@ -1392,8 +1392,8 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  ip-address@10.7.2:
-    resolution: {integrity: sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==}
+  ip-address@10.7.3:
+    resolution: {integrity: sha512-A1kdq/tSb5QjvKvAMgIoEvDBIgL7qaqVP/jkvSwYYRZ9iEzvPpopxp2wQfu3SuZRHtpHNxMn8Fs0bS+gf5Xmwg==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -3047,7 +3047,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.7.2
+      ip-address: 10.7.3
     transitivePeerDependencies:
       - supports-color
 
@@ -3277,7 +3277,7 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  ip-address@10.7.2: {}
+  ip-address@10.7.3: {}
 
   ipaddr.js@1.9.1: {}
 
