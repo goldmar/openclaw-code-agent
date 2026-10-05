@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setPluginConfig } from "../src/config";
 import { createCallbackHandler } from "../src/callback-handler";
+import type { SessionStore } from "../src/session-store";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import { BACKEND_NAMES, waitUntil, type BackendName } from "./harness-backends";
 import {
@@ -155,6 +156,12 @@ for (const name of BACKEND_NAMES) {
       await created.backend.endTurn("Wrote draft.txt.");
       const buttons = await decisionButtons("worktree-dirty-uncommitted");
       const commitButton = buttonNamed(buttons, "Commit changes");
+      // The capture-only notification fixture bypasses the real delivery's route binding.
+      // Use its production store operation to represent this button arriving in TEST_ROUTE.
+      const { store } = created.sm as unknown as { store: Pick<SessionStore, "actionTokenStore" | "whenPersisted"> };
+      store.actionTokenStore.bindActionTokensToRoute([commitButton.callbackData], TEST_ROUTE);
+      await store.whenPersisted();
+      assert.deepEqual(created.sm.getActionToken(commitButton.callbackData)?.route, TEST_ROUTE);
       const callbackHandler = createCallbackHandler();
       for (const rejection of ["unauthorized", "wrong-route"] as const) {
         const replies: string[] = [];
