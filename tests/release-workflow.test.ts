@@ -105,7 +105,7 @@ describe("release workflow", () => {
     );
   });
 
-  it("creates the immutable tag only after environment approval and before either registry publish", () => {
+  it("creates the immutable tag after verification and before either registry publish", () => {
     const tag = job("tag");
     assert.match(tag, /needs: verify\n/u);
     assert.match(tag, /environment: release/u);
