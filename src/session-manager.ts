@@ -418,7 +418,7 @@ export class SessionManager {
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       makeDirtyWorktreeButtons: (sessionId) => [[
         manager.makeActionButton(sessionId, "session-resume", "Commit changes", {
-          launchPrompt: "Your worktree has uncommitted changes and no commits. Commit the task's real changes with a clear message, and remove temporary files you created.",
+          launchPrompt: "The user selected Commit changes and explicitly authorized committing this task's existing changes. Commit the task's real changes with a clear message, and remove temporary files you created.",
         }),
         manager.makeActionButton(sessionId, "view-output", "View output"),
         manager.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
