@@ -420,7 +420,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     let lastProgressActivityAt = 0;
     let requestCounter = 0;
     let currentSessionId = options.resumeSessionId ?? "";
-    let currentPermissionMode = options.permissionMode;
+    let currentPermissionMode = options.permissionMode ?? "default";
     let pendingPlan: PendingPlanRequest | undefined;
     let pendingQuestion: PendingQuestionRequest | undefined;
     let closed = false;
@@ -611,7 +611,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       cwd: options.cwd,
       model: options.model,
       ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
-      permissionMode: options.permissionMode as ClaudePermissionMode | undefined,
+      permissionMode: currentPermissionMode as ClaudePermissionMode,
       allowDangerouslySkipPermissions: true,
       planModeInstructions: CLAUDE_PLAN_MODE_INSTRUCTIONS,
       allowedTools: options.allowedTools,
