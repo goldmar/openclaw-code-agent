@@ -133,6 +133,14 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(sdkOptions?.model, "opus");
   });
 
+  it("keeps an omitted permission mode explicit instead of inheriting Claude settings", async () => {
+    let sdkOptions: Record<string, unknown> | undefined;
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { sdkOptions = options; });
+    await collectMessages(harness.launch({ prompt: "check permissions", cwd: "/tmp" }));
+    assert.equal(sdkOptions?.permissionMode, "default");
+  });
+
   it("configures plan-mode instructions, session-state events, and no injected MCP servers", async () => {
     let sdkOptions: Record<string, any> | undefined;
     const { handle } = createQueryHandle([OK_RESULT]);
