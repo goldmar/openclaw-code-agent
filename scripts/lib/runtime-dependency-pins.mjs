@@ -17,10 +17,10 @@ import { join } from "node:path";
 
 /** Lowest acceptable release per pinned runtime dependency. */
 export const RUNTIME_SECURITY_FLOORS = Object.freeze({
-  "@hono/node-server": "2.1.1",
+  "@hono/node-server": "2.1.3",
   "express-rate-limit": "8.7.0",
   "fast-uri": "3.1.8",
-  hono: "4.13.7",
+  hono: "4.13.11",
   "ip-address": "10.7.2",
   qs: "6.16.0",
 });
