@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/openclaw-code-agent.svg)](https://www.npmjs.com/package/openclaw-code-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`openclaw-code-agent` (OCA) turns your OpenClaw chat into a control room for real coding agents. Claude Code, Codex, and experimental OpenCode run as managed background sessions, and OCA adds what a bare agent CLI lacks: plan approval, session lifecycle, wake routing, isolated git worktrees, merge and PR follow-through, and explicit goal loops.
+`openclaw-code-agent` (OCA) turns your OpenClaw chat into a control room for real coding agents. Claude Code, Codex, and OpenCode run as managed background sessions, and OCA adds what a bare agent CLI lacks: plan approval, session lifecycle, wake routing, isolated git worktrees, merge and PR follow-through, and explicit goal loops.
 
 Start a job from Telegram, Discord, or any other OpenClaw channel, approve the plan with a button, and get the merged branch or the open PR back in the same thread. Every step stays observable after the first message.
 
@@ -18,18 +18,18 @@ Start a job from Telegram, Discord, or any other OpenClaw channel, approve the p
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across Gateway restarts with persisted metadata and output. Steer a running Codex turn, rewind or fork it from an earlier turn, and resume completed Claude Code sessions.
 - **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost, including the running cost of an open Codex or OpenCode turn, per-model Claude Code cost and context fill, and Codex usage-limit windows.
-- **Multiple harnesses, one control plane**. Claude Code, Codex, and experimental OpenCode share the same tools, routing, notification pipeline, and worktree strategy model, while each backend runs on its own native protocol: the Claude Agent SDK, the Codex App Server, and the OpenCode server API.
+- **Multiple harnesses, one control plane**. Claude Code, Codex, and OpenCode share the same tools, routing, notification pipeline, and worktree strategy model, while each backend runs on its own native protocol: the Claude Agent SDK, the Codex App Server, and the OpenCode server API.
 - **One continuation path**. Follow-ups, approvals, revisions, question answers, interrupts, and redirects all continue the existing session instead of launching a duplicate.
 
-This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime and provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code, Codex, and experimental OpenCode harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
+This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime and provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code, Codex, and OpenCode harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
 
 ## What's New In v5
 
 - **Clearer chat updates.** Decisions name the session; fewer notices and `/agent_status` make pending work easier to track.
 - **Simpler tools.** Goal loops use `agent_goal`; plan and worktree escalations use `agent_escalate`.
-- **Native agent controls.** Codex supports steering, rewind, compaction, and inline review; Claude Code uses native plan approval; experimental OpenCode shares one server and supports multi-select questions.
+- **Native agent controls.** Codex supports steering, rewind, compaction, and inline review; Claude Code uses native plan approval; OpenCode shares one server and supports multi-select questions.
 - **Worktree setup and durable delivery.** Worktrees honor committed `.worktreeinclude` and `.openclaw/worktree-setup.sh`; notifications use OpenClaw's durable queue, and git/GitHub operations run asynchronously.
-- **Upgrade requirements.** v5.1.0 requires OpenClaw `2026.9.7`; Codex sessions require Codex CLI `0.156.1` or newer.
+- **Upgrade requirements.** v5.2.0 requires OpenClaw `2026.9.8`; Codex sessions require Codex CLI `0.156.1` or newer.
 
 **From 4.x:** Back up session and goal-task stores before upgrading: v5 rewrites session state in place. Move removed flat model settings under `harnesses.<name>` and update tool allowlists. Unset Codex execution settings now follow the host's `tools.exec.mode`; `bypassPermissions` alone no longer grants full access. Follow the [4.x migration and rollback steps](docs/REFERENCE.md#upgrading-from-4x), including state-path changes. For v5.0.0 users, see the [v5.0.1 upgrade notes](docs/REFERENCE.md#upgrading-from-500) for retired host Task Flow controls. Full release details are in the [CHANGELOG](CHANGELOG.md).
 
@@ -48,7 +48,7 @@ For small trusted changes, an orchestrator can launch a session, let the selecte
 
 ### Plan Review
 
-The default review loop is plan-first. Claude Code, Codex, and experimental OpenCode feed the same approval UX: the plugin blocks implementation until approval, then continues the same session after the plan is approved.
+The default review loop is plan-first. Claude Code, Codex, and OpenCode feed the same approval UX: the plugin blocks implementation until approval, then continues the same session after the plan is approved.
 
 - **Claude Code** submits its plan through its native `ExitPlanMode` request. OCA holds that request open until you decide, then sends approval or revision feedback back as the native answer, so the agent never has to re-read its plan from a prompt.
 - **Codex** can provide structured plan artifacts.
@@ -134,7 +134,7 @@ Add the smallest useful config under `plugins.entries["openclaw-code-agent"]` in
 For the first run, choose:
 
 - `defaultWorkdir`: a git repository root you expect to use often.
-- `defaultHarness`: `claude-code`, `codex`, or `opencode`. Treat `opencode` as experimental.
+- `defaultHarness`: `claude-code`, `codex`, or `opencode`.
 
 The default policy is intentionally review-first:
 
@@ -146,7 +146,7 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-The unreleased compatibility update targets the OpenClaw `2026.9.8` package and public SDK and requires `2026.9.8` for installation and loading. The published OCA 5.1.0 release targets `2026.9.7`. The plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7`; Node `>=24.16.0 <25 || >=26.1.0` is required. The OCA version bump and publication are separate from this preparation. OCA imports only public plugin-SDK subpaths that untrusted external plugins may use, and its session store, wake routing, callbacks, worktree flows, and Codex/Claude model restrictions remain plugin-owned. OpenClaw's host-side model catalog does not widen Code Agent's harness-scoped allowlists. Disabled bundled plugins are not implicitly enabled, and installing this package changes no OpenClaw host configuration. Upgrading from 4.x is not migration-free, though: on first start 5.0 rewrites OCA's own session store in place (backing up any rows it drops) and moves its output transcripts and update state; it does not migrate plugin config, so move any flat `defaultModel` / `model` / `reasoningEffort` / `allowedModels` keys under `harnesses.<name>` first, because the 5.0 config schema rejects them. Restrictive tool allowlists must add the new `agent_session_action` tool. See [Compatibility and upgrades](docs/REFERENCE.md#compatibility-and-upgrades).
+OCA 5.2.0 targets the OpenClaw `2026.9.8` package and public SDK and requires `2026.9.8` for installation and loading. The plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7`; Node `>=24.16.0 <25 || >=26.1.0` is required. OCA imports only public plugin-SDK subpaths that untrusted external plugins may use, and its session store, wake routing, callbacks, worktree flows, and Codex/Claude model restrictions remain plugin-owned. OpenClaw's host-side model catalog does not widen Code Agent's harness-scoped allowlists. Disabled bundled plugins are not implicitly enabled, and installing this package changes no OpenClaw host configuration. Upgrading from 4.x is not migration-free, though: on first start 5.0 rewrites OCA's own session store in place (backing up any rows it drops) and moves its output transcripts and update state; it does not migrate plugin config, so move any flat `defaultModel` / `model` / `reasoningEffort` / `allowedModels` keys under `harnesses.<name>` first, because the 5.0 config schema rejects them. Restrictive tool allowlists must add the new `agent_session_action` tool. See [Compatibility and upgrades](docs/REFERENCE.md#compatibility-and-upgrades).
 
 ### Codex
 
@@ -168,7 +168,7 @@ For Codex sessions authenticated with an OpenAI API key, the plugin estimates to
 
 Claude Code launches use `opus` when no model is supplied. Provider-qualified Claude ids such as `anthropic/claude-opus-5-5` are accepted and sent to Claude Code as the bare id (`claude-opus-5-5`), which Claude Code itself requires. Other explicit model choices remain subject to the existing allowlist. Claude Code loads your user and project MCP servers from its own settings; OCA no longer copies `~/.claude.json` servers into each launch. Cost comes from Claude Code's per-model usage and is updated when each turn completes.
 
-### OpenCode (experimental)
+### OpenCode
 
 Make sure local `opencode >= 1.16.2` is available and configured with provider auth. The plugin lazily starts one shared `opencode serve` process on localhost for all OpenCode sessions (each request names its project with `?directory=`), detects turn completion from the server's event stream, and uses OpenCode's classic session routes for prompts, messages, and replies. The server shuts down about 30 seconds after the last OpenCode session ends. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
 
@@ -206,7 +206,7 @@ Stop this session.
 
 ### Plan Review
 
-By default, Claude Code, Codex, and experimental OpenCode produce a plan before implementation. The plan can be approved, revised, or rejected through buttons when available, or with plain-text `Approve`, `Revise`, or `Reject` in the same thread.
+By default, Claude Code, Codex, and OpenCode produce a plan before implementation. The plan can be approved, revised, or rejected through buttons when available, or with plain-text `Approve`, `Revise`, or `Reject` in the same thread.
 
 Revisions stay attached to the same session, so the newest plan is the actionable one. With `planApproval: "approve"` the orchestrator may approve on its own, but only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user.
 

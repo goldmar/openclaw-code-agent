@@ -1,6 +1,6 @@
 {
   "name": "openclaw-code-agent",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
   "main": "dist/index.js",
@@ -121,7 +121,7 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "description": "OpenClaw plugin that runs Claude Code, Codex, and experimental OpenCode as managed background coding sessions from chat, with plan approval, isolated git worktrees, and merge/PR follow-through.",
+  "description": "OpenClaw plugin that runs Claude Code, Codex, and OpenCode as managed background coding sessions from chat, with plan approval, isolated git worktrees, and merge/PR follow-through.",
   "peerDependencies": {
     "openclaw": ">=2026.9.7"
   }

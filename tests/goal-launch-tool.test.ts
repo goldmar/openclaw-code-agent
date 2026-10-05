@@ -276,7 +276,7 @@ describe("agent_goal action=launch", () => {
     assert.equal(launchConfig?.originSessionKey, sessionKey);
   });
 
-  it("allows experimental OpenCode goal tasks to use the OpenCode provider default model", async () => {
+  it("allows OpenCode goal tasks to use the OpenCode provider default model", async () => {
     let launchConfig: Record<string, unknown> | undefined;
 
     setPluginConfig({

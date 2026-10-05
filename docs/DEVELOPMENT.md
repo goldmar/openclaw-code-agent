@@ -53,7 +53,7 @@ openclaw-code-agent/
 - `src/session-state.ts`: reducer-backed lifecycle / approval / runtime / worktree transitions
 - `src/session-interactions.ts`: action-token creation and state-driven button sets
 - `src/session-notifications.ts`: delivery-state-aware wrapper around lifecycle notifications
-- `src/harness/*`: Claude Code, Codex, and experimental OpenCode integrations
+- `src/harness/*`: Claude Code, Codex, and OpenCode integrations
 - `src/harness/codex-app-server-protocol/`: generated Codex App Server wire types (see below; never edit by hand)
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
@@ -304,7 +304,7 @@ Before merging a behavior change, confirm:
 
 ### OpenClaw compatibility release proof
 
-Run `pnpm verify`, `pnpm check-plugin-security`, `pnpm validate:release-metadata`, `pnpm verify:npm-consumer`, `pnpm audit:prod`, and `npm pack --dry-run` against the candidate. The consumer dependency check uses a stub host; it does not prove SDK/runtime loading. The packed-plugin security check installs into an isolated profile with the actual pinned OpenClaw package, enables OCA, and checks runtime loading and required tool registration before the security audit. This is CLI registry proof, not a running Gateway turn or effective tool admission. Record the exact candidate commit, tarball digest, package version, and actual host target for each result. For the pending 2026.9.8 update, validate the exact SDK/build target separately from the retained 2026.9.7 API/peer floor; the OCA version remains 5.1.0 until separate release preparation.
+Run `pnpm verify`, `pnpm check-plugin-security`, `pnpm validate:release-metadata`, `pnpm verify:npm-consumer`, `pnpm audit:prod`, and `npm pack --dry-run` against the candidate. The consumer dependency check uses a stub host; it does not prove SDK/runtime loading. The packed-plugin security check installs into an isolated profile with the actual pinned OpenClaw package, enables OCA, and checks runtime loading and required tool registration before the security audit. This is CLI registry proof, not a running Gateway turn or effective tool admission. Record the exact candidate commit, tarball digest, package version, and actual host target for each result. For OCA 5.2.0, validate the exact 2026.9.8 SDK/build and installation/loading target separately from the retained 2026.9.7 API/peer floor.
 
 The workflow named OCA Codex Telegram Proof currently executes local smoke; it is not live Telegram proof. Native proof remains guarded by `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live`, and requires separate authorization for external messaging and QA infrastructure. Before shipping, use a disposable Gateway and QA topic to verify Start Plan/Dismiss, plan revisions and approvals, completion, duplicate/unauthorized callback rejection, topic routing, and retained work across reload/restart. Deterministic tests and earlier upstream PR/package proofs do not waive that gate. Keep real routing identifiers, credentials, transcripts and captures out of this public repository.
 

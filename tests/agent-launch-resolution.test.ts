@@ -525,7 +525,7 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
-  it("allows experimental OpenCode to use its configured provider default when no model is set", () => {
+  it("allows OpenCode to use its configured provider default when no model is set", () => {
     const result = resolveAgentLaunchRequest(
       {
         prompt: "Use OpenCode defaults",

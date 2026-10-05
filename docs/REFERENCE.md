@@ -33,15 +33,41 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 ## Compatibility And Upgrades
 
-The unreleased compatibility update targets the OpenClaw `2026.9.8` package and public SDK. Its installation minimum is `2026.9.8`, while the plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7` (raised from `2026.9.6` in 5.0.1). Node `>=24.16.0 <25 || >=26.1.0` is required. Published OCA 5.1.0 targets `2026.9.7`; this preparation keeps the OCA version unchanged pending a separate release. OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
+OCA 5.2.0 targets the OpenClaw `2026.9.8` package and public SDK. Its installation minimum is `2026.9.8`, while the plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7` (raised from `2026.9.6` in 5.0.1). Node `>=24.16.0 <25 || >=26.1.0` is required. OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
 
-### OpenClaw 2026.9.8 compatibility preparation
+### OpenClaw 2026.9.8 compatibility
 
-No new plugin configuration migration is required. Keep existing plan approval, worktree strategies, model restrictions, and saved account/chat/topic routes. OpenClaw's `sessions_send` delivery result no longer includes `mode: "announce"`. OCA never read that field: completion wakes already go through `chat.send` and are confirmed by the matching `agent.wait` terminal receipt, so the change needs no OCA update. A queued Start Plan offer, wake admission, or `NO_REPLY` alone is not proof of visible delivery. Cron workflows using private wakes should retain their explicit delivery policy rather than enabling announce delivery to compensate.
+The host compatibility update does not migrate plugin configuration. Goal verification requires the [5.2.0 migration](#upgrading-from-510-to-520-goal-verifiers) below when upgrading from the removed global verifier setting. Keep existing plan approval, worktree strategies, model restrictions, and saved account/chat/topic routes. OpenClaw's `sessions_send` delivery result no longer includes `mode: "announce"`. OCA never read that field: completion wakes already go through `chat.send` and are confirmed by the matching `agent.wait` terminal receipt, so the change needs no OCA update. A queued Start Plan offer, wake admission, or `NO_REPLY` alone is not proof of visible delivery. Cron workflows using private wakes should retain their explicit delivery policy rather than enabling announce delivery to compensate.
 
 Enabling `planOfferTool` registers `agent_send_plan_offer`; it does not grant the tool to an agent. Global, provider, agent, group, sandbox, inherited, and runtime tool restrictions still apply. Enable the delivery channel separately; OCA's Codex harness does not require OpenClaw's bundled Codex plugin to be enabled.
 
-Compatibility preparation does not publish a new OCA version, upgrade OpenClaw, or close release-monitor follow-up events. Those require the later release and deployment evidence.
+Installing OCA does not upgrade OpenClaw or close release-monitor follow-up events. Deployment remains a separate operation.
+
+### Upgrading from 5.1.0 to 5.2.0: goal verifiers
+
+`requiredGoalVerifierCommands` is removed. Replace it in the plugin's operator-owned configuration before launching new goal work:
+
+```json
+{
+  "goalVerificationPolicies": {
+    "repositories": [
+      { "repository": "/srv/repos/web", "requiredCommands": ["bash ci.sh", "bash lint.sh"] },
+      { "repository": "/srv/repos/service", "requiredCommands": ["make check"] }
+    ]
+  },
+  "trustedVerifierCommands": ["bash check-accessibility.sh"]
+}
+```
+
+Repository paths must be absolute paths inside actual Git repositories. Subdirectories and linked worktrees share their repository's policy; separate clones and submodules have distinct identities. Do not configure two aliases for the same canonical repository. Every required suite must be a nonempty array of nonblank commands.
+
+For `/srv/repos/web`, task checks `["bash check-accessibility.sh"]` run after `bash ci.sh` and `bash lint.sh`. Task commands append; they cannot replace or select a weaker baseline. Order and repeated commands are preserved. Every check must pass, and Ralph mode also requires the completion promise. Additional commands keep the existing trust and user-confirmation rules.
+
+Add `defaultRequiredCommands` only when you intend its complete suite to apply to unmapped repositories or tasks outside Git. Without that explicit fallback, configured policies refuse those tasks. Leaving `goalVerificationPolicies` unset preserves normal caller-verifier behavior; it does not migrate an old active goal.
+
+Start new goals after migration. Goals saved with the removed global policy or without a new versioned binding cannot resume under an automatically inferred policy. Preserve their stores and terminal receipts. Changing an affected policy, repository identity or mapping invalidates further goal work, even when the configuration later changes back; an unrelated repository's checks can change independently.
+
+Other existing plan approval, worktree, harness model and route settings stay in effect. The OpenCode label change does not change its minimum version, authentication or model defaults. OCA 5.2.0 requires OpenClaw 2026.9.8 for installation/loading and does not upgrade the running Gateway.
 
 ### Upgrading from 5.0.0
 
@@ -76,7 +102,7 @@ For automation, `planOfferTool: true`, effective tool grants, OCA activation, an
   Place these fields under `plugins.entries.openclaw-code-agent.config`. An empty `allowedModels: []` removes that harness restriction; omission keeps the built-in list, but setting a custom `defaultModel` without an explicit list drops the built-in restriction.
 - **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` defaults to `medium` to preserve the effective GPT-6 Sol level when switching to GPT-6.1 Sol, and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)). OCA's `permissionMode` no longer affects Codex execution: in 4.x `bypassPermissions` always meant `danger-full-access` with no approvals, while in 5.0 a host with `tools.exec.mode` `auto` or `ask` runs Codex in the `:workspace` sandbox even for `bypassPermissions` sessions, and `deny` / `allowlist` refuse Codex launches. Set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` to keep the 4.x behavior on such hosts. Codex CLI `0.156.1` or newer is required: older App Servers (or ones whose version cannot be read) fail the launch with an error naming both versions.
 - **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override, so state lives in `$OPENCLAW_HOME/.openclaw`). If you set `OPENCLAW_HOME` to point OCA at a state directory, set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead. Output transcripts moved from `/tmp/openclaw-agent-<id>.txt`, and auto-update state from `<stateDir>/openclaw-code-agent-auto-update.json`, to `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
-- **Minimum host.** OpenClaw `2026.9.7` is required for installation, the plugin API, the Gateway, and the peer dependency. Install OCA 5.1.0 only on a host already running a supported version.
+- **Minimum host.** OCA 5.2.0 requires OpenClaw `2026.9.8` for installation and loading. The declared plugin API, Gateway and npm peer contracts remain `2026.9.7`; those floors do not permit loading OCA on an older host.
 - **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review) and merges tools: the four `agent_goal_*` tools are now `agent_goal`, and `agent_request_plan_approval` / `agent_request_worktree_decision` are now `agent_escalate`. `agent_send_plan_offer` is registered only with `planOfferTool: true`. If an agent's tool allowlist names OCA tools individually, update it; the [CHANGELOG](../CHANGELOG.md) has the full migration table.
 - **Chat commands.** `/agent_goal_status`, `/agent_goal_stop` and `/agent_goal_edit` are now `/agent_goal status`, `/agent_goal stop` and `/agent_goal edit`. New: `/agent_status`.
 - **Stricter tools.** `agent_kill` accepts only `session` and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
@@ -151,7 +177,7 @@ The host wizard does not currently provide a plugin-specific readiness panel, so
   - The bundled Claude SDK/CLI is part of the plugin dependency set, so installation is usually the easy part.
   - Authenticated usability may still require Claude-side login/account setup when you launch the first session.
 - `opencode`
-  - Experimental. Expect this to work only with local `opencode >= 1.16.2` and provider auth already configured for OpenCode.
+  - Requires local `opencode >= 1.16.2` and provider auth already configured for OpenCode.
   - The plugin lazily starts one shared `opencode serve` process on `127.0.0.1` for all OpenCode sessions and uses OpenCode's classic session routes (with `?directory=` per project) for prompt submission, message fetches, and replies. Turn completion comes from the server's event stream.
   - Leave the model unset for OpenCode's configured provider default, or pass an explicit `provider/model` string.
 
@@ -159,7 +185,7 @@ When choosing `defaultHarness`:
 
 - prefer `codex` if the command and auth are already working on this machine
 - prefer `claude-code` if Claude Code is the expected path and Codex is not locally ready
-- choose `opencode` only for experimental use after `opencode serve` works locally
+- choose `opencode` after `opencode serve` works locally
 - if neither harness is ready, finish onboarding with `defaultWorkdir` and optional `fallbackChannel`, then fix harness setup before launching sessions
 
 This setting picks between this plugin's own harnesses. It does not select OpenClaw ACPX, and it does not enable or disable OpenClaw core's bundled `codex` provider/harness plugin. Those are adjacent OpenClaw surfaces with different responsibilities. See [ACP-COMPARISON.md](ACP-COMPARISON.md).
@@ -212,7 +238,7 @@ forced_login_method = "chatgpt"
 | --- | --- | --- |
 | `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with native `ExitPlanMode` plan review and `AskUserQuestion` interception |
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, approvals, steering, rewind/fork, compaction, and inline review |
-| `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
+| `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
 Codex allowlists match the exact model id, ignoring case, after an `openai/` prefix is removed. Claude Code and OpenCode allowlists match any model whose name contains an entry (substring, ignoring case), so `sonnet` allows every Sonnet model and `deepseek-flash` also allows `deepseek-flash-2`. If the resolved model is not allowed, `agent_launch` fails immediately. After a launch, `agent_launch` waits up to 4 seconds (it returns as soon as the agent calls a tool or waits for a plan decision or an answer); a session that already failed or finished is reported in the result, so the launching turn tells the user, and that outcome's wake is skipped. Because a Codex entry must be an exact id, each Codex connection compares `harnesses.codex.allowedModels` with its `model/list` catalog and logs a warning (once per model and Gateway process) for an allowed model the catalog does not know, which is usually a typo or a retired model.
 
@@ -301,7 +327,7 @@ Claude Code harness details:
 
 OpenCode harness details:
 
-- Experimental support targets `opencode >= 1.16.2`. The shared-server design needs the `?directory=` request parameter, the `/global/event` stream with its `{ directory, payload }` envelope, and the classic session, `prompt_async`, permission-reply, and question-reply routes; 1.16.2 serves the same operations as the 1.18.32 document vendored in `tests/protocol/`, and its schema differences are in fields OCA does not read. Protocol shapes are validated against 1.18.32.
+- Support targets `opencode >= 1.16.2`. The shared-server design needs the `?directory=` request parameter, the `/global/event` stream with its `{ directory, payload }` envelope, and the classic session, `prompt_async`, permission-reply, and question-reply routes; 1.16.2 serves the same operations as the 1.18.32 document vendored in `tests/protocol/`, and its schema differences are in fields OCA does not read. Protocol shapes are validated against 1.18.32.
 - The plugin lazily starts one shared `opencode serve --port 0` process on localhost and reads the bound URL from its `opencode server listening on …` output. Every request names its project with `?directory=`, so sessions in different worktrees run concurrently on the same server. The server shuts down about 30 seconds after the last OpenCode session ends. Requests do not use HTTP keep-alive: a restarted server usually binds the same port, and a pooled connection to the previous process would fail the first request. A read whose connection is reset is repeated once.
 - One `/global/event` stream is demultiplexed by session id. A turn completes on `session.idle` (or an idle `session.status`) once the turn has shown activity; an idle event without activity is confirmed against session status and messages. Session status is polled only while the event stream is disconnected, to catch up on missed events.
 - If the server process dies, every in-flight turn fails with the exit reason, and the next turn starts a fresh server. OpenCode persists sessions, so they continue.
@@ -327,7 +353,7 @@ Important boundary:
 - this plugin's `codex` harness is part of `openclaw-code-agent`
 - it is not the same thing as OpenClaw ACPX
 - it is not the same thing as OpenClaw core's bundled `codex` plugin, even though both can use the same local Codex App Server substrate
-- this plugin's experimental `opencode` harness is also plugin-local; it is not OpenClaw ACPX's broader external-harness path
+- this plugin's `opencode` harness is also plugin-local; it is not OpenClaw ACPX's broader external-harness path
 
 ## Security Model
 
@@ -337,7 +363,7 @@ Accepted subprocess surfaces:
 
 - local `openclaw` CLI calls for `chat.send` wakes without explicit origins, `agent.wait` receipt observation and button-confirmed self-update (`plugins inspect` / `search` / `install`, `gateway restart`); explicit-origin wakes use the authenticated public Gateway SDK, and notifications and system events use the host runtime
 - Codex App Server launch over stdio
-- one shared OpenCode server on `127.0.0.1` for experimental OpenCode sessions
+- one shared OpenCode server on `127.0.0.1` for OpenCode sessions
 - local `git` / `gh` commands for worktree and PR flows
 - a repository's committed, executable `.openclaw/worktree-setup.sh` in new OCA worktrees
 - goal verifier shell commands the user confirmed (or typed, or the operator pre-approved in `trustedVerifierCommands`)
@@ -391,7 +417,7 @@ These should remain manual or follow-up configuration:
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
-`plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
+`plan` is the plugin default. Claude Code, Codex, and OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
 
 For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode. Codex's plan collaboration mode only instructs the model, so OCA enforces read-only plan review itself: plan turns run with the `:read-only` profile and approval policy `never`, and approval requests during a plan turn are declined (see [SECURITY.md](SECURITY.md#codex-sandbox)). After approval, turns use the posture from `harnesses.codex.permissionProfile`, `approvalPolicy` and `approvalsReviewer` (or the host `tools.exec.mode`). Use `permissionMode` and `planApproval` to control plan review gates.
 
@@ -494,7 +520,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders back off: the first comes 3h after the decision was requested, the second 24h later, the third a week after that, and then they stop. **Later** snoozes the next one for 24h. Delegated decisions remind the orchestrator instead of the user.
-- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. If a resumed session's worktree directory is gone, OCA recreates it from the stored `agent/*` branch; if that fails, the launch fails closed for every harness unless `worktree_strategy: "off"` is chosen.
+- Claude Code, Codex, and OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. If a resumed session's worktree directory is gone, OCA recreates it from the stored `agent/*` branch; if that fails, the launch fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 
@@ -539,7 +565,7 @@ Launch a background coding session.
 | `name` | `string` | No | Short session name; auto-generated if omitted |
 | `workdir` | `string` | No | Defaults to an existing absolute path in a leading `Workdir:` or `Repo:` prompt header line, then the tool workspace, plugin `defaultWorkdir`, or cwd |
 | `reasoning_effort` | `low \| medium \| high \| xhigh \| max` | No | Per-launch override. Otherwise retains saved resume/fork effort, then uses the harness default. Known supported settings appear as `reasoning: <level>` in session status headings; unknown/unsupported settings are omitted. |
-| `model` | `string` | No | Defaults to the selected harness default model. For experimental OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
+| `model` | `string` | No | Defaults to the selected harness default model. For OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
 | `system_prompt` | `string` | No | Extra system prompt. Stored with the session and reused when `agent_respond` (or a Resume button) resumes it |
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |
 | `resume_session_id` | `string` | No | Resume by plugin session ID or name. Persisted backend conversation IDs still work for recovery/diagnostics, but they are not the normal operator-facing path |

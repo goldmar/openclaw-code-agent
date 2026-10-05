@@ -424,7 +424,7 @@ describe("plugin entry source", () => {
       "codex",
       "opencode",
     ]);
-    assert.match(pluginManifest.configSchema?.properties?.defaultHarness?.description ?? "", /experimental harness/);
+    assert.match(pluginManifest.configSchema?.properties?.defaultHarness?.description ?? "", /Claude Code, Codex, or OpenCode/);
     assert.equal(pluginManifest.configSchema?.properties?.planApproval?.default, "delegate");
     assert.equal(pluginManifest.configSchema?.properties?.defaultWorktreeStrategy?.default, "delegate");
     assert.match(pluginManifest.configSchema?.properties?.defaultWorkdir?.description ?? "", /git repository root/);
@@ -460,7 +460,7 @@ describe("plugin entry source", () => {
     ]);
     assert.deepEqual(harnessDefaults?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
-    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /OpenCode is experimental/);
+    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /leave harnesses\.opencode\.defaultModel unset/i);
   });
 
   it("keeps declared tool contracts synced with runtime registrations", () => {
