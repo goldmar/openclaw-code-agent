@@ -77,7 +77,7 @@ export function registerGoalCommand(api: CommandApi): void {
         const replacementGoal = target?.rest.trim();
         if (!ref || !replacementGoal) return { text: "Usage: /agent_goal edit <task> <new goal>" };
         try {
-          const result = goalController.editTask(ref, replacementGoal, reply);
+          const result = await goalController.editTask(ref, replacementGoal, reply);
           if (result.action === "updated") {
             return { text: answer(result.task, `✏️ [${result.task.name}] Goal task edited.`, `✏️ [${result.task.name}] Goal task edited`) };
           }
@@ -162,7 +162,7 @@ export function registerGoalCommand(api: CommandApi): void {
         return { text: GOAL_USAGE };
       }
 
-      const resolution = resolveGoalLaunchRequest({
+      const resolution = await resolveGoalLaunchRequest({
         goal,
         verifierCommands: verifierCommands.length ? verifierCommands : undefined,
         name,
@@ -197,7 +197,7 @@ export function registerGoalCommand(api: CommandApi): void {
           originAgentId: resolution.originAgentId,
           originSessionKey: resolution.originSessionKey,
           route: resolution.route,
-          verifierCommands: resolution.verifierCommands,
+          verifierCommands: resolution.additionalVerifierCommands,
           maxCostUsd: resolution.maxCostUsd,
           // The user typed these commands themselves: no extra confirmation.
           requireVerifierConfirmation: false,

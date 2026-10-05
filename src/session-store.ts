@@ -779,6 +779,7 @@ export class SessionStore {
       outputPath: getSessionOutputFilePath(session.id),
       harness: session.harnessName,
       resumedFromSessionName: session.resumedFromSessionName,
+      goalTaskId: session.goalTaskId,
       requestedPermissionMode: approval.requestedPermissionMode,
       currentPermissionMode: approval.currentPermissionMode,
       approvalExecutionState: approval.approvalExecutionState,

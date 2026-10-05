@@ -281,7 +281,7 @@ describe("GoalTaskStore", () => {
     await (controller as any).restorePromise;
     for (const requireVerifierConfirmation of [false, true]) {
       await assert.rejects(controller.launchTask({
-        goal: "New goal", workdir: "/tmp/project", requireVerifierConfirmation,
+        goal: "New goal", workdir: dir, requireVerifierConfirmation,
         verifierCommands: [{ label: "CI", command: "true" }],
       }), /store is unavailable/);
     }

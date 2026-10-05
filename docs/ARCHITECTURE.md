@@ -223,6 +223,14 @@ agent_launch / /agent
   -> Session starts streaming output
 ```
 
+### Goal verification authority
+
+`goalVerificationPolicies` belongs to operator configuration. Async `runGit` identity reads resolve each actual workdir to its canonical Git common directory and filesystem identity, so linked worktrees share their repository baseline. Task checks append after that baseline, preserving ordered duplicates. A versioned task binding records the original repository identity, policy provenance and required/additional suite. Missing/legacy active bindings deny continuation with migration guidance; terminal store rows retain their original JSON evidence.
+
+Configuration updates append immutable policy snapshots. Each live goal consumes every intervening snapshot against its bound identity, including temporarily added mappings or aliases. Changes affecting another repository's checks leave its effective policy unchanged. Restore evaluates the current policy against the saved binding, capturing the runtime epoch before its first asynchronous lookup. No policy or Git failure becomes an empty baseline or an inferred default.
+
+Each identity Git call has a one-second timeout and runs asynchronously with Git redirection variables removed. Authority checks refresh the actual task/session identity and operator repository identities; they do not trust a cached remote URL or caller binding. With no concurrent config changes, validation has two sequential actual-identity reads and one parallel phase for configured repository paths. Each additional journal snapshot adds one operator lookup phase. The event loop remains available during Git and filesystem I/O. Controller/session callers check an authorization ticket synchronously after each await, immediately before their own effects; changed epochs require reevaluation. Plan, input and confirmation actions also retain their original request/version identity across those waits.
+
 ### Waiting For Input
 
 `turnEnd` plus explicit question / approval / worktree state drives the wake path.

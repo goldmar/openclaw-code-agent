@@ -125,11 +125,17 @@ export function formatGoalTask(
     lines.push(`  Completion promise: ${task.completionPromise}`);
   }
 
-  if (task.requiredVerifierCommands !== undefined) {
-    lines.push(`  Operator-required verifiers:`);
-    if (Array.isArray(task.requiredVerifierCommands)) {
-      lines.push(...task.requiredVerifierCommands.map((command) => `  - ${String(command)}`));
-    } else lines.push("  (invalid stored binding; start a new goal)");
+  if (task.goalVerificationBinding?.version === 1) {
+    const binding = task.goalVerificationBinding;
+    lines.push(`  Verification policy: ${binding.source}${binding.repository ? ` (${binding.repository})` : ""}`);
+    if (Array.isArray(binding.requiredCommands) && binding.requiredCommands.length) {
+      lines.push(`  Operator-required verifiers:`, ...binding.requiredCommands.map((command) => `  - ${String(command)}`));
+    }
+    if (Array.isArray(binding.additionalCommands) && binding.additionalCommands.length) {
+      lines.push(`  Additional task verifiers:`, ...binding.additionalCommands.map((command) => `  - ${String(command)}`));
+    }
+  } else if (task.requiredVerifierCommands !== undefined) {
+    lines.push(`  Legacy verification binding: start a new goal after migrating configuration.`);
   }
 
   if (task.sessionId) {

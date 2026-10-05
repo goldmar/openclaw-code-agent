@@ -2,13 +2,13 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { assignments, decodeReceipt, excluded, frameReceipt, FILE_LIMIT, HOST_PIN, requiredFact, sha } from "../scripts/e2e/oca501-evidence.mjs";
-import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
+import { optionsFor, visibleProof, stopOwnedChild, processIdentity, currentOwner, FeatureRun, until, patchAcknowledgementProof, configPatchFailureProof, assertPolicyRestoreOwner, CONFIG_PATCH_RPC_TIMEOUT_MS } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
-import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput } from "../scripts/e2e/oca501-native-protocol.mjs";
+import { currentNativeIntent, nativeExecutionCall, matchingNativeOutput, policyRestoreIntent, NATIVE_COMMAND, NATIVE_READ_COMMAND, assertNativeExecutionResult, responsesFixture } from "../scripts/e2e/oca501-native-protocol.mjs";
 import { Session } from "../src/session";
 import { SessionStore } from "../src/session-store";
 import { GoalController, normalizeVerifierCommands } from "../src/goal-controller";
@@ -17,11 +17,198 @@ import { GoalTaskStore } from "../src/goal-store";
 import { SessionRuntimeRegistry } from "../src/session-runtime-registry";
 import { SessionHarnessEventApplier } from "../src/session-harness-event-applier";
 import type { SessionManager } from "../src/session-manager";
-import type { SessionConfig } from "../src/types";
+import type { GoalVerificationBinding, SessionConfig } from "../src/types";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 const expected = { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" };
-const receipt = (): any => ({ ...expected, format: "oca501-slim-v1", complete: true, hostVersion: "2026.9.7", hostCommit: HOST_PIN, nativeVersion: "0.159.3", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
+const receipt = (): any => ({ ...expected, format: "oca-repo-goal-slim-v1", complete: true, hostVersion: "2026.9.8", hostCommit: HOST_PIN, nativeVersion: "0.160.0", assigned: [], completed: [], disposition: "PASS", failure: null, cleanup: { complete: true, failures: [] }, excluded: [], proofs: [] });
 describe("bounded representative host receipts", () => {
+  it("recognizes policy child acknowledgements without accepting unrelated lexical prefixes or parent paths", () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const ack = (paths: unknown) => ({ ok: true, hash: "changed", changedPaths: paths, sentinel: { payload: { stats: { requiresRestart: false } } } });
+    for (const path of [field, `${field}.repositories`, `${field}.defaultRequiredCommands`]) {
+      assert.deepEqual(patchAcknowledgementProof(ack([path]), "before", [field]), { patchAckOk: true, patchHashChanged: true, patchSelectedPathChanged: true, patchNoRestart: true });
+    }
+    for (const previousHash of [undefined, ""]) assert.equal(patchAcknowledgementProof(ack([field]), previousHash, [field]).patchHashChanged, false);
+    for (const paths of [[], undefined, [null], [field, null], Array(1), [field.slice(0, field.lastIndexOf("."))], [`${field}Other.repositories`], ["tools.deny"]]) {
+      assert.equal(patchAcknowledgementProof(ack(paths), "before", [field]).patchSelectedPathChanged, false);
+    }
+  });
+  it("requires changed hash, no restart, same process and complete applied readback after a real patch acknowledgement", async () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const identity = processIdentity(process.pid); assert.ok(identity);
+    const ack = { ok: true, hash: "changed", changedPaths: [`${field}.repositories`], sentinel: { payload: { stats: { requiresRestart: false } } } };
+    const after = { valid: true, hash: "changed", configRevisionHash: "applied", appliedConfigHash: "applied" };
+    const make = (override = {}, readback = after) => {
+      const calls: string[] = [], proofs: any[] = [];
+      const run = Object.assign(Object.create(FeatureRun.prototype), { gatewayIdentity: identity, gateway: { pid: process.pid }, proofs,
+        rpc: async (method: string) => { calls.push(method); return method === "config.patch" ? { ...ack, ...override } : calls.length === 1 ? { hash: "before" } : readback; } });
+      return { run, calls, proofs };
+    };
+    const valid = make(); assert.deepEqual(await valid.run.patch({}, [field]), after);
+    assert.deepEqual(valid.calls, ["config.get", "config.patch", "config.get"]);
+    assert.deepEqual(valid.proofs[0], { patchAckOk: true, patchHashChanged: true, patchSelectedPathChanged: true, patchNoRestart: true });
+    const invalidAcknowledgements: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
+      [{ ok: false }, "PATCH_ACK_OK_REQUIRED"], [{ hash: "before" }, "PATCH_ACK_HASH_CHANGE_REQUIRED"],
+      [{ hash: undefined }, "PATCH_ACK_HASH_CHANGE_REQUIRED"], [{ changedPaths: ["tools.deny"] }, "PATCH_ACK_SELECTED_PATH_REQUIRED"],
+      [{ changedPaths: [`${field}Other.repositories`] }, "PATCH_ACK_SELECTED_PATH_REQUIRED"],
+      [{ sentinel: { payload: { stats: { requiresRestart: true } } } }, "PATCH_ACK_NO_RESTART_REQUIRED"],
+      [{ sentinel: undefined }, "PATCH_ACK_NO_RESTART_REQUIRED"],
+    ];
+    for (const [override, label] of invalidAcknowledgements) {
+      const invalid = make(override); await assert.rejects(invalid.run.patch({}, [field]), new RegExp(label));
+      assert.deepEqual(invalid.calls, ["config.get", "config.patch"], "a refused acknowledgement cannot proceed to applied readback");
+      assert.equal(invalid.proofs.length, 1, "the closed acknowledgement facts survive before refusal");
+    }
+    for (const readback of [{ ...after, valid: false }, { ...after, hash: "stale" }, { ...after, appliedConfigHash: "stale" }, { ...after, configRevisionHash: "", appliedConfigHash: "" }]) {
+      await assert.rejects(make({}, readback).run.patch({}, [field]));
+    }
+    const replaced = make(); replaced.run.gatewayIdentity = { ...identity, startTicks: "0" };
+    await assert.rejects(replaced.run.patch({}, [field]));
+    const r = receipt(); r.proofs.push(valid.proofs[0]);
+    const decoded = decodeReceipt(frameReceipt(r), expected).receipt;
+    assert.deepEqual(decoded.proofs, r.proofs);
+    for (const field of ["patchAckOk", "patchHashChanged", "patchSelectedPathChanged", "patchNoRestart"]) {
+      for (const invalid of [null, "true", 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], [field]: invalid }] }));
+    }
+    assert.throws(() => frameReceipt({ ...r, proofs: [{ ...valid.proofs[0], rawAck: ack }] }), /Unknown feature proof field|Raw profile/);
+  });
+  it("declares exact repository-array replacement for removal and every selected-suite mutation", async () => {
+    const field = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies";
+    const root = mkdtempSync(join(tmpdir(), "oca-policy-patch-")), configPath = join(root, "config.json");
+    const original = { repositories: [{ repository: "/fixture/a", requiredCommands: ["a", "a"] }, { repository: "/fixture/b", requiredCommands: ["b"] }] };
+    const alias = { repositories: [...original.repositories, { repository: "/fixture/alias", requiredCommands: ["a"] }] };
+    const changedA = structuredClone(original); changedA.repositories[0].requiredCommands = ["changed-a"];
+    const changedB = structuredClone(original); changedB.repositories[1].requiredCommands = ["changed-b"];
+    const identity = processIdentity(process.pid); assert.ok(identity);
+    try {
+      for (const [previous, next] of [[alias, original], [original, changedA], [original, changedB], [changedA, original]]) {
+        const wrap = (policies: unknown) => ({ plugins: { entries: { "openclaw-code-agent": { config: { goalVerificationPolicies: policies } } } } });
+        writeFileSync(configPath, JSON.stringify(wrap(previous)));
+        let patched = false;
+        const patches: any[] = [], proofs: any[] = [];
+        const run = Object.assign(Object.create(FeatureRun.prototype), { env: { OPENCLAW_CONFIG_PATH: configPath }, proofs, gatewayIdentity: identity, gateway: { pid: process.pid },
+          rpc: async (method: string, params?: any) => {
+            if (method === "config.patch") {
+              assert.equal(params.baseHash, "before");
+              assert.deepEqual(params.replacePaths, [`${field}.repositories`], "host array intent is exact, never its policy parent");
+              assert.deepEqual(JSON.parse(params.raw), wrap(next)); patches.push(params); patched = true;
+              return { ok: true, hash: "after", changedPaths: [`${field}.repositories`], sentinel: { payload: { stats: { requiresRestart: false } } } };
+            }
+            assert.equal(method, "config.get");
+            return { valid: true, hash: patched ? "after" : "before", configRevisionHash: patched ? "after" : "before", appliedConfigHash: patched ? "after" : "before", config: wrap(patched ? next : previous) };
+          } });
+        await run.setPolicies(next); assert.equal(patches.length, 1); assert.deepEqual(run.currentPolicies, next);
+        assert.equal(proofs[0].patchSelectedPathChanged, true); assert.deepEqual(proofs[1].mutation, [`${field}.repositories`]);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("proves an empty required suite reaches schema validation rather than an earlier patch refusal", async () => {
+    const path = "plugins.entries.openclaw-code-agent.config.goalVerificationPolicies.repositories";
+    const schema = { error: { code: "INVALID_REQUEST", message: "invalid config: plugins.entries.openclaw-code-agent.config: /goalVerificationPolicies/repositories/0/requiredCommands: must NOT have fewer than 1 items" } };
+    const make = (result: { code: number; stdout: string }, revision = "unchanged", changedEffects = false) => {
+      let reads = 0, effectReads = 0;
+      const run = Object.assign(Object.create(FeatureRun.prototype), { repoA: "/fixture/a",
+        effects: () => ({ launches: changedEffects && effectReads++ ? 1 : 0 }),
+        rpc: async () => ({ hash: ++reads > 1 ? revision : "unchanged" }),
+        cli: async (args: string[], options: any) => {
+          const params = JSON.parse(args[args.indexOf("--params") + 1]);
+          assert.equal(options.allowFailure, true); assert.equal(params.baseHash, "unchanged");
+          assert.deepEqual(params.replacePaths, [path]);
+          assert.deepEqual(JSON.parse(params.raw).plugins.entries["openclaw-code-agent"].config.goalVerificationPolicies.repositories, [{ repository: "/fixture/a", requiredCommands: [] }]);
+          return result;
+        } });
+      return { run, reads: () => reads };
+    };
+    const actual = { code: 1, stdout: JSON.stringify(schema) };
+    const valid = make(actual); await valid.run.rejectEmptyPolicy(); assert.equal(valid.reads(), 2);
+    for (const result of [
+      { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "config.patch would remove entries from array path(s): private-path" } }) },
+      { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: "invalid config: unrelatedField" } }) },
+      { code: 1, stdout: "not JSON" }, { code: 0, stdout: JSON.stringify(schema) },
+      { code: 1, stdout: JSON.stringify({ error: { code: "UNAVAILABLE", message: schema.error.message } }) },
+    ]) { const invalid = make(result); await assert.rejects(invalid.run.rejectEmptyPolicy()); assert.equal(invalid.reads(), 1); }
+    await assert.rejects(make(actual, "modified").run.rejectEmptyPolicy());
+    await assert.rejects(make(actual, "unchanged", true).run.rejectEmptyPolicy());
+  });
+  it("retains closed patch failure facts before the original CLI exit assertion without leaking error prose", async () => {
+    const privateValue = "SYNTHETIC_PRIVATE_CONFIG_PATH";
+    const output = { code: 1, stdout: JSON.stringify({ error: { code: "INVALID_REQUEST", message: `config.patch would remove entries from array path(s): ${privateValue}` } }), stderr: privateValue };
+    const make = () => {
+      const proofs: any[] = [], calls: any[] = [];
+      const run = Object.assign(Object.create(FeatureRun.prototype), { hostEntry: "/fixture/host", proofs,
+        command: async (_command: string, _args: string[], options: any) => { calls.push(options); return output; } });
+      return { run, proofs, calls };
+    };
+    const args = ["gateway", "call", "config.patch", "--params", "{}", "--json"];
+    const denied = make(); await assert.rejects(denied.run.cli(args), /CONFIG_PATCH_EXIT_REQUIRED/);
+    assert.equal(denied.calls[0].allowFailure, true); assert.equal(denied.proofs[0].patchArrayIntentDenied, true);
+    const allowedFailure = make(); assert.deepEqual(await allowedFailure.run.cli(args, { allowFailure: true }), output);
+    assert.deepEqual(allowedFailure.proofs, denied.proofs);
+    assert.equal(configPatchFailureProof({ code: 1, stdout: "unknown private error" }).patchErrorCode, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "not JSON" }).patchErrorCode, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: JSON.stringify({ ok: true }) }).patchErrorCode, "NONE");
+    for (const code of ["INVALID_REQUEST", "UNAVAILABLE", "CONFLICT", "RATE_LIMITED"]) assert.equal(configPatchFailureProof({ code: 1, stdout: JSON.stringify({ error: { code } }) }).patchErrorCode, code);
+    assert.equal(configPatchFailureProof({ code: 1, stdout: JSON.stringify({ error: { code: privateValue } }) }).patchErrorCode, "UNKNOWN");
+    const r = receipt(); r.proofs = denied.proofs;
+    const encoded = frameReceipt(r); assert.equal(encoded.includes(privateValue), false);
+    assert.deepEqual(decodeReceipt(encoded, expected).receipt.proofs, denied.proofs);
+    for (const key of ["patchResponseParsed", "patchArrayIntentDenied", "patchRequiredCommandsSchemaDenied", "patchRateLimitDenied", "patchBaseHashDenied"]) {
+      for (const value of [null, "true", 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], [key]: value }] }));
+    }
+    for (const value of [null, privateValue, 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], patchErrorCode: value }] }));
+    assert.throws(() => frameReceipt({ ...r, proofs: [{ ...denied.proofs[0], rawError: privateValue }] }));
+  });
+  it("uses a bounded reload-aware deadline only for patch RPCs and never retries uncertain writes", async () => {
+    assert.ok(CONFIG_PATCH_RPC_TIMEOUT_MS > 60_000 && CONFIG_PATCH_RPC_TIMEOUT_MS < 120_000);
+    const calls: { args: string[]; options: Record<string, unknown> }[] = [], proofs: any[] = [];
+    const timeout = { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "gateway_transport_error", kind: "timeout", timeoutMs: CONFIG_PATCH_RPC_TIMEOUT_MS, message: "gateway timeout after 90000ms" } }), stderr: "" };
+    const run = Object.assign(Object.create(FeatureRun.prototype), { hostEntry: "/fixture/host", proofs,
+      command: async (_program: string, args: string[], options: Record<string, unknown> = {}) => {
+        calls.push({ args, options }); return args[3] === "config.patch" ? timeout : { code: 0, stdout: "{}", stderr: "" };
+      } });
+    const params = JSON.stringify({ raw: "{}", baseHash: "current", replacePaths: ["selected.repositories"] });
+    await assert.rejects(run.rpc("config.patch", JSON.parse(params)), /CONFIG_PATCH_EXIT_REQUIRED/);
+    assert.equal(calls.length, 1, "transport uncertainty must not replay a mutation or proceed to readback");
+    assert.deepEqual(calls[0].args, ["/fixture/host", "gateway", "call", "config.patch", "--params", params, "--json", "--timeout", String(CONFIG_PATCH_RPC_TIMEOUT_MS)]);
+    assert.deepEqual(calls[0].options, { allowFailure: true }, "the owning 120s command deadline is unchanged");
+    assert.equal(proofs.at(-1).patchTransportKind, "timeout");
+    assert.equal(proofs.at(-1).patchTransportTimeoutMs, CONFIG_PATCH_RPC_TIMEOUT_MS);
+    await run.rpc("config.get");
+    assert.deepEqual(calls[1].args, ["/fixture/host", "gateway", "call", "config.get", "--params", "{}", "--json"], "ordinary RPC budgets are unchanged");
+    const allowed = await run.cli(["gateway", "call", "config.patch", "--params", params, "--json"], { allowFailure: true });
+    assert.deepEqual(allowed, timeout, "the intentional malformed-policy path still receives its actual failure");
+    assert.equal(calls.length, 3);
+  });
+  it("retains typed transport failures as closed facts without exporting connection details or error prose", () => {
+    const privateValue = "SYNTHETIC_PRIVATE_TRANSPORT_VALUE";
+    const project = (error: Record<string, unknown>, code = 1) => configPatchFailureProof({ code, stdout: JSON.stringify({ ok: false, error, gateway: { url: privateValue } }), stderr: privateValue });
+    const timeout = project({ type: "gateway_transport_error", kind: "timeout", timeoutMs: 10000, message: `gateway timeout after 10000ms ${privateValue}` });
+    assert.equal(timeout.patchErrorCode, "UNKNOWN");
+    assert.equal(timeout.patchErrorType, "gateway_transport_error");
+    assert.equal(timeout.patchTransportKind, "timeout");
+    assert.equal(timeout.patchTransportTimeoutMs, 10000); assert.equal(timeout.patchTransportCode, null);
+    for (const code of [1000, 1006, 1012]) {
+      const closed = project({ type: "gateway_transport_error", kind: "closed", code, reason: privateValue });
+      assert.equal(closed.patchTransportKind, "closed"); assert.equal(closed.patchTransportCode, code); assert.equal(closed.patchTransportTimeoutMs, null);
+    }
+    for (const error of [
+      { type: "cli_error", kind: "timeout", timeoutMs: 10000 }, { type: privateValue, kind: "timeout", timeoutMs: 10000 },
+      { type: "gateway_transport_error", kind: privateValue, timeoutMs: 10000 },
+    ]) assert.equal(project(error).patchTransportTimeoutMs, null);
+    for (const timeoutMs of [undefined, null, "10000", 0, -1, 1.5, 120001, privateValue]) assert.equal(project({ type: "gateway_transport_error", kind: "timeout", timeoutMs }).patchTransportTimeoutMs, null);
+    assert.equal(project({ type: "gateway_transport_error", kind: "closed", code: privateValue }).patchTransportCode, null);
+    const r = receipt(); r.proofs = [timeout];
+    const frame = frameReceipt(r); assert.deepEqual(decodeReceipt(frame, expected).receipt.proofs, [timeout]);
+    assert.equal(JSON.stringify(decodeReceipt(frame, expected).receipt).includes(privateValue), false);
+    const invalid: ReadonlyArray<readonly [string, unknown]> = [
+      ["patchErrorType", privateValue], ["patchErrorType", null], ["patchTransportKind", privateValue],
+      ["patchTransportTimeoutMs", "10000"], ["patchTransportTimeoutMs", 0], ["patchTransportTimeoutMs", 120001],
+      ["patchTransportCode", privateValue], ["patchTransportCode", 1001],
+    ];
+    for (const [key, value] of invalid) assert.throws(() => frameReceipt({ ...r, proofs: [{ ...timeout, [key]: value }] }));
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "nonJSON" }).patchErrorType, "UNKNOWN");
+    assert.equal(configPatchFailureProof({ code: 0, stdout: "{}" }).patchErrorType, "NONE");
+  });
   it("requires exact external identity even on BLOCKED evidence", () => {
     const r = receipt(); r.disposition = "BLOCKED";
     const frame = frameReceipt(r); assert.deepEqual(decodeReceipt(frame, expected).receipt, r);
@@ -93,7 +280,8 @@ describe("bounded representative host receipts", () => {
     const verifierCommands = normalizeVerifierCommands(commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
     assert.ok(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")));
     assert.throws(() => frameReceipt({ ...receipt(), proofs: [{ verifierCommands }] }));
-    const goal = { id: "goal", status: "succeeded", sessionId: "session", sessionName: "own", requiredVerifierCommands: commands, verifierCommands, iteration: 0 };
+    const binding: GoalVerificationBinding = { version: 1, source: "default", requiredCommands: commands, additionalCommands: [], identity: { kind: "directory", path: "/tmp/own", device: "fixture", inode: "fixture" }, policyFingerprint: "fixture" };
+    const goal = { id: "goal", status: "succeeded", sessionId: "session", sessionName: "own", goalVerificationBinding: binding, verifierCommands, iteration: 0 };
     const row = { sessionId: goal.sessionId, name: goal.sessionName, workdir: "/tmp/own", goalTaskId: goal.id, backendRef: { conversationId: "thread" } };
     const listing = formatSessionListing({ id: row.sessionId, name: row.name, workdir: row.workdir, status: "completed", phase: "terminal", duration: 1, prompt: "Own", multiTurn: true, costUsd: 0 });
     let settled = false;
@@ -103,7 +291,7 @@ describe("bounded representative host receipts", () => {
     assert.equal(settled, true);
     const proof = decodeReceipt(frameReceipt({ ...receipt(), proofs: run.proofs }), expected).receipt.proofs[0];
     assert.deepEqual(proof.verifierCommands, commands.map((command, i) => ({ label: `check-${i + 1}`, command })));
-    assert.deepEqual(proof.requiredVerifierCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
+    assert.deepEqual(proof.requiredCommands, commands); assert.equal(proof.terminalRowSha256, sha(JSON.stringify(goal)));
     assert.equal(verifierCommands.every(spec => Object.hasOwn(spec, "timeoutMs")), true, "Original full terminal specs remain untouched");
   });
   it("settles unchanged required tuples without historical process-local wait handles", async () => {
@@ -166,6 +354,139 @@ describe("bounded representative host receipts", () => {
     for (const change of [{ turn_id: "foreign" }, { thread_id: "foreign" }]) assert.throws(() => matchingNativeOutput({ ...body, client_metadata: { ...body.client_metadata, ...change }, input: [result] }, call));
     assert.throws(() => matchingNativeOutput({ ...body, input: [{ ...result, call_id: "foreign" }] }, call));
   });
+  it("admits a policy restore only once for its original goal intent and distinct turn on the pinned thread", () => {
+    const tag = "OCA501_CASE_restore", goal = `${tag}: Finish.`;
+    const message = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+    const intent = { kind: "launch", goal, ralph: false };
+    const prefix = "The OpenClaw gateway restarted while this autonomous goal task was running.\nResume from the prior session context and continue toward the same goal immediately.";
+    const body = { tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }], client_metadata: { thread_id: "own-thread", turn_id: "new-turn" }, input: [message("<environment_context><cwd>/tmp/own/case</cwd></environment_context>"), message(`${prefix}\n\nGoal:\n${goal}\n\nInstructions:\n- Continue.`)] };
+    const fixture = () => ({ tag, intent, policyRestore: { phase: "registered", original: { harnessSessionId: "own-thread" }, originalTurn: "old-turn", originalExecutionComplete: true } });
+    const restored = policyRestoreIntent(body, fixture()); assert.equal(restored.kind, "restore");
+    assert.throws(() => currentNativeIntent(body, { caseTag: tag, intent }), "restore is not an unregistered launch");
+    for (const phase of ["admitting", "admitted", "released", "consumed"]) { const f = fixture(); f.policyRestore.phase = phase; assert.throws(() => policyRestoreIntent(body, f)); }
+    assert.throws(() => policyRestoreIntent(body, { ...fixture(), policyRestore: undefined }));
+    const incomplete = fixture(); incomplete.policyRestore.originalExecutionComplete = false; assert.throws(() => policyRestoreIntent(body, incomplete));
+    for (const metadata of [{ thread_id: "foreign", turn_id: "new-turn" }, { thread_id: "own-thread", turn_id: "old-turn" }, { thread_id: "own-thread", turn_id: "" }]) assert.throws(() => policyRestoreIntent({ ...body, client_metadata: metadata }, fixture()));
+    const ralphPrefix = "The OpenClaw gateway restarted while this Ralph-style goal task was running.\nResume from the prior session context and continue immediately.";
+    assert.throws(() => policyRestoreIntent({ ...body, input: [message(`${ralphPrefix}\n\nGoal:\n${goal}\n\nInstructions:\n- Continue.`)] }, fixture()));
+    const options = { transport: "native-codex", caseTag: tag, workdir: "/tmp/own/case", ownedRoot: "/tmp/own", callId: "oca501_exec_1", itemId: "item", intent: restored, expectedIdentity: body.client_metadata, validate: () => ({ ok: true }) };
+    const read = nativeExecutionCall(body, { ...options, receiptMode: "read-existing" });
+    assert.equal((read.args as { cmd?: string }).cmd, NATIVE_READ_COMMAND);
+    const result = { type: "function_call_output", call_id: read.callId, output: JSON.stringify({ exit_code: 0, output: "NATIVE-EXEC\n" }) };
+    assert.doesNotThrow(() => assertNativeExecutionResult(matchingNativeOutput({ ...body, input: [...body.input, result] }, read), read, "NATIVE-EXEC\n"));
+    assert.throws(() => assertNativeExecutionResult(result, read, "NATIVE-EXEC\nNATIVE-EXEC\n"), "restore cannot append a second marker");
+    assert.throws(() => assertNativeExecutionResult({ ...result, output: JSON.stringify({ exit_code: 1, output: "NATIVE-EXEC\n" }) }, read, "NATIVE-EXEC\n"));
+    assert.equal((nativeExecutionCall(body, options).args as { cmd?: string }).cmd, NATIVE_COMMAND, "a manually held restore still creates its own first receipt");
+    assert.throws(() => nativeExecutionCall(body, { ...options, receiptMode: "arbitrary" }));
+  });
+  it("holds the actual fixture restore response until drain and requires its own matched read result", async () => {
+    for (const revoke of ["none", "owner", "capability"]) {
+      const root = mkdtempSync(join(tmpdir(), "oca-fixture-restore-")), workdir = join(root, "case"); mkdirSync(workdir);
+      writeFileSync(join(workdir, "native-receipt.txt"), "NATIVE-EXEC\n");
+      const deferred = Promise.withResolvers<void>(); let drained = false, responseReceived = false, ownerCurrent = true;
+      const tag = "OCA501_CASE_control", intent = { kind: "launch", goal: `${tag}: Finish.`, ralph: false };
+      const capability: any = { phase: "registered", original: { harnessSessionId: "thread" }, originalTurn: "old-turn", originalExecutionComplete: true, drained: deferred.promise,
+        revalidate: async (record: any) => {
+          assert.equal(drained, true); assert.equal(record, capability.record); assert.equal(record.owner.sessionId, "new-owner");
+          if (revoke !== "none") queueMicrotask(() => {
+            if (revoke === "owner") ownerCurrent = false;
+            else fixture.policyRestore = { ...capability };
+          });
+          return () => { assert.equal(ownerCurrent, true, "replacement in the authorization return microtask must refuse"); assert.equal(record, capability.record); };
+        } };
+      const fixture: any = { tag, intent, workdir, threadId: "thread", turnId: "old-turn", executed: true, policyRestore: capability };
+      const provider = await responsesFixture({ root, model: "fixture", key: "owned-fixture-key", validate: () => ({ ok: true }),
+        observeNativeRestore: async (_fixture: any, record: any) => { assert.equal(capability.phase, "admitting"); assert.equal(record.threadId, "thread"); assert.equal(record.turnId, "new-turn"); },
+        observeNative: async () => ({ sessionId: "new-owner", nativeProcess: {} }) });
+      provider.cases.set(tag, fixture);
+      const message = (text: string) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+      const body = { model: "fixture", stream: true, tools: [{ type: "function", name: "exec_command", parameters: { type: "object" } }], client_metadata: { thread_id: "thread", turn_id: "new-turn" }, input: [message(`<environment_context><cwd>${workdir}</cwd></environment_context>`), message(`The OpenClaw gateway restarted while this autonomous goal task was running.\nResume from the prior session context and continue toward the same goal immediately.\n\nGoal:\n${intent.goal}\n\nInstructions:\n- Continue.`)] };
+      const send = (input: any) => fetch(`${provider.url}/v1/responses`, { method: "POST", body: JSON.stringify(input), signal: AbortSignal.timeout(5000) });
+      let failure: unknown;
+      const pending = send(body).then(response => { responseReceived = true; return response; }).catch((error: unknown): undefined => { failure = error; return undefined; });
+      try {
+        await until(() => failure || capability.record?.owner, 5000); assert.equal(failure, undefined);
+        assert.equal(responseReceived, false); assert.equal(fixture.executed, false, "the old result cannot prove restored execution");
+        drained = true; capability.phase = "released"; deferred.resolve();
+        const response = await pending;
+        if (revoke !== "none") {
+          assert.equal(response, undefined); assert.ok(failure); assert.equal(fixture.call, undefined);
+          assert.equal(capability.phase, "released"); assert.equal(fixture.executed, false);
+          assert.deepEqual(provider.failures, ["FIXTURE_NATIVE_OWNER_INVALID"]);
+          assert.equal(readFileSync(join(workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+          continue;
+        }
+        assert.ok(response); await response.text();
+        assert.equal(capability.phase, "consumed"); assert.equal(fixture.call.receiptMode, "read-existing"); assert.equal(fixture.call.args.cmd, NATIVE_READ_COMMAND);
+        assert.equal(fixture.executed, false);
+        const output = { type: "function_call_output", call_id: fixture.call.callId, output: JSON.stringify({ exit_code: 0, output: "NATIVE-EXEC\n" }) };
+        await (await send({ ...body, input: [...body.input, output] })).text();
+        assert.equal(fixture.executed, true); assert.equal(provider.requests[1].executionExit, 0);
+        assert.equal(readFileSync(join(workdir, "native-receipt.txt"), "utf8"), "NATIVE-EXEC\n");
+        await assert.rejects(send({ ...body, client_metadata: { thread_id: "thread", turn_id: "another-turn" } }));
+        assert.deepEqual(provider.failures, ["FIXTURE_NATIVE_IDENTITY_INVALID"]);
+        assert.equal(provider.requests[2].fixtureFailureCode, "FIXTURE_NATIVE_IDENTITY_INVALID");
+      } finally { fixture.shutdownExpected = true; deferred.resolve(); await provider.close(); rmSync(root, { recursive: true, force: true }); }
+    }
+  });
+  it("requires the replacement current owner and immutable binding before and after policy-restore drain", () => {
+    const original = { id: "goal", name: "own", goal: "Own goal", workdir: "/tmp/own", loopMode: "verifier", iteration: 0, sessionId: "old", harnessSessionId: "thread", goalVerificationBinding: { version: 1, requiredCommands: ["a", "a"], additionalCommands: ["extra"] }, verifierCommands: [{ command: "a" }, { command: "a" }, { command: "extra" }] };
+    const goal = { ...structuredClone(original), status: "running", iteration: 1, sessionId: "new", sessionName: "new-owner" };
+    const row = { sessionId: "new", name: "new-owner", goalTaskId: "goal", workdir: "/tmp/own", backendRef: { conversationId: "thread" } };
+    const record = { threadId: "thread", turnId: "new-turn" };
+    const cap = { phase: "admitting", original, originalTurn: "old-turn" };
+    assert.doesNotThrow(() => assertPolicyRestoreOwner(cap, goal, row, record));
+    const changedGoals: ReadonlyArray<Partial<typeof goal>> = [{ id: "foreign" }, { workdir: "/tmp/foreign" }, { sessionId: "old" }, { status: "completed" }, { iteration: 2 }, { harnessSessionId: "foreign" }, { goalVerificationBinding: { ...original.goalVerificationBinding, additionalCommands: [] } }, { verifierCommands: original.verifierCommands.slice(1) }];
+    for (const change of changedGoals) assert.throws(() => assertPolicyRestoreOwner(cap, { ...goal, ...change }, row, record));
+    for (const change of [{ sessionId: "foreign" }, { goalTaskId: "foreign" }, { workdir: "/tmp/foreign" }, { backendRef: { conversationId: "foreign" } }]) assert.throws(() => assertPolicyRestoreOwner(cap, goal, { ...row, ...change }, record));
+    for (const change of [{ turnId: "old-turn" }, { threadId: "foreign" }]) assert.throws(() => assertPolicyRestoreOwner(cap, goal, row, { ...record, ...change }));
+    assert.throws(() => assertPolicyRestoreOwner({ ...cap, phase: "consumed" }, goal, row, record));
+    assert.throws(() => assertPolicyRestoreOwner({ ...cap, phase: "released", record }, goal, row, { ...record }), "a substituted response cannot consume the ticket after the drain await");
+    assert.doesNotThrow(() => assertPolicyRestoreOwner({ ...cap, phase: "released", record }, goal, row, record));
+  });
+  it("drains the pinned admitted process before releasing restored model work and refuses a changed owner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "oca-policy-drain-"));
+    const child = spawn("bash", ["-c", `while [ ! -f release ]; do sleep 0.05; done; printf '%s\\n' '{"ordinal":1,"kind":"CI","exit":0}' > checks.jsonl`], { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const identity = await until(() => { const current = processIdentity(child.pid!); return current?.executable.endsWith("/bash") && current; }, 5000); assert.ok(identity);
+    let ownerCurrent = false, released = false;
+    const capability = { phase: "admitted", record: { owner: { sessionId: "new" } }, check: identity, release: () => { released = true; } };
+    const fixture = { workdir: root, policyRestore: capability };
+    const run = Object.assign(Object.create(FeatureRun.prototype), { policyRestoreOwner: () => { assert.equal(ownerCurrent, true); } });
+    try {
+      await assert.rejects(run.drainPolicyRestore(fixture));
+      assert.equal(existsSync(join(root, "release")), false); assert.equal(released, false);
+      assert.equal(processIdentity(identity.pid)?.startTicks, identity.startTicks, "refusal leaves the original owned check held");
+      ownerCurrent = true; await run.drainPolicyRestore(fixture);
+      assert.equal(capability.phase, "released"); assert.equal(released, true);
+      assert.notEqual(processIdentity(identity.pid)?.startTicks, identity.startTicks);
+      assert.deepEqual(JSON.parse(readFileSync(join(root, "checks.jsonl"), "utf8")), { ordinal: 1, kind: "CI", exit: 0 });
+      await assert.rejects(run.drainPolicyRestore(fixture), "the drain capability cannot be reused");
+    } finally {
+      const stopped = await stopOwnedChild(child, { identity, graceMs: 1000, killMs: 1000 });
+      if (stopped.complete) rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("keeps a retired admitted check separate from the restored owner's entire ordered suite", () => {
+    const root = mkdtempSync(join(tmpdir(), "oca-restored-checks-"));
+    const fixture = { tag: "OCA501_CASE_owned", workdir: root }, proofs: any[] = [];
+    const run = Object.assign(Object.create(FeatureRun.prototype), { proofs });
+    const expected = [["CI", 0], ["LINT", 0], ["CI", 0], ["EXTRA_A", 0]];
+    const checks = [["CI", 0], ...expected].map(([kind, exit], i) => ({ ordinal: i + 1, kind, exit }));
+    try {
+      writeFileSync(join(root, "native-receipt.txt"), "NATIVE-EXEC\n");
+      writeFileSync(join(root, "checks.jsonl"), checks.map(row => JSON.stringify(row)).join("\n"));
+      run.checks(fixture, expected, [["CI", 0]]);
+      assert.deepEqual(proofs[0].retiredChecks, checks.slice(0, 1)); assert.deepEqual(proofs[0].checks, checks.slice(1));
+      assert.throws(() => run.checks(fixture, expected), "the retired result cannot replace a restored required check");
+      for (const bad of [checks.slice(0, -1), [...checks.slice(0, 2), checks[3], checks[2], checks[4]], checks.map((row, i) => i === 1 ? { ...row, exit: 1 } : row)]) {
+        writeFileSync(join(root, "checks.jsonl"), bad.map(row => JSON.stringify(row)).join("\n")); assert.throws(() => run.checks(fixture, expected, [["CI", 0]]));
+      }
+      const r = receipt(); r.proofs = [{ ...proofs[0], retiredAdmittedCheckDrained: true, restoredEffectiveSuitePassed: true }, { providerRequests: [{ fixtureFailureCode: "FIXTURE_INTENT_INVALID", call: { receiptMode: "read-existing" } }] }];
+      assert.deepEqual(decodeReceipt(frameReceipt(r), { candidateSha: "a".repeat(40), nodeVersion: "24.16.0", scenario: "smoke" }).receipt.proofs, r.proofs);
+      for (const value of ["PRIVATE_ERROR_PROSE", null, 1]) assert.throws(() => frameReceipt({ ...r, proofs: [{ providerRequests: [{ fixtureFailureCode: value }] }] }));
+      assert.throws(() => frameReceipt({ ...r, proofs: [{ providerRequests: [{ call: { receiptMode: "PRIVATE_ERROR_PROSE" } }] }] }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   it("joins actual running recovery rows through the controller's current task association", async () => {
     const directory = mkdtempSync(join(tmpdir(), "oca501-goal-owner-"));
     const fixture = { name: "own", workdir: directory, intent: { kind: "launch", goal: "Own intent" }, ralph: false };
@@ -188,7 +509,7 @@ describe("bounded representative host receipts", () => {
       const goal = await controller.launchTask({ name: fixture.name, goal: fixture.intent.goal, workdir: directory, verifierCommands: [{ label: "check", command: "true" }],
         loopMode: "verifier", permissionMode: "bypassPermissions", route: { provider: "webchat", target: "owned-parent" } });
       assert.equal(goal.sessionId, live.id); assert.equal(goal.sessionName, live.name); assert.notEqual(live.name, fixture.name);
-      const row = store.getPersistedSession(live.id)!; assert.equal(Object.hasOwn(row, "goalTaskId"), false);
+      const row = store.getPersistedSession(live.id)!; assert.equal(row.goalTaskId, goal.id);
       const listing = getSessionsListingText({ list: () => [live], listPersistedSessions: () => store.listPersistedSessions() } as unknown as SessionManager, "running", undefined, { full: true });
       const bound = { ...fixture, goalId: goal.id, nativeSessionId: live.id };
       assert.equal(currentOwner([row], listing, bound, "thread", goal), row);

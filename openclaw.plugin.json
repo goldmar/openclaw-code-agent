@@ -243,7 +243,7 @@
       "trustedVerifierCommands": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Goal verifier commands the operator pre-approves (exact strings). A goal launched by the orchestrator whose verifier commands are all in this list starts without the one-time user confirmation; any other model-supplied verifier command needs the user's confirmation button first."
+        "description": "Additional goal verifier commands the operator pre-approves (exact strings). Required policy checks are already approved. Model-supplied additions all in this list skip the one-time user confirmation; any other model-supplied addition needs confirmation first."
       },
       "planOfferTool": {
         "type": "boolean",
@@ -256,14 +256,63 @@
         "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Skip this version buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
       },
       "requiredGoalVerifierCommands": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "\\S"
+        "description": "Removed configuration. Migrate to goalVerificationPolicies.repositories with requiredCommands or an explicit defaultRequiredCommands, then start new goals. This legacy field denies goal work; historical evidence is preserved."
+      },
+      "goalVerificationPolicies": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "repository",
+                "requiredCommands"
+              ],
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Operator-owned absolute path inside the actual Git repository. Linked worktrees and symlinks share its canonical Git common-directory identity; duplicate identities are invalid."
+                },
+                "requiredCommands": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                }
+              }
+            }
+          },
+          "defaultRequiredCommands": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
         },
-        "description": "Complete ordered mandatory goal verifier suite. Omitted goal verifiers use this suite; explicit verifiers must match it exactly after outer trimming. All checks must pass, including in Ralph mode. Empty or invalid settings deny goal work."
+        "anyOf": [
+          {
+            "required": [
+              "repositories"
+            ]
+          },
+          {
+            "required": [
+              "defaultRequiredCommands"
+            ]
+          }
+        ],
+        "description": "Operator-owned complete required checks per actual repository. Goal verifier_commands are additional checks appended in order, retaining duplicates. Configured unmatched repositories and nonrepositories require an explicit default; invalid identities/configuration deny goal work. Absent configuration preserves caller-verifier behavior."
       }
     }
   },
@@ -360,8 +409,13 @@
       "advanced": true
     },
     "requiredGoalVerifierCommands": {
-      "label": "Required goal verifier suite",
-      "help": "Operator-owned ordered checks required for every goal. For example [\"bash ci.sh\"]. Every entry runs; callers cannot select a subset. Remove the setting to restore defaults for new goals; existing bound goals retain their checks.",
+      "label": "Removed global goal verifiers",
+      "help": "Migration required: replace with goalVerificationPolicies, then start new goals. Existing terminal evidence is preserved.",
+      "advanced": true
+    },
+    "goalVerificationPolicies": {
+      "label": "Repository goal verification policies",
+      "help": "Operator-owned repository paths and complete required suites, with optional explicit defaultRequiredCommands. Goal checks append to the baseline. Linked worktrees share repository identity. Active goals are invalidated only when their selected policy or identity changes.",
       "advanced": true
     }
   },

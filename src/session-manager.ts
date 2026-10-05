@@ -16,6 +16,7 @@ import { SessionStateSyncService } from "./session-state-sync-service";
 import { SessionReferenceService } from "./session-reference-service";
 import { SessionWorktreeStrategyService, type WorktreeStrategyResult } from "./session-worktree-strategy-service";
 import type {
+  GoalAuthorizationTicket,
   SessionConfig,
   SessionStatus,
   SessionMetrics,
@@ -641,12 +642,13 @@ export class SessionManager {
     this.maintenance.dispose();
   }
 
-  private goalTaskAuthorizer?: (id: string) => void;
+  private goalTaskAuthorizer?: (id: string, workdir?: string) => Promise<GoalAuthorizationTicket>;
+  private readonly goalAdmissionTickets = new WeakMap<SessionConfig, GoalAuthorizationTicket>();
   private goalTaskIsActive?: (id: string) => boolean;
   private goalSessionStopHandlers?: GoalSessionStopHandlers;
 
   /** Internal owner callbacks; session callers cannot provide an authorization snapshot. */
-  setGoalTaskAuthorizer(authorizer: (id: string) => void, isActive?: (id: string) => boolean): void {
+  setGoalTaskAuthorizer(authorizer: (id: string, workdir?: string) => Promise<GoalAuthorizationTicket>, isActive?: (id: string) => boolean): void {
     this.goalTaskAuthorizer = authorizer;
     this.goalTaskIsActive = isActive;
   }
@@ -688,36 +690,31 @@ export class SessionManager {
    * keeps its strict guard and fails when it discovers a policy change; only a
    * later explicit action detaches. Goal-controller work never detaches.
    */
-  continueGoalSession(
-    target: { goalTaskId?: string },
+  async continueGoalSession(
+    target: { goalTaskId?: string; workdir?: string },
     session?: Session,
     options: { fromGoalController?: boolean } = {},
-  ): SessionConfig["goalOwnership"] {
+  ): Promise<{ goalOwnership: SessionConfig["goalOwnership"]; authorization: GoalAuthorizationTicket }> {
     const id = target.goalTaskId;
-    if (!id) return undefined;
+    if (!id) return { goalOwnership: undefined, authorization: { isCurrent: () => !target.goalTaskId } };
     if (!options.fromGoalController && this.goalTaskEnded(id)) {
       session?.detachGoal();
-      return "detached";
+      return { goalOwnership: "detached", authorization: { isCurrent: () => !session?.goalTaskId && this.goalTaskEnded(id) } };
     }
-    this.assertGoalTaskAuthorized(id);
-    return "attached";
+    const authorization = await this.assertGoalTaskAuthorized(id, session?.workdir ?? target.workdir);
+    return { goalOwnership: "attached", authorization: { isCurrent: () => authorization.isCurrent() && target.goalTaskId === id && !session?.goalDetached } };
   }
 
-  assertGoalTaskAuthorized(id?: string): void {
-    if (!id) return;
-    if (!this.goalTaskAuthorizer) throw new Error("Goal controller unavailable; this goal session cannot continue.");
-    this.goalTaskAuthorizer(id);
+  async assertGoalTaskAuthorized(id?: string, workdir?: string): Promise<GoalAuthorizationTicket> {
+    if (this.shuttingDown) throw new Error("Session service is shutting down.");
+    if (!id) return { isCurrent: () => !this.shuttingDown };
+    const authorizer = this.goalTaskAuthorizer;
+    if (!authorizer) throw new Error("Goal controller unavailable; this goal session cannot continue.");
+    const ticket = await authorizer(id, workdir);
+    return { isCurrent: () => !this.shuttingDown && this.goalTaskAuthorizer === authorizer && ticket.isCurrent() };
   }
 
-  private goalOwnedLaunch(config: SessionConfig): SessionConfig {
-    if (config.forkSession) {
-      if (config.sessionIdOverride && (this.sessions.has(config.sessionIdOverride)
-        || this.getPersistedSession(config.sessionIdOverride))) {
-        throw new Error("An independent fork cannot reuse an existing session identity. Omit sessionIdOverride to create a new session.");
-      }
-      if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
-      return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
-    }
+  private goalOwnerForLaunch(config: SessionConfig): string | undefined {
     const owners = new Set<string>();
     for (const [ref, identity] of [
       [config.sessionIdOverride, "stable"],
@@ -747,17 +744,36 @@ export class SessionManager {
     if (owners.size > 1) throw new Error("Conflicting canonical goal owners for this resume.");
     const original = [...owners][0];
     if (original && config.goalTaskId && config.goalTaskId !== original) throw new Error("A resumed session cannot change its goal owner.");
-    const goalTaskId = original ?? config.goalTaskId;
+    return original ?? config.goalTaskId;
+  }
+
+  private async goalOwnedLaunch(config: SessionConfig, workdir = config.workdir): Promise<SessionConfig> {
+    if (config.forkSession) {
+      if (config.sessionIdOverride && (this.sessions.has(config.sessionIdOverride)
+        || this.getPersistedSession(config.sessionIdOverride))) {
+        throw new Error("An independent fork cannot reuse an existing session identity. Omit sessionIdOverride to create a new session.");
+      }
+      if (config.goalTaskId) throw new Error("An independent fork cannot claim ownership of an existing goal.");
+      return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+    }
+    const goalTaskId = this.goalOwnerForLaunch(config);
     // Decided at the first check of a launch: once attached, a later goal end
     // found during preparation fails the launch instead of detaching it.
     if (goalTaskId && config.goalOwnership !== "attached" && this.goalTaskEnded(goalTaskId)) {
       return { ...config, goalTaskId: undefined, goalOwnership: "detached", assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
     }
-    this.assertGoalTaskAuthorized(goalTaskId);
-    if (!goalTaskId) return { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
-    return { ...config, goalTaskId, goalOwnership: "attached",
-      assertGoalTaskAuthorized: () => this.assertGoalTaskAuthorized(goalTaskId),
+    let authorization: GoalAuthorizationTicket;
+    do { authorization = await this.assertGoalTaskAuthorized(goalTaskId, workdir); } while (!authorization.isCurrent());
+    if (!goalTaskId) {
+      const ordinary: SessionConfig = { ...config, goalOwnership: undefined, assertGoalTaskAuthorized: undefined, isGoalTaskEnded: undefined };
+      this.goalAdmissionTickets.set(ordinary, { isCurrent: () => authorization.isCurrent() && this.goalOwnerForLaunch(ordinary) === undefined });
+      return ordinary;
+    }
+    const owned: SessionConfig = { ...config, goalTaskId, goalOwnership: "attached",
+      assertGoalTaskAuthorized: (actualWorkdir) => this.assertGoalTaskAuthorized(goalTaskId, actualWorkdir),
       isGoalTaskEnded: () => this.goalTaskEnded(goalTaskId) };
+    this.goalAdmissionTickets.set(owned, { isCurrent: () => authorization.isCurrent() && this.goalOwnerForLaunch(owned) === goalTaskId });
+    return owned;
   }
 
   /**
@@ -768,7 +784,9 @@ export class SessionManager {
    * and session-id checks must see the previous launch already registered.
    */
   launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
-    try { config = this.goalOwnedLaunch(config); } catch (err) { return Promise.reject(err); }
+    const admission = this.goalOwnedLaunch(config);
+    // Observe rejection while an earlier serialized launch still owns the queue.
+    void admission.catch((): void => undefined);
     const persisted = config.resumeSessionId && config.sessionIdOverride
       ? this.getPersistedSession(config.sessionIdOverride) : undefined;
     const approval = persisted ? buildResumedPlanState(persisted, config.permissionMode ?? pluginConfig.permissionMode) : undefined;
@@ -776,7 +794,11 @@ export class SessionManager {
       decisionVersion: approval.decisionVersion,
       backendConversationId: getBackendConversationId(persisted!),
     } : undefined;
-    const launch = this.spawnTail.then((): Promise<Session> => this.launchSerialized(config, options, expectedApproval));
+    const launch = this.spawnTail.then(async (): Promise<Session> => {
+      config = await admission;
+      while (this.goalAdmissionTickets.get(config)?.isCurrent() === false) config = await this.goalOwnedLaunch(config);
+      return this.launchSerialized(config, options, expectedApproval);
+    });
     this.spawnTail = launch.then((): void => undefined, (): void => undefined);
     return launch;
   }
@@ -789,7 +811,7 @@ export class SessionManager {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
-    config = this.goalOwnedLaunch(config);
+    do { config = await this.goalOwnedLaunch(config); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
     const activeCount = this.registry.activeSessionCount();
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
@@ -887,9 +909,9 @@ export class SessionManager {
     config.repoIntegrationPolicySource = launchPolicy.resolution.source === "none" ? undefined : launchPolicy.resolution.source;
     config.repoProvider = launchPolicy.resolution.provider;
 
-    config = this.goalOwnedLaunch(config);
+    do { config = await this.goalOwnedLaunch(config); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
     const preparedLaunch = await this.restore.prepareSpawn(config, name);
-    config = this.goalOwnedLaunch(config);
+    do { config = await this.goalOwnedLaunch(config, preparedLaunch.actualWorkdir); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
     // Repo-policy lookup and worktree preparation await git; shutdown may have
     // started meanwhile, and a session registered now would outlive it.
     if (this.shuttingDown) {
@@ -2653,26 +2675,68 @@ export class SessionManager {
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-    this.assertGoalTaskAuthorized(session.goalTaskId);
-    const answer = await this.questions.handleAskUserQuestion(session, input, context);
-    this.assertGoalTaskAuthorized(session.goalTaskId);
+    const originalPendingInput = session.pendingInputState;
+    const pendingInputSignature = JSON.stringify(originalPendingInput);
+    const previousQuestion = this.pendingAskUserQuestions.get(sessionId);
+    const questionSignature = JSON.stringify(previousQuestion && [previousQuestion.requestId, previousQuestion.questionId, previousQuestion.questions]);
+    const contextSignature = JSON.stringify(context);
+    const inputSignature = JSON.stringify(input);
+    const goalTaskId = session.goalTaskId, workdir = session.workdir, harness = session.harnessName;
+    const backendId = getBackendConversationId(session);
+    const assertOwner = (): void => {
+      if (this.sessions.get(sessionId) !== session || session.goalTaskId !== goalTaskId || session.workdir !== workdir
+        || session.harnessName !== harness || (backendId && getBackendConversationId(session) !== backendId)
+        || !["starting", "running"].includes(session.status) || JSON.stringify(context) !== contextSignature || JSON.stringify(input) !== inputSignature) {
+        throw new Error("The question's session or request changed during authorization; the original question was not delivered.");
+      }
+    };
+    { let authorization; do { authorization = await this.assertGoalTaskAuthorized(session.goalTaskId, session.workdir); } while (!authorization.isCurrent()); }
+    assertOwner();
+    const pending = session.pendingInputState;
+    const currentQuestion = this.pendingAskUserQuestions.get(sessionId);
+    // A named harness request may first appear in Session while Git admission
+    // is pending. Only that same request may appear; an existing request must
+    // retain its original question/version as well.
+    const namedRequestAppeared = !originalPendingInput && context?.requestId && pending?.requestId === context.requestId;
+    if (((pending !== originalPendingInput || JSON.stringify(pending) !== pendingInputSignature) && !namedRequestAppeared)
+      || currentQuestion !== previousQuestion || JSON.stringify(currentQuestion && [currentQuestion.requestId, currentQuestion.questionId, currentQuestion.questions]) !== questionSignature) {
+      throw new Error("The pending question changed during authorization; the original question was not delivered.");
+    }
+    const answering = this.questions.handleAskUserQuestion(session, input, context);
+    const registeredQuestion = this.pendingAskUserQuestions.get(sessionId);
+    const registeredPendingInput = session.pendingInputState;
+    const registeredInputSignature = JSON.stringify(registeredPendingInput);
+    const answer = await answering;
+    { let authorization; do { authorization = await this.assertGoalTaskAuthorized(session.goalTaskId, session.workdir); } while (!authorization.isCurrent()); }
+    assertOwner();
+    const nextQuestion = this.pendingAskUserQuestions.get(sessionId);
+    if ((nextQuestion && nextQuestion !== registeredQuestion)
+      || (session.pendingInputState && (session.pendingInputState !== registeredPendingInput
+        || JSON.stringify(session.pendingInputState) !== registeredInputSignature))) {
+      throw new Error("The pending question changed during answer authorization; the original answer was not returned.");
+    }
     return answer;
   }
 
   /**
    * Resolve a pending AskUserQuestion by option index (from button callback).
    */
-  resolveAskUserQuestion(
+  async resolveAskUserQuestion(
     sessionId: string,
     optionIndex: number,
     context: AskUserQuestionResolutionContext = {},
-  ): boolean {
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
+    const pending = this.pendingAskUserQuestions.get(sessionId);
+    const pendingSignature = JSON.stringify(pending && [pending.requestId, pending.questionId, pending.questions]);
     if (session) {
       // The user's answer is an explicit action: an ended goal detaches the session.
-      this.continueGoalSession(session, session);
+      { let continuation; do { continuation = await this.continueGoalSession(session, session); } while (!continuation.authorization.isCurrent()); }
       assertModelAllowedForHarness(session.harnessName, session.model, resolveAllowedModelsForHarness(session.harnessName));
     }
+    const current = this.pendingAskUserQuestions.get(sessionId);
+    if (this.sessions.get(sessionId) !== session || current !== pending
+      || JSON.stringify(current && [current.requestId, current.questionId, current.questions]) !== pendingSignature) return false;
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 

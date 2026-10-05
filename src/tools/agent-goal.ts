@@ -69,14 +69,14 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_goal",
     description:
-      "Goal loops: a session that repeats until verifier commands pass ('verifier') or a completion promise appears ('ralph'). Operator-required verifiers apply in both modes: omit verifier_commands to use the complete configured suite; supplied commands must match it exactly. Use only when the user asks for a goal/autonomous loop. action: launch | status | edit | stop.",
+      "Goal loops: a session that repeats until verifier commands pass ('verifier') or a completion promise appears ('ralph'). Operator-required verifiers apply in both modes: the actual repository selects its complete operator policy; verifier_commands append additional checks and cannot replace that baseline. Use only when the user asks for a goal/autonomous loop. action: launch | status | edit | stop.",
     parameters: Type.Object({
       action: Type.StringEnum(GOAL_ACTIONS, { description: "launch needs goal; stop needs task; edit needs task and goal; status lists all or one task" }),
       task: Type.Optional(Type.String({ description: "Goal task name or ID (status, edit, stop)" })),
       goal: Type.Optional(Type.String({ description: "Goal text (launch), or the replacement goal (edit)" })),
       verifier_commands: Type.Optional(Type.Array(Type.String(), {
         minItems: 1,
-        description: "launch: shell commands that must pass (bash -c in the workdir, minimal env). Commands not in the plugin's trustedVerifierCommands need one user confirmation before the loop starts.",
+        description: "launch: additional shell commands appended after the operator-required repository checks; all must pass (bash -c in the workdir, minimal env). Commands not in the plugin's trustedVerifierCommands need one user confirmation before the loop starts.",
       })),
       name: Type.Optional(Type.String({ description: "launch: short kebab-case task name" })),
       workdir: Type.Optional(Type.String()),
@@ -107,12 +107,12 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
       }
       if (p.action === "edit") {
         const task = optionalString(p.task)!;
-        try { return text(renderGoalEditResult(goalController.editTask(task, p.goal!), task)); } catch (err) {
+        try { return text(renderGoalEditResult(await goalController.editTask(task, p.goal!), task)); } catch (err) {
           return text(`Error editing goal task: ${err instanceof Error ? err.message : String(err)}`, true);
         }
       }
 
-      const resolution = resolveGoalLaunchRequest({
+      const resolution = await resolveGoalLaunchRequest({
         goal: p.goal!,
         verifierCommands: p.verifier_commands,
         name: p.name,
@@ -149,10 +149,10 @@ export function makeAgentGoalTool(ctx: OpenClawPluginToolContext) {
           originSessionKey: resolution.originSessionKey,
           route: resolution.route,
           harness: resolution.harness,
-          verifierCommands: resolution.verifierCommands,
+          verifierCommands: resolution.additionalVerifierCommands,
           maxCostUsd: resolution.maxCostUsd,
           // The orchestrator chose these commands: the user confirms them once.
-          requireVerifierConfirmation: verifierCommandsNeedConfirmation(resolution.verifierCommands),
+          requireVerifierConfirmation: verifierCommandsNeedConfirmation(resolution.additionalVerifierCommands),
         });
         return text(formatGoalLaunchResult(task, { ...resolution, maxIterations: p.max_iterations }));
       } catch (err: unknown) {

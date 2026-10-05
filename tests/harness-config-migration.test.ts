@@ -130,9 +130,11 @@ describe("session model policy on native execution", () => {
         questions: [{ question: "Which target?", options: [{ label: "Staging" }] }],
       }, { requestId: "early-question" });
       void pending.then(() => { settled = true; }, () => { settled = true; });
+      for (let count = 0; count < 200 && !(manager as any).pendingAskUserQuestions.has(session.id); count++) await tick(5);
+      assert.equal((manager as any).pendingAskUserQuestions.has(session.id), true, "the intercepted question must register before revocation");
       setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["opus"] } } });
       await assert.rejects(manager.resolvePendingInputOption(session.id, 0, { requestId: "early-question" }), /not allowed/);
-      assert.throws(() => manager.resolveAskUserQuestion(session.id, 0), /not allowed/);
+      await assert.rejects(manager.resolveAskUserQuestion(session.id, 0), /not allowed/);
       await tick(5);
       assert.equal(settled, false, "denied answers must leave the question pending");
       setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });

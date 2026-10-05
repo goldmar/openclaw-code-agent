@@ -2,6 +2,8 @@ import "./test-env";
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionStore, sessionStoreInternals } from "../src/session-store";
+import { Session } from "../src/session";
+import type { SessionStatus } from "../src/types";
 import { archiveLegacySessionIndex, sessionStoreStorageInternals } from "../src/session-store-storage";
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
@@ -511,6 +513,84 @@ describe("SessionStore persisted compatibility", () => {
 });
 
 describe("SessionStore path resolution", () => {
+  it("persists the current running Session's goal owner through repeated writes and reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-running-goal-owner-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeStore(indexPath, []);
+      const store = new SessionStore({ indexPath, env: {} });
+      const session = new Session({
+        prompt: "Continue the owned goal", workdir: dir, harness: "codex", route: DEFAULT_ROUTE,
+        goalTaskId: "goal-current", goalOwnership: "attached",
+      }, "owned-goal");
+      session.harnessSessionId = "owned-thread";
+      session.on("statusChange", (_session: Session, status: SessionStatus) => { if (status === "running") store.markRunning(session); });
+      session.transition("running");
+      assert.equal(session.goalTaskId, "goal-current");
+      for (let write = 0; write < 2; write++) {
+        store.markRunning(session);
+        const saved = JSON.parse(readFileSync(indexPath, "utf8")).sessions.find((row: { sessionId: string }) => row.sessionId === session.id);
+        assert.equal(saved.status, "running");
+        assert.equal(saved.goalTaskId, "goal-current");
+        assert.equal(saved.backendRef.conversationId, "owned-thread");
+        assert.equal(store.getPersistedSession(session.id)?.goalTaskId, "goal-current");
+      }
+      const reloaded = new SessionStore({ indexPath, env: {} });
+      assert.equal(reloaded.getPersistedSession(session.id)?.goalTaskId, "goal-current");
+      assert.equal(reloaded.getPersistedSession(session.id)?.runtimeRecovery?.reason, "persisted-running-without-runtime");
+      assert.equal(session.status, "running", "ownership was saved before any terminal serialization");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the actual current owner rather than borrowing an older row's owner after replacement or detach", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-running-owner-replacement-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeStore(indexPath, [{
+        sessionId: "stable-owner", harnessSessionId: "old-thread", name: "shared-name", prompt: "old goal",
+        workdir: dir, status: "completed", costUsd: 0, goalTaskId: "old-goal",
+      }]);
+      const store = new SessionStore({ indexPath, env: {} });
+      const current = new Session({
+        sessionIdOverride: "stable-owner", prompt: "new goal", workdir: dir, harness: "codex", route: DEFAULT_ROUTE,
+        goalTaskId: "new-goal", goalOwnership: "attached",
+      }, "shared-name");
+      current.harnessSessionId = "current-thread";
+      current.transition("running");
+      store.markRunning(current);
+      assert.equal(store.getPersistedSession(current.id)?.goalTaskId, "new-goal");
+      assert.equal(store.getPersistedSession("old-thread"), undefined);
+      assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(current.id)?.goalTaskId, "new-goal");
+
+      const ordinary = new Session({
+        sessionIdOverride: current.id, prompt: "ordinary replacement", workdir: dir, harness: "codex", route: DEFAULT_ROUTE,
+      }, "shared-name");
+      ordinary.harnessSessionId = "ordinary-thread";
+      ordinary.transition("running");
+      store.markRunning(ordinary);
+      const saved = JSON.parse(readFileSync(indexPath, "utf8")).sessions;
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0].status, "running");
+      assert.equal(saved[0].backendRef.conversationId, "ordinary-thread");
+      assert.equal(Object.hasOwn(saved[0], "goalTaskId"), false);
+      assert.equal(store.getPersistedSession("current-thread"), undefined);
+      assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(ordinary.id)?.goalTaskId, undefined);
+
+      store.markRunning(current);
+      assert.equal(store.getPersistedSession(current.id)?.goalTaskId, "new-goal");
+      current.detachGoal();
+      store.markRunning(current);
+      const detached = JSON.parse(readFileSync(indexPath, "utf8")).sessions.find((row: { sessionId: string }) => row.sessionId === current.id);
+      assert.equal(detached.status, "running");
+      assert.equal(Object.hasOwn(detached, "goalTaskId"), false);
+      assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(current.id)?.goalTaskId, undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   function markRunningAt(store: SessionStore, sessionId: string): void {
     store.markRunning({
       id: sessionId,

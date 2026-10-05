@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking goal verifier configuration:** `goalVerificationPolicies` replaces `requiredGoalVerifierCommands` with operator-owned required checks selected by canonical repository identity. Task verifier commands append additional checks and keep their existing confirmation rules. All required and additional checks must pass, including in Ralph mode. Migrate the removed global setting and start new goals; old active bindings fail closed and terminal receipts remain unchanged. Repository-specific policy changes invalidate affected live batches, including change-and-restore transitions, while unrelated repository checks can change independently.
+
 - **`✅` now means "the session completed", and nothing else** ([#520](https://github.com/goldmar/openclaw-code-agent/pull/520)). A completed session gets it exactly once: `✅ [name] Completed` or `✅ [name] Completed — <outcome>`. Failed, stopped, suspended and discarded sessions never get it.
 - Outcome forms: ``Merged: `<branch>` → `<base>` ``, `PR opened: <url>`, `PR updated: <url>`, `PR was already merged: <url>`, `PR is up to date: <url>`, `no changes to merge` (a worktree session without commits; was an `ℹ️` line) and `goal succeeded` (was `✅ [task] Goal task succeeded`).
 - A merge or PR that is not the completion notice is a milestone: `ℹ️ [name] Merged: …`, `ℹ️ [name] PR opened: …`, `ℹ️ [name] PR updated: …`. This covers `agent_merge`, `agent_pr` and the buttons while the session is running or after its completion was announced.

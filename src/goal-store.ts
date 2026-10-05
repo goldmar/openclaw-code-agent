@@ -145,6 +145,8 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
     // Keep raw selection evidence, including malformed entries. Policy validation
     // rejects active invalid tasks before normalization; history is never sanitized.
     verifierCommands: (Object.hasOwn(value, "verifierCommands") ? value.verifierCommands : []) as GoalTaskState["verifierCommands"],
+    ...(Object.hasOwn(value, "goalVerificationBinding")
+      ? { goalVerificationBinding: value.goalVerificationBinding as GoalTaskState["goalVerificationBinding"] } : {}),
     ...(Object.hasOwn(value, "requiredVerifierCommands")
       ? { requiredVerifierCommands: value.requiredVerifierCommands as string[] } : {}),
     lastVerifierSummary: typeof value.lastVerifierSummary === "string" ? value.lastVerifierSummary : undefined,

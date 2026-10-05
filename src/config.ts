@@ -98,6 +98,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     autoUpdate: config.autoUpdate ?? true,
     worktreeGitHooks: config.worktreeGitHooks === "skip" ? "skip" : "run",
     trustedVerifierCommands: config.trustedVerifierCommands,
+    goalVerificationPolicies: copyGoalPolicyConfiguration(config.goalVerificationPolicies),
     requiredGoalVerifierCommands: Array.isArray(config.requiredGoalVerifierCommands)
       ? [...config.requiredGoalVerifierCommands] : config.requiredGoalVerifierCommands,
     planOfferTool: config.planOfferTool === true,
@@ -105,19 +106,48 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
   getGoalVerifierPolicyRevision();
 }
 
-// A verifier proof is stale after any policy transition, including A -> B -> A.
-let goalVerifierPolicyKey = "absent";
-let goalVerifierPolicyRevision = 0;
+export interface GoalPolicyConfigurationSnapshot {
+  revision: number;
+  policies: unknown;
+  legacy: unknown;
+}
+
+function copyGoalPolicyConfiguration<T>(value: T): T {
+  try { return structuredClone(value); }
+  catch { return { invalid: true } as T; }
+}
+
+function policyKeyValue(value: unknown, commands = false, ancestors = new Set<object>()): unknown {
+  if (value === undefined) return ["undefined"];
+  if (value === null) return ["null"];
+  if (typeof value === "string") return ["string", commands ? value.trim() : value];
+  if (typeof value !== "object") return [typeof value, String(value)];
+  if (ancestors.has(value)) return ["invalid-cycle"];
+  const next = new Set(ancestors).add(value);
+  if (Array.isArray(value)) return ["array", Array.from(value, entry => policyKeyValue(entry, commands, next))];
+  return ["object", Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, policyKeyValue(entry, key === "requiredCommands" || key === "defaultRequiredCommands", next)])];
+}
+
+// Keep transitions, not just the latest policy: a temporary mapping or alias
+// must remain observable by the affected goal after a verifier finishes.
+const goalPolicyConfigurations: GoalPolicyConfigurationSnapshot[] = [];
+let goalVerifierPolicyKey = "";
 export function getGoalVerifierPolicyRevision(): number {
-  const raw: unknown = pluginConfig.requiredGoalVerifierCommands;
-  const key = raw === undefined ? "absent" : Array.isArray(raw) && raw.length > 0
-    && Array.from(raw).every((entry) => typeof entry === "string" && entry.trim())
-    ? JSON.stringify(raw.map((entry: string) => entry.trim())) : "invalid";
+  const policies = copyGoalPolicyConfiguration(pluginConfig.goalVerificationPolicies);
+  const legacy = copyGoalPolicyConfiguration(pluginConfig.requiredGoalVerifierCommands);
+  const key = JSON.stringify([policyKeyValue(policies), policyKeyValue(legacy)]);
   if (key !== goalVerifierPolicyKey) {
     goalVerifierPolicyKey = key;
-    goalVerifierPolicyRevision += 1;
+    goalPolicyConfigurations.push({ revision: goalPolicyConfigurations.length + 1, policies, legacy });
   }
-  return goalVerifierPolicyRevision;
+  return goalPolicyConfigurations.length;
+}
+
+export function getGoalPolicyConfigurations(after = 0): readonly GoalPolicyConfigurationSnapshot[] {
+  getGoalVerifierPolicyRevision();
+  return goalPolicyConfigurations.filter(snapshot => snapshot.revision > after)
+    .map(snapshot => copyGoalPolicyConfiguration(snapshot));
 }
 
 /**
