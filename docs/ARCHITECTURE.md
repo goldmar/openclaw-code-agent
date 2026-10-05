@@ -10,7 +10,7 @@ User (Telegram / Discord / other OpenClaw channel)
   -> orchestrator agent
   -> plugin tools / commands
   -> SessionManager
-  -> Agent harness (Claude Code, Codex, or experimental OpenCode)
+  -> Agent harness (Claude Code, Codex, or OpenCode)
   -> coding session
 
 SessionManager
@@ -124,7 +124,7 @@ OpenClaw 2026.9.7 removed the Task Flow runtime. OCA owns its session lifecycle 
 
 - `claude-code`: native Claude Code harness. `canUseTool` intercepts `AskUserQuestion` (structured pending input) and holds `ExitPlanMode` open as a native plan-approval request that approve/revise decisions answer directly
 - `codex`: native Codex App Server harness (typed against vendored `codex app-server generate-ts` output in `src/harness/codex-app-server-protocol/`) with structured pending input and approvals, structured plan artifacts, backend refs, steering, rewind/fork, and compact/review thread actions
-- `opencode`: experimental OpenCode server harness using one lazily started, shared local `opencode serve` process, classic session routes with `?directory=` for prompts/messages/replies, event-stream turn completion, OpenCode's built-in `plan`/`build` agents, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
+- `opencode`: OpenCode server harness using one lazily started, shared local `opencode serve` process, classic session routes with `?directory=` for prompts/messages/replies, event-stream turn completion, OpenCode's built-in `plan`/`build` agents, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
 
 Important mapping detail:
 
@@ -140,7 +140,7 @@ Boundary note:
 
 - this plugin's internal `codex` harness is local to this plugin
 - it is separate from OpenClaw core's bundled `codex` provider/harness plugin
-- this plugin's experimental `opencode` harness is local to this plugin
+- this plugin's `opencode` harness is local to this plugin
 - it is also separate from ACPX, which is an ACP backend rather than this plugin's execution runtime
 
 ### `WakeDispatcher`
@@ -366,7 +366,7 @@ Backend capabilities intentionally differ:
 4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, the repository's `.openclaw/worktree-setup.sh` for new worktrees, `chat.send` wakes without explicit origins and `agent.wait` observation, plugin self-update, and explicit verifier commands. Explicit-origin wakes use the public authenticated Gateway SDK with requested admin scope; the Gateway still authorizes that connection.
 5. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 6. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
-7. Codex, Claude Code, and experimental OpenCode share the same session-centric control plane even though their backend transports differ.
+7. Codex, Claude Code, and OpenCode share the same session-centric control plane even though their backend transports differ.
 8. Worktree cleanup is lifecycle-first and evidence-based. Tooling and maintenance only remove worktrees when local repository evidence proves a safe resolved state such as `merged`, `released`, `dismissed`, or `no_change`.
 
 ## Config Touchpoints

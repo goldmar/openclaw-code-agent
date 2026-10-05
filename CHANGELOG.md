@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-10-05
+
+5.2.0 makes completion messages and worktree decisions clearer, selects mandatory goal checks by repository, and targets OpenClaw 2026.9.8. Read the verifier migration below before upgrading.
+
 ### Changed
+
+- OpenCode is described as the OpenCode server harness, without the experimental label. Its authentication requirements, minimum server version and model-default behavior stay the same.
 
 - **Breaking goal verifier configuration:** `goalVerificationPolicies` replaces `requiredGoalVerifierCommands` with operator-owned required checks selected by canonical repository identity. Task verifier commands append additional checks and keep their existing confirmation rules. All required and additional checks must pass, including in Ralph mode. Migrate the removed global setting and start new goals; old active bindings fail closed and terminal receipts remain unchanged. Repository-specific policy changes invalidate affected live batches, including change-and-restore transitions, while unrelated repository checks can change independently.
 
@@ -55,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Worktree retention keeps a worktree while any PR of its branch is open, into whatever base, also one opened by hand next to a closed recorded PR (not checked when the recorded PR was merged or the worktree is gone); a recorded PR URL is trusted only when it is this repository's PR for this branch, also after the repository's owner was renamed. A maintenance pass shares one branch lookup per repository and branch.
   - Resume-first protection recognises a session of the same chat and topic that was stored without a bot account; a session stored with one matches only a launch through the same bot, so a launch that names no bot account does not match it unless both share a session key.
 - The PR bundle-size check limit is 1 MB (1024 KB; was 700 KB).
-- Target the OpenClaw `2026.9.8` package and public plugin SDK, with `2026.9.8` as the installation and loading minimum. Retain the declared `2026.9.7` plugin API, Gateway, and npm peer contracts: this hotfix introduces no public SDK changes used by OCA. This is compatibility preparation; the OCA version bump and publication remain separate.
+- Target the OpenClaw `2026.9.8` package and public plugin SDK, with `2026.9.8` as the installation and loading minimum. Retain the declared `2026.9.7` plugin API, Gateway, and npm peer contracts: this hotfix introduces no public SDK changes used by OCA. The OCA release does not upgrade the running OpenClaw host.
 
 ### Removed
 
@@ -63,9 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- Remove `requiredGoalVerifierCommands` and put its complete suite under each intended `goalVerificationPolicies.repositories` entry, or an explicit `defaultRequiredCommands`. Task checks append; their trust and confirmation rules remain. Start new goals after migration: old active bindings cannot automatically adopt the new policy. Existing terminal receipts remain unchanged. See [the 5.2.0 migration](docs/REFERENCE.md#upgrading-from-510-to-520-goal-verifiers).
+
 - Existing harness model restrictions, plan approval, worktree policies, and stored routes remain in effect. Keep model settings under `harnesses.<name>` and supply `allowedModels` alongside a custom `defaultModel` when it must remain restricted. Start Plan automation needs `planOfferTool: true`, effective tool grants, and an enabled delivery channel independently; OCA does not enable bundled harness plugins or migrate host configuration.
 
 ### Fixed
+
+- The real **Commit changes** button tells the resumed agent that the user selected it and explicitly authorized committing this task's existing changes. Ordinary Resume and automatic continuations keep their existing instructions ([#524](https://github.com/goldmar/openclaw-code-agent/pull/524)).
+- Active goal sessions retain their goal ownership in the running-session store, including before terminal persistence ([#523](https://github.com/goldmar/openclaw-code-agent/pull/523)).
 
 - PR follow-ups use the immutable GitHub head after branch pruning and merges, retain commits made before OCA records the merge, and resolve the head for legacy sessions. Unknown manual/off counts now warn.
 - PR pushes and head ownership honor the configured push remote, while hook checks use the target repository’s base; a concurrent PR target change stops before branch movement or push so a retry checks its own base.
@@ -1157,7 +1168,8 @@ Compatibility evidence must identify the OCA commit and published OpenClaw packa
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v5.1.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v5.2.0...HEAD
+[5.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.1...v5.1.0
 [5.0.1]: https://github.com/goldmar/openclaw-code-agent/compare/v5.0.0...v5.0.1
 [5.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.20...v5.0.0

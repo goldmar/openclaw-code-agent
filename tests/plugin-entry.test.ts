@@ -424,7 +424,7 @@ describe("plugin entry source", () => {
       "codex",
       "opencode",
     ]);
-    assert.match(pluginManifest.configSchema?.properties?.defaultHarness?.description ?? "", /experimental harness/);
+    assert.match(pluginManifest.configSchema?.properties?.defaultHarness?.description ?? "", /Claude Code, Codex, or OpenCode/);
     assert.equal(pluginManifest.configSchema?.properties?.planApproval?.default, "delegate");
     assert.equal(pluginManifest.configSchema?.properties?.defaultWorktreeStrategy?.default, "delegate");
     assert.match(pluginManifest.configSchema?.properties?.defaultWorkdir?.description ?? "", /git repository root/);
@@ -460,7 +460,7 @@ describe("plugin entry source", () => {
     ]);
     assert.deepEqual(harnessDefaults?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
-    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /OpenCode is experimental/);
+    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /leave harnesses\.opencode\.defaultModel unset/i);
   });
 
   it("keeps declared tool contracts synced with runtime registrations", () => {
@@ -553,11 +553,11 @@ describe("plugin entry source", () => {
     const floor = escapeRegExp(openclawFloor);
 
     assert.match(reference, /## Compatibility And Upgrades/);
-    assert.match(reference, new RegExp(`unreleased compatibility update targets the OpenClaw \`${target}\` package and public SDK`));
-    assert.match(readme, new RegExp(`unreleased compatibility update targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(reference, new RegExp(`OCA ${escapeRegExp(packageMetadata.version)} targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(readme, new RegExp(`OCA ${escapeRegExp(packageMetadata.version)} targets the OpenClaw \`${target}\` package and public SDK`));
     assert.match(reference, new RegExp(`installation minimum is \`${target}\``));
     assert.match(reference, new RegExp(`npm peer compatibility floor remains \`${floor}\``));
-    assert.match(reference, /keeps the OCA version unchanged pending a separate release/);
+    assert.match(reference, new RegExp(`OCA ${escapeRegExp(packageMetadata.version)} requires OpenClaw ${target} for installation/loading and does not upgrade the running Gateway`));
     assert.match(readme, /installing this package changes no OpenClaw host configuration/);
     assert.match(readme, /Upgrading from 4\.x is not migration-free/);
     assert.match(readme, /Restrictive tool allowlists must add the new `agent_session_action` tool/);
