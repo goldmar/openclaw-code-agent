@@ -6,10 +6,13 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setPluginConfig } from "../src/config";
+import { createCallbackHandler } from "../src/callback-handler";
+import type { SessionStore } from "../src/session-store";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import { BACKEND_NAMES, waitUntil, type BackendName } from "./harness-backends";
 import {
   buttonNamed,
+  buildCallbackContext,
   clickButton,
   startInteractionFixture,
   TEST_ROUTE,
@@ -141,7 +144,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(f.notifications.some((entry) => /branch `unknown`/.test(entry.request.userMessage ?? "")), false);
     });
 
-    it("does not discard a dirty worktree while Commit changes resumes the session in it", async () => {
+    it("delivers the user's Commit changes authorization only after a valid selection and protects its worktree", async () => {
       const repo = createRepo();
       const created = await startInteractionFixture(name, {
         config: { workdir: repo, worktreeStrategy: "ask", multiTurn: false },
@@ -152,8 +155,30 @@ for (const name of BACKEND_NAMES) {
       writeFileSync(join(worktree, "draft.txt"), "uncommitted\n");
       await created.backend.endTurn("Wrote draft.txt.");
       const buttons = await decisionButtons("worktree-dirty-uncommitted");
+      const commitButton = buttonNamed(buttons, "Commit changes");
+      // The capture-only notification fixture bypasses the real delivery's route binding.
+      // Use its production store operation to represent this button arriving in TEST_ROUTE.
+      const { store } = created.sm as unknown as { store: Pick<SessionStore, "actionTokenStore" | "whenPersisted"> };
+      store.actionTokenStore.bindActionTokensToRoute([commitButton.callbackData], TEST_ROUTE);
+      await store.whenPersisted();
+      assert.deepEqual(created.sm.getActionToken(commitButton.callbackData)?.route, TEST_ROUTE);
+      const callbackHandler = createCallbackHandler();
+      for (const rejection of ["unauthorized", "wrong-route"] as const) {
+        const replies: string[] = [];
+        const ctx = buildCallbackContext("telegram", commitButton.callbackData, {
+          ...(rejection === "wrong-route" ? { target: "-1009876543210" } : {}),
+          onReply: (text) => { replies.push(text); },
+          onClear: () => {},
+        });
+        if (rejection === "unauthorized") ctx.auth = { isAuthorizedSender: false };
+        await callbackHandler.handler(ctx as never);
+        assert.match(replies.join("\n"), rejection === "unauthorized" ? /Unauthorized/ : /belongs to another chat/);
+        assert.equal(created.backend.turns.length, 1, "a refused callback starts no authorized commit turn");
+        assert.deepEqual(created.backend.steers, [], "a refused callback sends no instruction to the backend");
+        assert.equal(existsSync(join(worktree, "draft.txt")), true);
+      }
       const [commit, discard] = await Promise.all([
-        clickButton(buttonNamed(buttons, "Commit changes")),
+        clickButton(commitButton),
         clickButton(buttonNamed(buttons, "Discard")),
       ]);
       assert.doesNotMatch(commit.replies.join("\n"), /still being processed/);
@@ -163,6 +188,17 @@ for (const name of BACKEND_NAMES) {
         /still being processed|is still running in this worktree/,
       );
       assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
+      await created.backend.waitForTurns(2);
+      assert.equal(
+        created.backend.turns[1]?.text,
+        "The user selected Commit changes and explicitly authorized committing this task's existing changes. Commit the task's real changes with a clear message, and remove temporary files you created.",
+        "the actual resumed backend turn receives the user's scoped commit authorization",
+      );
+      assert.doesNotMatch(created.backend.turns[0]?.text ?? "", /The user selected Commit changes/);
+      const duplicate = await clickButton(commitButton);
+      assert.match(duplicate.replies.join("\n"), /expired or was already used/);
+      assert.equal(created.backend.turns.length, 2, "a consumed Commit changes selection starts no extra turn");
+      assert.deepEqual(created.backend.steers, [], "a consumed selection sends no extra instruction");
     });
 
     it("runs only one of two decisions clicked at the same time", async () => {
