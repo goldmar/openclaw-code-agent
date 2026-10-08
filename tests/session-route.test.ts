@@ -210,6 +210,8 @@ describe("session-route", () => {
     assert.match(block, /"target":"-1001234567890"/);
     assert.match(block, /"threadId":"13832"/);
     assert.doesNotMatch(block, /sessionKey/);
+    assert.match(block, /include topLevel=true and the explicit originRoute\.threadId/);
+    assert.match(block, /Omit replyTo/);
     assert.ok(block.endsWith(ROUTED_REPLY_RULE), block);
   });
 
@@ -443,6 +445,27 @@ describe("session-route", () => {
 });
 
 describe("wake reply rule", () => {
+  it("limits synthetic reply suppression to Telegram forum topics", () => {
+    const forum = formatOriginRouteWakeBlock({
+      originChannel: "telegram|-100123", originThreadId: 77,
+      originSessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+    assert.match(forum, /"threadId":"77"/);
+    assert.match(forum, /topLevel=true/);
+    assert.ok(forum.endsWith(ROUTED_REPLY_RULE));
+    for (const route of [
+      { provider: "telegram", target: "5551234", threadId: "77" },
+      { provider: "telegram", target: "-100123" },
+      { provider: "telegram", target: "-100123", threadId: "0" },
+      { provider: "telegram", target: "5551234:direct-topic:77" },
+      { provider: "slack", target: "C123", threadId: "77" },
+      { provider: "discord", target: "5551234", threadId: "77" },
+      { provider: "webchat", target: "agent:main:main" },
+    ]) {
+      assert.doesNotMatch(formatOriginRouteWakeBlock({ route }), /topLevel|Omit replyTo/);
+    }
+  });
+
   it("tells the orchestrator to reach the user with the message tool, for any route", () => {
     for (const sessionKey of ["agent:main:direct:5551234", "agent:main:telegram:direct:5551234", "agent:main:main"]) {
       const block = formatOriginRouteWakeBlock({ route: { provider: "telegram", target: "5551234", sessionKey } });
