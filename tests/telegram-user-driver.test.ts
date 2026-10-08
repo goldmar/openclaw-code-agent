@@ -5,7 +5,8 @@ import { it } from "node:test";
 
 it("native Telegram QA preserves current TDLib forum topics on receive and send", () => {
   const actual = execFileSync("python3", ["-c", `
-import importlib.util, json
+import importlib.util, json, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("driver", "scripts/e2e/telegram-user-driver.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
