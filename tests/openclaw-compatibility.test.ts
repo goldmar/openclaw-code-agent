@@ -1,7 +1,8 @@
 import "./test-env";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { validateDiscoveryRejection, validateHostMinimumRejection } from "../scripts/check-openclaw-compatibility.mjs";
+import { validateCompatibilityHost, validateDiscoveryRejection, validateHostMinimumRejection } from "../scripts/check-openclaw-compatibility.mjs";
+import packageMetadata from "../package.json";
 
 const incompatible = "plugin requires plugin API >=2099.1.1, but this host is 2026.9.8;";
 const invalid = "invalid package plugin API metadata:";
@@ -12,6 +13,16 @@ const rejected = {
 };
 
 describe("compatibility discovery acceptance", () => {
+  it("requires explicit negative intent for a previous host and refuses target/newer hosts", () => {
+    validateCompatibilityHost(packageMetadata, packageMetadata.openclaw.build.openclawVersion);
+    validateCompatibilityHost(packageMetadata, "2026.9.7");
+    validateCompatibilityHost(packageMetadata, "2026.9.8", true);
+    validateCompatibilityHost(packageMetadata, "2026.9.7", true);
+    assert.throws(() => validateCompatibilityHost(packageMetadata, "2026.9.8"));
+    for (const version of ["2026.9.9", "2026.9.10", "2026.10.1", "2027.1.1", "2026.9.8-rc.1"]) {
+      assert.throws(() => validateCompatibilityHost(packageMetadata, version, true));
+    }
+  });
   it("requires an explicit unchanged-artifact rejection on the older host", () => {
     const result = { ...rejected, diagnostics: [{ pluginId: "openclaw-code-agent",
       message: "plugin requires OpenClaw >=2026.9.8, but this host is 2026.9.7; skipping load" }] };

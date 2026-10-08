@@ -29,6 +29,7 @@
     "proof:codex-local": "node --import tsx scripts/e2e/oca-codex-telegram-proof.ts local-smoke",
     "proof:codex-telegram": "node scripts/e2e/run-oca-codex-telegram-proof.mjs",
     "smoke:codex-release": "OPENCLAW_RUN_LIVE_CODEX_RELEASE_SMOKE=1 node scripts/run-tests.mjs tests/live-codex-app-server-smoke.test.ts",
+    "smoke:claude-live": "OPENCLAW_RUN_LIVE_CLAUDE_SMOKE=1 node scripts/run-tests.mjs tests/live-claude-code-smoke.test.ts",
     "smoke:opencode-live": "OPENCLAW_RUN_LIVE_OPENCODE_SMOKE=1 node scripts/run-tests.mjs tests/live-opencode-server-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
@@ -43,15 +44,15 @@
     "install": {
       "npmSpec": "openclaw-code-agent",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.9.8"
+      "minHostVersion": ">=2026.9.9"
     },
     "compat": {
       "pluginApi": ">=2026.9.7",
       "minGatewayVersion": "2026.9.7"
     },
     "build": {
-      "openclawVersion": "2026.9.8",
-      "pluginSdkVersion": "2026.9.8"
+      "openclawVersion": "2026.9.9",
+      "pluginSdkVersion": "2026.9.9"
     }
   },
   "files": [
@@ -79,7 +80,7 @@
     "@types/node": "^26.0.1",
     "esbuild": "^0.28.2",
     "fast-check": "^4.10.2",
-    "openclaw": "2026.9.8",
+    "openclaw": "2026.9.9",
     "tsx": "^4.23.15",
     "typebox": "1.3.34",
     "typescript": "^7.0.2"

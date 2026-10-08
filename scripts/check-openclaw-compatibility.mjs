@@ -9,10 +9,29 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createIsolatedOpenClawEnv, validatePackedPluginRuntime } from "./check-plugin-security.mjs";
+import { createCronCompatibilityProvider } from "./lib/openclaw-compatibility-cron.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const execute = promisify(execFile);
 const pluginId = "openclaw-code-agent";
+
+/** Explicit negative runs may use any older released host, but cannot certify a target. */
+export function validateCompatibilityHost(pkg, hostVersion, expectHostMinimumRejection = false) {
+  const target = pkg.openclaw.build.openclawVersion;
+  if (expectHostMinimumRejection) {
+    const parse = (value) => {
+      assert.match(value, /^\d{4}\.\d+\.\d+$/u, "negative host checks require exact stable versions");
+      return value.split(".").map(Number);
+    };
+    const older = parse(hostVersion);
+    const newer = parse(target);
+    const difference = older.map((part, index) => part - newer[index]).find((part) => part !== 0);
+    assert.ok(difference < 0, "host minimum rejection requires a host older than the target");
+  } else {
+    assert.ok([target, pkg.openclaw.compat.minGatewayVersion].includes(hostVersion),
+      "host must match the exact target or declared compatibility floor");
+  }
+}
 
 function validateExcludedPlugin(result, before, after) {
   assert.equal(after, before, "discovery must preserve plugin configuration");
@@ -52,15 +71,19 @@ async function freePort() {
 async function main() {
   const args = process.argv.slice(process.argv[2] === "--" ? 3 : 2);
   assert.ok(args.every((arg, index) => arg === "--gateway" || arg === "--host-root"
-    || (index > 0 && args[index - 1] === "--host-root")), "usage: [--gateway] [--host-root PATH]");
+    || arg === "--expect-host-minimum-rejection"
+    || (index > 0 && args[index - 1] === "--host-root")),
+  "usage: [--gateway] [--host-root PATH] [--expect-host-minimum-rejection]");
   const hostArg = args.indexOf("--host-root");
   if (hostArg >= 0) assert.ok(args[hostArg + 1] && !args[hostArg + 1].startsWith("--"));
   const hostRoot = resolve(hostArg >= 0 ? args[hostArg + 1] : join(root, "node_modules/openclaw"));
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const manifest = JSON.parse(await readFile(join(root, "openclaw.plugin.json"), "utf8"));
   const host = JSON.parse(await readFile(join(hostRoot, "package.json"), "utf8"));
-  assert.ok([pkg.openclaw.build.openclawVersion, pkg.openclaw.compat.minGatewayVersion].includes(host.version),
-    "host must match the exact target or declared compatibility floor");
+  const expectHostMinimumRejection = args.includes("--expect-host-minimum-rejection");
+  assert.ok(!expectHostMinimumRejection || hostArg >= 0, "negative host checks require --host-root");
+  assert.ok(!expectHostMinimumRejection || !args.includes("--gateway"), "negative host checks do not start a Gateway");
+  validateCompatibilityHost(pkg, host.version, expectHostMinimumRejection);
   const cli = join(hostRoot, "openclaw.mjs");
   const temp = await mkdtemp(join(tmpdir(), "oca-host-compat-"));
   const results = [];
@@ -136,6 +159,9 @@ async function main() {
         assert.equal(names.length, tools.length);
         if (args.includes("--gateway")) {
           stage = `${scenario}-gateway`;
+          const provider = await createCronCompatibilityProvider();
+          provider.configure(config);
+          await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
           const gateway = spawn(process.execPath, [cli, "gateway", "run"], { env, cwd: profile, stdio: "ignore" });
           let exited = false;
           const closed = new Promise((done) => { gateway.once("error", () => { exited = true; done(); }); gateway.once("close", () => { exited = true; done(); }); });
@@ -156,7 +182,12 @@ async function main() {
             assert.equal(invoked.ok, true);
             assert.ok(!invoked.output?.isError);
             assert.ok(invoked.output?.content?.some((item) => item.type === "text" && item.text.trim()));
-            config.tools = { deny: ["agent_stats"] };
+            if (scenario === "default") {
+              stage = "rooted-cron-tool-caps";
+              await provider.check(call, rpc);
+              stage = `${scenario}-gateway`;
+            }
+            config.tools = { ...config.tools, deny: ["agent_stats"] };
             await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
             let denied = false;
             for (let attempt = 0; attempt < 20; attempt++) {
@@ -171,6 +202,7 @@ async function main() {
             if (!exited) gateway.kill("SIGTERM");
             const timeout = setTimeout(() => { if (!exited) gateway.kill("SIGKILL"); }, 10_000);
             try { await closed; } finally { clearTimeout(timeout); }
+            await provider.close();
           }
         }
       }
@@ -179,6 +211,12 @@ async function main() {
     console.log(JSON.stringify({ hostVersion: host.version, packageVersion: pkg.version, tarballSha256: digest,
       gatewayChecked: args.includes("--gateway") && host.version === pkg.openclaw.build.openclawVersion, results }, null, 2));
   } catch (error) {
+    // Opt-in private diagnostics for isolated fixture failures; never forward
+    // raw subprocess output to CI or chat (it may include profile/auth data).
+    if (process.env.OPENCLAW_COMPAT_FAILURE_LOG) {
+      await writeFile(process.env.OPENCLAW_COMPAT_FAILURE_LOG,
+        error?.stderr || error?.stdout || "No subprocess diagnostics available", { mode: 0o600 });
+    }
     // Do not print subprocess output or config; the isolated profile contains auth.
     // A subprocess failure's message embeds its stderr and a JSON parse error quotes
     // its input, so report only how those ended.
