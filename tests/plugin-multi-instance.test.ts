@@ -174,6 +174,60 @@ describe("one OCA runtime per Gateway process", () => {
     });
   }
 
+  it("keeps a prepared owner's delivered callback usable after that owner retires", async () => {
+    const gateway = await loadPluginCopy("gateway-lender");
+    const prepared = await loadPluginCopy("rooted-cron");
+    const gatewayHost = createPluginHost("gateway");
+    const preparedHost = createPluginHost("prepared");
+    gateway.index.register(gatewayHost.api);
+    prepared.index.register(preparedHost.api);
+    const repoDir = mkdtempSync(join(repoRoot, ".instance-cron-repo-"));
+    scratchRoots.push(repoDir);
+    git(repoDir, "init", "-b", "main");
+    git(repoDir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "init");
+    try {
+      await startService(gatewayHost, {});
+      await runTool(preparedHost, "agent_sessions");
+      const manager = gateway.singletons.sessionManager;
+      const runtimeId = getSharedRuntime()?.instanceId;
+      let buttons: Array<Array<{ label: string; callbackData: string }>> = [];
+      manager.notifications = {
+        dispatch: (_session: unknown, request: any) => {
+          if (request?.label === "repo-policy-choice") {
+            buttons = request.buttons;
+            request.hooks?.onNotifySucceeded?.();
+          }
+        },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      await prepared.singletons.sessionManager.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "-1001", threadId: "13832" },
+        prompt: "Review one change", workdir: repoDir, harness: "codex", worktreeStrategy: "auto-pr",
+      });
+      const button = buttons.flat().find((candidate) => candidate.label === "No PR");
+      assert.ok(button);
+      await disposeHost(preparedHost);
+      assert.equal(getSharedRuntime()?.instanceId, runtimeId);
+      assert.equal(gateway.singletons.sessionManager, manager);
+      assert.equal(gateway.runtimeStore.getPluginRuntime(), gatewayHost.runtime);
+      let launches = 0;
+      manager.launchAfterRepoPolicyChoice = async () => { launches++; return { text: "launched" }; };
+      const first = telegramCallbackCtx(button.callbackData);
+      await gatewayHost.runInteractive("telegram", first.ctx);
+      assert.match(first.replies.join("\n"), /Repo policy saved/);
+      assert.equal(launches, 1);
+      const replay = telegramCallbackCtx(button.callbackData);
+      await gatewayHost.runInteractive("telegram", replay.ctx);
+      assert.equal(launches, 1, "retirement and replay must not duplicate accepted work");
+      assert.match(replay.replies.join("\n"), /expired|already|stale/i);
+      await runTool(gatewayHost, "agent_stats");
+      assert.equal(gateway.singletons.sessionManager, manager);
+    } finally {
+      await stopAll(preparedHost, gatewayHost);
+    }
+  });
+
   it("switches host handles to the newest live owner and never keeps a retired owner's", async () => {
     const a = await loadPluginCopy("handles-a");
     const b = await loadPluginCopy("handles-b");

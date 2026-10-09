@@ -413,8 +413,8 @@ class UserDriver:
                 {
                     "@type": "sendMessage",
                     "chat_id": chat_id,
-                    "message_thread_id": int(thread_id or 0),
-                    "reply_to_message_id": int(reply_to or 0),
+                    "topic_id": {"@type": "messageTopicForum", "forum_topic_id": int(thread_id)} if thread_id else None,
+                    "reply_to": {"@type": "inputMessageReplyToMessage", "message_id": int(reply_to)} if reply_to else None,
                     "options": {
                         "@type": "messageSendOptions",
                         "disable_notification": True,
@@ -501,6 +501,8 @@ def normalize_message(message, users=None):
     elif "caption" in content:
         text = (content.get("caption") or {}).get("text", "")
     reply_to_message_id = message.get("reply_to_message_id") or (message.get("reply_to") or {}).get("message_id")
+    topic = message.get("topic_id") or {}
+    thread_id = topic.get("forum_topic_id") if topic.get("@type") == "messageTopicForum" else message.get("message_thread_id")
     return {
         "messageId": message.get("id"),
         "chatId": message.get("chat_id"),
@@ -508,7 +510,7 @@ def normalize_message(message, users=None):
         "senderUsername": sender_user.get("username") or "",
         "date": message.get("date"),
         "replyToMessageId": reply_to_message_id,
-        "threadId": message.get("message_thread_id"),
+        "threadId": thread_id,
         "text": text,
         "contentType": content.get("@type"),
         "raw": message,
@@ -738,21 +740,27 @@ def command_probe(args):
         sys.exit(1)
 
 
+def message_history_request(chat_id, limit, thread_id=0):
+    payload = {
+        "@type": "getForumTopicHistory" if thread_id else "getChatHistory",
+        "chat_id": chat_id,
+        "from_message_id": 0,
+        "offset": 0,
+        "limit": limit,
+    }
+    if thread_id:
+        payload["forum_topic_id"] = int(thread_id)
+    else:
+        payload["only_local"] = False
+    return payload
+
+
 def command_transcript(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     chat_id = driver.resolve_chat(args.chat)
-    history = driver.client.request(
-        {
-            "@type": "getChatHistory",
-            "chat_id": chat_id,
-            "from_message_id": 0,
-            "offset": 0,
-            "limit": args.limit,
-            "only_local": False,
-        }
-    )
+    history = driver.client.request(message_history_request(chat_id, args.limit, args.thread_id))
     messages = [normalize_message(message) for message in history.get("messages", [])]
     print_result({"ok": True, "chatId": chat_id, "messages": messages}, args.json, getattr(args, "output", ""))
 
@@ -910,7 +918,7 @@ def main():
     send.add_argument("--chat", default="")
     send.add_argument("--text", required=True)
     send.add_argument("--reply-to")
-    send.add_argument("--thread-id", type=int, default=0)
+    send.add_argument("--thread-id", type=int, default=0, help="Forum topic identifier (Telegram Bot API message_thread_id).")
     send.set_defaults(func=command_send)
 
     wait = sub.add_parser("wait")
@@ -939,6 +947,7 @@ def main():
     add_common(transcript)
     transcript.add_argument("--chat", default="")
     transcript.add_argument("--limit", type=int, default=20)
+    transcript.add_argument("--thread-id", type=int, default=0, help="Read this forum topic's history instead of general chat history.")
     transcript.set_defaults(func=command_transcript)
 
     click_callback = sub.add_parser("click-callback")

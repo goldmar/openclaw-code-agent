@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Target the OpenClaw 2026.9.9 package and public SDK, with installation/loading minimum `>=2026.9.9`. The plugin API, Gateway and npm peer floor remains 2026.9.7. The OCA version bump is deferred; published 5.2.0 continues to target OpenClaw 2026.9.8.
+- Extend compatibility verification to reject the unchanged candidate on explicitly selected older hosts while preserving their configuration. Cover prepared-runtime ownership, rooted cron tool caps, callback routing and receipt-based completion without enabling bundled Codex.
+- Document the Telegram owner Control UI command `/controlui`, the existing harness-scoped model restrictions, and Codex 0.160.0 protocol provenance. No new plugin configuration migration is introduced.
+- Refresh pnpm's transitive `proxy-addr` resolution to 2.0.8 for GHSA-jqcg-44mw-7w3h; the npm consumer shrinkwrap already resolves the patched version.
+- Update native Telegram QA tooling to preserve current TDLib forum topic identifiers in messages and sends, and use topic-specific transcript history for callback proof.
+- Keep synthetic Telegram forum wake summaries in their original topic while suppressing inherited reply metadata. Explicit `threadId` with `topLevel=true` prevents the host from treating virtual message id `0` as a Telegram reply target.
+
 ## [5.2.0] - 2026-10-05
 
 5.2.0 makes completion messages and worktree decisions clearer, selects mandatory goal checks by repository, and targets OpenClaw 2026.9.8. Read the verifier migration below before upgrading.

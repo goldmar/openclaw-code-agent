@@ -443,5 +443,13 @@ export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const replyRule = route?.provider === "webchat"
     ? "Reply with an ordinary visible final answer in this WebChat session. Do not use the message tool to send this update."
     : ROUTED_REPLY_RULE;
-  return [`originRoute: ${JSON.stringify(originRoute)}`, replyRule].join("\n");
+  // Synthetic chat.send wakes have no Telegram message to reply to. The host
+  // otherwise inherits message id "0" in forum context and rejects the send.
+  // topLevel suppresses that inheritance while an explicit threadId stays put.
+  const forumRule = route?.provider === "telegram"
+    && /^-\d+$/.test(String(originRoute.target ?? ""))
+    && /^[1-9]\d*$/.test(String(originRoute.threadId ?? ""))
+    ? "For this Telegram forum wake, include topLevel=true and the explicit originRoute.threadId in the message send. Omit replyTo: this wake has no source Telegram message. topLevel suppresses inherited reply metadata; the explicit threadId keeps the send in the original topic."
+    : undefined;
+  return [`originRoute: ${JSON.stringify(originRoute)}`, forumRule, replyRule].filter(Boolean).join("\n");
 }
