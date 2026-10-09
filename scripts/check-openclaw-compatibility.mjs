@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,10 +10,59 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createIsolatedOpenClawEnv, validatePackedPluginRuntime } from "./check-plugin-security.mjs";
 import { createCronCompatibilityProvider } from "./lib/openclaw-compatibility-cron.mjs";
+import { redactProofValue } from "./lib/proof-redaction.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const execute = promisify(execFile);
 const pluginId = "openclaw-code-agent";
+
+/**
+ * Collect exact credential values by name, including --key=value and --key value.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+export function compatibilityDiagnosticSecrets(env, args = []) {
+  const entries = Object.entries(env);
+  for (let index = 0; index < args.length; index++) {
+    if (!args[index].startsWith("--")) continue;
+    const [name, ...value] = args[index].slice(2).split("=");
+    entries.push([name, value.length ? value.join("=") : args[index + 1]]);
+  }
+  return entries.filter(([name, value]) => typeof value === "string" && value.length > 0
+    && redactProofValue({ [name]: value })[name] === "[redacted credential]")
+    .map(([, value]) => value);
+}
+
+/**
+ * Replace the destination itself, never its symlink target, and refuse races at creation.
+ * @param {string} path
+ * @param {string} diagnostics
+ * @param {Iterable<string>} secrets
+ */
+export async function writeCompatibilityFailureLog(path, diagnostics, secrets) {
+  let sanitized = String(diagnostics);
+  for (const secret of [...new Set(secrets)].filter(Boolean).sort((a, b) => b.length - a.length)) {
+    sanitized = sanitized.split(secret).join("[redacted credential]");
+  }
+  sanitized = String(redactProofValue(sanitized));
+  try { await unlink(path); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  await writeFile(path, sanitized, { flag: "wx", mode: 0o600 });
+}
+
+/** Configuration and Gateway startup share the provider's cleanup boundary. */
+export async function withCompatibilityProvider(config, configPath, runGateway,
+  createProvider = createCronCompatibilityProvider) {
+  let provider;
+  try {
+    provider = await createProvider();
+    provider.configure(config);
+    await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    await runGateway(provider);
+  } finally {
+    await provider?.close();
+  }
+}
 
 /** Explicit negative runs may use any older released host, but cannot certify a target. */
 export function validateCompatibilityHost(pkg, hostVersion, expectHostMinimumRejection = false) {
@@ -87,6 +136,7 @@ async function main() {
   const cli = join(hostRoot, "openclaw.mjs");
   const temp = await mkdtemp(join(tmpdir(), "oca-host-compat-"));
   const results = [];
+  const diagnosticSecrets = new Set(compatibilityDiagnosticSecrets(process.env, args));
   let stage = "pack";
   try {
     const pack = await execute("npm", ["pack", "--json", "--pack-destination", temp], { cwd: root });
@@ -127,6 +177,7 @@ async function main() {
         if (/^(?:CLAWDBOT_|CODEX_|ANTHROPIC_|OPENAI_)/u.test(key) || /(?:TOKEN|SECRET|API_KEY)$/u.test(key)) delete env[key];
       }
       env.OPENCLAW_GATEWAY_PORT = String(port);
+      for (const secret of compatibilityDiagnosticSecrets(env)) diagnosticSecrets.add(secret);
       const config = {
         gateway: { mode: "local", port, bind: "loopback", auth: { mode: "token", token: randomBytes(32).toString("hex") } },
         agents: { defaults: { workspace: join(profile, "workspace") } },
@@ -137,10 +188,14 @@ async function main() {
         } },
       };
       const configText = JSON.stringify(config);
+      diagnosticSecrets.add(config.gateway.auth.token);
       await writeFile(env.OPENCLAW_CONFIG_PATH, configText, { mode: 0o600 });
-      const call = async (...command) => execute(process.execPath, [cli, ...command], {
-        env, cwd: profile, timeout: 90_000, maxBuffer: 8 * 1024 * 1024,
-      });
+      const call = async (...command) => {
+        for (const secret of compatibilityDiagnosticSecrets(env, command)) diagnosticSecrets.add(secret);
+        return execute(process.execPath, [cli, ...command], {
+          env, cwd: profile, timeout: 90_000, maxBuffer: 8 * 1024 * 1024,
+        });
+      };
       if (scenario === "host-minimum") {
         const listed = JSON.parse((await call("plugins", "list", "--json")).stdout);
         validateHostMinimumRejection(listed, configText, await readFile(env.OPENCLAW_CONFIG_PATH, "utf8"),
@@ -159,51 +214,51 @@ async function main() {
         assert.equal(names.length, tools.length);
         if (args.includes("--gateway")) {
           stage = `${scenario}-gateway`;
-          const provider = await createCronCompatibilityProvider();
-          provider.configure(config);
-          await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
-          const gateway = spawn(process.execPath, [cli, "gateway", "run"], { env, cwd: profile, stdio: "ignore" });
-          let exited = false;
-          const closed = new Promise((done) => { gateway.once("error", () => { exited = true; done(); }); gateway.once("close", () => { exited = true; done(); }); });
-          try {
-            const rpc = async (method, params = {}) => JSON.parse((await call("gateway", "call", method,
-              "--json", "--timeout", "10000", "--params", JSON.stringify(params))).stdout);
-            let ready = false;
-            for (let attempt = 0; attempt < 30 && !exited; attempt++) {
-              try { await rpc("health"); ready = true; break; } catch { await new Promise((done) => setTimeout(done, 500)); }
+          // This is the controlled provider's exact API key, not operator auth.
+          diagnosticSecrets.add("isolated-fixture");
+          await withCompatibilityProvider(config, env.OPENCLAW_CONFIG_PATH, async (provider) => {
+            const gateway = spawn(process.execPath, [cli, "gateway", "run"], { env, cwd: profile, stdio: "ignore" });
+            let exited = false;
+            const closed = new Promise((done) => { gateway.once("error", () => { exited = true; done(); }); gateway.once("close", () => { exited = true; done(); }); });
+            try {
+              const rpc = async (method, params = {}) => JSON.parse((await call("gateway", "call", method,
+                "--json", "--timeout", "10000", "--params", JSON.stringify(params))).stdout);
+              let ready = false;
+              for (let attempt = 0; attempt < 30 && !exited; attempt++) {
+                try { await rpc("health"); ready = true; break; } catch { await new Promise((done) => setTimeout(done, 500)); }
+              }
+              assert.ok(ready, "isolated Gateway failed readiness");
+              const sessionKey = "agent:main:compatibility-qa";
+              await rpc("sessions.create", { key: sessionKey });
+              const effective = await rpc("tools.effective", { sessionKey });
+              const effectiveNames = effective.groups.flatMap((group) => group.tools.map((tool) => tool.id));
+              assert.ok(tools.every((tool) => effectiveNames.includes(tool)), "missing effective OCA tools");
+              const invoked = await rpc("tools.invoke", { name: "agent_stats", sessionKey, args: {} });
+              assert.equal(invoked.ok, true);
+              assert.ok(!invoked.output?.isError);
+              assert.ok(invoked.output?.content?.some((item) => item.type === "text" && item.text.trim()));
+              if (scenario === "default") {
+                stage = "rooted-cron-tool-caps";
+                await provider.check(call, rpc);
+                stage = `${scenario}-gateway`;
+              }
+              config.tools = { ...config.tools, deny: ["agent_stats"] };
+              await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
+              let denied = false;
+              for (let attempt = 0; attempt < 20; attempt++) {
+                const result = await rpc("tools.invoke", { name: "agent_stats", sessionKey, args: {} });
+                if (result.ok === false && ["not_found", "forbidden"].includes(result.error?.code)) { denied = true; break; }
+                await new Promise((done) => setTimeout(done, 500));
+              }
+              assert.ok(denied, "tool denial did not apply after reload");
+              const restricted = await rpc("tools.effective", { sessionKey });
+              assert.ok(!restricted.groups.some((group) => group.tools.some((tool) => tool.id === "agent_stats")));
+            } finally {
+              if (!exited) gateway.kill("SIGTERM");
+              const timeout = setTimeout(() => { if (!exited) gateway.kill("SIGKILL"); }, 10_000);
+              try { await closed; } finally { clearTimeout(timeout); }
             }
-            assert.ok(ready, "isolated Gateway failed readiness");
-            const sessionKey = "agent:main:compatibility-qa";
-            await rpc("sessions.create", { key: sessionKey });
-            const effective = await rpc("tools.effective", { sessionKey });
-            const effectiveNames = effective.groups.flatMap((group) => group.tools.map((tool) => tool.id));
-            assert.ok(tools.every((tool) => effectiveNames.includes(tool)), "missing effective OCA tools");
-            const invoked = await rpc("tools.invoke", { name: "agent_stats", sessionKey, args: {} });
-            assert.equal(invoked.ok, true);
-            assert.ok(!invoked.output?.isError);
-            assert.ok(invoked.output?.content?.some((item) => item.type === "text" && item.text.trim()));
-            if (scenario === "default") {
-              stage = "rooted-cron-tool-caps";
-              await provider.check(call, rpc);
-              stage = `${scenario}-gateway`;
-            }
-            config.tools = { ...config.tools, deny: ["agent_stats"] };
-            await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
-            let denied = false;
-            for (let attempt = 0; attempt < 20; attempt++) {
-              const result = await rpc("tools.invoke", { name: "agent_stats", sessionKey, args: {} });
-              if (result.ok === false && ["not_found", "forbidden"].includes(result.error?.code)) { denied = true; break; }
-              await new Promise((done) => setTimeout(done, 500));
-            }
-            assert.ok(denied, "tool denial did not apply after reload");
-            const restricted = await rpc("tools.effective", { sessionKey });
-            assert.ok(!restricted.groups.some((group) => group.tools.some((tool) => tool.id === "agent_stats")));
-          } finally {
-            if (!exited) gateway.kill("SIGTERM");
-            const timeout = setTimeout(() => { if (!exited) gateway.kill("SIGKILL"); }, 10_000);
-            try { await closed; } finally { clearTimeout(timeout); }
-            await provider.close();
-          }
+          });
         }
       }
       results.push({ scenario, status: "passed" });
@@ -214,8 +269,12 @@ async function main() {
     // Opt-in private diagnostics for isolated fixture failures; never forward
     // raw subprocess output to CI or chat (it may include profile/auth data).
     if (process.env.OPENCLAW_COMPAT_FAILURE_LOG) {
-      await writeFile(process.env.OPENCLAW_COMPAT_FAILURE_LOG,
-        error?.stderr || error?.stdout || "No subprocess diagnostics available", { mode: 0o600 });
+      try {
+        await writeCompatibilityFailureLog(process.env.OPENCLAW_COMPAT_FAILURE_LOG,
+          error?.stderr || error?.stdout || "No subprocess diagnostics available", diagnosticSecrets);
+      } catch {
+        console.error("Could not write private compatibility diagnostics");
+      }
     }
     // Do not print subprocess output or config; the isolated profile contains auth.
     // A subprocess failure's message embeds its stderr and a JSON parse error quotes
