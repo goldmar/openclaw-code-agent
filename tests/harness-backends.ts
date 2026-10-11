@@ -9,7 +9,7 @@
  * through SessionManager, agent_respond, and the button callback handler, so
  * the same scenario runs against every backend.
  */
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeCodeHarness } from "../src/harness/claude-code";
 import { CodexHarness } from "../src/harness/codex";
 import type { JsonRpcClient, JsonRpcId, JsonRpcNotificationHandler, JsonRpcRequestHandler } from "../src/harness/codex-rpc";
@@ -225,7 +225,7 @@ export class ClaudeBackend implements BackendDriver {
     });
   }
 
-  private queryHandle(output: Pushable<unknown>): Record<string | symbol, unknown> {
+  private queryHandle(output: Pushable<unknown>): Record<string | symbol, unknown> & Pick<Query, "close"> {
     return {
       [Symbol.asyncIterator]: () => output[Symbol.asyncIterator](),
       setPermissionMode: async (mode: string) => {
@@ -236,6 +236,7 @@ export class ClaudeBackend implements BackendDriver {
         await this.consumePrompts(input, output);
       },
       interrupt: async (): Promise<undefined> => undefined,
+      close: () => output.end(),
       getContextUsage: async () => { throw new Error("not supported by the fake query"); },
       supportedModels: async (): Promise<never[]> => [],
     };
