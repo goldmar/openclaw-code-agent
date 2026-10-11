@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject Start Plan offers without a direct delivery route instead of reporting a queued offer for an internal system route.
 - Native Telegram QA export/restore supports accounts without a public username, retaining numeric user identity. Proof setup preserves Desktop sessions instead of revoking the saved authorization before use.
 
 - Close Claude's SDK query after stream completion and during shutdown, including startup cancellation, so native CLI processes do not linger after planning/resume QA or session teardown.

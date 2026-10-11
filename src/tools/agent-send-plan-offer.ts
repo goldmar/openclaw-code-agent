@@ -1,6 +1,7 @@
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
+import { isDirectSessionRoute } from "../session-route";
 import { WORKTREE_STRATEGIES, WORKTREE_STRATEGY_SET } from "../types";
 import type { OpenClawPluginToolContext, SessionRoute, WorktreeStrategy } from "../types";
 
@@ -56,7 +57,7 @@ async function executePlanOffer(
     return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
   }
   const route = resolveRoute(ctx, params);
-  if (!route?.provider || !route.target) {
+  if (!route || !isDirectSessionRoute(route)) {
     return { content: [{ type: "text", text: "Error: Could not resolve a direct delivery route for the plan offer." }] };
   }
 

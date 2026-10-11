@@ -1,9 +1,15 @@
 import "./test-env";
 import assert from "node:assert/strict";
 import { it } from "node:test";
+import { makeAgentSendPlanOfferTool } from "../src/tools/agent-send-plan-offer";
+import { setPluginConfig } from "../src/config";
+import { setSessionManager } from "../src/singletons";
+import type { SessionManager } from "../src/session-manager";
 import { createCronCompatibilityProvider } from "../scripts/lib/openclaw-compatibility-cron.mjs";
 
-async function runProbe(dispatcher: boolean, offerResult = "Error: Could not resolve a direct delivery route for the plan offer.") {
+async function runProbe(dispatcher: boolean, offerResult?: string) {
+  setPluginConfig({});
+  setSessionManager({ sendPlanOffer() { throw new Error("The probe must not queue a notification"); } } as unknown as SessionManager);
   const provider = await createCronCompatibilityProvider();
   const config = { agents: { defaults: {} } } as any;
   provider.configure(config);
@@ -26,7 +32,11 @@ async function runProbe(dispatcher: boolean, offerResult = "Error: Could not res
       const tool = dispatcher ? args.id : call.function.name;
       const allowed = job.payload.toolsAllow.includes(tool);
       calls.push({ tool, allowed, args: dispatcher ? args.args : args });
-      const output = { content: [{ type: "text", text: tool === "agent_stats" ? "Initialized metrics" : offerResult }] };
+      const output = tool === "agent_stats"
+        ? { content: [{ type: "text", text: "Initialized metrics" }] }
+        : offerResult !== undefined ? { content: [{ type: "text", text: offerResult }] }
+          : await makeAgentSendPlanOfferTool({ workspaceDir: ".", sessionKey: "agent:main:cron:fixture" })
+            .execute("fixture-call", dispatcher ? args.args : args);
       const content = allowed
         ? JSON.stringify(dispatcher ? { tool: { name: tool }, result: output } : output)
         : `Error: Unknown tool ${dispatcher ? "id" : "name"}: ${tool}`;
@@ -42,6 +52,8 @@ async function runProbe(dispatcher: boolean, offerResult = "Error: Could not res
     return calls;
   } finally {
     await provider.close();
+    setSessionManager(null);
+    setPluginConfig({});
   }
 }
 

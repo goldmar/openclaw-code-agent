@@ -17,6 +17,20 @@ describe("agent_send_plan_offer tool", () => {
     assert.match(text, /Invalid parameters/);
   });
 
+  it("refuses missing and system routes without queueing a plan offer", async () => {
+    let calls = 0;
+    setSessionManager({ sendPlanOffer() { calls++; } } as any);
+    const params = { offer_id: "route-probe", offer_text: "Report", plan_prompt: "Plan", plan_workdir: "/tmp" };
+    for (const sessionKey of [undefined, "agent:main:cron:fixture"]) {
+      const tool = makeAgentSendPlanOfferTool({ workspaceDir: "/tmp", sessionKey });
+      for (const target_channel of [undefined, "system|system", "system|placeholder", "telegram|system"]) {
+        const result = await tool.execute("tool-id", { ...params, target_channel });
+        assert.equal(result.content[0]?.text, "Error: Could not resolve a direct delivery route for the plan offer.");
+      }
+    }
+    assert.equal(calls, 0);
+  });
+
   it("routes an interactive plan offer through SessionManager", async () => {
     const calls: Array<Record<string, unknown>> = [];
     setSessionManager({

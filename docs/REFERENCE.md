@@ -87,7 +87,7 @@ OCA 5.0.1 requires OpenClaw 2026.9.7. OpenClaw removed Tasks and TaskFlow in [#1
 
 Keep model restrictions under `harnesses.codex.allowedModels` and `harnesses["claude-code"].allowedModels`. An omitted restriction uses the existing harness defaults; an explicit empty list is unrestricted. Setting `defaultModel` without `allowedModels` clears that harness's built-in restriction, so supply both when the default should remain restricted. Current restrictions also apply when restarting or resuming a stored model; denial does not substitute a different model. Host role model policy governs host completions separately from OCA's external Codex/Claude Code harnesses.
 
-For automation, `planOfferTool: true`, effective tool grants, OCA activation, and an enabled delivery channel are separate requirements. Grant only the intended OCA tools, including `agent_send_plan_offer` for Start Plan workflows. Disabled bundled harness plugins need not be enabled to use OCA's own harnesses. Installation performs no host configuration migration.
+For automation, `planOfferTool: true`, effective tool grants, OCA activation, and an enabled delivery channel are separate requirements. Grant only the intended OCA tools, including `agent_send_plan_offer` for Start Plan workflows. Disabled bundled harness plugins need not be enabled to use OCA's own harnesses. Installation performs no host configuration migration. Calls without a direct delivery route return an error and do not queue an offer.
 
 ### Upgrading from 4.x
 
