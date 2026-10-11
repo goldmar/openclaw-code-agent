@@ -89,7 +89,7 @@ The plugin config key `autoUpdate` (default `true`) controls the self-updater:
 
 Update buttons are single-use action tokens bound to the approved version.
 
-Every OCA button is an opaque, expiring action token. Besides the host's authorized-sender check, a token is bound to the chat its button was delivered to: a callback carrying it from another chat or channel is refused, so a token copied out of one conversation cannot act from another.
+Every OCA button is an opaque, expiring action token. Besides the host's authorized-sender check, a token is bound to the route its button was delivered to. Telegram checks the recorded bot account, chat and topic before consuming the token; missing required metadata, contradictory routes and wrong-topic/account clicks are refused without invalidating the legitimate button. Direct-message topics remain distinct from forum topics. Discord retains its parent-channel/thread binding. Legacy unbound tokens still require host sender authorization, and accountless routes enforce their recorded chat/topic.
 
 ## Worktree Setup Script
 

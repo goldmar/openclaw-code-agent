@@ -607,7 +607,6 @@ ${recoveryBlock}if ! TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 
   echo "${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery login is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
   exit 1
 fi
-TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
 `;
 }
 

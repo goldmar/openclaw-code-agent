@@ -40,7 +40,9 @@ export type CommandDefinition = Parameters<Api["registerCommand"]>[0];
 export type CommandContext = Parameters<CommandDefinition["handler"]>[0];
 export type CommandResult = Awaited<ReturnType<CommandDefinition["handler"]>>;
 export type InteractiveRegistration = Parameters<Api["registerInteractiveHandler"]>[0];
-export type ServiceDefinition = Parameters<Api["registerService"]>[0];
+// OCA uses V1 services. Newer hosts also accept V2 scheduler-bound services;
+// this fake must refuse those instead of calling them with a V1 context.
+export type ServiceDefinition = Exclude<Parameters<Api["registerService"]>[0], { apiVersion: 2 }>;
 export type HostLogger = Api["logger"];
 
 type LlmComplete = PluginRuntime["llm"]["complete"];
@@ -253,7 +255,10 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
     },
     registerTool: (tool, toolOptions) => { tools.push({ tool, options: toolOptions }); },
     registerCommand: (command) => { commands.push(command); },
-    registerService: (service) => { services.push(service); },
+    registerService: (service) => {
+      if (service.apiVersion === 2) throw new Error("fake host: V2 service scheduler is not implemented");
+      services.push(service);
+    },
     on: (hookName, handler) => {
       if (hookName !== "gateway_start") throw new Error(`fake host: unsupported hook ${hookName}`);
       gatewayStartHooks.push(handler as GatewayStartHandler);

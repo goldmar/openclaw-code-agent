@@ -551,13 +551,14 @@ describe("plugin entry source", () => {
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
     const target = escapeRegExp(openclawTarget);
     const floor = escapeRegExp(openclawFloor);
+    const version = escapeRegExp(packageMetadata.version);
 
     assert.match(reference, /## Compatibility And Upgrades/);
-    assert.match(reference, new RegExp(`The Unreleased source checkout targets the OpenClaw \`${target}\` package and public SDK`));
-    assert.match(readme, new RegExp(`The Unreleased source checkout targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(reference, new RegExp(`OCA ${version} targets the OpenClaw \`${target}\` package and public SDK`));
+    assert.match(readme, new RegExp(`OCA ${version} targets the OpenClaw \`${target}\` package and public SDK`));
     assert.match(reference, new RegExp(`installation minimum is \`${target}\``));
     assert.match(reference, new RegExp(`npm peer compatibility floor remains \`${floor}\``));
-    assert.match(reference, /published OCA 5\.2\.0 still targets OpenClaw 2026\.9\.8/i);
+    assert.match(reference, /published OCA 5\.2\.0 targets OpenClaw 2026\.9\.8/i);
     assert.match(readme, /installing this package changes no OpenClaw host configuration/);
     assert.match(readme, /Upgrading from 4\.x is not migration-free/);
     assert.match(readme, /Restrictive tool allowlists must add the new `agent_session_action` tool/);

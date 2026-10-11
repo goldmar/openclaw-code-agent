@@ -420,6 +420,9 @@ function callbackConversation(ctx: InteractiveCallbackContext): CallbackConversa
         conversationId: ctx.conversationId,
         parentConversationId: ctx.parentConversationId,
         chatId: ctx.callback?.chatId,
+        accountId: ctx.accountId,
+        threadId: ctx.threadId,
+        isForum: ctx.isForum,
       }
     : {
         channel: "discord",
@@ -816,7 +819,7 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
-      // N2: a button acts only from the chat it was delivered to.
+      // N2: check the saved route before consuming or acting on the token.
       if (!callbackMatchesTokenRoute(callbackConversation(ctx), token.route)) {
         logButtonDiagnostic("callback_route_mismatch", {
           channel: ctx.channel,
@@ -825,8 +828,10 @@ export function createCallbackHandler(
           actionKind: token.kind,
           sessionId: token.sessionId,
         });
-        log.warn(`[callback-handler] Refused a ${token.kind} callback from a chat other than the one its button was sent to.`);
-        await replyText(ctx, "🚫 This button belongs to another chat.");
+        log.warn(`[callback-handler] Refused a ${token.kind} callback from a route other than the one its button was sent to.`);
+        await replyText(ctx, ctx.channel === "telegram"
+          ? "🚫 This button belongs to another chat, account, or topic."
+          : "🚫 This button belongs to another chat.");
         return { handled: true };
       }
 

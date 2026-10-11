@@ -107,6 +107,23 @@ async function nextPlanRound(markdown: string): Promise<PlanRound> {
 
 for (const name of BACKEND_NAMES) {
   describe(`${name}: plan approval`, () => {
+    if (name !== "opencode") {
+      it("does not execute a saved plan after the harness model is revoked", async () => {
+        fixture = await start(name);
+        const round = await proposePlan();
+        const buttons = await planButtons();
+        setPluginConfig({ harnesses: { [name]: {
+          defaultModel: fixture.session.model,
+          allowedModels: ["model-denied-by-current-policy"],
+        } } });
+        const reply = await clickButton(buttonNamed(buttons, "Approve"));
+        assert.match(reply.replies.join("\n"), /not allowed/i);
+        assert.equal(fixture.backend.turns.length, round.turnsBefore, "no implementation turn under revoked model policy");
+        assert.equal(fixture.session.pendingPlanApproval, true);
+        assert.notEqual(fixture.session.approvalState, "approved");
+      });
+    }
+
     it("asks the user with Approve / Revise / Reject buttons and approves the current plan version", async () => {
       fixture = await start(name);
       if (name !== "claude-code") assert.equal(fixture.backend.turns[0]?.planMode, true, "planning runs read-only");

@@ -312,6 +312,16 @@ describe("resolveAgentLaunchRequest", () => {
     if (result.kind === "resolved") assert.equal(result.resolvedModel, "sonnet");
   });
 
+  it("does not widen the Claude harness allowlist for the host's Haiku 5.5 catalog", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use Haiku", harness: "claude-code", model: "anthropic/claude-haiku-5-5" },
+      { workspaceDir: "/tmp", oneShotCliRun: true },
+      {},
+    );
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") assert.match(result.text, /not allowed/);
+  });
+
   it("canonicalizes the provider-qualified Claude default to the bare Claude Code id", () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",

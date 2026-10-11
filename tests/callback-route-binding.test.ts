@@ -1,18 +1,65 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { callbackMatchesTokenRoute } from "../src/callback-route-binding";
+import { callbackMatchesTokenRoute, type CallbackConversation } from "../src/callback-route-binding";
 import { SessionActionTokenStore } from "../src/session-action-token-store";
 
 const CHAT = "-1001234567890";
 const OTHER_CHAT = "-1009876543210";
 
 describe("callback route binding (N2)", () => {
-  it("accepts the same Telegram chat, any topic of it, and a prefixed target", () => {
+  it("accepts only the saved Telegram topic, and accepts a prefixed plain-chat target", () => {
     const route = { provider: "telegram", target: CHAT, threadId: "42" };
     assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: `${CHAT}:topic:42`, parentConversationId: CHAT, chatId: CHAT }, route), true);
-    assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: `${CHAT}:topic:7`, chatId: CHAT }, route), true);
+    assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: `${CHAT}:topic:7`, chatId: CHAT }, route), false);
     assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: CHAT }, { provider: "telegram", target: `telegram:${CHAT}` }), true);
+  });
+
+  it("requires the recorded account and rejects missing topic or contradictory chat/thread metadata", () => {
+    const route = { provider: "telegram", accountId: "bot", target: CHAT, threadId: "42" };
+    const callback = { channel: "telegram", accountId: "bot", chatId: CHAT,
+      conversationId: `${CHAT}:topic:42`, threadId: 42, isForum: true };
+    assert.equal(callbackMatchesTokenRoute(callback, route), true);
+    const patches: Partial<CallbackConversation>[] = [
+      { accountId: "other" }, { accountId: undefined }, { chatId: OTHER_CHAT },
+      { parentConversationId: OTHER_CHAT }, { threadId: 7 }, { threadId: "invalid" },
+      { conversationId: `${CHAT}:direct-topic:42` }, { isForum: false },
+      { conversationId: "unreadable" }, { threadId: undefined, conversationId: CHAT },
+    ];
+    for (const patch of patches) {
+      assert.equal(callbackMatchesTokenRoute({ ...callback, ...patch }, route), false, JSON.stringify(patch));
+    }
+    // Accountless historical routes still enforce their saved topic.
+    assert.equal(callbackMatchesTokenRoute({ ...callback, accountId: undefined }, { ...route, accountId: undefined }), true);
+    assert.equal(callbackMatchesTokenRoute({ ...callback, threadId: 7, conversationId: `${CHAT}:topic:7` },
+      { ...route, accountId: undefined }), false);
+  });
+
+  it("normalizes General without letting a plain-chat token act from another forum topic", () => {
+    const general = { channel: "telegram", chatId: CHAT, isForum: true };
+    const plainRoute = { provider: "telegram", target: CHAT };
+    assert.equal(callbackMatchesTokenRoute(general, plainRoute), true);
+    assert.equal(callbackMatchesTokenRoute({ ...general, conversationId: `${CHAT}:topic:1`, threadId: 1 }, plainRoute), true);
+    assert.equal(callbackMatchesTokenRoute(general, { ...plainRoute, threadId: "1" }), true);
+    assert.equal(callbackMatchesTokenRoute({ ...general, threadId: 42 }, plainRoute), false);
+    assert.equal(callbackMatchesTokenRoute({ ...general, conversationId: `${CHAT}:topic:42` }, plainRoute), false);
+  });
+
+  it("keeps direct-message topics distinct from forum and ordinary DM threads", () => {
+    const route = { provider: "telegram", target: "telegram:1234:direct-topic:42" };
+    const callback = { channel: "telegram", chatId: "1234", conversationId: "1234:direct-topic:42", isForum: false };
+    assert.equal(callbackMatchesTokenRoute(callback, route), true);
+    assert.equal(callbackMatchesTokenRoute({ ...callback, threadId: 42 }, route), true);
+    assert.equal(callbackMatchesTokenRoute({ ...callback, isForum: true }, route), false);
+    assert.equal(callbackMatchesTokenRoute({ channel: "telegram", chatId: "1234", threadId: 42, isForum: false },
+      { provider: "telegram", target: "1234:topic:42" }), false);
+    for (const conversationId of ["1234", "1234:topic:42", "1234:direct-topic:7"]) {
+      assert.equal(callbackMatchesTokenRoute({ ...callback, conversationId }, route), false);
+    }
+    assert.equal(callbackMatchesTokenRoute(callback, { provider: "telegram", target: "1234", threadId: "42" }), false);
+    assert.equal(callbackMatchesTokenRoute({ channel: "telegram", chatId: "1234", threadId: 42, isForum: false },
+      { provider: "telegram", target: "1234", threadId: "42" }), true);
+    assert.equal(callbackMatchesTokenRoute(callback, { provider: "telegram", target: "1234:direct-topic:0" }), false);
   });
 
   it("refuses another Telegram chat and another channel", () => {

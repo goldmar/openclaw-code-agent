@@ -237,11 +237,9 @@ async function main() {
               assert.equal(invoked.ok, true);
               assert.ok(!invoked.output?.isError);
               assert.ok(invoked.output?.content?.some((item) => item.type === "text" && item.text.trim()));
-              if (scenario === "default") {
-                stage = "rooted-cron-tool-caps";
-                await provider.check(call, rpc);
-                stage = `${scenario}-gateway`;
-              }
+              stage = `${scenario}-rooted-cron-tool-caps`;
+              await provider.check(call, rpc, { offerEnabled: scenario === "offer-enabled" });
+              stage = `${scenario}-gateway`;
               config.tools = { ...config.tools, deny: ["agent_stats"] };
               await writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config), { mode: 0o600 });
               let denied = false;

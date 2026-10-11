@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,12 @@ try {
     join(stagingDir, "package.json"),
     `${JSON.stringify(publishedRuntimeManifest, null, 2)}\n`,
   );
+  // Retain unchanged consumer resolutions during version-only preparation.
+  // npm updates entries that the new runtime manifest actually changes.
+  const previousShrinkwrap = join(rootDir, "npm-shrinkwrap.json");
+  if (existsSync(previousShrinkwrap)) {
+    cpSync(previousShrinkwrap, join(stagingDir, "package-lock.json"));
+  }
   execFileSync(
     process.platform === "win32" ? "npm.cmd" : "npm",
     [

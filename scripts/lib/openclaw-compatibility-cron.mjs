@@ -7,6 +7,7 @@ export async function createCronCompatibilityProvider() {
   const observations = [];
   const failures = [];
   let expectedTool;
+  let permittedTools = [];
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/v1/models") {
@@ -27,7 +28,10 @@ export async function createCronCompatibilityProvider() {
       const dispatcher = names.includes("tool_call");
       if (isProbe) {
         assert.ok(dispatcher || advertised === (expectedTool === "agent_stats"), "require a usable host tool interface");
-        assert.ok(names.every((name) => !name?.startsWith("agent_") || name === expectedTool));
+        assert.ok(names.every((name) => !name?.startsWith("agent_") || permittedTools.includes(name)));
+        if (!dispatcher) {
+          assert.equal(names.includes("agent_send_plan_offer"), permittedTools.includes("agent_send_plan_offer"));
+        }
       }
       let delta = { role: "assistant", content: "OCA_CRON_EMPTY_CAP_OK" };
       let finish = "stop";
@@ -92,15 +96,18 @@ export async function createCronCompatibilityProvider() {
           maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })),
       } } };
     },
-    async check(call, rpc) {
-      for (const allowTool of [true, false]) {
+    async check(call, rpc, { offerEnabled = false } = {}) {
+      const caps = [["agent_stats"], [], ...(offerEnabled ? [["agent_stats", "agent_send_plan_offer"]] : [])];
+      for (const toolsAllow of caps) {
+        permittedTools = toolsAllow;
+        const allowTool = toolsAllow.includes("agent_stats");
         expectedTool = allowTool ? "agent_stats" : undefined;
         const before = observations.length;
         const job = await rpc("cron.add", { name: `oca-compat-${randomUUID()}`,
           schedule: { kind: "at", at: new Date(Date.now() + 86400000).toISOString() },
           sessionTarget: "isolated", wakeMode: "now", deleteAfterRun: false,
           payload: { kind: "agentTurn", message: "Check OCA metrics once if granted; otherwise reply without tools.",
-            toolsAllow: allowTool ? ["agent_stats"] : [] }, delivery: { mode: "none" },
+            toolsAllow }, delivery: { mode: "none" },
         });
         try {
           let terminal;

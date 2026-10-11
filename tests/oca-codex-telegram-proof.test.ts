@@ -167,6 +167,7 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.doesNotMatch(script, /telegram-user-code/);
     assert.doesNotMatch(script, /telegram-user-password/);
     assert.match(script, /stored Telegram session expired; refresh\/export\/seed broker payload/);
+    assert.doesNotMatch(script, /terminate-desktop-sessions/, "restored Desktop authorization must not be revoked");
   });
 
   it("gates Telegram login and QR recovery behind explicit recovery mode", () => {
@@ -176,6 +177,7 @@ describe("OCA Codex Telegram proof runner", () => {
 
     assert.ok(loginIndex > 0);
     assert.ok(statusIndex > loginIndex);
+    assert.doesNotMatch(setup, /terminate-desktop-sessions/, "recovery must not revoke other Desktop sessions either");
     assert.match(setup, /Telegram session recovery mode enabled/);
     assert.match(setup, /TELEGRAM_USER_DRIVER_CODE="\$telegram_code"/);
     assert.match(setup, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);

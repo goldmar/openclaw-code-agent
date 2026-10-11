@@ -106,8 +106,9 @@ describe("compatibility discovery acceptance", () => {
     validateCompatibilityHost(packageMetadata, "2026.9.7");
     validateCompatibilityHost(packageMetadata, "2026.9.8", true);
     validateCompatibilityHost(packageMetadata, "2026.9.7", true);
+    validateCompatibilityHost(packageMetadata, "2026.9.9", true);
     assert.throws(() => validateCompatibilityHost(packageMetadata, "2026.9.8"));
-    for (const version of ["2026.9.9", "2026.9.10", "2026.10.1", "2027.1.1", "2026.9.8-rc.1"]) {
+    for (const version of [packageMetadata.openclaw.build.openclawVersion, "2027.1.1", "2026.9.8-rc.1"]) {
       assert.throws(() => validateCompatibilityHost(packageMetadata, version, true));
     }
   });

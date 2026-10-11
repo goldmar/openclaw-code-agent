@@ -6,6 +6,8 @@ import { SessionActionTokenStore } from "../src/session-action-token-store";
 import { setAutoUpdateService, setSessionManager } from "../src/singletons";
 import { setPluginConfig } from "../src/config";
 import { createStubSession } from "./helpers";
+import type { PluginInteractiveTelegramHandlerContext } from "../api";
+import type { SessionManager } from "../src/session-manager";
 
 const TELEGRAM_FORUM_TARGET = "-1001234567890";
 const TELEGRAM_FORUM_THREAD_ID = "42";
@@ -3734,7 +3736,43 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
     assert.deepEqual(result, { handled: true });
     assert.equal(consumes, 0);
-    assert.equal(state.replies[0], "🚫 This button belongs to another chat.");
+    assert.equal(state.replies[0], "🚫 This button belongs to another chat, account, or topic.");
+  });
+
+  it("refuses wrong-account/topic offer clicks without consuming or clearing the valid button", async () => {
+    const store = new SessionActionTokenStore(() => undefined, 60_000);
+    const token = store.createActionToken("offer", "plan-offer-dismiss", {
+      route: { provider: "telegram", accountId: "default", target: TELEGRAM_FORUM_TARGET,
+        threadId: TELEGRAM_FORUM_THREAD_ID },
+    });
+    let consumes = 0;
+    const manager = {
+      getActionToken: (id: string) => store.getActionToken(id),
+      consumeActionToken: (id: string) => { consumes++; return store.consumeActionToken(id); },
+    } satisfies Pick<SessionManager, "getActionToken" | "consumeActionToken">;
+    // This action needs only the token methods; the full manager is intentionally absent.
+    setSessionManager(manager as unknown as SessionManager);
+    const handler = createCallbackHandler();
+    const patches: Partial<PluginInteractiveTelegramHandlerContext>[] = [
+      { accountId: "other" }, { accountId: undefined },
+      { threadId: 7, conversationId: `${TELEGRAM_FORUM_TARGET}:topic:7` },
+      { threadId: undefined, conversationId: TELEGRAM_FORUM_TARGET, isForum: false },
+    ];
+    for (const patch of patches) {
+      const state = createCtx(token.id);
+      const ctx = { ...state.ctx, ...patch } as PluginInteractiveTelegramHandlerContext;
+      await handler.handler(ctx);
+      assert.equal(consumes, 0);
+      assert.equal(store.getActionToken(token.id)?.consumedAt, undefined);
+      assert.equal(state.buttonsCleared, 0);
+      assert.equal(state.buttonMarkupEdits, 0);
+      assert.deepEqual(state.replies, ["🚫 This button belongs to another chat, account, or topic."]);
+    }
+    const valid = createCtx(token.id);
+    await handler.handler(valid.ctx as PluginInteractiveTelegramHandlerContext);
+    assert.equal(consumes, 1);
+    assert.equal(valid.buttonsCleared, 1);
+    assert.deepEqual(valid.replies, ["⏭️ Plan offer dismissed."]);
   });
 
   it("refuses a Discord callback from another channel than the token's (N2)", async () => {

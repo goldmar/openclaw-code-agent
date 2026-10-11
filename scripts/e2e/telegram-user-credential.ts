@@ -204,6 +204,17 @@ function requireTelegramUserPayloadString(payload: Record<string, unknown>, key:
   return value;
 }
 
+// Telegram accounts need not have a public username. The numeric testerUserId
+// remains the required identity; never invent a username when exporting state.
+function telegramTesterUsername(source: Record<string, unknown>): string {
+  const value = source.testerUsername;
+  if (value === undefined) return "";
+  if (typeof value !== "string") {
+    throwCredentialPayloadError("testerUsername must be a string when provided.");
+  }
+  return value.trim();
+}
+
 function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>): JsonObject {
   const groupId = requireTelegramUserPayloadString(payload, "groupId");
   if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
@@ -247,7 +258,7 @@ function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>):
     groupId,
     sutToken: requireTelegramUserPayloadString(payload, "sutToken"),
     testerUserId,
-    testerUsername: requireTelegramUserPayloadString(payload, "testerUsername"),
+    testerUsername: telegramTesterUsername(payload),
     telegramApiId,
     telegramApiHash: requireTelegramUserPayloadString(payload, "telegramApiHash"),
     tdlibDatabaseEncryptionKey: requireTelegramUserPayloadString(
@@ -516,7 +527,7 @@ async function createTelegramUserPayload(opts: Map<string, string>) {
       groupId,
       sutToken,
       testerUserId: requireString(config, "testerUserId"),
-      testerUsername: requireString(config, "testerUsername"),
+      testerUsername: telegramTesterUsername(config),
       telegramApiId: requireString(config, "apiId"),
       telegramApiHash: requireString(config, "apiHash"),
       tdlibDatabaseEncryptionKey: requireString(config, "databaseEncryptionKey"),
@@ -589,7 +600,7 @@ async function restoreTelegramUserPayload(params: {
       databaseEncryptionKey: requireString(payload, "tdlibDatabaseEncryptionKey"),
       defaultChatId: requireString(payload, "groupId"),
       testerUserId: Number(requireString(payload, "testerUserId")),
-      testerUsername: requireString(payload, "testerUsername"),
+      testerUsername: telegramTesterUsername(payload),
     });
   } finally {
     await rm(tempRoot, { force: true, recursive: true });
@@ -648,7 +659,7 @@ async function leaseAndRestoreTelegramUser(opts: Map<string, string>) {
           userDriverDir,
           desktopWorkdir,
           testerUserId: requireString(payload, "testerUserId"),
-          testerUsername: requireString(payload, "testerUsername"),
+          testerUsername: telegramTesterUsername(payload),
           groupId: requireString(payload, "groupId"),
         },
         null,
