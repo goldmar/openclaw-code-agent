@@ -310,3 +310,7 @@ Chat commands mirror the common workflows when you want explicit commands instea
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Developer Telegram proof helpers require `python3.12` on PATH. Their Python
+code uses only the standard library; entrypoints and child commands select
+that minor explicitly so changing Homebrew’s bare Python default is harmless.

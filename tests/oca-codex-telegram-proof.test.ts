@@ -155,10 +155,10 @@ describe("OCA Codex Telegram proof runner", () => {
 
   it("requires restored Telegram sessions during normal remote setup", () => {
     const script = renderRemoteSetup(parseArgs(["run"]));
-    const statusIndex = script.indexOf('python3 "$root/user-driver.py" status');
+    const statusIndex = script.indexOf('python3.12 "$root/user-driver.py" status');
 
     assert.ok(statusIndex > 0);
-    assert.doesNotMatch(script, /python3 "\$root\/user-driver\.py" login/);
+    assert.doesNotMatch(script, /python3\.12 "\$root\/user-driver\.py" login/);
     assert.doesNotMatch(script, /TELEGRAM_USER_DRIVER_CODE="\$telegram_code"/);
     assert.doesNotMatch(script, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);
     assert.doesNotMatch(script, /login --password/);
@@ -171,8 +171,8 @@ describe("OCA Codex Telegram proof runner", () => {
 
   it("gates Telegram login and QR recovery behind explicit recovery mode", () => {
     const setup = renderRemoteSetup(parseArgs(["run", "--recover-telegram-session"]));
-    const loginIndex = setup.indexOf('python3 "$root/user-driver.py" login');
-    const statusIndex = setup.indexOf('python3 "$root/user-driver.py" status');
+    const loginIndex = setup.indexOf('python3.12 "$root/user-driver.py" login');
+    const statusIndex = setup.indexOf('python3.12 "$root/user-driver.py" status');
 
     assert.ok(loginIndex > 0);
     assert.ok(statusIndex > loginIndex);

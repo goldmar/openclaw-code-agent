@@ -258,7 +258,7 @@ jobs:
           CLAWHUB_REGISTRY: https://clawhub.ai
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
-          python3 - <<'PY'
+          python3.12 - <<'PY'
           import json
           import os
           from pathlib import Path

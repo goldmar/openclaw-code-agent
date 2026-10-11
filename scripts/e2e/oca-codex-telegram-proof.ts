@@ -513,7 +513,7 @@ export function renderRemoteSetup(opts: Options): string {
   const tdlibSha256 = opts.tdlibSha256 ?? "";
   const recoveryBlock = opts.recoverTelegramSession
     ? `
-telegram_code="$(python3 - "$root/telegram-user-code" <<'PY'
+telegram_code="$(python3.12 - "$root/telegram-user-code" <<'PY'
 import pathlib
 import sys
 
@@ -523,7 +523,7 @@ except FileNotFoundError:
     pass
 PY
 )"
-telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
+telegram_password="$(python3.12 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
 import json
 import pathlib
 import sys
@@ -549,7 +549,7 @@ PY
 )"
 if [ -n "$telegram_password" ]; then
   echo "Telegram session recovery mode enabled; attempting maintenance login." >&2
-  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
+  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3.12 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
 fi
 `
     : "";
@@ -570,7 +570,7 @@ run_setup_step() {
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
 run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
-run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake g++ git gperf make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-oca-telegram-apt.log
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake g++ git gperf make zlib1g-dev libssl-dev python3.12 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-oca-telegram-apt.log
 if [ ! -x "$root/Telegram/Telegram" ]; then
   curl -fL --retry 3 --retry-delay 5 --retry-all-errors -o "$root/telegram.tar.xz" https://telegram.org/dl/desktop/linux
   tar -xJf "$root/telegram.tar.xz" -C "$root"
@@ -603,11 +603,11 @@ if ! ldconfig -p | grep -q libtdjson.so; then
   run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
   sudo ldconfig
 fi
-${recoveryBlock}if ! TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"; then
+${recoveryBlock}if ! TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3.12 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"; then
   echo "${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery login is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
   exit 1
 fi
-TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
+TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3.12 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
 `;
 }
 
@@ -627,7 +627,7 @@ wmctrl -l | grep -i telegram >/dev/null
 
 export function renderAuthorizeDesktop(opts: Options): string {
   const qrBlock = opts.recoverTelegramSession
-    ? `TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"`
+    ? `TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3.12 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"`
     : `echo "stored Telegram Desktop tdata expired; refresh/export/seed broker payload. QR recovery is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
   exit 1`;
   return `#!/usr/bin/env bash
@@ -865,7 +865,7 @@ async function clickCallbackWithBotAnswer(params: {
 }): Promise<{ callback: Record<string, unknown>; callbackAnswer: { answered: boolean; updatesSeen: number } }> {
   const callbackPath = path.join(params.outputDir, "telegram-callback.redacted.json");
   let clickDone = false;
-  const child = spawn("python3", [
+  const child = spawn("python3.12", [
     TELEGRAM_USER_DRIVER,
     "click-callback",
     "--chat",
@@ -916,7 +916,7 @@ async function clickCallbackWithBotAnswer(params: {
 
 function runTelegramUserDriverJson(args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const output = runCommandSync({
-    command: "python3",
+    command: "python3.12",
     args: [TELEGRAM_USER_DRIVER, ...args, "--json"],
     cwd: REPO_ROOT,
     env,
@@ -1174,7 +1174,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
         ],
       });
       const transcript = runCommandSync({
-        command: "python3",
+        command: "python3.12",
         args: [
           TELEGRAM_USER_DRIVER,
           "transcript",

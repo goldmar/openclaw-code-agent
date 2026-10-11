@@ -1,10 +1,11 @@
 import "./test-env";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { it } from "node:test";
 
 it("native Telegram QA preserves current TDLib forum topics on receive and send", () => {
-  const actual = execFileSync("python3", ["-c", `
+  const actual = execFileSync("python3.12", ["-c", `
 import importlib.util, json, sys
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("driver", "scripts/e2e/telegram-user-driver.py")
@@ -40,4 +41,17 @@ print(json.dumps(driver.client.payload))
   assert.equal(actual[0].chatHistory.only_local, false);
   assert.deepEqual(actual[1].topic_id, { "@type": "messageTopicForum", forum_topic_id: 13832 });
   assert.deepEqual(actual[1].reply_to, { "@type": "inputMessageReplyToMessage", message_id: 77 });
+});
+
+
+it("Python command surfaces select a minor interpreter independently of PATH defaults", () => {
+  const proof = readFileSync("scripts/e2e/oca-codex-telegram-proof.ts", "utf8");
+  assert.doesNotMatch(proof, /(?:spawn\(|command:\s*)"python3"/);
+  assert.doesNotMatch(proof, /python3 (?:-|"\$root)/);
+  assert.match(proof, /spawn\("python3\.12"/);
+  const driver = readFileSync("scripts/e2e/telegram-user-driver.py", "utf8");
+  assert.equal(driver.split("\n")[0], "#!/usr/bin/env python3.12");
+  for (const file of [".github/workflows/release.yml", ".github/workflows/workflow-sanity.yml"]) {
+    assert.doesNotMatch(readFileSync(file, "utf8"), /python3 -/);
+  }
 });

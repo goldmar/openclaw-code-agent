@@ -29,7 +29,7 @@ jobs:
 
       - name: Fail on tabs in workflow files
         run: |
-          python3 - <<'PY'
+          python3.12 - <<'PY'
           from pathlib import Path
           import sys
 
