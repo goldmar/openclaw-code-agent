@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Close Claude's SDK query after stream completion and during shutdown, including startup cancellation, so native CLI processes do not linger after planning/resume QA or session teardown.
+
 - Bind Telegram action buttons to their saved bot account, chat and topic before consuming tokens. Wrong-account/topic clicks leave the legitimate button usable. Forum and direct-message topics remain distinct; General-topic callbacks use the host's topic normalization. Legacy unbound tokens retain sender authorization, and accountless routes still enforce their saved chat/topic. Discord binding is unchanged.
 - Preserve existing npm consumer resolutions when regenerating shrinkwrap for release preparation.
 - Target the OpenClaw 2026.10.1 package and public SDK, with installation/loading minimum `>=2026.10.1`. The plugin API, Gateway and npm peer floor remains 2026.9.7; it does not override the higher installation minimum.

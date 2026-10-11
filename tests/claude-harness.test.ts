@@ -45,6 +45,7 @@ function createQueryHandle(messages: unknown[], extras: Record<string, unknown> 
     async interrupt(): Promise<void> {
       interrupted = true;
     },
+    close(): void { release?.(); },
     ...extras,
   };
 
@@ -425,6 +426,44 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(optionsSeen?.permissionMode, "plan");
     assert.equal(messages.some((message) => message.type === "backend_ref"), true);
     assert.equal(messages.at(-1)?.type, "run_completed");
+  });
+
+  it("closes the SDK query once after its stream ends and on explicit shutdown", async () => {
+    for (const explicit of [false, true]) {
+      let closes = 0;
+      const query = createQueryHandle([OK_RESULT], {
+        holdUntilReleased: explicit,
+        close: () => { closes++; query.release(); },
+      });
+      const ready = Promise.withResolvers<void>();
+      const session = new ClaudeCodeHarness({ startup: async () => ({
+        query: () => { ready.resolve(); return query.handle as any; }, close() {},
+      }) }).launch({ prompt: "finish", cwd: "/tmp/project" });
+      const messages = collectAll(session);
+      await ready.promise;
+      if (explicit) {
+        await session.close?.();
+        await session.close?.();
+      }
+      await messages;
+      assert.equal(closes, 1);
+    }
+  });
+
+  it("discards a late warm startup without sending a prompt after close", async () => {
+    let closes = 0;
+    let prompts = 0;
+    const startup = Promise.withResolvers<{ query: () => any; close: () => void }>();
+    const session = new ClaudeCodeHarness({ startup: async () => startup.promise }).launch({
+      prompt: "must not execute", cwd: "/tmp/project",
+    });
+    const messages = collectAll(session);
+    const closing = session.close?.();
+    startup.resolve({ query: () => { prompts++; return createQueryHandle([]).handle; }, close: () => { closes++; } });
+    await closing;
+    await messages;
+    assert.equal(prompts, 0);
+    assert.equal(closes, 1);
   });
 
   it("preserves the pre-0.3.267 custom system prompt snapshot behavior", async () => {

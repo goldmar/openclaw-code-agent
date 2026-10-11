@@ -424,6 +424,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     let pendingPlan: PendingPlanRequest | undefined;
     let pendingQuestion: PendingQuestionRequest | undefined;
     let closed = false;
+    const abortController = options.abortController ?? new AbortController();
     const forkBaseline = options.forkSession && options.resumeSessionId ? options.forkBaselineUsage : undefined;
 
     /** Record an answer for the active question; resolves the tool call after the last one. */
@@ -620,7 +621,7 @@ export class ClaudeCodeHarness implements AgentHarness {
         ? undefined
         : { type: "custom", prompt: options.systemPrompt, snapshot: false },
       includePartialMessages: true,
-      abortController: options.abortController,
+      abortController,
       canUseTool,
       // Worktree sessions keep project settings, hooks, `.mcp.json`, and
       // `.claude/` config from the trusted checkout instead of the branch.
@@ -641,6 +642,13 @@ export class ClaudeCodeHarness implements AgentHarness {
     const startupFn = this.deps.startup ?? sdkStartup;
     const getSessionInfo = this.deps.getSessionInfo ?? sdkGetSessionInfo;
     const getSessionMessages = this.deps.getSessionMessages ?? sdkGetSessionMessages;
+    let activeQuery: Query | undefined;
+    let queryClosed = false;
+    const closeQuery = (): void => {
+      if (!activeQuery || queryClosed) return;
+      queryClosed = true;
+      activeQuery.close();
+    };
     const qPromise = (async (): Promise<Query> => {
       if (options.resumeSessionId) {
         // Completed Claude sessions are resumable; confirm the transcript still
@@ -656,7 +664,9 @@ export class ClaudeCodeHarness implements AgentHarness {
       }
       const warmQuery = await startupFn({ options: sdkOptions });
       try {
-        return warmQuery.query(prompt);
+        if (closed || abortController.signal.aborted) throw new Error("Claude Code launch was aborted.");
+        activeQuery = warmQuery.query(prompt);
+        return activeQuery;
       } catch (error) {
         warmQuery.close();
         throw error;
@@ -883,12 +893,26 @@ export class ClaudeCodeHarness implements AgentHarness {
           pending.resolve({ behavior: "deny", message: "The session ended before the question was answered.", interrupt: true });
         }
         await Promise.allSettled([...reporting]);
+        closeQuery();
         queue.close();
       }
     })();
 
     return {
       messages: queue.messages(),
+
+      async close(): Promise<void> {
+        closed = true;
+        abortController.abort();
+        settlePendingPlan({ behavior: "deny", message: "The session was closed before the plan was reviewed.", interrupt: true });
+        if (pendingQuestion) {
+          const pending = pendingQuestion;
+          pendingQuestion = undefined;
+          pending.resolve({ behavior: "deny", message: "The session was closed before the question was answered.", interrupt: true });
+        }
+        await qPromise.catch((): undefined => undefined);
+        closeQuery();
+      },
 
       async setPermissionMode(mode: string): Promise<void> {
         const q = await qPromise;
