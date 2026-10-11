@@ -8,6 +8,7 @@ export async function createCronCompatibilityProvider() {
   const failures = [];
   let expectedTool;
   let permittedTools = [];
+  let toolArgs = {};
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/v1/models") {
@@ -24,10 +25,10 @@ export async function createCronCompatibilityProvider() {
       const names = (body.tools ?? []).map((tool) => tool.function?.name);
       const lastUser = body.messages.findLastIndex((message) => message.role === "user");
       const result = body.messages.slice(lastUser + 1).find((message) => message.role === "tool");
-      const advertised = names.includes("agent_stats");
+      const advertised = names.includes(expectedTool);
       const dispatcher = names.includes("tool_call");
       if (isProbe) {
-        assert.ok(dispatcher || advertised === (expectedTool === "agent_stats"), "require a usable host tool interface");
+        assert.ok(dispatcher || advertised === permittedTools.includes(expectedTool), "require a usable host tool interface");
         assert.ok(names.every((name) => !name?.startsWith("agent_") || permittedTools.includes(name)));
         if (!dispatcher) {
           assert.equal(names.includes("agent_send_plan_offer"), permittedTools.includes("agent_send_plan_offer"));
@@ -35,27 +36,37 @@ export async function createCronCompatibilityProvider() {
       }
       let delta = { role: "assistant", content: "OCA_CRON_EMPTY_CAP_OK" };
       let finish = "stop";
-      if (isProbe && (advertised || dispatcher) && !result) {
+      if (isProbe && !result) {
         delta = { role: "assistant", tool_calls: [{ index: 0, id: `call_${randomUUID()}`,
-          type: "function", function: { name: dispatcher ? "tool_call" : "agent_stats",
-            arguments: dispatcher ? JSON.stringify({ id: "agent_stats", args: {} }) : "{}" } }] };
+          type: "function", function: { name: dispatcher ? "tool_call" : expectedTool,
+            arguments: JSON.stringify(dispatcher ? { id: expectedTool, args: toolArgs } : toolArgs) } }] };
         finish = "tool_calls";
         observations.push({ kind: "tool-request", names });
       } else if (result) {
         const call = body.messages.slice(lastUser + 1).flatMap((message) => message.tool_calls ?? [])
           .find((entry) => entry.id === result.tool_call_id);
-        assert.equal(call?.function?.name, dispatcher ? "tool_call" : "agent_stats", "tool result must match its actual advertised call");
-        if (expectedTool) {
-          assert.ok(result.content && !String(result.content).includes("Error:"), "actual OCA tool must return initialized metrics");
+        assert.equal(call?.function?.name, dispatcher ? "tool_call" : expectedTool, "tool result must match its actual advertised call");
+        if (permittedTools.includes(expectedTool)) {
+          let output = result.content;
           if (dispatcher) {
             const envelope = JSON.parse(result.content);
-            assert.equal(envelope.tool.name, "agent_stats");
-            assert.ok(envelope.result.content?.some((entry) => entry.type === "text" && entry.text.trim()));
-            assert.ok(!envelope.result.isError);
+            assert.equal(envelope.tool.name, expectedTool);
+            output = envelope.result;
+            assert.ok(!output.isError);
+            assert.ok(output.content?.some((entry) => entry.type === "text" && entry.text.trim()));
+          }
+          if (expectedTool === "agent_send_plan_offer") {
+            // Valid inputs with no delivery route prove admission and execution
+            // without sending a message or starting a coding session.
+            const text = typeof output === "string" ? output : JSON.stringify(output);
+            assert.match(text, /Error: Could not resolve a direct delivery route for the plan offer\./u);
+          } else {
+            assert.ok(output && !JSON.stringify(output).includes("Error:"), "actual OCA tool must return initialized metrics");
           }
           observations.push({ kind: "tool-result", names });
         } else {
-          assert.match(String(result.content), /Unknown tool (?:id|name)/iu, "empty cron cap must reject dispatch to OCA");
+          assert.match(String(result.content), /Unknown tool (?:id|name)|Tool [^\n]*not found/iu,
+            "cron cap must reject dispatch to the requested OCA tool");
           observations.push({ kind: "tool-denied", names });
         }
         delta = { role: "assistant", content: "OCA_CRON_TOOL_RESULT_OK" };
@@ -97,17 +108,26 @@ export async function createCronCompatibilityProvider() {
       } } };
     },
     async check(call, rpc, { offerEnabled = false } = {}) {
-      const caps = [["agent_stats"], [], ...(offerEnabled ? [["agent_stats", "agent_send_plan_offer"]] : [])];
-      for (const toolsAllow of caps) {
-        permittedTools = toolsAllow;
-        const allowTool = toolsAllow.includes("agent_stats");
-        expectedTool = allowTool ? "agent_stats" : undefined;
+      const probes = [
+        { tool: "agent_stats", toolsAllow: ["agent_stats"], args: {} },
+        { tool: "agent_stats", toolsAllow: [], args: {} },
+        ...(offerEnabled ? [true, false].map((allowed) => ({
+          tool: "agent_send_plan_offer", toolsAllow: allowed ? ["agent_send_plan_offer"] : ["agent_stats"],
+          args: { offer_id: "oca-compatibility", offer_text: "Compatibility probe", plan_prompt: "Do not launch",
+            plan_workdir: "." },
+        })) : []),
+      ];
+      for (const probe of probes) {
+        permittedTools = probe.toolsAllow;
+        expectedTool = probe.tool;
+        toolArgs = probe.args;
+        const allowTool = permittedTools.includes(expectedTool);
         const before = observations.length;
         const job = await rpc("cron.add", { name: `oca-compat-${randomUUID()}`,
           schedule: { kind: "at", at: new Date(Date.now() + 86400000).toISOString() },
           sessionTarget: "isolated", wakeMode: "now", deleteAfterRun: false,
-          payload: { kind: "agentTurn", message: "Check OCA metrics once if granted; otherwise reply without tools.",
-            toolsAllow }, delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "Run the controlled OCA tool admission probe once, then finish.",
+            toolsAllow: permittedTools }, delivery: { mode: "none" },
         });
         try {
           let terminal;
@@ -123,10 +143,9 @@ export async function createCronCompatibilityProvider() {
           assert.equal(result.run.completionStatus, "succeeded");
           assert.ok(result.run.runId && result.run.sessionKey, "terminal cron result must identify its run and session");
           const actual = observations.slice(before);
-          const dispatched = actual.some((entry) => entry.names.includes("tool_call"));
-          assert.equal(actual.filter((entry) => entry.kind === "tool-request").length, allowTool || dispatched ? 1 : 0);
+          assert.equal(actual.filter((entry) => entry.kind === "tool-request").length, 1);
           assert.equal(actual.filter((entry) => entry.kind === "tool-result").length, allowTool ? 1 : 0);
-          assert.equal(actual.filter((entry) => entry.kind === "tool-denied").length, !allowTool && dispatched ? 1 : 0);
+          assert.equal(actual.filter((entry) => entry.kind === "tool-denied").length, allowTool ? 0 : 1);
           assert.ok(actual.length > 0);
           assert.deepEqual(failures, []);
           const after = await rpc("tools.invoke", { name: "agent_stats", sessionKey: "agent:main:compatibility-qa", args: {} });

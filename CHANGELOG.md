@@ -9,16 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.2.1] - 2026-10-11
 
-- Native Telegram QA export/restore supports accounts without a public username, retaining numeric user identity. Proof setup preserves Desktop sessions instead of revoking the saved authorization before use.
+### Fixed
 
-### Changed
+- Native Telegram QA export/restore supports accounts without a public username, retaining numeric user identity. Proof setup preserves Desktop sessions instead of revoking the saved authorization before use.
 
 - Close Claude's SDK query after stream completion and during shutdown, including startup cancellation, so native CLI processes do not linger after planning/resume QA or session teardown.
 
 - Bind Telegram action buttons to their saved bot account, chat and topic before consuming tokens. Wrong-account/topic clicks leave the legitimate button usable. Forum and direct-message topics remain distinct; General-topic callbacks use the host's topic normalization. Legacy unbound tokens retain sender authorization, and accountless routes still enforce their saved chat/topic. Discord binding is unchanged.
+
+### Changed
+
 - Preserve existing npm consumer resolutions when regenerating shrinkwrap for release preparation.
 - Target the OpenClaw 2026.10.1 package and public SDK, with installation/loading minimum `>=2026.10.1`. The plugin API, Gateway and npm peer floor remains 2026.9.7; it does not override the higher installation minimum.
-- Extend compatibility verification to reject the unchanged candidate on explicitly selected older hosts while preserving their configuration. Cover prepared-runtime ownership, rooted cron tool caps, callback routing and receipt-based completion without enabling bundled Codex.
+- Extend compatibility verification to reject the unchanged candidate on explicitly selected older hosts while preserving their configuration. Cover prepared-runtime ownership, rooted cron tool caps (including allowed and denied Start Plan invocations), callback routing and receipt-based completion without enabling bundled Codex.
 - Document the Telegram owner Control UI command `/controlui`, the existing harness-scoped model restrictions, and Codex 0.160.0 protocol provenance. No new plugin configuration migration is introduced.
 - Refresh pnpm's transitive `proxy-addr` resolution to 2.0.8 for GHSA-jqcg-44mw-7w3h; the npm consumer shrinkwrap already resolves the patched version.
 - Update native Telegram QA tooling to preserve current TDLib forum topic identifiers in messages and sends, and use topic-specific transcript history for callback proof.
