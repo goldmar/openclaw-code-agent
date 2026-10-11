@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Close Claude's SDK query after stream completion and during shutdown, including startup cancellation, so native CLI processes do not linger after planning/resume QA or session teardown.
 
-- Bind Telegram action buttons to their saved bot account, chat and topic before consuming tokens. Wrong-account/topic clicks leave the legitimate button usable. Forum and direct-message topics remain distinct; General-topic callbacks use the host's topic normalization. Legacy unbound tokens retain sender authorization, and accountless routes still enforce their saved chat/topic. Discord binding is unchanged.
+- Bind Telegram action buttons to their saved bot account, chat and topic before consuming tokens. Wrong-account/topic clicks leave the legitimate button usable. Forum and direct-message topics remain distinct; General-topic callbacks use the host's topic normalization, and numeric topic target aliases retain their topic binding. Legacy unbound tokens retain sender authorization, and accountless routes still enforce their saved chat/topic. Discord binding is unchanged.
 
 ### Changed
 

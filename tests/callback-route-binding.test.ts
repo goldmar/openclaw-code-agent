@@ -15,6 +15,17 @@ describe("callback route binding (N2)", () => {
     assert.equal(callbackMatchesTokenRoute({ channel: "telegram", conversationId: CHAT }, { provider: "telegram", target: `telegram:${CHAT}` }), true);
   });
 
+  it("normalizes the host's numeric topic alias while preserving topic binding", () => {
+    const route = { provider: "telegram", target: `telegram:${CHAT}:42`, accountId: "bot" };
+    const callback = { channel: "telegram", accountId: "bot", chatId: CHAT,
+      conversationId: `${CHAT}:topic:42`, threadId: 42, isForum: true };
+    assert.equal(callbackMatchesTokenRoute(callback, route), true);
+    assert.equal(callbackMatchesTokenRoute({ ...callback, conversationId: `${CHAT}:42` }, route), true);
+    assert.equal(callbackMatchesTokenRoute({ ...callback, conversationId: `${CHAT}:7`, threadId: 7 }, route), false);
+    assert.equal(callbackMatchesTokenRoute(callback, { ...route, threadId: "7" }), false);
+    assert.equal(callbackMatchesTokenRoute(callback, { ...route, target: `${CHAT}:direct-topic:42` }), false);
+  });
+
   it("requires the recorded account and rejects missing topic or contradictory chat/thread metadata", () => {
     const route = { provider: "telegram", accountId: "bot", target: CHAT, threadId: "42" };
     const callback = { channel: "telegram", accountId: "bot", chatId: CHAT,

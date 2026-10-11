@@ -26,12 +26,13 @@ type TelegramAddress = { chat: string; scope?: "topic" | "direct-topic"; topic?:
 
 function telegramAddress(value: string | undefined): TelegramAddress | undefined {
   const trimmed = value?.trim().replace(/^(?:telegram|tg):/i, "");
-  const match = /^(-?\d+)(?::(topic|direct-topic):(\d+))?$/i.exec(trimmed ?? "");
+  const match = /^(-?\d+)(?::(?:(topic|direct-topic):)?(\d+))?$/i.exec(trimmed ?? "");
   if (!match) return undefined;
   const topic = match[3] === undefined ? undefined : telegramTopicId(match[3]);
   if (match[3] !== undefined && topic === undefined) return undefined;
   if (match[2]?.toLowerCase() === "direct-topic" && topic === "0") return undefined;
-  return { chat: match[1]!, scope: match[2]?.toLowerCase() as TelegramAddress["scope"], topic };
+  return { chat: match[1]!, scope: topic === undefined ? undefined
+    : (match[2]?.toLowerCase() ?? "topic") as TelegramAddress["scope"], topic };
 }
 
 function telegramTopicId(value: string | number): string | undefined {
