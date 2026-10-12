@@ -2361,7 +2361,7 @@ describe("createCallbackHandler()", () => {
     const handler = createCallbackHandler("telegram", {
       makeAgentMergeTool: () => ({
         execute: async (_id: string, params: unknown) => {
-          assert.deepEqual(params, { session: "sess-42" });
+          assert.deepEqual(params, { ocaSessionId: "sess-42" });
           return createToolResult("✅ Merged branch agent/ux-fix into main.", true);
         },
       }) as any,
@@ -2389,7 +2389,7 @@ describe("createCallbackHandler()", () => {
       const handler = createCallbackHandler("telegram", {
         makeAgentPrTool: () => ({
           execute: async (_id: string, params: unknown) => {
-            assert.deepEqual(params, { session: "sess-42" });
+            assert.deepEqual(params, { ocaSessionId: "sess-42" });
             return createToolResult("✅ PR opened: https://github.com/example/repo/pull/42", true);
           },
         }) as any,
@@ -2649,13 +2649,13 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(await handler.handler(sync.ctx as any), { handled: true });
     assert.deepEqual(reoffers, [{ failure: "PR failed: the earlier PR was closed without merging: https://github.com/example/repo/pull/42", closedPr: true }]);
     assert.deepEqual(sync.replies, [], "the re-offered prompt is the one message");
-    assert.deepEqual(prCalls, [{ session: "sess-42" }]);
+    assert.deepEqual(prCalls, [{ ocaSessionId: "sess-42" }]);
 
     // The re-offered prompt's New PR button carries `prForceNew`.
     token = { sessionId: "sess-42", kind: "worktree-create-pr", prForceNew: true };
     const fresh = createCtx("token-new-pr");
     assert.deepEqual(await handler.handler(fresh.ctx as any), { handled: true });
-    assert.deepEqual(prCalls[1], { session: "sess-42", force_new: true });
+    assert.deepEqual(prCalls[1], { ocaSessionId: "sess-42", force_new: true });
     assert.equal(reoffers.length, 1, "a successful New PR re-offers nothing");
   });
 
@@ -2685,7 +2685,7 @@ describe("createCallbackHandler()", () => {
     const state = createCtx("token-new-pr");
     assert.deepEqual(await handler.handler(state.ctx as any), { handled: true });
 
-    assert.deepEqual(prCalls, [{ session: "sess-42", force_new: true }, { session: "sess-42" }]);
+    assert.deepEqual(prCalls, [{ ocaSessionId: "sess-42", force_new: true }, { ocaSessionId: "sess-42" }]);
     assert.equal(reoffers, 0, "the press ends as a sync, not as a failure");
     assert.deepEqual(state.replies, [], "the PR outcome notice is the one message");
     assert.equal(state.buttonsCleared, 1);

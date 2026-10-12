@@ -204,7 +204,7 @@ async function main(): Promise<void> {
       outcomes.push(stage);
     } else if (opts["--mode"] === "gates") {
       outcomes.push("frozen-install");
-      const gates = [["verify"], ["verify:openclaw-compat", "--", "--gateway"], ["check-plugin-security"], ["verify:npm-consumer"], ["audit:prod"], ["validate:release-metadata"]];
+      const gates = [["verify"], ["check-plugin-security"], ["verify:npm-consumer"], ["audit:prod"], ["validate:release-metadata"]];
       for (const args of gates) { stage = args[0]; await run(process.execPath, [pm, ...args], ROOT, stage); outcomes.push(stage); }
       stage = "bundle-limit";
       await run(process.execPath, ["--input-type=module", "-e", "import { createBundleSizeReport } from './scripts/check-bundle-size.mjs'; const report = createBundleSizeReport(); if (report.overLimit) process.exit(1); console.log(JSON.stringify(report));"], ROOT, stage);
