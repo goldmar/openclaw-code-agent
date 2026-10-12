@@ -215,7 +215,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.requireDirectUserNotification, undefined);
     assert.equal(request.wakeMessage, undefined);
     assert.match(request.wakeMessageOnNotifySuccess, /Goal task paper-harness-preopen-hardening succeeded\./);
-    assert.match(request.wakeMessageOnNotifySuccess, /agent_output\(session='bdTo6WBy', full=true\)/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_output\(ocaSessionId='bdTo6WBy', full=true\)/);
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
@@ -2376,11 +2376,11 @@ describe("SessionManager resumed launch routing", () => {
           if (args[0].sessionIdOverride === row.sessionId) queuedResolve();
           return result;
         });
-        const approving = executeRespond(sm, { codeAgentSessionId: row.sessionId!, message: "Approve", userInitiated: true });
+        const approving = executeRespond(sm, { session: row.sessionId!, message: "Approve", userInitiated: true });
         try {
           await (boundary === "queue" ? queued : started);
           const changed = await executeRespond(sm, {
-            codeAgentSessionId: row.sessionId!, message: decision, userInitiated: true, fromOrchestratorTurn: true,
+            session: row.sessionId!, message: decision, userInitiated: true, fromOrchestratorTurn: true,
           });
           assert.notEqual(changed.isError, true);
           releasePolicy();
@@ -2879,7 +2879,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
     assert.match(request.wakeMessageOnNotifySuccess, /\[planner\] Plan v7 is with the user/);
-    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-plan-ask'/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(ocaSessionId='s-plan-ask'/);
     assert.equal(request.wakeDelivery, "next-turn");
 
     const approveTokenId = request.buttons[0][0].callbackData;
@@ -2931,7 +2931,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.userMessage, undefined);
     assert.equal(request.buttons, undefined);
     assert.match(request.wakeMessage, /\[planner-delegate\] Plan v\d+ ready\. ID: s-plan-delegate You review it \(planApproval: delegate\)/);
-    assert.match(request.wakeMessage, /agent_escalate\(session='s-plan-delegate', kind='plan'/);
+    assert.match(request.wakeMessage, /agent_escalate\(ocaSessionId='s-plan-delegate', kind='plan'/);
   });
 
   it("does not show approval buttons for Codex plan sessions when planApproval=delegate", async () => {
@@ -4582,7 +4582,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(request.userMessage, undefined);
     assert.equal(request.buttons, undefined);
     assert.match(request.wakeMessage, /Reminder: plan v\d+ still waits for your review/);
-    assert.match(request.wakeMessage, /agent_escalate\(session='s-plan-timeout-delegate', kind='plan'/);
+    assert.match(request.wakeMessage, /agent_escalate\(ocaSessionId='s-plan-timeout-delegate', kind='plan'/);
   });
 
   it("uses explicit stopped wording for user-terminated sessions", async () => {
@@ -4744,7 +4744,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       "Open PR",
       "Decide later",
     ]);
-    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-cc-worktree'/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(ocaSessionId='s-cc-worktree'/);
     assert.equal(request.wakeDelivery, "next-turn");
     assert.match(request.wakeMessageOnNotifySuccess, /Should I merge this branch or open a PR\?/);
 
@@ -4790,7 +4790,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     const token = (sm as any).interactions.getActionToken(request.buttons[0][0].callbackData);
     assert.equal(token.pendingInputRequestId, "native-question-1");
     assert.equal(token.pendingInputQuestionId, undefined);
-    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(session='s-cc-question'/);
+    assert.match(request.wakeMessageOnNotifySuccess, /agent_respond\(ocaSessionId='s-cc-question'/);
     assert.equal(request.wakeDelivery, "next-turn");
     assert.match(request.wakeMessageOnNotifySuccess, /Which environment should I target\?/);
 

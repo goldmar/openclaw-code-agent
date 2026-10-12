@@ -18,7 +18,7 @@ import { resolvePendingInputAnswer } from "../pending-input-normalization";
 import type { PersistedSessionInfo, PlanApprovalMode, SessionConfig } from "../types";
 
 interface RespondParams {
-  codeAgentSessionId: string;
+  session: string;
   message: string;
   interrupt?: boolean;
   userInitiated?: boolean;
@@ -141,7 +141,7 @@ function formatResumeUnavailable(
     ? `This session is closed by default. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
     : reason === "missing_backend_state"
       ? `No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
-      : `Use agent_respond(session='${getSessionRef(session)}', message='<next instruction>') to continue the running session.`;
+      : `Use agent_respond(ocaSessionId='${getSessionRef(session)}', message='<next instruction>') to continue the running session.`;
   const detailLine = details ? ` ${details}` : "";
   return {
     text: `Resume unavailable for session ${session.name} [${getSessionRef(session)}] (${reason}).${detailLine} ${guidance}`,
@@ -258,7 +258,7 @@ function userOnlyApprovalReason(
   if ((session.planApproval ?? pluginConfig.planApproval) !== "ask") return undefined;
   return [
     `Plan approval for session ${session.name} is reserved for the user (planApproval is "ask"); approve=true from the orchestrator is refused.`,
-    `Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(session='${session.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`,
+    `Wait for the user's Approve button, or forward the user's own reply as text with agent_respond(ocaSessionId='${session.name}', message='<their words, e.g. approve>', userInitiated=true) and without approve=true.`,
   ].join(" ");
 }
 
@@ -423,13 +423,13 @@ export async function requestPlanDecisionChanges(
   const ref = active?.id ?? persisted?.sessionId ?? sessionId;
   if (options.fromOrchestratorTurn) {
     return {
-      text: `[${name}] Plan v${reviewedVersion ?? "?"} is set for revision. Forward the user's requested change with agent_respond(session='${ref}', message='<their words>', userInitiated=true); if they have not said it yet, ask them.`,
+      text: `[${name}] Plan v${reviewedVersion ?? "?"} is set for revision. Forward the user's requested change with agent_respond(ocaSessionId='${ref}', message='<their words>', userInitiated=true); if they have not said it yet, ask them.`,
     };
   }
   sm.queueOrchestratorContext?.(
     ref,
     "plan-revise-requested",
-    `[${name}] The user asked to revise plan v${reviewedVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(session='${ref}', message='<their words>', userInitiated=true).`,
+    `[${name}] The user asked to revise plan v${reviewedVersion ?? "?"}. Their next message is the requested change: forward it with agent_respond(ocaSessionId='${ref}', message='<their words>', userInitiated=true).`,
     `plan-revise-requested:${ref}:v${reviewedVersion ?? "?"}`,
   );
 
@@ -583,12 +583,12 @@ export async function executeRespond(
   sm: SessionManager,
   params: RespondParams,
 ): Promise<RespondResult> {
-  const session = sm.resolve(params.codeAgentSessionId);
-  const persisted = session ? undefined : sm.getPersistedSession(params.codeAgentSessionId);
+  const session = sm.resolve(params.session);
+  const persisted = session ? undefined : sm.getPersistedSession(params.session);
 
   if (!session && !persisted) {
-    const failure = unknownSessionError(params.codeAgentSessionId);
-    return { text: failure.content[0].text, isError: true, details: failure.details, userText: `❌ Session "${params.codeAgentSessionId}" not found.` };
+    const failure = unknownSessionError(params.session);
+    return { text: failure.content[0].text, isError: true, details: failure.details, userText: `❌ Session "${params.session}" not found.` };
   }
 
   const target = session ?? persisted!;
@@ -625,7 +625,7 @@ export async function executeRespond(
     text: "Error: The pending input request changed during authorization. Review the current question before replying.", isError: true,
   });
   const assertActionIsCurrent = (): void => {
-    const current = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
+    const current = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
     if ((session && current !== session) || planAuthorizationSignature(current) !== decisionSignature
       || !goalOwnerUnchanged(current, originalGoalOwner, session)) throw new Error("The plan or session changed during authorization. Review the current plan before retrying.");
     if (!params.approve && !params.interrupt && !pendingInputIsCurrent()) throw new Error(stalePendingInput().text.replace(/^Error: /, ""));
@@ -637,7 +637,7 @@ export async function executeRespond(
       return { text: `Error: ${errorMessage(err)}`, isError: true, userText: fail(errorMessage(err)) };
     }
   }
-  const currentTarget = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
+  const currentTarget = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
   if (textPlanDecision !== "reject" && ((session && currentTarget !== session)
     || planAuthorizationSignature(currentTarget) !== decisionSignature || !goalOwnerUnchanged(currentTarget, originalGoalOwner, session))) {
     return { text: "Error: The plan decision changed during authorization. Review the current plan before retrying.", isError: true };
@@ -652,12 +652,12 @@ export async function executeRespond(
     });
   }
   if (textPlanDecision === "revise") {
-    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.codeAgentSessionId, {
+    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session, {
       fromOrchestratorTurn: params.fromOrchestratorTurn,
     });
   }
   if (textPlanDecision === "reject") {
-    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.codeAgentSessionId, { repliedToUser: params.replyIsNotice });
+    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session, { repliedToUser: params.replyIsNotice });
   }
 
   if (params.approve) {

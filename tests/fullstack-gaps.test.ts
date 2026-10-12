@@ -426,7 +426,7 @@ describe("the merge target of a session", () => {
     const recorded = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
     const before = recorded.heads();
 
-    const text = await s.runTool("agent_merge", { codeAgentSessionId: recorded.session.id });
+    const text = await s.runTool("agent_merge", { ocaSessionId: recorded.session.id });
     assert.match(text, /Merged: `[^`]+` → `develop`/, text);
     assert.equal(exists(recorded.repo, "develop", "feature.txt"), true);
     assert.equal(recorded.heads().main, before.main, "the default branch is untouched");
@@ -436,7 +436,7 @@ describe("the merge target of a session", () => {
     const explicit = await finishedSession(s, { strategy: "delegate", launchFrom: "develop", recordBase: true });
     git(explicit.repo, "switch", "main");
     const explicitBefore = explicit.heads();
-    const overridden = await s.runTool("agent_merge", { codeAgentSessionId: explicit.session.id, base_branch: "main" });
+    const overridden = await s.runTool("agent_merge", { ocaSessionId: explicit.session.id, base_branch: "main" });
     assert.match(overridden, /Merged: `[^`]+` → `main`/, overridden);
     assert.equal(exists(explicit.repo, "main", "feature.txt"), true);
     assert.equal(explicit.heads().develop, explicitBefore.develop, "the recorded base is untouched");
@@ -474,7 +474,7 @@ describe("the merge target of a session", () => {
 
     // The user continues the session instead of deciding; it completes again.
     const turnsBefore = s.backend.turns.length;
-    const resumedText = await s.runTool("agent_respond", { codeAgentSessionId: session.id, message: "Add one more file." });
+    const resumedText = await s.runTool("agent_respond", { ocaSessionId: session.id, message: "Add one more file." });
     assert.doesNotMatch(resumedText, /^(?:Error|❌)/, resumedText);
     await s.backend.waitForTurns(turnsBefore + 1);
     await waitUntil(() => s.sm.resolve(session.id)?.status === "running", "resumed session running");
@@ -499,7 +499,7 @@ describe("the merge target of a session", () => {
     assert.equal(s.sm.getPersistedSession(session.id)?.worktreeBaseBranch, undefined);
     const before = heads();
 
-    const text = await s.runTool("agent_merge", { codeAgentSessionId: session.id });
+    const text = await s.runTool("agent_merge", { ocaSessionId: session.id });
     assert.match(text, /Merged: `[^`]+` → `main`/, text);
     assert.equal(exists(repo, "main", "feature.txt"), true);
     assert.equal(heads().develop, before.develop);
@@ -821,7 +821,7 @@ describe("goal loop", () => {
     // Otherwise the stop lands first: the controller then finds the session
     // unloaded and reads how it ended from the stored row.
 
-    assert.match(await s.runTool("agent_kill", { codeAgentSessionId: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\); goal task "[\w-]+" stopped\.$/);
+    assert.match(await s.runTool("agent_kill", { ocaSessionId: session.id }), /^⛔ \[[\w-]+\] Stopped \(it was not running\); goal task "[\w-]+" stopped\.$/);
 
     // The plan is rejected with the session, so nothing keeps waiting for it.
     const row = s.sm.getPersistedSession(session.id);
@@ -892,7 +892,7 @@ describe("goal loop", () => {
     await waitUntil(() => s.sm.getPersistedSession(session.id)?.status === "killed", "session suspended");
     await s.sm.whenStorePersisted();
 
-    const text = await s.runTool("agent_kill", { codeAgentSessionId: session.id, reason: "completed" });
+    const text = await s.runTool("agent_kill", { ocaSessionId: session.id, reason: "completed" });
     assert.match(text, /Marked as completed \(it was not running\)\. Its goal task "[\w-]+" is stopped: the session was closed without running, so its verifiers did not run\./);
 
     assert.equal(s.sm.getPersistedSession(session.id)?.status, "completed");

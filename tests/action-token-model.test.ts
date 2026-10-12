@@ -132,19 +132,19 @@ function createReal(): Real {
 
   const toolResult = (success: boolean) => ({ content: [{ type: "text", text: success ? "✅ done" : "❌ failed" }], meta: { success, outcomeNotified: success } });
   const mergeTool = (() => ({
-    execute: async (_id: string, params: { session: string }) => {
+    execute: async (_id: string, params: { ocaSessionId: string }) => {
       await Promise.resolve();
-      actions.push({ sessionId: params.codeAgentSessionId, kind: "worktree-merge" });
-      const success = outcome(params.codeAgentSessionId);
-      if (success) persisted.get(params.codeAgentSessionId)!.worktreeMerged = true;
+      actions.push({ sessionId: params.ocaSessionId, kind: "worktree-merge" });
+      const success = outcome(params.ocaSessionId);
+      if (success) persisted.get(params.ocaSessionId)!.worktreeMerged = true;
       return toolResult(success);
     },
   })) as unknown as typeof makeAgentMergeTool;
   const prTool = (() => ({
-    execute: async (_id: string, params: { session: string }) => {
+    execute: async (_id: string, params: { ocaSessionId: string }) => {
       await Promise.resolve();
-      actions.push({ sessionId: params.codeAgentSessionId, kind: "worktree-create-pr" });
-      return toolResult(outcome(params.codeAgentSessionId));
+      actions.push({ sessionId: params.ocaSessionId, kind: "worktree-create-pr" });
+      return toolResult(outcome(params.ocaSessionId));
     },
   })) as unknown as typeof makeAgentPrTool;
 

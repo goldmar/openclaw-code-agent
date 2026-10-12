@@ -1,3 +1,4 @@
+import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, localBranchRef, targetRepoValidationError } from "../worktree-ref-validation";
 import { repoHookGitArgs } from "../git-hooks";
 import { Type } from "../tool-parameter-schema";
@@ -20,7 +21,7 @@ export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGe
 export type { PrMetadata, PrMetadataEvidence, PrMetadataProvider, PrMetadataResult } from "../worktree-pr-metadata";
 
 interface AgentPrParams {
-  codeAgentSessionId: string;
+  ocaSessionId: string;
   title?: string;
   body?: string;
   update_metadata?: boolean;
@@ -33,7 +34,7 @@ interface AgentPrParams {
 function isAgentPrParams(value: unknown): value is AgentPrParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.codeAgentSessionId === "string";
+  return typeof params.ocaSessionId === "string";
 }
 
 type AgentPrExecuteResult = {
@@ -422,7 +423,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
     name: "agent_pr",
     description: "Push a worktree branch and open a GitHub PR, or update the session's open PR (push plus a comment listing new commits). Posts the outcome to the user.",
     parameters: Type.Object({
-      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
+      ...sessionReferenceProperties(),
       title: Type.Optional(Type.String({ description: "Default: generated" })),
       body: Type.Optional(Type.String({ description: "Default: generated. On an open PR, replaces the body." })),
       update_metadata: Type.Optional(Type.Boolean({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
@@ -430,7 +431,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       force_new: Type.Optional(Type.Boolean({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
       target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
-    }),
+    }, requiredSessionReference),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
@@ -439,8 +440,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // shared reference while a merge or PR is still running, and the outcome
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
+      const normalized = normalizeSessionReferenceParams(params);
+      if (normalized.ok === false) return { ...normalized.error, meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      params = normalized.params;
       if (!isAgentPrParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { codeAgentSessionId, title?, body?, update_metadata?, base_branch?, force_new?, target_repo?, summary? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { ocaSessionId, title?, body?, update_metadata?, base_branch?, force_new?, target_repo?, summary? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       if (params.base_branch !== undefined) {
@@ -458,7 +462,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Resolve session (active or persisted)
-      const target = resolveWorktreeToolTarget(sm, params.codeAgentSessionId);
+      const target = resolveWorktreeToolTarget(sm, params.ocaSessionId);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
       // Only the managed terminal caller may combine completion with a PR outcome.
@@ -473,14 +477,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       };
 
       if (!targetSession && !persistedSession) {
-        return { content: [{ type: "text", text: `Error: Session "${params.codeAgentSessionId}" not found.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { content: [{ type: "text", text: `Error: Session "${params.ocaSessionId}" not found.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       const { worktreePath, originalWorkdir, sessionName } = target;
       let { branchName } = target;
 
       if (!worktreePath || !originalWorkdir) {
-        return { content: [{ type: "text", text: `Error: Session "${params.codeAgentSessionId}" does not have a worktree.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { content: [{ type: "text", text: `Error: Session "${params.ocaSessionId}" does not have a worktree.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       if (!branchName) {

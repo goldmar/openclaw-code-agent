@@ -1,5 +1,34 @@
 # Issue 504 representative host acceptance
 
+## Public session-key transport probe
+
+For the current candidate, run:
+
+```sh
+node --import tsx scripts/e2e/oca-session-reference-transport.mjs
+```
+
+This opt-in probe loads the actual pinned OpenClaw package and the candidate's
+response tool. A synthetic manager holds an older intended session and a newer
+unrelated one. The published `tool_call` control dispatches canonical
+`ocaSessionId`, legacy `session`, and matching dual inputs; conflicts, unknown
+references, and unresolved masked references cause no sends. Separate transcript
+rendering checks distinguish display masking from unchanged original/dispatch
+arguments. The summary records the candidate SHA, host version, and compiled
+module hashes. Internal host export discovery fails closed on unsupported shapes.
+
+This is synthetic dispatcher evidence, not a production Gateway, model, native
+backend, packed-install, or reporter-host reproduction. The reporter's successful
+local rename on 2026.9.8 motivates the workaround; it does not establish the cause
+of pre-delivery mutation. Package security and runtime compatibility gates remain
+separate. No redaction or approval policy is disabled.
+
+## Historical representative host flow
+
+The flow below is pinned to OpenClaw 2026.9.7 and Codex 0.159.3. It does not certify
+current candidates whose installation/loading minimum is OpenClaw 2026.10.1.
+Its focused/gates modes remain separate from the newer transport probe.
+
 The opt-in flow tests a packed candidate through actual OpenClaw 2026.9.7 and
 Codex 0.159.3. Only ordinary Responses model text is simulated, on loopback.
 It uses disposable profiles, synthetic credentials and local Git repositories.

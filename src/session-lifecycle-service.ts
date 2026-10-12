@@ -485,7 +485,7 @@ export class SessionLifecycleService {
         wakeMessage: [
           `[${session.name}] Reminder: plan v${actionableVersion ?? "?"} still waits for your review (the session was suspended while idle; approving resumes it). ID: ${session.id}`,
           ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
-          `Approve with agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line>') when it is in scope and low risk; otherwise agent_escalate(session='${session.id}', kind='plan', summary='<why>').`,
+          `Approve with agent_respond(ocaSessionId='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line>') when it is in scope and low risk; otherwise agent_escalate(ocaSessionId='${session.id}', kind='plan', summary='<why>').`,
         ].join("\n"),
         notifyUser: "never",
       });
@@ -842,7 +842,7 @@ export class SessionLifecycleService {
 /** Next-turn context after a question reached the user. */
 function buildQuestionShownWakeText(session: Pick<Session, "id" | "name">, question: string | undefined): string {
   return [
-    `[${session.name}] The user was shown the agent's question below; do not answer it yourself. If they answer in chat, forward it: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
+    `[${session.name}] The user was shown the agent's question below; do not answer it yourself. If they answer in chat, forward it: agent_respond(ocaSessionId='${session.id}', message='<answer>', userInitiated=true).`,
     fenceAgentOutput(question ?? "", "question"),
   ].join("\n");
 }

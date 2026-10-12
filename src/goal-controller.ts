@@ -1242,7 +1242,7 @@ export class GoalController {
     let result: Awaited<ReturnType<typeof executeRespond>>;
     try {
       result = await executeRespond(this.sessionManager, {
-        codeAgentSessionId: session.id,
+        session: session.id,
         message: autoReply,
         userInitiated: false,
         fromGoalController: true,

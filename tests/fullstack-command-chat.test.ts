@@ -330,7 +330,7 @@ describe("one message per chat command (Telegram topic)", () => {
       assert.deepEqual(texts.filter((text) => !/^✅ \[turn-done\]/.test(text)), [], "nothing else is sent for the turn");
 
       // Closing it again as completed changes nothing and sends no second ✅.
-      assert.equal(await s.runTool("agent_kill", { codeAgentSessionId: session.id, reason: "completed" }), "ℹ️ [turn-done] Already completed; nothing to stop.");
+      assert.equal(await s.runTool("agent_kill", { ocaSessionId: session.id, reason: "completed" }), "ℹ️ [turn-done] Already completed; nothing to stop.");
       await new Promise((resolve) => setTimeout(resolve, 200));
       assert.equal(s.messages().filter((message) => /^✅ \[turn-done\]/.test(message.text)).length, 1);
     });

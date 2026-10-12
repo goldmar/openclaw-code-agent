@@ -230,7 +230,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /Merge blocked/i);
       assert.match((result.content[0] as { text: string }).text, /the worktree has uncommitted changes but branch/i);
@@ -252,7 +252,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, "missing-branch");
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName });
       const text = (result.content[0] as { text: string }).text;
 
       assert.doesNotMatch(text, /has no commits ahead/i);
@@ -276,7 +276,7 @@ describe("agent_merge push behavior", () => {
       persistedSession.worktreeMerged = true;
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /already merged/i);
       assert.doesNotMatch((result.content[0] as { text: string }).text, /Merge blocked/i);
@@ -295,7 +295,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, strategy: "squash", delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, strategy: "squash", delete_branch: false });
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /Squash commit/);
@@ -325,7 +325,7 @@ describe("agent_merge push behavior", () => {
         return "Canonical worktree decision prompt sent.";
       };
 
-      const refused = await makeAgentMergeTool().execute("toolu_model_call", { codeAgentSessionId: sessionName });
+      const refused = await makeAgentMergeTool().execute("toolu_model_call", { ocaSessionId: sessionName });
       const refusedText = (refused.content[0] as { text: string }).text;
       assert.match(refusedText, /Not merged/);
       assert.match(refusedText, /`\.worktreeinclude`/);
@@ -333,7 +333,7 @@ describe("agent_merge push behavior", () => {
       assert.equal(prompts.length, 1);
       assert.match(prompts[0]!.hookWarning ?? "", /\.worktreeinclude/);
 
-      const merged = await makeAgentMergeTool().execute("callback", { codeAgentSessionId: sessionName, delete_branch: false });
+      const merged = await makeAgentMergeTool().execute("callback", { ocaSessionId: sessionName, delete_branch: false });
       assert.doesNotMatch((merged.content[0] as { text: string }).text, /Not merged/);
       assert.equal(git(repoDir, "log", "--format=%s", "-1", "main"), "include env");
     } finally {
@@ -351,7 +351,7 @@ describe("agent_merge push behavior", () => {
 
       const initialRemoteMain = remoteHead(repoDir, "main");
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
       assert.match((result.content[0] as { text: string }).text, /Worktree cleaned up; branch kept/);
@@ -374,7 +374,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /Branch and worktree cleaned up/);
       assert.equal(existsSync(worktreePath), false);
@@ -399,7 +399,7 @@ describe("agent_merge push behavior", () => {
         await fn();
       };
 
-      const result = await makeAgentMergeTool().execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await makeAgentMergeTool().execute("tool-id", { ocaSessionId: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
       assert.equal((persisted.worktreeLifecycle as { state?: string } | undefined)?.state, "merged");
@@ -420,7 +420,7 @@ describe("agent_merge push behavior", () => {
       git(repoDir, "worktree", "remove", worktreePath);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName });
 
       assert.match((result.content[0] as { text: string }).text, /Branch deleted; worktree was already absent/);
       assert.doesNotMatch((result.content[0] as { text: string }).text, /cleanup skipped/);
@@ -449,7 +449,7 @@ describe("agent_merge push behavior", () => {
       });
 
       const result = await makeAgentMergeTool().execute("tool-id", {
-        codeAgentSessionId: sessionName,
+        ocaSessionId: sessionName,
         summary: "Adds the sub() helper with a unit test.",
       });
 
@@ -487,7 +487,7 @@ describe("agent_merge push behavior", () => {
         capturedRequests,
       });
 
-      await makeAgentMergeTool().execute("tool-id", { codeAgentSessionId: sessionName, summary: "Adds sub()." });
+      await makeAgentMergeTool().execute("tool-id", { ocaSessionId: sessionName, summary: "Adds sub()." });
 
       assert.equal(capturedRequests.length, 1);
       assert.match(capturedRequests[0].request.wakeMessageOnNotifyFailed, /did NOT reach the user/);
@@ -514,7 +514,7 @@ describe("agent_merge push behavior", () => {
       });
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
       assert.equal(capturedRequests.length, 1);
@@ -557,7 +557,7 @@ describe("agent_merge push behavior", () => {
       });
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
       assert.equal(capturedRequests.length, 1);
@@ -583,7 +583,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, push: true, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, push: true, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Pushed\./);
       assert.equal(remoteHead(repoDir, "main"), git(repoDir, "rev-parse", "main"));
@@ -603,7 +603,7 @@ describe("agent_merge push behavior", () => {
       git(repoDir, "remote", "set-url", "origin", join(tmpdir(), "missing-openclaw-remote.git"));
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, push: true, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, push: true, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /locally, but failed to push `main`/);
       assert.equal(notifications.length, 1);
@@ -626,7 +626,7 @@ describe("agent_merge push behavior", () => {
       writeFileSync(join(repoDir, "README.md"), "local dirty base change\n", "utf-8");
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Pre-merge stash pop conflicted/);
       assert.equal(notifications.length, 1);
@@ -667,7 +667,7 @@ describe("agent_merge push behavior", () => {
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: sessionName, delete_branch: false });
+      const result = await tool.execute("tool-id", { ocaSessionId: sessionName, delete_branch: false });
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /has uncommitted changes/);
@@ -761,7 +761,7 @@ describe("agent_merge captured generation through the repository queue", () => {
           notifyWorktreeOutcome: (target: any) => { assert.equal(target.id, "a"); },
         };
         setSessionManager(manager);
-        const result = await makeAgentMergeTool().execute("model-call", { codeAgentSessionId: "shared", ...(scenario === "explicit-base" ? { base_branch: "main" } : {}) });
+        const result = await makeAgentMergeTool().execute("model-call", { ocaSessionId: "shared", ...(scenario === "explicit-base" ? { base_branch: "main" } : {}) });
         const compatible = ["alias-retarget", "explicit-base", "initial-pr-open", "runtime-status"].includes(scenario);
         if (compatible) {
           assert.match(result.content[0].text, /ℹ️/);

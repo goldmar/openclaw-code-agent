@@ -55,7 +55,7 @@ export function registerAgentRespondCommand(api: CommandApi): void {
 
       const target = sessionManager.resolve(ref) ?? sessionManager.getPersistedSession(ref);
       const result = await executeRespond(sessionManager, {
-        codeAgentSessionId: ref,
+        session: ref,
         message,
         interrupt,
         userInitiated: true, // Command is always user-initiated

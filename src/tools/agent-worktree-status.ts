@@ -1,3 +1,4 @@
+import { normalizeSessionReferenceParams, sessionReferenceProperties } from "./session-reference-params";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
@@ -11,14 +12,14 @@ import {
 import { resolveLandingBaseBranch } from "../worktree";
 
 interface AgentWorktreeStatusParams {
-  session?: string;
+  ocaSessionId?: string;
 }
 
 function isAgentWorktreeStatusParams(value: unknown): value is AgentWorktreeStatusParams {
   if (value == null) return true;
   if (Array.isArray(value)) return false;
   if (typeof value !== "object") return false;
-  const session = (value as Record<string, unknown>).codeAgentSessionId;
+  const session = (value as Record<string, unknown>).ocaSessionId;
   return session === undefined || typeof session === "string";
 }
 
@@ -34,18 +35,21 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
     name: "agent_worktree_status",
     description: "Worktree state per session: lifecycle (active, pending decision, PR open, merged, released, dismissed, no change), whether cleanup is safe, and why a worktree is kept.",
     parameters: Type.Object({
-      codeAgentSessionId: Type.Optional(Type.String({ description: "Session name or ID; omit for all" })),
+      ...sessionReferenceProperties(),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
+      const normalized = normalizeSessionReferenceParams(params ?? {}, false);
+      if (normalized.ok === false) return normalized.error;
+      params = normalized.params;
       if (!isAgentWorktreeStatusParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { codeAgentSessionId? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { ocaSessionId? }." }] };
       }
 
       const targetSession = params && typeof params === "object"
-        ? (params as AgentWorktreeStatusParams).session
+        ? (params as AgentWorktreeStatusParams).ocaSessionId
         : undefined;
       let sessionsToShow = listWorktreeToolTargets(sessionManager);
       if (targetSession) {

@@ -207,7 +207,7 @@ describe("session-control app layer", () => {
     const withBranch: any = { resolve: () => branch, closeSuspendedSession: () => "completed" };
     assert.equal(
       getKillSessionText(withBranch, "s", "completed"),
-      "ℹ️ [s] Marked as completed (it was not running). Its branch `agent/s` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).",
+      "ℹ️ [s] Marked as completed (it was not running). Its branch `agent/s` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).",
     );
     const goalStops: Array<[string | undefined, string]> = [];
     const goal: any = {

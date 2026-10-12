@@ -1,29 +1,6 @@
 import "./test-env";
-/**
- * Regression test for the `session` → `codeAgentSessionId` rename
- * (issue #504 in goldmar/openclaw-code-agent).
- *
- * The OpenClaw core redactor matches the bare field name `session` as a
- * sensitive credential, so any value passed as `args.session` arrives at
- * OCA tools as `***` and the tool returns "Session not found". Renaming the
- * public tool parameter to `codeAgentSessionId` escapes the redactor and
- * makes the parameter survive the Tool Search wrapper.
- *
- * This test enforces two contracts:
- *   1. Every public OCA tool schema exposes `codeAgentSessionId` and
- *      does NOT expose `session` (the masked field name).
- *   2. The agent_kill allowlist accepts `codeAgentSessionId` and rejects
- *      `session` (otherwise upstream would silently re-allow the masked
- *      field name and the original bug would re-emerge).
- *
- * If a future merge reintroduces `session` as a tool parameter (or removes
- * `codeAgentSessionId`), this test fails. Run it as part of the standard
- * OCA test suite (`pnpm test`).
- */
-
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-
 import { makeAgentRespondTool } from "../src/tools/agent-respond";
 import { makeAgentOutputTool } from "../src/tools/agent-output";
 import { makeAgentEscalateTool } from "../src/tools/agent-escalate";
@@ -33,60 +10,133 @@ import { makeAgentPrTool } from "../src/tools/agent-pr";
 import { makeAgentSessionActionTool } from "../src/tools/agent-session-action";
 import { makeAgentWorktreeCleanupTool } from "../src/tools/agent-worktree-cleanup";
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
+import { normalizeSessionReferenceParams } from "../src/tools/session-reference-params";
 import { setSessionManager } from "../src/singletons";
+import type { SessionManager } from "../src/session-manager";
+import { createStubSession } from "./helpers";
 
-const SESSION_TOOLS: ReadonlyArray<{
-  name: string;
-  factory: () => { name: string; parameters?: { properties?: Record<string, unknown> } };
-}> = [
-  { name: "agent_respond", factory: () => makeAgentRespondTool() },
-  { name: "agent_output", factory: () => makeAgentOutputTool() },
-  { name: "agent_escalate", factory: () => makeAgentEscalateTool() },
-  { name: "agent_merge", factory: () => makeAgentMergeTool() },
-  { name: "agent_kill", factory: () => makeAgentKillTool() },
-  { name: "agent_pr", factory: () => makeAgentPrTool() },
-  { name: "agent_session_action", factory: () => makeAgentSessionActionTool() },
-  { name: "agent_worktree_cleanup", factory: () => makeAgentWorktreeCleanupTool() },
-  { name: "agent_worktree_status", factory: () => makeAgentWorktreeStatusTool() },
+const tools = () => [
+  { tool: makeAgentRespondTool(), extra: { message: "Follow up" }, required: true },
+  { tool: makeAgentOutputTool(), extra: { full: true }, required: true },
+  { tool: makeAgentEscalateTool(), extra: { kind: "plan", summary: "Review" }, required: true },
+  { tool: makeAgentMergeTool(), extra: {}, required: true },
+  { tool: makeAgentKillTool(), extra: {}, required: true },
+  { tool: makeAgentPrTool(), extra: {}, required: true },
+  { tool: makeAgentSessionActionTool(), extra: { action: "compact" }, required: true },
+  { tool: makeAgentWorktreeCleanupTool(), extra: { mode: "preview_all" }, required: false },
+  { tool: makeAgentWorktreeStatusTool(), extra: {}, required: false },
 ];
 
-describe("OCA tool schema contract: codeAgentSessionId, not session", () => {
-  for (const { name, factory } of SESSION_TOOLS) {
-    it(`${name} exposes codeAgentSessionId and does NOT expose session`, () => {
-      const tool = factory();
-      assert.equal(tool.name, name);
-      const props = tool.parameters?.properties ?? {};
-      assert.ok(
-        "codeAgentSessionId" in props,
-        `${name}: schema must expose 'codeAgentSessionId' as a property (the renamed OCA session reference). ` +
-          `The bare name 'session' is matched as a sensitive credential by OpenClaw core and arrives as '***' in tool args.`,
-      );
-      assert.ok(
-        !("session" in props),
-        `${name}: schema must NOT expose 'session' as a property. ` +
-          `The OpenClaw core redactor masks any args.session value before the tool sees it (issue #504). ` +
-          `Use 'codeAgentSessionId' instead.`,
-      );
-    });
-  }
-});
+afterEach(() => setSessionManager(null));
 
-describe("agent_kill: allowlist accepts codeAgentSessionId, rejects session", () => {
-  it("accepts a params object whose only session-shaped key is codeAgentSessionId", async () => {
-    setSessionManager(null);
-    const tool = makeAgentKillTool();
-    // `reason: "completed"` is the other allow-listed key. The tool will
-    // surface service_unavailable because sessionManager is null, but the
-    // validation step (which enforces the allowlist) runs first; if the
-    // allowlist still expects `session`, validation rejects and we never
-    // reach the service_unavailable path.
-    const result = await tool.execute("call-1", { codeAgentSessionId: "x", reason: "completed" });
-    const text = (result as { content: Array<{ text: string }> }).content[0].text;
-    assert.doesNotMatch(
-      text,
-      /Invalid parameters/,
-      "agent_kill validation must accept codeAgentSessionId; the allowlist still contains the old name 'session'.",
-    );
-    assert.match(text, /SessionManager not initialized|not found|not running|stopped|Marked as completed/i);
+describe("public OCA session reference contract", () => {
+  it("advertises the canonical key and the deprecated alias with the correct requiredness", () => {
+    for (const { tool, required } of tools()) {
+      const schema = tool.parameters as unknown as {
+        properties: Record<string, { description?: string }>; required?: string[]; anyOf?: Array<{ required: string[] }>;
+      };
+      assert.ok("ocaSessionId" in schema.properties, tool.name);
+      assert.match(schema.properties.session.description ?? "", /Deprecated alias/);
+      assert.ok(!("codeAgentSessionId" in schema.properties));
+      assert.ok(!schema.required?.includes("ocaSessionId") && !schema.required?.includes("session"));
+      assert.deepEqual(schema.anyOf, required ? [{ required: ["ocaSessionId"] }, { required: ["session"] }] : undefined);
+    }
+  });
+
+  it("refuses malformed and conflicting targets before any manager or Git operation", async () => {
+    // A boundary fake: even a lookup is forbidden for an invalid reference.
+    setSessionManager(new Proxy({}, { get() { assert.fail("Invalid input touched SessionManager"); } }) as SessionManager);
+    for (const reference of [
+      { ocaSessionId: "old", session: "new" }, { ocaSessionId: "old", session: "***" },
+      { ocaSessionId: "old", session: 1 }, { ocaSessionId: null, session: "old" },
+      { ocaSessionId: "old", session: undefined }, { ocaSessionId: undefined, session: "old" },
+      { ocaSessionId: "" }, { session: " " }, { ocaSessionId: "old", session: " " },
+      { ocaSessionId: {} }, { session: [] as unknown[] }, { codeAgentSessionId: "old" },
+      { ocaSessionId: "old", codeAgentSessionId: "old" },
+    ]) {
+      for (const { tool, extra } of tools()) {
+        const result = await tool.execute("invalid", { ...extra, ...reference }) as { isError?: boolean; details?: { operationStarted?: boolean }; content: Array<{ text: string }> };
+        assert.equal(result.isError, true, tool.name);
+        assert.equal(result.details?.operationStarted, false, tool.name);
+        assert.doesNotMatch(JSON.stringify(result), /"old"|"new"|"\*\*\*"/);
+      }
+    }
+    for (const { tool, extra, required } of tools()) {
+      if (required) assert.equal((await tool.execute("missing", extra) as { isError?: boolean }).isError, true, tool.name);
+    }
+  });
+
+  it("accepts canonical, legacy, and identical dual references through every tool", async () => {
+    for (const reference of [{ ocaSessionId: "older-exact" }, { session: "older-exact" },
+      { ocaSessionId: "older-exact", session: "older-exact" }]) {
+      for (const { tool, extra } of tools()) {
+        const lookups: string[] = [];
+        // Unknown-target fake proves validation reaches lookup without allowing any operation.
+        setSessionManager({ resolve: (ref: string): undefined => { lookups.push(ref); return undefined; },
+          getPersistedSession: (ref: string): undefined => { lookups.push(ref); return undefined; },
+          list: (): never[] => [], listPersistedSessions: (): never[] => [],
+        } as unknown as SessionManager);
+        const result = await tool.execute("valid-reference", { ...extra, ...reference });
+        assert.doesNotMatch(result.content[0].text, /Invalid parameters/, tool.name);
+        if (tool.name !== "agent_worktree_status" && !(tool.name === "agent_pr" && /GitHub CLI/.test(result.content[0].text))) {
+          assert.ok(lookups.length > 0, tool.name);
+          assert.ok(lookups.every((ref) => ref === "older-exact"), tool.name);
+        }
+      }
+    }
+  });
+
+  it("preserves literal references and optional omission without mutating caller input", () => {
+    const input = { session: "  literal name  ", full: false };
+    assert.deepEqual(normalizeSessionReferenceParams(input), { ok: true, params: { ocaSessionId: "  literal name  ", full: false } });
+    assert.deepEqual(input, { session: "  literal name  ", full: false });
+    assert.deepEqual(normalizeSessionReferenceParams({}, false), { ok: true, params: {} });
+  });
+
+  it("delivers to the older exact session and preserves approval and boolean validation", async () => {
+    const sent: string[] = [];
+    const older = createStubSession({ id: "older-exact", name: "older", sendMessage: async () => { sent.push("older"); } });
+    const newer = createStubSession({ id: "newer-exact", name: "newer", sendMessage: async () => { sent.push("newer"); } });
+    const sessions = new Map([[older.id, older], [newer.id, newer]]);
+    setSessionManager({ resolve: (ref: string) => sessions.get(ref), getPersistedSession: (): undefined => undefined } as unknown as SessionManager);
+    for (const reference of [{ ocaSessionId: older.id }, { session: older.id }, { ocaSessionId: older.id, session: older.id }]) {
+      assert.equal((await makeAgentRespondTool().execute("send", { ...reference, message: "Follow up" })).isError, false);
+    }
+    assert.deepEqual(sent, ["older", "older", "older"]);
+    for (const key of ["approve", "userInitiated", "interrupt"]) {
+      assert.equal((await makeAgentRespondTool().execute("boolean", { ocaSessionId: older.id, message: "approve", [key]: "false" })).isError, true);
+    }
+    older.pendingPlanApproval = true;
+    older.planApproval = "ask";
+    const denied = await makeAgentRespondTool().execute("approval", { ocaSessionId: older.id, message: "Approved", approve: true });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /reserved for the user/);
+    assert.deepEqual(sent, ["older", "older", "older"]);
+  });
+
+  it("dispatches explicit cleanup only to the selected reference", async () => {
+    const dismissed: string[] = [];
+    setSessionManager({ dismissWorktree: async (ref: string) => { dismissed.push(ref); return "Discarded selected fixture"; },
+    } as unknown as SessionManager);
+    for (const reference of [{ ocaSessionId: "older-exact" }, { session: "older-exact" },
+      { ocaSessionId: "older-exact", session: "older-exact" }]) {
+      const result = await makeAgentWorktreeCleanupTool().execute("dismiss", { ...reference, dismiss_session: true });
+      assert.match(result.content[0].text, /Discarded selected fixture/);
+    }
+    assert.deepEqual(dismissed, ["older-exact", "older-exact", "older-exact"]);
+  });
+
+  it("keeps the kill allowlist closed after alias normalization", async () => {
+    const stopped: string[] = [];
+    const older = { id: "older-exact", name: "older", status: "running" };
+    setSessionManager({ resolve: (ref: string) => ref === older.id ? older : undefined,
+      getPersistedSession: (): undefined => undefined, kill: (id: string) => { stopped.push(id); return true; },
+    } as unknown as SessionManager);
+    for (const reference of [{ ocaSessionId: older.id }, { session: older.id }, { ocaSessionId: older.id, session: older.id }]) {
+      assert.match((await makeAgentKillTool().execute("kill", reference)).content[0].text, /Stopped/);
+    }
+    assert.deepEqual(stopped, [older.id, older.id, older.id]);
+    await makeAgentKillTool().execute("extra", { session: older.id, purge: true });
+    assert.deepEqual(stopped, [older.id, older.id, older.id]);
   });
 });

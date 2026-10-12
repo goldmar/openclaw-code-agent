@@ -37,7 +37,7 @@ describe("literal worktree ref boundary", () => {
     await assert.rejects(async () => await resolveTargetRepo("/nonexistent", "--repo=evil/x"), /Invalid PR target repository/);
 
     setSessionManager(new Proxy({}, { get() { throw new Error("session manager must not be reached"); } }) as any);
-    const pr = await makeAgentPrTool().execute("test", { codeAgentSessionId: "test", target_repo: "--web" });
+    const pr = await makeAgentPrTool().execute("test", { ocaSessionId: "test", target_repo: "--web" });
     assert.match(pr.content[0].text, /Error: target_repo: Expected a GitHub repository/);
     const launch = await makeAgentLaunchTool({} as any).execute("test", { prompt: "test", worktree_pr_target_repo: "octo/repo --web" });
     assert.match(launch.content[0].text, /Error: worktree_pr_target_repo: Expected a GitHub repository/);
@@ -55,7 +55,7 @@ describe("literal worktree ref boundary", () => {
     for (const value of invalid) {
       for (const [tool, params] of [
         [makeAgentLaunchTool({} as any), { prompt: "test", worktree_base_branch: value }],
-        [makeAgentPrTool(), { codeAgentSessionId: "test", base_branch: value }],
+        [makeAgentPrTool(), { ocaSessionId: "test", base_branch: value }],
         [makeAgentWorktreeCleanupTool(), { base_branch: value }],
       ] as const) {
         const result = await tool.execute("test", params);
@@ -71,7 +71,7 @@ describe("literal worktree ref boundary", () => {
       listPersistedSessions: (): never[] => [],
     } as any);
     for (const value of invalid) {
-      const result = await makeAgentMergeTool().execute("test", { codeAgentSessionId: "known", base_branch: value });
+      const result = await makeAgentMergeTool().execute("test", { ocaSessionId: "known", base_branch: value });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, /Error: (Expected|Invalid parameters)/);
     }

@@ -84,9 +84,9 @@ describe("agent_worktree_status", () => {
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
-    for (const params of ["bad", { codeAgentSessionId: 42 }, []] as const) {
+    for (const params of ["bad", { ocaSessionId: 42 }, []] as const) {
       const result = await tool.execute("tool-id", params);
-      assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { codeAgentSessionId? }.");
+      assert.match((result.content[0] as { text: string }).text, /Error: Invalid parameters/);
     }
   });
 
@@ -122,8 +122,9 @@ describe("agent_worktree_status", () => {
       setSessionManager({
         list: (): never[] => [],
         resolve: (): undefined => undefined,
-        listPersistedSessions: () => [persisted] as any,
+        listPersistedSessions: () => [persisted, { ...persisted, sessionId: "unrelated-newer", name: "unrelated-newer", workdir: "/must-not-inspect" }] as any,
         getPersistedSession(ref: string) {
+          assert.notEqual(ref, "unrelated-newer", "A selected status filter must never inspect another session");
           return [persisted].find((session) =>
             session.sessionId === ref || session.harnessSessionId === ref || session.name === ref
           ) as any;
@@ -131,9 +132,12 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const tool = makeAgentWorktreeStatusTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: "released-status" });
+      for (const reference of [{ ocaSessionId: "released-status" }, { session: "released-status" },
+        { ocaSessionId: "released-status", session: "released-status" }]) {
+      const result = await tool.execute("tool-id", reference);
       const text = (result.content[0] as { text: string }).text;
 
+      assert.doesNotMatch(text, /unrelated-newer/);
       assert.match(text, /Session: released-status \[s-released-status\]/);
       assert.match(text, /^  Lifecycle: needs decision$/m);
       assert.match(text, /^  Branch:    \S/m);
@@ -142,6 +146,7 @@ describe("agent_worktree_status", () => {
       assert.match(text, /Cleanup:\s*safe now/);
       assert.match(text, /Ahead:\s*\d+ ahead \/ \d+ behind/);
       assert.match(text, /Reasons:\s*pending decision, content already on base/);
+      }
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -182,7 +187,7 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const tool = makeAgentWorktreeStatusTool();
-      const result = await tool.execute("tool-id", { codeAgentSessionId: "conflict-resolving-status" });
+      const result = await tool.execute("tool-id", { ocaSessionId: "conflict-resolving-status" });
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /^  Lifecycle: conflict resolving$/m);
@@ -270,7 +275,7 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const statusTool = makeAgentWorktreeStatusTool();
-      const statusResult = await statusTool.execute("tool-id", { codeAgentSessionId: "pr-314-comments-cleanup" });
+      const statusResult = await statusTool.execute("tool-id", { ocaSessionId: "pr-314-comments-cleanup" });
       const statusText = (statusResult.content[0] as { text: string }).text;
 
       assert.match(statusText, /^  Lifecycle: pr open$/m);

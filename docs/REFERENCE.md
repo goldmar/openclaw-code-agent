@@ -117,7 +117,7 @@ For automation, `planOfferTool: true`, effective tool grants, OCA activation, an
 - **Minimum host.** OCA 5.2.0 requires OpenClaw `2026.9.8` for installation and loading. The declared plugin API, Gateway and npm peer contracts remain `2026.9.7`; those floors do not permit loading OCA on an older host.
 - **Tool allowlists.** 5.0 adds the `agent_session_action` tool (Codex compact and review) and merges tools: the four `agent_goal_*` tools are now `agent_goal`, and `agent_request_plan_approval` / `agent_request_worktree_decision` are now `agent_escalate`. `agent_send_plan_offer` is registered only with `planOfferTool: true`. If an agent's tool allowlist names OCA tools individually, update it; the [CHANGELOG](../CHANGELOG.md) has the full migration table.
 - **Chat commands.** `/agent_goal_status`, `/agent_goal_stop` and `/agent_goal_edit` are now `/agent_goal status`, `/agent_goal stop` and `/agent_goal edit`. New: `/agent_status`.
-- **Stricter tools.** `agent_kill` accepts only `session` and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
+- **Stricter tools.** `agent_kill` accepts only `ocaSessionId`, its deprecated `session` alias, and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
 - **Safety defaults.** Goal loops start with the configured `permissionMode` (plan) and wait for the user to confirm orchestrator-supplied verifier commands (pre-approve fixed ones in `trustedVerifierCommands`). With `planApproval: "ask"` only the user approves plans. `.worktreeinclude` and `.openclaw/worktree-setup.sh` must be committed to take effect, and the setup script and verifiers get a minimal environment. Branches that change git hooks or those files need the user's Merge / Open PR button. Coding agents no longer see `GH_TOKEN` and similar unrelated secrets; see [Child process environments](#child-process-environments).
 - **Removed knobs.** `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` and the startup sweep of unmanaged `openclaw-worktree-*` directories are gone, a launch that needs a worktree outside a git repository fails instead of using the OS temp directory, and OCA no longer copies `~/.claude.json` MCP servers into Claude Code launches.
 - **In-process integrations.** `SessionManager.spawn` is `launchSession`, and the worktree, repo-policy, and branch-name helpers return promises. The full list is in the [CHANGELOG](../CHANGELOG.md).
@@ -136,7 +136,7 @@ For automation, `planOfferTool: true`, effective tool grants, OCA activation, an
 - Telegram topic routes are ordinary code-agent route metadata. Start Plan, plan decisions, questions, completion, merge, and PR callbacks and wakes route through stored delivery context and single-use action tokens; keep fully routable channel strings and topic/thread ids such as `telegram|<chat-id>` with thread `<topic-id>`. Host callback acknowledgement is not proof that the requested state transition or routed follow-up completed.
 - Buttons carry `code-agent:<token>` data. OpenClaw's interactive dispatcher hands OCA the part after the namespace as `ctx.callback.payload` (Telegram) or `ctx.interaction.payload` (Discord); that payload is the token. Each token is bound to the route its button was delivered to; Telegram checks the recorded bot account, chat and topic (the session's route, stamped when the message is sent; plan offers, goal verifier prompts, and update prompts carry their chat from the start). A Telegram callback from another account, chat or topic is refused before token consumption, on top of the host's authorized-sender check. Discord callbacks retain their parent-channel/thread binding. Tokens without a route retain host sender authorization, and accountless saved routes still enforce their chat/topic.
 - Text answers to a question work the same way for every harness: an option label (case-insensitive, preferred over a number) or option number selects that option, a multi-select question takes several comma-separated entries, and any other text is a free-text answer unless the question accepts only its options (OpenCode `custom: false`). An empty reply or an option number outside the list is not sent to the agent: `agent_respond` returns an error with the question shown again, and the question stays open.
-- A question button for a question the session no longer shows (answered in text, timed out, or cancelled) replies that the question is no longer waiting and does nothing. When the session was suspended or stopped by a Gateway restart, the button resumes it with the selected answer instead. A worktree decision button (Merge, Open PR, Sync PR, Later, Discard) on a decision that was already settled (merged or discarded) replies `⚠️ [name] This decision was already resolved (<how>). Nothing was changed.` and does nothing; a repeated `agent_worktree_cleanup(session, dismiss_session=true)` returns the same line.
+- A question button for a question the session no longer shows (answered in text, timed out, or cancelled) replies that the question is no longer waiting and does nothing. When the session was suspended or stopped by a Gateway restart, the button resumes it with the selected answer instead. A worktree decision button (Merge, Open PR, Sync PR, Later, Discard) on a decision that was already settled (merged or discarded) replies `⚠️ [name] This decision was already resolved (<how>). Nothing was changed.` and does nothing; a repeated `agent_worktree_cleanup(ocaSessionId, dismiss_session=true)` returns the same line.
 - A Gateway restart keeps a pending plan decision: pressing Approve, Revise, or Reject after the restart resumes the session the same way as after an idle suspension. Stopping the session any other way (`agent_kill`) rejects the plan.
 - Plan approval and pending-input question callbacks use apply-then-consume token semantics. If a decision fails before state is applied, the token remains retryable and the buttons stay active; once approval state is applied, a later delivery failure leaves the token treated as terminal so it cannot replay a completed decision. Approve, reject, and request-changes callbacks are serialized per session/version, so sibling clicks re-validate and report stale or already handled.
 - Completion wakes deliver the canonical plugin status first and request at most one orchestrator follow-up when `completionWakeSummaryRequired=true`; an empty response is not delivery proof. A wake with an origin route tells the orchestrator to reach the user with `message(action='send', final=true)` to `originRoute` and then answer `NO_REPLY`. The wake passes the resolved provider, account, target, and thread as explicit `chat.send` origin fields with `deliver=false`, so private final text does not establish routed delivery even for custom or `dmScope: "per-peer"` session keys. Before submission, the run identity and reply contract are persisted. The pending obligation clears only when `agent.wait` returns a matching terminal receipt with `sourceReplyDelivered=true`; an admission acknowledgement or `NO_REPLY` alone is insufficient. Plain WebChat wakes instead require a non-empty visible terminal reply. Uncertain submissions and timeouts retain the saved run for observation without resending. `originRoute` lists provider, account, target and thread, not the session key. PR update completion summaries are deduplicated by material outcome, so later updates with new commits still produce a fresh summary.
@@ -466,7 +466,7 @@ Treat those fields as authoritative in orchestration logic:
 - `implemented_without_required_approval` is the explicit approval-bypass case
 - successful completion wakes already correspond to a canonical plugin-sent completion notification, and the orchestrator should usually follow that with a short factual outcome summary
 - that expectation applies to ordinary terminal/manual completions and no-change completion wakes too, not just delegated worktree flows
-- a final summary that exists only inside `agent_output(session, full=true)` is source material, not visible delivery; when the plugin has posted only its terse status line, the orchestrator must still send one short routed summary
+- a final summary that exists only inside `agent_output(ocaSessionId, full=true)` is source material, not visible delivery; when the plugin has posted only its terse status line, the orchestrator must still send one short routed summary
 - send at most one orchestrator-owned human summary for a terminal/worktree outcome; if a duplicate wake can confirm that prior orchestrator follow-up was already visibly delivered, skip the duplicate
 - otherwise skip the summary only when the orchestrator is silently continuing an internal pipeline, there is no meaningful confirmed outcome to report yet, result data is incomplete or unreliable, or an explicit NO_REPLY/silent cron/system opt-out applies
 
@@ -602,13 +602,17 @@ agent_launch(
 )
 ```
 
+Public session-targeting tools use `ocaSessionId`: prefer the exact OCA ID from the launch receipt. The existing `session` key remains a deprecated input alias. Supply either spelling; if both are supplied, their literal values must match exactly. Conflicting, malformed, or blank supplied references are refused before lookup or work. An invalid cleanup/status filter never becomes an all-sessions request. Name/backend-reference resolution and approval permissions are unchanged.
+
+The canonical key avoids the bare `session` field matcher in OpenClaw transcript/display redaction. The reporter observed successful local calls after renaming on OpenClaw 2026.9.8; this does not by itself prove that redaction changed dispatched arguments. Unknown or masked references still fail closed.
+
 ### `agent_respond`
 
 Send a follow-up, steer or redirect work, answer a pending question, approve a plan, or escalate a `default` mode session to `bypassPermissions`. A session that is not running is resumed first when it still has a backend conversation.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Prefer the plugin session ID or name. Persisted backend conversation IDs are accepted only for recovery/diagnostics |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Prefer the plugin session ID or name. Persisted backend conversation IDs are accepted only for recovery/diagnostics |
 | `message` | `string` | Yes | Follow-up text |
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | `true` when the message is the user's own words. It resets the auto-respond counter, and for a pending plan the words `approve`, `reject` and `revise` decide it (any other text is revision feedback) |
@@ -618,8 +622,8 @@ Send a follow-up, steer or redirect work, answer a pending question, approve a p
 Examples:
 
 ```text
-agent_respond(session: "fix-auth", message: "Approved. Go ahead.", approve: true, approval_rationale: "Two-file fix within the task, tests included.")
-agent_respond(session: "fix-auth", message: "approve", userInitiated: true)   # the user typed "approve" (planApproval: ask)
+agent_respond(ocaSessionId: "fix-auth", message: "Approved. Go ahead.", approve: true, approval_rationale: "Two-file fix within the task, tests included.")
+agent_respond(ocaSessionId: "fix-auth", message: "approve", userInitiated: true)   # the user typed "approve" (planApproval: ask)
 ```
 
 The user's own messages are not echoed back to the chat. After the user presses **Revise**, the orchestrator gets a queued note that the user's next message is the requested change.
@@ -630,14 +634,14 @@ Run a backend thread action on a running session. Supported by Codex only; other
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Running session name or ID |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Running session name or ID |
 | `action` | `compact \| review` | Yes | `compact` summarizes the conversation to free context (`thread/compact/start`). `review` runs Codex's built-in reviewer inline (`review/start`) |
 | `review_target` | `uncommitted \| base_branch \| commit \| custom` | No | Defaults to `base_branch` (the session's worktree base) for worktree sessions, otherwise `uncommitted` |
 | `base_branch` | `string` | No | Branch to diff against for `base_branch` |
 | `commit_sha` | `string` | No | Commit for `commit` |
 | `instructions` | `string` | No | Reviewer instructions for `custom` |
 
-A pre-PR review is an explicit orchestrator step: call `agent_session_action(session, action: "review")` before `agent_pr` when a review pass is wanted. OCA does not insert reviews automatically into worktree PR flows.
+A pre-PR review is an explicit orchestrator step: call `agent_session_action(ocaSessionId, action: "review")` before `agent_pr` when a review pass is wanted. OCA does not insert reviews automatically into worktree PR flows.
 
 ### `agent_escalate`
 
@@ -645,7 +649,7 @@ Hand a delegated decision to the user with buttons, once per decision, then wait
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Session name or ID |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Session name or ID |
 | `kind` | `plan \| worktree` | Yes | `plan`: Approve / Revise / Reject for a session waiting on a `delegate` or `approve` mode plan review (refused in `ask` mode, where the user already has the prompt). `worktree`: Merge / Open PR / Later / Discard for a finished `delegate` worktree session |
 | `summary` | `string` | Yes | Shown to the user: why you escalate, what changes, risk, and open questions |
 
@@ -673,7 +677,7 @@ Read buffered output without changing session state. Where the harness reports t
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Name or internal ID |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Name or internal ID |
 | `lines` | `number` | No | Defaults to `50` |
 | `full` | `boolean` | No | Show the full buffered stream |
 
@@ -694,10 +698,10 @@ Terminate a running session or mark it complete.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Name or internal ID |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Name or internal ID |
 | `reason` | `killed \| completed` | No | Omit to stop; `completed` marks a running session done, and the user gets the completion notice (`✅ [name] Completed`, or the worktree prompt or outcome). The tool result is `ℹ️ [name] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).` |
 
-A suspended session (stopped by the idle timeout, or recovered after a Gateway restart) has no running process: `agent_kill` closes it without a user notice, whether it is still loaded or only stored, and answers `⛔ [name] Stopped (it was not running).` (`ℹ️ [name] Marked as completed (it was not running).` with `reason: completed`). A plan that still waited for a decision is rejected and its buttons are retired, as when a running session is stopped. A goal task that owned the session stops at once with its one `⛔ [task] Goal task stopped` notice. Without `reason` (or `killed`) that notice says `Stopped by user.` and the tool result is `⛔ [name] Stopped (it was not running); goal task "<task>" stopped.`; the `/agent_kill` command answers the same line from another chat, and in the task's own chat its reply is the goal notice itself. With `reason: completed` the notice says `The session was closed as completed without running.` and the tool result is `ℹ️ [name] Marked as completed (it was not running). Its goal task "<task>" is stopped: the session was closed without running, so its verifiers did not run.` The session no longer blocks a new launch in its chat. A stopped session can still be continued with `agent_respond` or its **Resume** button, like any stopped session; one marked completed cannot. Marking a suspended worktree session completed runs no completion handling (no merge, PR or `🔀` prompt): for a worktree session the result then ends ``Its branch `<branch>` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`` A suspended session that was never stored can only be stopped, and the result says `Stopped`. If the stop cannot be saved the result is `❌ [name] Not stopped: the stop could not be saved. Try again.`
+A suspended session (stopped by the idle timeout, or recovered after a Gateway restart) has no running process: `agent_kill` closes it without a user notice, whether it is still loaded or only stored, and answers `⛔ [name] Stopped (it was not running).` (`ℹ️ [name] Marked as completed (it was not running).` with `reason: completed`). A plan that still waited for a decision is rejected and its buttons are retired, as when a running session is stopped. A goal task that owned the session stops at once with its one `⛔ [task] Goal task stopped` notice. Without `reason` (or `killed`) that notice says `Stopped by user.` and the tool result is `⛔ [name] Stopped (it was not running); goal task "<task>" stopped.`; the `/agent_kill` command answers the same line from another chat, and in the task's own chat its reply is the goal notice itself. With `reason: completed` the notice says `The session was closed as completed without running.` and the tool result is `ℹ️ [name] Marked as completed (it was not running). Its goal task "<task>" is stopped: the session was closed without running, so its verifiers did not run.` The session no longer blocks a new launch in its chat. A stopped session can still be continued with `agent_respond` or its **Resume** button, like any stopped session; one marked completed cannot. Marking a suspended worktree session completed runs no completion handling (no merge, PR or `🔀` prompt): for a worktree session the result then ends ``Its branch `<branch>` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).`` A suspended session that was never stored can only be stopped, and the result says `Stopped`. If the stop cannot be saved the result is `❌ [name] Not stopped: the stop could not be saved. Try again.`
 
 Any other parameter is rejected with `Invalid parameters` and nothing is stopped.
 
@@ -762,7 +766,7 @@ Merge a worktree branch back to base.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Must resolve to a session with worktree metadata |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Must resolve to a session with worktree metadata |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Precedence (the session's landing base): this parameter, else the session's recorded base branch (`worktree_base_branch` at launch), else the detected default branch. It is the base the `🔀 [name] Finished on `<branch>` → `<base>`` prompt, the **Merge** button, the delegate wake, the automatic merge, a new PR from `agent_pr` and `agent_worktree_status` use, so they always name the same base. The base of an existing PR is not part of it: after `agent_pr(base_branch='release')` on a session without a recorded base, a later `agent_merge` without `base_branch` still merges into the default branch (`agent_worktree_status` then shows `PR base: release` next to the landing base). A named or recorded base that does not exist answers ``❌ Merge blocked: base branch `<base>` does not exist in <repo>.`` |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
 | `summary` | `string` | No | One or two lines for the user on what changed. Shown under the merge outcome line; then no follow-up summary wake is sent |
@@ -788,7 +792,7 @@ Create or update a GitHub PR for a worktree branch.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Must resolve to a session with worktree metadata |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Must resolve to a session with worktree metadata |
 | `title` | `string` | No | Auto-generated if omitted |
 | `body` | `string` | No | Auto-generated if omitted |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Base for a new PR and the base preferred when looking up the branch's PR. Precedence (the session's landing base): this parameter, else the session's recorded base branch (`worktree_base_branch` at launch, so a stacked session's PR goes into the branch it is stacked on), else the detected default branch. An existing PR is never retargeted, also when `base_branch` names another branch, and its base never becomes the session's landing base. Case by case: **an open PR is updated** (recorded by the session or found by its branch): its own base is used for the hook-change check, the change counts, the PR comment and the messages, and is recorded as the PR's base. **A new PR is opened**: the landing base is used for all of these. **The PR was merged** and no PR of the branch is open: the call only records it (with its base, used to detect that the branch has landed); nothing is pushed, no branch is moved and no hook-change check runs. **The PR was closed without merging** (and `force_new` is not set): the call only reports it; nothing is pushed. **`force_new` is refused** (an open or merged PR exists): nothing is pushed, no branch is moved and no hook-change check runs. **The hook-change check cannot be computed**: it counts as changed and the user is asked (see [Git hooks](#git-hooks-and-worktree-setup-changes)) |
@@ -809,7 +813,7 @@ Show lifecycle-first worktree status for one session or all sessions with worktr
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | No | Omit to list all tracked worktrees |
+| `ocaSessionId` | `string` | No | Omit to list all tracked worktrees |
 
 Status output is authoritative from persisted lifecycle plus current repository evidence. Each entry includes:
 
@@ -829,10 +833,10 @@ Clean managed worktree lifecycle state safely, or dismiss one pending worktree d
 | `workdir` | `string` | No | Repository to inspect |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `mode` | `preview_safe \| clean_safe \| preview_all` | No | Defaults to `clean_safe`. `preview_safe` lists what would be removed; `preview_all` also lists kept worktrees and why |
-| `session` | `string` | No | Restrict cleanup to one session |
-| `dismiss_session` | `boolean` | No | With `session`, permanently dismiss that worktree instead of resolving by repo evidence |
+| `ocaSessionId` | `string` | No | Restrict cleanup to one session |
+| `dismiss_session` | `boolean` | No | With `ocaSessionId`, permanently dismiss that worktree instead of resolving by repo evidence |
 
-With no `session`, the tool performs a deterministic "clean all safe" pass over all managed worktrees in scope. It removes only sessions whose lifecycle resolves as safe now:
+With no `ocaSessionId`, the tool performs a deterministic "clean all safe" pass over all managed worktrees in scope. It removes only sessions whose lifecycle resolves as safe now:
 
 - `merged`
 - `released`
@@ -993,7 +997,7 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Idle timeout | `💤 [name] Suspended after idle timeout` with **Resume** / **View output** buttons |
 | Stopped | `⛔ [name] Stopped by user` (or `by shutdown`, `by startup timeout`, `unexpectedly`) |
 | Worktree decision in `ask` (also `auto-merge` or `auto-pr` when the branch changes hook or worktree-setup files, and `delegate` when repository policy blocks follow-through and the branch changes such files) | ``🔀 [name] Finished on `<branch>` → `<base>` `` with Merge / Open PR / Later / Discard buttons |
-| Commits made after the session's PR was opened, or after its branch was merged (the PR or merge happened while it ran, or it was resumed) | The worktree counts as resolved only while the branch has nothing new. For a recorded PR the branch is compared with GitHub's immutable head commit, also after a merge or branch pruning; this resolves the head for legacy sessions and keeps commits made between the GitHub merge and OCA settlement new. Unknown counts as new. Local merges without a PR use the recorded merge time and the base. When the session completes with such commits: `ask` (and `auto-merge`, which never merges past an open PR on its own) sends the `🔀` prompt counting those commits, with the line `These commits were made after the PR was opened and are not in it yet.` and Merge / **Sync PR** / View PR / Later / Discard; **Sync PR** pushes them, comments on the PR and carries the `✅ [name] Completed — PR updated: <url>`. `delegate` wakes the orchestrator (`… not yet in its PR`, with the PR and `agent_pr(session=…)` to sync it) and the user gets `✅ [name] Completed`. `manual` / `off` prompt nobody: the `✅ [name] Completed` notice gets the line ``⚠️ <N> commits on `<branch>` are not in the PR: <url>``. `manual` / `off` report an unknown count as `Could not determine which commits … are in the PR`. `auto-pr` updates the PR as before. After a merge the branch is open again: `auto-merge` merges the new commits (`✅ [name] Completed — Merged: …`), and `auto-pr` opens a new PR for them (`✅ [name] Completed — PR opened: <url>`). `agent_pr` and the PR buttons do the same: a merged PR settles the call (`PR was already merged: <url>`) only while the branch has nothing its immutable merged head lacks (unknown stops without pushing or settling); otherwise the commits are pushed and a new PR is opened. With nothing new, the completion is the plain `✅ [name] Completed` |
+| Commits made after the session's PR was opened, or after its branch was merged (the PR or merge happened while it ran, or it was resumed) | The worktree counts as resolved only while the branch has nothing new. For a recorded PR the branch is compared with GitHub's immutable head commit, also after a merge or branch pruning; this resolves the head for legacy sessions and keeps commits made between the GitHub merge and OCA settlement new. Unknown counts as new. Local merges without a PR use the recorded merge time and the base. When the session completes with such commits: `ask` (and `auto-merge`, which never merges past an open PR on its own) sends the `🔀` prompt counting those commits, with the line `These commits were made after the PR was opened and are not in it yet.` and Merge / **Sync PR** / View PR / Later / Discard; **Sync PR** pushes them, comments on the PR and carries the `✅ [name] Completed — PR updated: <url>`. `delegate` wakes the orchestrator (`… not yet in its PR`, with the PR and `agent_pr(ocaSessionId=…)` to sync it) and the user gets `✅ [name] Completed`. `manual` / `off` prompt nobody: the `✅ [name] Completed` notice gets the line ``⚠️ <N> commits on `<branch>` are not in the PR: <url>``. `manual` / `off` report an unknown count as `Could not determine which commits … are in the PR`. `auto-pr` updates the PR as before. After a merge the branch is open again: `auto-merge` merges the new commits (`✅ [name] Completed — Merged: …`), and `auto-pr` opens a new PR for them (`✅ [name] Completed — PR opened: <url>`). `agent_pr` and the PR buttons do the same: a merged PR settles the call (`PR was already merged: <url>`) only while the branch has nothing its immutable merged head lacks (unknown stops without pushing or settling); otherwise the commits are pushed and a new PR is opened. With nothing new, the completion is the plain `✅ [name] Completed` |
 | Worktree decision in `delegate` | The user gets `✅ [name] Completed`; the decision goes to the orchestrator as a wake (no buttons until it escalates), also when the branch changes hook or worktree-setup files (the wake names them, and only the user's button can then merge or open a PR). Its later merge or PR is an `ℹ️` milestone |
 | Stale worktree decision | ``⏰ [name] Branch `<branch>` still waits for your decision (<age>).`` with the decision buttons (3h, then 24h, then a week later, then no more); the third ends `… (<age>). Last reminder.` |
 | **Later** | ``⏭️ [name] Reminder snoozed 24h for `<branch>`.``; after the last reminder ``⏭️ [name] Kept for later: `<branch>`. No more reminders; /agent_status lists it.`` |

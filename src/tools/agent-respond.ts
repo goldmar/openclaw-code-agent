@@ -1,3 +1,4 @@
+import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
@@ -5,7 +6,7 @@ import { executeRespond } from "../actions/respond";
 import type { OpenClawPluginToolContext } from "../types";
 
 interface AgentRespondParams {
-  codeAgentSessionId: string;
+  ocaSessionId: string;
   message: string;
   interrupt?: boolean;
   userInitiated?: boolean;
@@ -16,7 +17,7 @@ interface AgentRespondParams {
 function isAgentRespondParams(value: unknown): value is AgentRespondParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.codeAgentSessionId === "string"
+  return typeof params.ocaSessionId === "string"
     && typeof params.message === "string"
     && ["interrupt", "userInitiated", "approve"].every((key) => params[key] === undefined || typeof params[key] === "boolean")
     && (params.approval_rationale === undefined || typeof params.approval_rationale === "string");
@@ -29,7 +30,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
     description:
       "Send a message to a session: a follow-up, an answer to its question (option number or label; comma-separated for multi-select), or plan feedback. A stopped, suspended or completed session that still has its conversation is resumed.",
     parameters: Type.Object({
-      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
+      ...sessionReferenceProperties(),
       message: Type.String(),
       interrupt: Type.Optional(Type.Boolean({ description: "Stop the current turn first" })),
       userInitiated: Type.Optional(
@@ -41,17 +42,20 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
       approval_rationale: Type.Optional(
         Type.String({ description: "With approve=true: one short line on why the plan is safe; shown to the user in the approval notice" }),
       ),
-    }),
+    }, requiredSessionReference),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
+      const normalized = normalizeSessionReferenceParams(params);
+      if (normalized.ok === false) return normalized.error;
+      params = normalized.params;
       if (!isAgentRespondParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { ocaSessionId, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
       }
 
       const result = await executeRespond(sessionManager, {
-        codeAgentSessionId: params.codeAgentSessionId,
+        session: params.ocaSessionId,
         message: params.message,
         interrupt: params.interrupt,
         userInitiated: params.userInitiated,

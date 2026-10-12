@@ -191,7 +191,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           return {
             content: [{
               type: "text",
-              text: `Session ${resumeTarget!.name} [${resumeTargetRef(resumeTarget, params.resume_session_id)}] is already running. Use agent_respond(session='${params.resume_session_id}', message='<next instruction>') instead of agent_launch(resume_session_id=...).`,
+              text: `Session ${resumeTarget!.name} [${resumeTargetRef(resumeTarget, params.resume_session_id)}] is already running. Use agent_respond(ocaSessionId='${params.resume_session_id}', message='<next instruction>') instead of agent_launch(resume_session_id=...).`,
             }],
           };
         }

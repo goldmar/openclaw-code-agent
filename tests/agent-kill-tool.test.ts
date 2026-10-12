@@ -28,7 +28,7 @@ describe("agent_kill tool parameters", () => {
   it("kills a running session with valid parameters", async () => {
     const { sm, killed } = fakeSessionManager();
     setSessionManager(sm as never);
-    const result = await makeAgentKillTool().execute("id", { codeAgentSessionId: "runner" });
+    const result = await makeAgentKillTool().execute("id", { ocaSessionId: "runner" });
     assert.match(text(result), /^⛔ \[runner\] Stopped\.$/);
     assert.deepEqual(killed, ["s-run"]);
   });
@@ -37,10 +37,10 @@ describe("agent_kill tool parameters", () => {
     const { sm, killed } = fakeSessionManager();
     setSessionManager(sm as never);
     const tool = makeAgentKillTool();
-    for (const params of [{ codeAgentSessionId: "runner", purge: true }, { codeAgentSessionId: "runner", reason: "killed", extra: 1 }]) {
-      assert.match(text(await tool.execute("id", params)), /Invalid parameters\. Expected \{ codeAgentSessionId, reason\? \}\./);
+    for (const params of [{ ocaSessionId: "runner", purge: true }, { ocaSessionId: "runner", reason: "killed", extra: 1 }]) {
+      assert.match(text(await tool.execute("id", params)), /Invalid parameters\. Expected \{ ocaSessionId, reason\? \}\./);
     }
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "runner", reason: "stopped" })), /Invalid parameters/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "runner", reason: "stopped" })), /Invalid parameters/);
     assert.deepEqual(killed, [], "no invalid call reaches kill");
   });
 });

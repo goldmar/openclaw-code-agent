@@ -333,7 +333,7 @@ export function resolveAgentLaunchRequest(
             summarizeLinkedSessions(linked.resumable),
             ``,
             `Resume the latest one with:`,
-            `  agent_respond(session='${linked.resumable[0].ref}', message='<next instruction>')`,
+            `  agent_respond(ocaSessionId='${linked.resumable[0].ref}', message='<next instruction>')`,
             `Fork from it with:`,
             `  agent_launch(prompt='<new task>', resume_session_id='${linked.resumable[0].ref}', fork_session=true)`,
           ].join("\n")
@@ -344,7 +344,7 @@ export function resolveAgentLaunchRequest(
             summarizeLinkedSessions(linked.active),
             ``,
             `Send a follow-up instead of launching a duplicate:`,
-            `  agent_respond(session='${linked.active[0].ref}', message='<next instruction>')`,
+            `  agent_respond(ocaSessionId='${linked.active[0].ref}', message='<next instruction>')`,
           ].join("\n")
         : "";
       const first = linked.active[0] ?? linked.resumable[0];

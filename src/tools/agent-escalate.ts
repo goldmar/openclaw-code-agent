@@ -1,3 +1,4 @@
+import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
@@ -6,7 +7,7 @@ import type { OpenClawPluginToolContext } from "../types";
 type EscalationKind = "plan" | "worktree";
 
 interface AgentEscalateParams {
-  codeAgentSessionId: string;
+  ocaSessionId: string;
   kind: EscalationKind;
   summary: string;
 }
@@ -14,7 +15,7 @@ interface AgentEscalateParams {
 function isAgentEscalateParams(value: unknown): value is AgentEscalateParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.codeAgentSessionId === "string"
+  return typeof params.ocaSessionId === "string"
     && (params.kind === "plan" || params.kind === "worktree")
     && typeof params.summary === "string"
     && params.summary.trim().length > 0;
@@ -32,20 +33,23 @@ export function makeAgentEscalateTool(_ctx?: OpenClawPluginToolContext) {
     description:
       "Hand a decision to the user with buttons, once per decision. kind='plan': Approve/Revise/Reject for a session waiting on plan approval. kind='worktree': Merge/Open PR/Later/Discard for a finished worktree session. Then wait for the user.",
     parameters: Type.Object({
-      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
+      ...sessionReferenceProperties(),
       kind: Type.StringEnum(["plan", "worktree"]),
       summary: Type.String({ description: "Shown to the user: why you escalate, what changes, risk, and open questions. A few short lines." }),
-    }),
+    }, requiredSessionReference),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
+      const normalized = normalizeSessionReferenceParams(params);
+      if (normalized.ok === false) return normalized.error;
+      params = normalized.params;
       if (!isAgentEscalateParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, kind: 'plan' | 'worktree', summary }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { ocaSessionId, kind: 'plan' | 'worktree', summary }.");
       }
       const sm = sessionManager;
-      const session = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
-      if (!session) return unknownSessionError(params.codeAgentSessionId);
+      const session = sm.resolve(params.ocaSessionId) ?? sm.getPersistedSession(params.ocaSessionId);
+      if (!session) return unknownSessionError(params.ocaSessionId);
       const ref = "id" in session ? session.id : session.sessionId ?? session.backendRef?.conversationId ?? session.harnessSessionId;
       const text = params.kind === "plan"
         ? sm.requestPlanApprovalFromUser(ref, params.summary)

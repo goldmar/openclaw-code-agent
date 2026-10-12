@@ -93,7 +93,7 @@ export function getKillSessionText(
       // runs for a session that was not running, so an open branch is named.
       const branch = openWorktreeBranch(target);
       return `ℹ️ [${target.name}] Marked as completed (it was not running).${goalTask ? ` Its goal task "${goalTask}" is stopped: the session was closed without running, so its verifiers did not run.` : ""}${branch
-        ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(session, dismiss_session=true).`
+        ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).`
         : ""}`;
     }
     if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;

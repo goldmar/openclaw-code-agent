@@ -67,7 +67,7 @@ async function sessionWithMidRunPr(
   const branch = session.worktreeBranch!;
   commit(session.worktreePath!, `${name}-one.txt`, "one\n", "add one");
 
-  await s.runTool("agent_pr", { codeAgentSessionId: session.id });
+  await s.runTool("agent_pr", { ocaSessionId: session.id });
   await s.waitForMessage(new RegExp(`^ℹ️ \\[${name}\\] PR opened: `));
   const prUrl = github.readState().prs.at(-1)!.url;
   assert.equal(github.remoteHead(branch), git(github.repoDir, "rev-parse", branch), "the PR has the first commit");
@@ -130,13 +130,13 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
     const wake = s.wakes.slice(wakesBefore).find((candidate) => /\[pr-delegate\] Finished on /.test(candidate.message))!;
     assert.match(wake.message, /: 1 commit, 1 file, \+1\/-0 not yet in its PR\./);
     assert.ok(wake.message.includes(`Open PR: ${prUrl}`), wake.message);
-    assert.match(wake.message, /agent_pr\(session='pr-delegate'/);
+    assert.match(wake.message, /agent_pr\(ocaSessionId='pr-delegate'/);
     await s.waitForMessage(/^✅ \[pr-delegate\] Completed/);
     assert.equal(about(s, "pr-delegate").some((message) => message.text.startsWith("🔀")), false, "no buttons under delegate");
     assert.equal(completionLines(s, "pr-delegate").length, 1);
 
     // The orchestrator syncs the PR: a milestone, not a second completion.
-    await s.runTool("agent_pr", { codeAgentSessionId: session.id });
+    await s.runTool("agent_pr", { ocaSessionId: session.id });
     await s.waitForMessage(/^ℹ️ \[pr-delegate\] PR updated: /);
     assert.equal(github.remoteHead(branch), second);
     assert.equal(completionLines(s, "pr-delegate").length, 1);
@@ -197,7 +197,7 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     const session = await s.launch({ workdir: github.repoDir, worktreeStrategy: "auto-pr", name: "pr-again" });
     const branch = session.worktreeBranch!;
     commit(session.worktreePath!, "pr-again-one.txt", "one\n", "add one");
-    await s.runTool("agent_pr", { codeAgentSessionId: session.id });
+    await s.runTool("agent_pr", { ocaSessionId: session.id });
     await s.waitForMessage(/^ℹ️ \[pr-again\] PR opened: /);
     const first = github.readState().prs.at(-1)!;
     assert.equal(s.sm.getPersistedSession(session.id)?.worktreePrHeadBranch, branch, "the pushed branch is recorded as the PR's head");
@@ -206,7 +206,7 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     github.updateState((state) => {
       state.prs.find((pr) => pr.number === first.number)!.state = "MERGED";
     });
-    assert.match(await s.runTool("agent_pr", { codeAgentSessionId: session.id }), /PR was already merged/);
+    assert.match(await s.runTool("agent_pr", { ocaSessionId: session.id }), /PR was already merged/);
     assert.equal(s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state, "merged");
 
     await afterTheMerge();
@@ -230,7 +230,7 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     github.updateState((state) => {
       state.prs.find((pr) => pr.number === latest.number)!.state = "MERGED";
     });
-    assert.match(await s.runTool("agent_pr", { codeAgentSessionId: session.id }), /PR was already merged/);
+    assert.match(await s.runTool("agent_pr", { ocaSessionId: session.id }), /PR was already merged/);
     assert.equal(github.ghCalls("create").length, 2);
   });
 });

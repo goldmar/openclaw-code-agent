@@ -718,7 +718,7 @@ export class SessionWorktreeStrategyService {
       wakeMessageOnNotifyFailed: [
         `[${session.name}] Finished with uncommitted changes${noCommits ? " and no commits" : ""} on \`${branchName}\`; the Commit changes / Discard buttons could not be shown. ID: ${session.id}`,
         ...(this.deps.originThreadLine(session) ? [this.deps.originThreadLine(session)] : []),
-        `Ask the user whether to commit the changes (agent_respond(session='${session.id}', message='Commit the task's real changes with a clear message.', userInitiated=true)) or discard them (agent_worktree_cleanup(session='${session.name}', dismiss_session=true)).`,
+        `Ask the user whether to commit the changes (agent_respond(ocaSessionId='${session.id}', message='Commit the task's real changes with a clear message.', userInitiated=true)) or discard them (agent_worktree_cleanup(ocaSessionId='${session.name}', dismiss_session=true)).`,
       ].join("\n"),
     });
     return { notificationSent: true, worktreeRemoved: false };

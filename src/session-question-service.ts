@@ -87,7 +87,7 @@ export class SessionQuestionService {
       `[${session.name}] The agent asks the user a question that could not be shown to them. ID: ${session.id}`,
       `Show it to the user exactly, without answering it:`,
       questionBlock,
-      `Forward their answer: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
+      `Forward their answer: agent_respond(ocaSessionId='${session.id}', message='<answer>', userInitiated=true).`,
     ].join("\n");
 
     return new Promise((resolve, reject) => {
@@ -120,7 +120,7 @@ export class SessionQuestionService {
         shouldDispatch: () => this.pendingQuestions.get(session.id)?.requestId === requestId,
         // Context for when the user answers in chat; nothing to do now (N37).
         wakeMessageOnNotifySuccess: [
-          `[${session.name}] The user was asked this question with buttons; do not answer it yourself. If they answer in chat, forward it: agent_respond(session='${session.id}', message='<answer>', userInitiated=true).`,
+          `[${session.name}] The user was asked this question with buttons; do not answer it yourself. If they answer in chat, forward it: agent_respond(ocaSessionId='${session.id}', message='<answer>', userInitiated=true).`,
           questionBlock,
         ].join("\n"),
         wakeDelivery: "next-turn",

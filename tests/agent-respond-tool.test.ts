@@ -15,7 +15,7 @@ describe("agent_respond tool parameter validation", () => {
   it("returns an invalid-parameters error when message is missing", async () => {
     setSessionManager({} as SessionManager);
     const tool = makeAgentRespondTool();
-    const result = await tool.execute("tool-id", { codeAgentSessionId: "s1" });
+    const result = await tool.execute("tool-id", { ocaSessionId: "s1" });
     const text = (result as any).content?.[0]?.text ?? "";
     assert.match(text, /Invalid parameters/);
   });
@@ -35,7 +35,7 @@ describe("agent_respond tool parameter validation", () => {
     } as unknown as SessionManager);
     const tool = makeAgentRespondTool();
     const result = await tool.execute("tool-id", {
-      codeAgentSessionId: "s1",
+      ocaSessionId: "s1",
       message: "Approved. Go ahead.",
       approve: true,
       approval_rationale: "Low risk and in scope.",
@@ -51,7 +51,7 @@ describe("agent_respond tool parameter validation", () => {
       sendMessage: async (message: string) => { sent.push(message); throw new FollowUpDeliveryUnconfirmedError(); },
     });
     setSessionManager({ resolve: () => session } as unknown as SessionManager);
-    const result = await makeAgentRespondTool().execute("same-call-id", { codeAgentSessionId: "PRIVATE_ID", message: "PRIVATE_MESSAGE" });
+    const result = await makeAgentRespondTool().execute("same-call-id", { ocaSessionId: "PRIVATE_ID", message: "PRIVATE_MESSAGE" });
     assert.equal(result.isError, true);
     assert.deepEqual(result.details, { status: "error", code: "response_delivery_unconfirmed", targetSelected: true,
       recovery: "Check the originally selected exact session with authorized agent_output before explicitly deciding whether to send again.",

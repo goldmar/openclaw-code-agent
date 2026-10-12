@@ -1739,7 +1739,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(queued[0]!.ref, "test-id");
     assert.equal(queued[0]!.label, "plan-revise-requested");
     assert.match(queued[0]!.text, /^\[revise-me\] The user asked to revise plan v4\./);
-    assert.match(queued[0]!.text, /agent_respond\(session='test-id', message='<their words>', userInitiated=true\)/);
+    assert.match(queued[0]!.text, /agent_respond\(ocaSessionId='test-id', message='<their words>', userInitiated=true\)/);
   });
 
   it("queues a note that the prompt's earlier next-turn notes no longer apply after a decision button", async () => {

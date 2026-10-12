@@ -42,7 +42,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
   const mergeAllowed = allowedActions?.merge !== false && !hookWarning;
 
-  const escalateCall = `agent_escalate(session='${sessionName}', kind='worktree', summary='<why>')`;
+  const escalateCall = `agent_escalate(ocaSessionId='${sessionName}', kind='worktree', summary='<why>')`;
   return [
     `[${sessionName}] Finished on ${branchName} → ${baseBranch}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${openPrUrl ? " not yet in its PR" : ""}. You decide what happens to the branch (worktree: delegate). ID: ${sessionId}`,
     ...(openPrUrl ? [`Open PR: ${openPrUrl}. These commits were made after it was opened and are not pushed.`] : []),
@@ -51,13 +51,13 @@ export function buildDelegateWorktreeWakeMessage(args: {
     ...(commitLines.length > 0 ? [fenceAgentOutput([...commitLines, ...(moreNote ? [moreNote] : [])].join("\n"), "commit messages")] : []),
     ...(policyReason ? [`Policy: ${policyReason}`] : []),
     ...(hookWarning ? [`Hook changes: ${hookWarning.replace(/^⚠️\s*/u, "")} Only the user can merge or open a PR for this branch.`] : []),
-    `Check the result (agent_output(session='${sessionId}', full=true)), then:`,
+    `Check the result (agent_output(ocaSessionId='${sessionId}', full=true)), then:`,
     ...(mergeAllowed
-      ? [`- In scope and low risk: agent_merge(session='${sessionName}', summary='<one or two lines for the user on what changed>'). The summary is shown with the merge notice; send no other message.`]
+      ? [`- In scope and low risk: agent_merge(ocaSessionId='${sessionName}', summary='<one or two lines for the user on what changed>'). The summary is shown with the merge notice; send no other message.`]
       : [`- Do not merge: ${hookWarning ? "the branch changes hook files" : "repo policy does not allow a direct merge"}.`]),
     ...(openPrUrl
       ? [
-          ...(hookWarning ? [] : [`- In scope and low risk, and the PR should have them: agent_pr(session='${sessionName}', summary='<one or two lines for the user on what changed>') pushes them and updates the PR.`]),
+          ...(hookWarning ? [] : [`- In scope and low risk, and the PR should have them: agent_pr(ocaSessionId='${sessionName}', summary='<one or two lines for the user on what changed>') pushes them and updates the PR.`]),
           `- A risky change or unclear scope: ${escalateCall}, then wait for the user.`,
         ]
       : [`- A PR${allowedActions?.pr === false ? " (not available here)" : ""}, a risky change, or unclear scope: ${escalateCall}, then wait for the user. Do not call agent_pr yourself.`]),
@@ -68,7 +68,7 @@ export function buildDelegateReminderWakeMessage(
   session: Pick<PersistedSessionInfo, "name" | "sessionId" | "harnessSessionId" | "worktreeBranch">,
   pendingHours: number,
 ): string {
-  return `[${session.name}] Reminder: branch ${session.worktreeBranch ?? "unknown"} has waited ${pendingHours}h for your decision. agent_merge(session='${session.name}', summary='...') if it is safe, otherwise agent_escalate(session='${session.name}', kind='worktree', summary='...').`;
+  return `[${session.name}] Reminder: branch ${session.worktreeBranch ?? "unknown"} has waited ${pendingHours}h for your decision. agent_merge(ocaSessionId='${session.name}', summary='...') if it is safe, otherwise agent_escalate(ocaSessionId='${session.name}', kind='worktree', summary='...').`;
 }
 
 export function buildNoChangeWakeMessage(args: {

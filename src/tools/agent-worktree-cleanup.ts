@@ -1,3 +1,4 @@
+import { normalizeSessionReferenceParams, sessionReferenceProperties } from "./session-reference-params";
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { Type } from "../tool-parameter-schema";
 import type { OpenClawPluginToolContext } from "../types";
@@ -16,7 +17,7 @@ interface AgentWorktreeCleanupParams {
   workdir?: string;
   base_branch?: string;
   mode?: "preview_safe" | "clean_safe" | "preview_all";
-  session?: string;
+  ocaSessionId?: string;
   dismiss_session?: boolean;
 }
 
@@ -27,22 +28,25 @@ function isAgentWorktreeCleanupParams(value: unknown): value is AgentWorktreeCle
 export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_worktree_cleanup",
-    description: "Remove finished worktrees that are safe to delete (merged, released, no changes); never removes pending, dirty, PR-open or running ones. With session + dismiss_session=true, permanently discards that session's branch and worktree.",
+    description: "Remove finished worktrees that are safe to delete (merged, released, no changes); never removes pending, dirty, PR-open or running ones. With ocaSessionId + dismiss_session=true, permanently discards that session's branch and worktree.",
     parameters: Type.Object({
       workdir: Type.Optional(Type.String({ description: "Only this repository" })),
       base_branch: Type.Optional(Type.String({ description: "Base branch for the merged check (default: detected)" })),
       mode: Type.Optional(Type.StringEnum(["preview_safe", "clean_safe", "preview_all"], {
         description: "clean_safe (default) removes; preview_safe lists what would be removed; preview_all also lists kept worktrees and why",
       })),
-      codeAgentSessionId: Type.Optional(Type.String({ description: "Only this session" })),
-      dismiss_session: Type.Optional(Type.Boolean({ description: "With codeAgentSessionId: delete its branch and worktree even if unmerged (cannot be undone)" })),
+      ...sessionReferenceProperties(),
+      dismiss_session: Type.Optional(Type.Boolean({ description: "With ocaSessionId: delete its branch and worktree even if unmerged (cannot be undone)" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
+      const normalized = normalizeSessionReferenceParams(params, false);
+      if (normalized.ok === false) return normalized.error;
+      params = normalized.params;
       if (!isAgentWorktreeCleanupParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, session?, dismiss_session? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, ocaSessionId?, dismiss_session? }." }] };
       }
       // A 4.x dry_run=true call must never silently become a 5.0 clean_safe
       // deletion when a host forwards extra properties to execute().
@@ -55,7 +59,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
       }
 
-      const sessionRef = params.codeAgentSessionId;
+      const sessionRef = params.ocaSessionId;
       const mode = params.mode ?? "clean_safe";
       const dryRun = mode !== "clean_safe";
       const includeRetained = mode === "preview_all" || mode === "clean_safe";

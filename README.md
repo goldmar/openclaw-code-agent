@@ -273,6 +273,8 @@ OCA is a high-trust developer automation plugin: anyone who can launch a session
 
 ## Tools And Commands
 
+Session-targeting tools use `ocaSessionId`, preferably the exact ID from the launch receipt. The old `session` key remains a deprecated input alias; if both are supplied they must match exactly. Blank, malformed, or conflicting references are refused. See the [tool reference](docs/REFERENCE.md#agent_respond).
+
 Most users interact in chat. The tool surface is for OpenClaw agents and advanced integrations.
 
 | Agent-facing tool | Purpose |

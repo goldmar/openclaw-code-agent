@@ -95,7 +95,7 @@ export function buildCompletionFollowupInstructionLines(args: {
   originThreadLine?: string;
 }): string[] {
   return [
-    `Tell the user in one or two sentences what was done (read agent_output(session='${args.sessionId}', full=true) if the output above is not enough). Do not repeat the status line.`,
+    `Tell the user in one or two sentences what was done (read agent_output(ocaSessionId='${args.sessionId}', full=true) if the output above is not enough). Do not repeat the status line.`,
     `If this finished one phase of a larger job, start the next phase now instead.`,
     finalReplyRule(args.originThreadLine),
   ];
@@ -173,7 +173,7 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     statusDeliveryLine(sanitizedOutcomeLine, args.canonicalStatusDelivered),
     ...(details.length > 0 ? details.map((line) => `- ${line}`) : []),
     ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
-    `Tell the user in one or two sentences what changed (agent_output(session='${args.sessionId}', full=true) if you need the details; if there is no output, state only the facts above). Mention a failed push; refer to PRs by number, not URL. Do not repeat the outcome line.`,
+    `Tell the user in one or two sentences what changed (agent_output(ocaSessionId='${args.sessionId}', full=true) if you need the details; if there is no output, state only the facts above). Mention a failed push; refer to PRs by number, not URL. Do not repeat the outcome line.`,
     finalReplyRule(args.originThreadLine),
   ].join("\n");
 }
@@ -191,7 +191,7 @@ export function buildGoalTaskSucceededFollowupWake(args: {
     `[${args.sessionName ?? args.taskName}] Goal task ${args.taskName} succeeded. ID: ${args.sessionId}`,
     statusDeliveryLine(args.summary, args.canonicalStatusDelivered),
     ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
-    `Tell the user in one or two sentences what was achieved (agent_output(session='${args.sessionId}', full=true) if needed; otherwise state only the goal status). Do not repeat the status line.`,
+    `Tell the user in one or two sentences what was achieved (agent_output(ocaSessionId='${args.sessionId}', full=true) if needed; otherwise state only the goal status). Do not repeat the status line.`,
     finalReplyRule(args.originThreadLine),
   ].join("\n");
 }
@@ -246,7 +246,7 @@ export function buildFailedPayload(args: {
       fenceAgentOutput(errorSummary, "failure summary"),
       ...outputSection,
       ...worktreeCleanupNote,
-      `Tell the user the cause in one line and your next step. Continue the same session with agent_respond(session='${session.id}', message='...'), fork it with agent_launch(resume_session_id='${session.id}', fork_session=true, prompt='...'), or fix a launch/config error and relaunch.`,
+      `Tell the user the cause in one line and your next step. Continue the same session with agent_respond(ocaSessionId='${session.id}', message='...'), fork it with agent_launch(resume_session_id='${session.id}', fork_session=true, prompt='...'), or fix a launch/config error and relaunch.`,
       ...(originThreadLine?.includes(ROUTED_REPLY_RULE) ? [ROUTED_REPLY_REMINDER] : []),
     ].join("\n"),
     buttons: failedButtons,

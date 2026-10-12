@@ -588,7 +588,7 @@ describe("SessionNotificationService", () => {
       completedAt: 1_780_000_002_000,
     } as any;
     const laterCycleRequest = worktreeMessages.buildNoChangeNotification({
-      codeAgentSessionId: resumedSession,
+      session: resumedSession,
      
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup-b",
@@ -2028,7 +2028,7 @@ describe("SessionNotificationService", () => {
       wakeMessageOnNotifySuccess: [
         "Goal task succeeded.",
         'Completion promise "TRADING_PLATFORM_FULL_REPO_REVIEW_2_20_ITER_DONE" detected in agent output.',
-        "Use agent_output(session='kzKq9Grv', full=true) to send one factual summary.",
+        "Use agent_output(ocaSessionId='kzKq9Grv', full=true) to send one factual summary.",
       ].join("\n"),
       completionSummary: {
         required: true,
@@ -2182,7 +2182,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(requests[0]?.deferConditionalWakeMs, 2000);
     assert.equal(wakeAttempts, 1);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(ocaSessionId='pr-174-update-session', full=true\)/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /The user saw: /);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Tell the user in one or two sentences what changed/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /refer to PRs by number, not URL/);
@@ -2396,7 +2396,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(requests[1]?.completionWakeSummaryRequired, true);
     assert.equal(typeof requests[1]?.wakeMessageOnNotifySuccess, "string");
-    assert.match(requests[1]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='k7rM7W1J', full=true\)/);
+    assert.match(requests[1]?.wakeMessageOnNotifySuccess as string, /agent_output\(ocaSessionId='k7rM7W1J', full=true\)/);
     assert.ok(persisted.completionSummaryDedupe?.length > 0);
   });
 
@@ -3309,7 +3309,7 @@ describe("SessionNotificationService", () => {
     assert.equal(capturedRequest.requireDirectUserNotification, true);
     assert.equal(capturedRequest.completionWakeSummaryRequired, true);
     assert.equal(capturedRequest.deferConditionalWakeUntilNextTick, true);
-    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(session='session-7', full=true\)/);
+    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(ocaSessionId='session-7', full=true\)/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /Pushed main\./);
     assert.deepEqual(

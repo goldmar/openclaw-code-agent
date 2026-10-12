@@ -889,7 +889,7 @@ describe("agent_launch tool defaults", () => {
 
     assert.equal(spawnCalled, false);
     assert.match(text, /Resume-first protection blocked a fresh launch/);
-    assert.match(text, /agent_respond\(session='sess-resume'/);
+    assert.match(text, /agent_respond\(ocaSessionId='sess-resume'/);
     assert.match(text, /force_new_session=true/);
   });
 

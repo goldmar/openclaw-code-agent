@@ -263,7 +263,7 @@ describe("plugin entry source", () => {
 
     assert.doesNotMatch(skill, /auto-approve/i);
     assert.match(approveSection, /only after you verify the plan/);
-    assert.match(approveSection, /agent_output\(session, full=true\)/);
+    assert.match(approveSection, /agent_output\(ocaSessionId, full=true\)/);
     assert.match(approveSection, /agent_escalate/);
   });
 

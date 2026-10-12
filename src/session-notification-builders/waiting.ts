@@ -146,8 +146,8 @@ export function buildWaitingForInputPayload(args: {
   if (isPlanApproval) {
     const resolvedMode = resolvedPlanApprovalMode;
     const header = `[${session.name}] Plan v${actionableVersion ?? "?"} ready. ID: ${session.id}`;
-    const approveCall = `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line: why it is safe>')`;
-    const escalateCall = `agent_escalate(session='${session.id}', kind='plan', summary='<why, what changes, risk>')`;
+    const approveCall = `agent_respond(ocaSessionId='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<one line: why it is safe>')`;
+    const escalateCall = `agent_escalate(ocaSessionId='${session.id}', kind='plan', summary='<why, what changes, risk>')`;
     if (resolvedMode === "delegate") {
       return {
         label: "plan-approval",
@@ -157,12 +157,12 @@ export function buildWaitingForInputPayload(args: {
         wakeMessage: [
           `${header} You review it (planApproval: delegate).`,
           ...(originThreadLine ? [originThreadLine] : []),
-          `Preview (truncated; read the whole plan first: agent_output(session='${session.id}', full=true)):`,
+          `Preview (truncated; read the whole plan first: agent_output(ocaSessionId='${session.id}', full=true)):`,
           fenceAgentOutput(preview, "plan preview"),
           `Then decide:`,
           `- Approve when it matches the task, is low risk and leaves no design question open: ${approveCall}. The user sees your rationale in the approval notice; no other message is needed.`,
           `- Escalate when it deletes data, touches credentials, CI/release or production, grows the scope, or you are unsure: ${escalateCall}, then wait for the user.`,
-          `- Ask for changes: agent_respond(session='${session.id}', message='<feedback>').`,
+          `- Ask for changes: agent_respond(ocaSessionId='${session.id}', message='<feedback>').`,
         ].join("\n"),
       };
     }
@@ -175,7 +175,7 @@ export function buildWaitingForInputPayload(args: {
         planReviewSummary,
         wakeMessage: [
           `${header} It is with the user (planApproval: ask); do not approve it yourself (approve=true is refused).`,
-          `If the user answers in chat, forward their whole message in one call: agent_respond(session='${session.id}', message='<their words>', userInitiated=true).`,
+          `If the user answers in chat, forward their whole message in one call: agent_respond(ocaSessionId='${session.id}', message='<their words>', userInitiated=true).`,
         ].join("\n"),
         buttons: userMessages ? undefined : planApprovalButtons,
       };
@@ -188,7 +188,7 @@ export function buildWaitingForInputPayload(args: {
       wakeMessage: [
         `${header} You may approve it, but only after verifying the plan (planApproval: approve).`,
         ...(originThreadLine ? [originThreadLine] : []),
-        `1. Read it: agent_output(session='${session.id}', full=true).`,
+        `1. Read it: agent_output(ocaSessionId='${session.id}', full=true).`,
         `2. If it deletes or rewrites data or history, touches credentials, secrets, CI/release or production, runs irreversible commands, or goes beyond the task: ${escalateCall}.`,
         `3. Otherwise: ${approveCall}.`,
       ].join("\n"),
@@ -203,7 +203,7 @@ export function buildWaitingForInputPayload(args: {
       ...(originThreadLine ? [originThreadLine] : []),
       `Show the user the question below exactly, without answering or commenting on it:`,
       fenceAgentOutput(preview, "last output"),
-      `Forward their answer: agent_respond(session='${session.id}', message='<their answer>', userInitiated=true).`,
+      `Forward their answer: agent_respond(ocaSessionId='${session.id}', message='<their answer>', userInitiated=true).`,
     ].join("\n"),
     buttons: questionButtons,
   };

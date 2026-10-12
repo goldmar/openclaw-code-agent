@@ -35,7 +35,7 @@ beforeEach(() => {
 describe("executeRespond", () => {
   it("returns an error when the session does not exist", async () => {
     const sm = createStubSessionManager();
-    const result = await executeRespond(sm, { codeAgentSessionId: "missing", message: "hello" });
+    const result = await executeRespond(sm, { session: "missing", message: "hello" });
     assert.equal(result.isError, true);
     assert.match(result.text, /not found/);
   });
@@ -59,7 +59,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "suspended-session", id: "test-id" });
     };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "wake up" });
+    const result = await executeRespond(sm, { session: "test-id", message: "wake up" });
     assert.equal(result.text, "Resume started for session suspended-session [test-id]. Use agent_output to see the response.");
     assert.equal(capturedConfig.resumeSessionId, "harness-idle");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
@@ -86,7 +86,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "worktree-session", id: "test-id" });
     };
 
-    await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    await executeRespond(sm, { session: "test-id", message: "continue" });
     // The repo policy and worktree reuse resolve against the checkout; the worktree path broke the lookup.
     assert.equal(capturedConfig.workdir, "/repo");
     assert.equal(capturedConfig.resumeWorktreeFrom, "test-id");
@@ -117,7 +117,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "resumed", id: "test-id" });
     };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.harness, "codex");
     assert.equal(capturedConfig.originSessionKey, "agent:main:telegram:group:123:topic:42");
@@ -144,7 +144,7 @@ describe("executeRespond", () => {
       capturedConfig = config;
       return createStubSession({ name: "claude-complete", id: "test-id" });
     };
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.resumeSessionId, "harness-done");
   });
@@ -164,7 +164,7 @@ describe("executeRespond", () => {
       configs.push(config);
       return createStubSession({ name: "resumed", id: config.sessionIdOverride });
     };
-    await executeRespond(sm, { codeAgentSessionId: "live-id", message: "continue" });
+    await executeRespond(sm, { session: "live-id", message: "continue" });
     assert.equal(configs[0]?.systemPrompt, "Marker ZEBRA-42.");
 
     (sm as any).store.persisted.set("harness-sys", {
@@ -183,7 +183,7 @@ describe("executeRespond", () => {
       route: { provider: "telegram", target: "-1001234567890" },
     } as any);
     (sm as any).store.idIndex.set("sys-id", "harness-sys");
-    const result = await executeRespond(sm, { codeAgentSessionId: "sys-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "sys-id", message: "continue" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(configs[1]?.systemPrompt, "Marker ZEBRA-43.");
   });
@@ -197,7 +197,7 @@ describe("executeRespond", () => {
       backendRef: undefined,
     });
     const sm = createStubSessionManager({ "test-id": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
     assert.match(result.text, /Resume unavailable/);
     assert.match(result.text, /completed/);
@@ -221,7 +221,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "codex-complete", id: "test-id" });
     };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue implementation" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue implementation" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.resumeSessionId, "thread-codex-complete");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
@@ -240,7 +240,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
     sm.launchSession = () => { throw new Error("spawn failed"); };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
     assert.match(result.text, /Resume unavailable/);
     assert.match(result.text, /missing_backend_state/);
@@ -275,7 +275,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "dead-plan",
+      session: "dead-plan",
       message: "Approved. Go ahead.",
       approve: true,
     });
@@ -322,7 +322,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "plan-session-typed", id: "dead-plan-typed" });
     };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "dead-plan-typed", message: "Approve", userInitiated: true });
+    const result = await executeRespond(sm, { session: "dead-plan-typed", message: "Approve", userInitiated: true });
 
     assert.match(result.text, /Plan approved for session/);
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
@@ -374,7 +374,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "SPhNrL4Q",
+      session: "SPhNrL4Q",
       message: "Approved. Go ahead.",
       approve: true,
       approvalRationale: "The plan is in scope.",
@@ -418,7 +418,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "dead-plan-off",
+      session: "dead-plan-off",
       message: "Approved. Go ahead.",
       approve: true,
     });
@@ -455,7 +455,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Optimize first for accurate names and following best practices.",
       userInitiated: true,
       interrupt: true,
@@ -481,8 +481,8 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "follow-up": running, "answer": answering });
     (sm as any).notifySession = (_session: unknown, text: string) => { notifications.push(text); };
 
-    await executeRespond(sm, { codeAgentSessionId: "follow-up", message: "Also add tests.", userInitiated: true });
-    await executeRespond(sm, { codeAgentSessionId: "answer", message: "the second one", userInitiated: true });
+    await executeRespond(sm, { session: "follow-up", message: "Also add tests.", userInitiated: true });
+    await executeRespond(sm, { session: "answer", message: "the second one", userInitiated: true });
 
     assert.deepEqual(notifications, [], "4.x posted ↪️ [name] \"<the user's words>\" for each");
   });
@@ -500,7 +500,7 @@ describe("executeRespond", () => {
       submitPendingInputText: async () => true,
     });
     const result = await executeRespond(createStubSessionManager({ "test-id": session }), {
-      codeAgentSessionId: "test-id", message: "first answer", userInitiated: true,
+      session: "test-id", message: "first answer", userInitiated: true,
     });
 
     assert.match(result.text, /question answered.*more input is required/i);
@@ -540,7 +540,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "dead-plan-shutdown",
+      session: "dead-plan-shutdown",
       message: "Approved. Go ahead.",
       approve: true,
       approvalRationale: "The plan stays in bounds and only touches low-risk files.",
@@ -588,7 +588,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "dead-plan-revise",
+      session: "dead-plan-revise",
       message: "Please revise the plan to avoid touching migrations.",
     });
 
@@ -607,7 +607,7 @@ describe("executeRespond", () => {
     });
     const sm = createStubSessionManager({ "test-id": session });
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "hello" });
+    const result = await executeRespond(sm, { session: "test-id", message: "hello" });
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Message sent to session/);
     assert.doesNotMatch(result.text, /steered/);
@@ -616,7 +616,7 @@ describe("executeRespond", () => {
   it("tells the user when a message goes to a session with a pending plan as plan feedback", async () => {
     const plain = createStubSession({ status: "running", lifecycle: "active", name: "plain", sendMessage: async () => {} });
     assert.equal(
-      (await executeRespond(createStubSessionManager({ "test-id": plain }), { codeAgentSessionId: "test-id", message: "hello" })).userText,
+      (await executeRespond(createStubSessionManager({ "test-id": plain }), { session: "test-id", message: "hello" })).userText,
       "💬 [plain] Message sent.",
     );
 
@@ -628,14 +628,14 @@ describe("executeRespond", () => {
       // The send moves the plan state on; the reply still names what the message was.
       sendMessage: async () => { planned.pendingPlanApproval = false; },
     });
-    const result = await executeRespond(createStubSessionManager({ "test-id": planned }), { codeAgentSessionId: "test-id", message: "use sqlite instead" });
+    const result = await executeRespond(createStubSessionManager({ "test-id": planned }), { session: "test-id", message: "use sqlite instead" });
     assert.equal(result.isError, undefined);
     assert.match(result.text, /sending as revision feedback/);
     assert.equal(result.userText, "💬 [planned] Message sent as plan feedback.");
 
     const revising = createStubSession({ status: "running", lifecycle: "active", name: "revising", approvalState: "changes_requested", sendMessage: async () => {} });
     assert.equal(
-      (await executeRespond(createStubSessionManager({ "test-id": revising }), { codeAgentSessionId: "test-id", message: "and add tests" })).userText,
+      (await executeRespond(createStubSessionManager({ "test-id": revising }), { session: "test-id", message: "and add tests" })).userText,
       "💬 [revising] Message sent as plan feedback.",
     );
   });
@@ -648,7 +648,7 @@ describe("executeRespond", () => {
     });
     const sm = createStubSessionManager({ "test-id": session });
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "also fix the docs" });
+    const result = await executeRespond(sm, { session: "test-id", message: "also fix the docs" });
     assert.equal(result.isError, undefined);
     assert.match(result.text, /\(steered into the running turn\)/);
   });
@@ -666,7 +666,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approved. Go ahead.",
       approve: true,
       approvalRationale: "The scope matches the request and the change is low risk.",
@@ -694,7 +694,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approve",
       userInitiated: true,
     });
@@ -721,7 +721,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approve",
       userInitiated: true,
     });
@@ -761,14 +761,14 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Revise",
       userInitiated: true,
     });
     // N35: the orchestrator learns, for its next turn, that the user's next message is the change.
     assert.equal(queued.length, 1);
     assert.equal(queued[0]!.label, "plan-revise-requested");
-    assert.match(queued[0]!.text, /Their next message is the requested change: forward it with agent_respond\(session='test-id'/);
+    assert.match(queued[0]!.text, /Their next message is the requested change: forward it with agent_respond\(ocaSessionId='test-id'/);
 
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Reply with the changes you want/);
@@ -797,9 +797,9 @@ describe("executeRespond", () => {
     const queued: string[] = [];
     (sm as any).queueOrchestratorContext = (_ref: string, label: string) => { queued.push(label); return true; };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "revise", userInitiated: true, fromOrchestratorTurn: true });
+    const result = await executeRespond(sm, { session: "test-id", message: "revise", userInitiated: true, fromOrchestratorTurn: true });
     assert.deepEqual(queued, [], "a next-turn note would arrive after the revised plan");
-    assert.match(result.text, /Plan v1 is set for revision\. Forward the user's requested change with agent_respond\(session='test-id'/);
+    assert.match(result.text, /Plan v1 is set for revision\. Forward the user's requested change with agent_respond\(ocaSessionId='test-id'/);
     assert.equal(session.approvalState, "changes_requested");
   });
 
@@ -839,7 +839,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Reject",
       userInitiated,
     });
@@ -879,7 +879,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approved. Go ahead.",
       approve: true,
       approvalRationale: "The scope matches the request and the change is low risk.",
@@ -930,7 +930,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approved. Go ahead.",
       approve: true,
       approvalRationale: "The plan matches topic 28 scope.",
@@ -968,7 +968,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approved because the change is straightforward. Go ahead.",
       approve: true,
     });
@@ -993,7 +993,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "Approved. Go ahead.",
       approve: true,
     });
@@ -1012,7 +1012,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     const result = await executeRespond(sm, {
-      codeAgentSessionId: "test-id",
+      session: "test-id",
       message: "auto",
       userInitiated: false,
     });
@@ -1038,7 +1038,7 @@ describe("executeRespond", () => {
       return createStubSession({ name: "startup-failure", id: "test-id", status: "running" });
     };
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /relaunched fresh/i);
     assert.equal(capturedConfig.prompt, "original prompt");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
@@ -1054,7 +1054,7 @@ describe("executeRespond", () => {
     });
     const sm = createStubSessionManager({ "test-id": session });
 
-    const result = await executeRespond(sm, { codeAgentSessionId: "test-id", message: "continue" });
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
     assert.match(result.text, /Resume unavailable/);
     assert.match(result.text, /missing_backend_state/);
@@ -1090,7 +1090,7 @@ describe("executeRespond", () => {
     (sm as any).__dispatchCalls = [];
     (sm as any).sessions.set(session.id, session);
 
-    const pending = executeRespond(sm, { codeAgentSessionId: session.id, message: "continue" });
+    const pending = executeRespond(sm, { session: session.id, message: "continue" });
     setTimeout(() => {
       harness.pushMessage({ type: "init", session_id: "harness-resume-only" });
     }, 5);
@@ -1150,7 +1150,7 @@ describe("executeRespond", () => {
     (sm as any).__dispatchCalls = [];
     (sm as any).sessions.set(session.id, session);
 
-    const pending = executeRespond(sm, { codeAgentSessionId: session.id, message: "continue" });
+    const pending = executeRespond(sm, { session: session.id, message: "continue" });
     setTimeout(() => {
       harness.pushMessage({
         type: "result",
@@ -1202,7 +1202,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
   it("refuses an orchestrator approve=true and changes nothing", async () => {
     const { session, sent, switched } = liveAskSession();
     const sm = createStubSessionManager({ "ask-plan": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-plan", message: "Approved. Go ahead.", approve: true });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved. Go ahead.", approve: true });
     assert.equal(result.isError, true);
     assert.match(result.text, /reserved for the user/);
     assert.deepEqual(sent, []);
@@ -1212,7 +1212,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
   it("refuses approve=true even when the caller also claims userInitiated", async () => {
     const { session, sent, switched } = liveAskSession();
     const sm = createStubSessionManager({ "ask-plan": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-plan", message: "Approved.", approve: true, userInitiated: true });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true });
     assert.equal(result.isError, true);
     assert.deepEqual(sent, []);
     assert.deepEqual(switched, []);
@@ -1221,7 +1221,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
   it("accepts the Approve button", async () => {
     const { session, switched } = liveAskSession();
     const sm = createStubSessionManager({ "ask-plan": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-plan", message: "Approved.", approve: true, userInitiated: true, userApproval: "button" });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true, userInitiated: true, userApproval: "button" });
     assert.match(result.text, /Plan approved/);
     assert.deepEqual(switched, ["bypassPermissions"]);
   });
@@ -1229,7 +1229,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
   it("accepts the user's typed reply (userInitiated)", async () => {
     const { session, sent, switched } = liveAskSession();
     const sm = createStubSessionManager({ "ask-plan": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-plan", message: "approve", userInitiated: true });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "approve", userInitiated: true });
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Plan approved/);
     assert.deepEqual(switched, ["bypassPermissions"]);
@@ -1257,7 +1257,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
     (sm as any).store.idIndex.set("ask-suspended", "harness-ask");
     let launched = false;
     sm.launchSession = (() => { launched = true; return createStubSession({ id: "ask-suspended" }); }) as any;
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-suspended", message: "Approved.", approve: true });
+    const result = await executeRespond(sm, { session: "ask-suspended", message: "Approved.", approve: true });
     assert.equal(result.isError, true);
     assert.equal(launched, false);
   });
@@ -1265,7 +1265,7 @@ describe("planApproval \"ask\": only the user approves (D2)", () => {
   it("still lets the orchestrator approve in delegate mode", async () => {
     const { session, switched } = liveAskSession({ planApproval: "delegate" });
     const sm = createStubSessionManager({ "ask-plan": session });
-    const result = await executeRespond(sm, { codeAgentSessionId: "ask-plan", message: "Approved.", approve: true });
+    const result = await executeRespond(sm, { session: "ask-plan", message: "Approved.", approve: true });
     assert.match(result.text, /Plan approved/);
     assert.deepEqual(switched, ["bypassPermissions"]);
   });

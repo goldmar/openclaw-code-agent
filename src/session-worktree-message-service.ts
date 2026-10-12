@@ -190,8 +190,8 @@ export class SessionWorktreeMessageService {
       wakeMessageOnNotifyFailed: [
         `[${session.name}] Finished on ${branchLine} (${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
         prOffered
-          ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`
-          : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(session='${session.name}', dismiss_session=true).`,
+          ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(ocaSessionId='${session.name}', dismiss_session=true).`
+          : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(ocaSessionId='${session.name}', dismiss_session=true).`,
       ].join("\n"),
     };
   }

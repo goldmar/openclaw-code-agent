@@ -167,7 +167,7 @@ for (const name of BACKEND_NAMES) {
       const turnsBefore = s.backend.turns.length;
 
       // The orchestrator hands the review to the user; the host refuses the buttons.
-      const handedOver = await s.runTool("agent_escalate", { codeAgentSessionId: session.id, kind: "plan", summary: "Touches the schema; please confirm." });
+      const handedOver = await s.runTool("agent_escalate", { ocaSessionId: session.id, kind: "plan", summary: "Touches the schema; please confirm." });
       assert.match(handedOver, /Canonical plan approval prompt queued/);
       const fallback = await s.waitForMessage(/buttons could not be delivered/);
       assert.equal(fallback.buttons.length, 0);

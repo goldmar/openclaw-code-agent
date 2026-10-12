@@ -57,8 +57,8 @@ describe("session-notification-builder", () => {
     assert.equal(payload.label, "plan-approval");
     assert.doesNotMatch(payload.wakeMessage, /AUTO-APPROVE|Approve it now/);
     assert.match(payload.wakeMessage, /only after verifying the plan/);
-    assert.match(payload.wakeMessage, /agent_output\(session='session-approve', full=true\)/);
-    assert.match(payload.wakeMessage, /agent_escalate\(session='session-approve', kind='plan'/);
+    assert.match(payload.wakeMessage, /agent_output\(ocaSessionId='session-approve', full=true\)/);
+    assert.match(payload.wakeMessage, /agent_escalate\(ocaSessionId='session-approve', kind='plan'/);
     assert.match(payload.wakeMessage, /approval_rationale=/);
   });
 
@@ -463,11 +463,11 @@ describe("session-notification-builder", () => {
 
     assert.equal(payload.userMessage, undefined);
     assert.match(payload.wakeMessage, /You review it \(planApproval: delegate\)/);
-    assert.match(payload.wakeMessage, /read the whole plan first: agent_output\(session='session-delegate', full=true\)/);
-    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<one line: why it is safe>'\)/);
+    assert.match(payload.wakeMessage, /read the whole plan first: agent_output\(ocaSessionId='session-delegate', full=true\)/);
+    assert.match(payload.wakeMessage, /agent_respond\(ocaSessionId='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<one line: why it is safe>'\)/);
     // N36: the rationale is shown to the user, so no separate explanation is requested.
     assert.match(payload.wakeMessage, /The user sees your rationale in the approval notice; no other message is needed/);
-    assert.match(payload.wakeMessage, /agent_escalate\(session='session-delegate', kind='plan', summary='<why, what changes, risk>'\), then wait for the user/);
+    assert.match(payload.wakeMessage, /agent_escalate\(ocaSessionId='session-delegate', kind='plan', summary='<why, what changes, risk>'\), then wait for the user/);
   });
 
   it("suppresses extra ask-mode plan summaries once a user-visible prompt is proven", () => {
@@ -663,7 +663,7 @@ describe("session-notification-builder", () => {
       worktreeAutoCleaned: false,
     });
 
-    assert.match(payload.wakeMessage, /agent_respond\(session='session-2'/);
+    assert.match(payload.wakeMessage, /agent_respond\(ocaSessionId='session-2'/);
     assert.match(payload.wakeMessage, /agent_launch\(resume_session_id='session-2', fork_session=true/);
     assert.match(payload.wakeMessage, /⚠️ Approval: the session implemented changes without the required plan approval/);
   });
@@ -685,10 +685,10 @@ describe("session-notification-builder", () => {
     });
 
     assert.match(message, /Finished on agent\/feature-session → main/);
-    assert.match(message, /agent_output\(session='session-3', full=true\)/);
+    assert.match(message, /agent_output\(ocaSessionId='session-3', full=true\)/);
     assert.match(message, /Do not call agent_pr yourself/);
-    assert.match(message, /agent_merge\(session='feature-session', summary=/);
-    assert.match(message, /agent_escalate\(session='feature-session', kind='worktree'/);
+    assert.match(message, /agent_merge\(ocaSessionId='feature-session', summary=/);
+    assert.match(message, /agent_escalate\(ocaSessionId='feature-session', kind='worktree'/);
     assert.doesNotMatch(message, /originRoute/);
   });
 
@@ -727,7 +727,7 @@ describe("session-notification-builder", () => {
     assert.match(message, /Completed with no branch changes to merge\. Worktree cleaned up\./);
     assert.doesNotMatch(message, /Requested permission mode|approved_then_implemented/);
     assert.match(message, /Output \(end\):/);
-    assert.match(message, /agent_output\(session='session-4', full=true\)/);
+    assert.match(message, /agent_output\(ocaSessionId='session-4', full=true\)/);
     assert.match(message, /Tell the user in one or two sentences what was done/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
     assert.match(message, /Do not repeat the status line/);

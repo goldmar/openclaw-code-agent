@@ -9,7 +9,7 @@ export function sessionToolError(code: SessionToolErrorCode, text: string, targe
       code,
       operationStarted: false,
       ...(targetSelected === undefined ? {} : { targetSelected }),
-      recovery: "Use the original launch receipt or an authorized existing session lookup to select the intended exact OCA ID.",
+      recovery: "Use the original launch receipt or an authorized existing session lookup to select the intended exact OCA ID and pass it as ocaSessionId.",
     },
   };
 }

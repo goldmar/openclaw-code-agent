@@ -49,8 +49,8 @@ describe("agent_session_action tool (B12, B13)", () => {
       }),
     } as any);
     const tool = makeAgentSessionActionTool();
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "fix-auth", action: "compact" })), /Context compaction queued for session fix-auth \[s1\]/);
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "fix-auth", action: "review" })), /Code review against main queued/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "fix-auth", action: "compact" })), /Context compaction queued for session fix-auth \[s1\]/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "fix-auth", action: "review" })), /Code review against main queued/);
     assert.deepEqual(requested, [
       { kind: "compact" },
       { kind: "review", target: { type: "baseBranch", branch: "main" } },
@@ -62,7 +62,7 @@ describe("agent_session_action tool (B12, B13)", () => {
     setSessionManager({
       resolve: () => ({ id: "s2", name: "done", status: "completed", requestThreadAction: () => { requested += 1; } }),
     } as any);
-    const result = await makeAgentSessionActionTool().execute("id", { codeAgentSessionId: "done", action: "review" }) as any;
+    const result = await makeAgentSessionActionTool().execute("id", { ocaSessionId: "done", action: "review" }) as any;
     assert.equal(result.isError, true);
     assert.match(text(result), /is completed, not running, so the review was not queued/);
     assert.doesNotMatch(text(result), /queued for session/);
@@ -76,8 +76,8 @@ describe("agent_session_action tool (B12, B13)", () => {
         : undefined,
     } as any);
     const tool = makeAgentSessionActionTool();
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "claude", action: "compact" })), /does not support the "compact" thread action/);
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "gone", action: "compact" })), /is not active/);
-    assert.match(text(await tool.execute("id", { codeAgentSessionId: "claude", action: "delete" })), /Invalid parameters/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "claude", action: "compact" })), /does not support the "compact" thread action/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "gone", action: "compact" })), /is not active/);
+    assert.match(text(await tool.execute("id", { ocaSessionId: "claude", action: "delete" })), /Invalid parameters/);
   });
 });

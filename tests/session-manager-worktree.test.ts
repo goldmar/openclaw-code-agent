@@ -712,7 +712,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.userMessage, /new-file\.txt/);
       // Buttons that cannot be delivered have no text-only fallback: the orchestrator asks the user instead.
       assert.match(request.wakeMessageOnNotifyFailed ?? "", /the Commit changes \/ Discard buttons could not be shown/);
-      assert.match(request.wakeMessageOnNotifyFailed ?? "", /agent_worktree_cleanup\(session='.+', dismiss_session=true\)/);
+      assert.match(request.wakeMessageOnNotifyFailed ?? "", /agent_worktree_cleanup\(ocaSessionId='.+', dismiss_session=true\)/);
       const persisted = (sm as any).store.persisted.get("h-dirty-completion");
       assert.equal(persisted.lifecycle, "awaiting_worktree_decision");
       assert.equal(persisted.worktreeState, "pending_decision");
@@ -808,8 +808,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.wakeMessage, /originRoute: \{/);
       assert.match(request.wakeMessage, /"target":"-1001234567890"/);
       assert.match(request.wakeMessage, /"threadId":"13832"/);
-      assert.match(request.wakeMessage, /agent_merge\(session='delegate-session', summary=/);
-      assert.match(request.wakeMessage, /agent_escalate\(session='delegate-session', kind='worktree'/);
+      assert.match(request.wakeMessage, /agent_merge\(ocaSessionId='delegate-session', summary=/);
+      assert.match(request.wakeMessage, /agent_escalate\(ocaSessionId='delegate-session', kind='worktree'/);
       assert.match(request.wakeMessage, /Do not call agent_pr yourself/);
       const persisted = (sm as any).store.persisted.get("h-delegate");
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);

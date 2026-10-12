@@ -326,7 +326,7 @@ describe("actual repository goal policies", () => {
         switchPermissionMode: () => { effects++; }, sendMessage: async () => { effects++; return "sent"; },
       });
       (manager as any).sessions.set(session.id, session);
-      const action = executeRespond(manager, { codeAgentSessionId: session.id, message: "Original answer", userInitiated: true,
+      const action = executeRespond(manager, { session: session.id, message: "Original answer", userInitiated: true,
         fromGoalController: boundary === "final", interrupt: boundary === "interrupt", approve: boundary === "interrupt", userApproval: "button" });
       await entered.promise;
       if (boundary === "interrupt") session.planDecisionVersion = 2;
