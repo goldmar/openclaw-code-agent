@@ -167,7 +167,9 @@ jobs:
   # tarball with the npm CLI that ships with Node.js.
   publish-npm:
     name: Publish to npm
-    needs: [verify, tag]
+    # npm must not publish until ClawHub's authoritative wait and exact-artifact
+    # verification both succeed. A failed or pending ClawHub job blocks npm.
+    needs: [verify, tag, publish-clawhub]
     runs-on: ubuntu-latest
     environment: release
     permissions:
