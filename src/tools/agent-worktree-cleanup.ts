@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties } from "./session-reference-params";
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { Type } from "../tool-parameter-schema";
@@ -22,7 +23,11 @@ interface AgentWorktreeCleanupParams {
 }
 
 function isAgentWorktreeCleanupParams(value: unknown): value is AgentWorktreeCleanupParams {
-  return Boolean(value) && typeof value === "object";
+  if (!value || typeof value !== "object") return false;
+  const params = value as Record<string, unknown>;
+  return ["workdir", "base_branch", "ocaSessionId"].every((key) => params[key] === undefined || typeof params[key] === "string")
+    && (params.mode === undefined || ["preview_safe", "clean_safe", "preview_all"].some((mode) => mode === params.mode))
+    && (params.dismiss_session === undefined || typeof params.dismiss_session === "boolean");
 }
 
 export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
@@ -36,16 +41,16 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         description: "clean_safe (default) removes; preview_safe lists what would be removed; preview_all also lists kept worktrees and why",
       })),
       ...sessionReferenceProperties(),
-      dismiss_session: Type.Optional(Type.Boolean({ description: "With ocaSessionId: delete its branch and worktree even if unmerged (cannot be undone)" })),
+      dismiss_session: Type.Optional(Type.BooleanLike({ description: "With ocaSessionId: delete its branch and worktree even if unmerged (cannot be undone)" })),
     }),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
-      const normalized = normalizeSessionReferenceParams(params, false);
+      const normalized = normalizeSessionReferenceParams(rawParams, false);
       if (normalized.ok === false) return normalized.error;
-      params = normalized.params;
-      if (!isAgentWorktreeCleanupParams(params)) {
+      const params = normalizeBooleanParams(normalized.params, ["dismiss_session"], isAgentWorktreeCleanupParams);
+      if (!params) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, base_branch?, mode?, ocaSessionId?, dismiss_session? }." }] };
       }
       // A 4.x dry_run=true call must never silently become a 5.0 clean_safe

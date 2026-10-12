@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { assertBranchName, assertBranchOrRemoteTrackingRef, branchNameValidationError, localBranchRef, targetRepoValidationError } from "../worktree-ref-validation";
 import { repoHookGitArgs } from "../git-hooks";
@@ -34,7 +35,9 @@ interface AgentPrParams {
 function isAgentPrParams(value: unknown): value is AgentPrParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.ocaSessionId === "string";
+  return typeof params.ocaSessionId === "string"
+    && ["title", "body", "summary", "base_branch", "target_repo"].every((key) => params[key] === undefined || typeof params[key] === "string")
+    && ["update_metadata", "force_new"].every((key) => params[key] === undefined || typeof params[key] === "boolean");
 }
 
 type AgentPrExecuteResult = {
@@ -426,13 +429,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       ...sessionReferenceProperties(),
       title: Type.Optional(Type.String({ description: "Default: generated" })),
       body: Type.Optional(Type.String({ description: "Default: generated. On an open PR, replaces the body." })),
-      update_metadata: Type.Optional(Type.Boolean({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
+      update_metadata: Type.Optional(Type.BooleanLike({ description: "Open PR: regenerate title and body (default: only OCA-generated ones)" })),
       base_branch: Type.Optional(Type.String({ description: "Base for a new PR. Default: the session's recorded base (worktree_base_branch at launch), else the detected default branch. An existing PR keeps its own base" })),
-      force_new: Type.Optional(Type.Boolean({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
+      force_new: Type.Optional(Type.BooleanLike({ description: "Open a new PR: fail instead of updating an open one; replaces one closed without merging" })),
       target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
     }, requiredSessionReference),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
@@ -440,10 +443,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // shared reference while a merge or PR is still running, and the outcome
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
-      const normalized = normalizeSessionReferenceParams(params);
+      const normalized = normalizeSessionReferenceParams(rawParams);
       if (normalized.ok === false) return { ...normalized.error, meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      params = normalized.params;
-      if (!isAgentPrParams(params)) {
+      const params = normalizeBooleanParams(normalized.params, ["update_metadata", "force_new"], isAgentPrParams);
+      if (!params) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { ocaSessionId, title?, body?, update_metadata?, base_branch?, force_new?, target_repo?, summary? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 

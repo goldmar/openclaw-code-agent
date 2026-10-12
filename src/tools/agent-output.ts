@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
@@ -27,16 +28,16 @@ export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
     parameters: Type.Object({
       ...sessionReferenceProperties(),
       lines: Type.Optional(Type.Number({ description: "Default 50" })),
-      full: Type.Optional(Type.Boolean()),
+      full: Type.Optional(Type.BooleanLike()),
     }, requiredSessionReference),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
-      const normalized = normalizeSessionReferenceParams(params);
+      const normalized = normalizeSessionReferenceParams(rawParams);
       if (normalized.ok === false) return normalized.error;
-      params = normalized.params;
-      if (!isAgentOutputParams(params)) {
+      const params = normalizeBooleanParams(normalized.params, ["full"], isAgentOutputParams);
+      if (!params) {
         return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { ocaSessionId, lines?, full? }.");
       }
       const sm = sessionManager;

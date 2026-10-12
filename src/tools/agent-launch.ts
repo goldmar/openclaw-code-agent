@@ -1,5 +1,6 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { branchNameValidationError, targetRepoValidationError } from "../worktree-ref-validation";
-import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
+import { REASONING_EFFORTS } from "../types";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
@@ -32,7 +33,14 @@ function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
   if (!value || typeof value !== "object") return false;
   const p = value as Record<string, unknown>;
   return typeof p.prompt === "string"
-    && (p.reasoning_effort === undefined || REASONING_EFFORTS.includes(p.reasoning_effort as ReasoningEffort));
+    && ["name", "workdir", "model", "system_prompt", "resume_session_id", "harness", "worktree_base_branch", "worktree_pr_target_repo", "agentId"].every((key) => p[key] === undefined || typeof p[key] === "string")
+    && (p.allowed_tools === undefined || (Array.isArray(p.allowed_tools) && p.allowed_tools.every((tool) => typeof tool === "string")))
+    && (p.reasoning_effort === undefined || REASONING_EFFORTS.some((effort) => effort === p.reasoning_effort))
+    && ["fork_session", "force_new_session"].every((key) => p[key] === undefined || typeof p[key] === "boolean")
+    && (p.rewind_turns === undefined || typeof p.rewind_turns === "number")
+    && (p.permission_mode === undefined || ["default", "plan", "bypassPermissions"].some((mode) => mode === p.permission_mode))
+    && (p.plan_approval === undefined || ["ask", "delegate", "approve"].some((mode) => mode === p.plan_approval))
+    && (p.worktree_strategy === undefined || ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"].some((strategy) => strategy === p.worktree_strategy));
 }
 
 
@@ -112,11 +120,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       system_prompt: Type.Optional(Type.String({ description: "Extra system prompt" })),
       allowed_tools: Type.Optional(Type.Array(Type.String())),
       resume_session_id: Type.Optional(Type.String({ description: "Session to continue (or fork with fork_session=true)" })),
-      fork_session: Type.Optional(Type.Boolean({ description: "With resume_session_id: start a new session from its context" })),
+      fork_session: Type.Optional(Type.BooleanLike({ description: "With resume_session_id: start a new session from its context" })),
       rewind_turns: Type.Optional(
         Type.Number({ minimum: 1, description: "With resume_session_id: drop the last N turns first (Codex, Claude Code; OpenCode only with fork_session=true, which keeps the original). Files are not reverted." }),
       ),
-      force_new_session: Type.Optional(Type.Boolean({ description: "Start a new session even if a linked one could be resumed" })),
+      force_new_session: Type.Optional(Type.BooleanLike({ description: "Start a new session even if a linked one could be resumed" })),
       permission_mode: Type.Optional(
         Type.StringEnum(["default", "plan", "bypassPermissions"],
           { description: "'plan': the agent plans first; work starts after approval. 'default': no plan gate; the harness's own permission rules apply (Claude Code allows tools, Codex follows its sandbox settings, OpenCode asks). 'bypassPermissions': no gate, no prompts. Default: plugin config (plan)." },
@@ -136,11 +144,12 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       worktree_base_branch: Type.Optional(Type.String({ description: "Branch to merge or PR into (default: detected)" })),
       worktree_pr_target_repo: Type.Optional(Type.String({ description: "owner/repo for cross-fork PRs (default: the upstream remote, else origin)" })),
     }),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
-      if (!isAgentLaunchParams(params)) {
+      const params = normalizeBooleanParams(rawParams, ["fork_session", "force_new_session"], isAgentLaunchParams);
+      if (!params) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected at least { prompt }." }] };
       }
 

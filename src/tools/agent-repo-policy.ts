@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
@@ -10,6 +11,14 @@ interface AgentRepoPolicyParams {
   reset?: boolean;
   list?: boolean;
   cleanup?: boolean;
+}
+
+function isAgentRepoPolicyParams(value: unknown): value is AgentRepoPolicyParams {
+  if (!value || typeof value !== "object") return false;
+  const params = value as Record<string, unknown>;
+  return (params.workdir === undefined || typeof params.workdir === "string")
+    && (params.policy === undefined || isPolicy(params.policy))
+    && ["reset", "list", "cleanup"].every((key) => params[key] === undefined || typeof params[key] === "boolean");
 }
 
 function isPolicy(value: unknown): value is RepoIntegrationPolicy {
@@ -67,15 +76,16 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
     parameters: Type.Object({
       workdir: Type.Optional(Type.String({ description: "Default: the current workspace. reset also accepts a stored path." })),
       policy: Type.Optional(Type.StringEnum(["pr-required", "pr-allowed", "never-pr", "manual"])),
-      reset: Type.Optional(Type.Boolean()),
-      list: Type.Optional(Type.Boolean({ description: "All stored policies" })),
-      cleanup: Type.Optional(Type.Boolean({ description: "Remove policies of repositories that no longer exist" })),
+      reset: Type.Optional(Type.BooleanLike()),
+      list: Type.Optional(Type.BooleanLike({ description: "All stored policies" })),
+      cleanup: Type.Optional(Type.BooleanLike({ description: "Remove policies of repositories that no longer exist" })),
     }),
     async execute(_id: string, params: AgentRepoPolicyParams | unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
-      const input = params && typeof params === "object" ? params as AgentRepoPolicyParams : {};
+      const input = normalizeBooleanParams(params ?? {}, ["reset", "list", "cleanup"], isAgentRepoPolicyParams);
+      if (!input) return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { workdir?, policy?, reset?, list?, cleanup? }." }] };
       if (input.cleanup === true) {
         const removed = await sessionManager.cleanupRepoPolicies();
         const text = removed.length === 0

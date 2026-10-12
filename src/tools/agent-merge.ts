@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { branchNameValidationError } from "../worktree-ref-validation";
@@ -141,11 +142,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           description: "merge (default): rebase onto base, then fast-forward. squash: one commit.",
         }),
       ),
-      push: Type.Optional(Type.Boolean({ description: "Push the base branch afterwards (default false)" })),
-      delete_branch: Type.Optional(Type.Boolean({ description: "Default true" })),
+      push: Type.Optional(Type.BooleanLike({ description: "Push the base branch afterwards (default false)" })),
+      delete_branch: Type.Optional(Type.BooleanLike({ description: "Default true" })),
       summary: Type.Optional(Type.String({ description: "One or two lines for the user on what changed; shown under the outcome line. Then no follow-up summary is requested from you." })),
     }, requiredSessionReference),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
@@ -153,10 +154,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // shared reference while a merge or PR is still running, and the outcome
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
-      const normalized = normalizeSessionReferenceParams(params);
+      const normalized = normalizeSessionReferenceParams(rawParams);
       if (normalized.ok === false) return normalized.error;
-      params = normalized.params;
-      if (!isAgentMergeParams(params)) {
+      const params = normalizeBooleanParams(normalized.params, ["push", "delete_branch"], isAgentMergeParams);
+      if (!params) {
         return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { ocaSessionId, base_branch?, strategy?, push?, delete_branch?, summary? }.");
       }
 
