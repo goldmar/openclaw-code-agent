@@ -1,3 +1,4 @@
+import "./test-env";
 /**
  * Regression test for the `session` → `codeAgentSessionId` rename
  * (issue #504 in goldmar/openclaw-code-agent).
