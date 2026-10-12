@@ -24,7 +24,7 @@ export async function resolveGoalRepositoryIdentity(workdir: string): Promise<Go
       });
     } catch (error) {
       const failure = error as CommandError;
-      if (failure.code !== 128 || !/^fatal: not a git repository(?: \(or any of the parent directories\))?:/m.test(failure.stderr ?? "")) {
+      if (failure.code !== 128 || !/^fatal: not a git repository(?: \(or any of the parent directories\)| \(or any parent up to mount point [^)]*\)):?/m.test(failure.stderr ?? "")) {
         throw new Error(IDENTITY_ERROR);
       }
       // A broken/unreadable/nested .git marker must never become the default.

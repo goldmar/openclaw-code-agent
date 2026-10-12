@@ -179,6 +179,26 @@ describe("actual repository goal policies", () => {
     await assert.rejects(resolveGoalVerification(plain), /Cannot verify/);
   });
 
+  for (const variant of [
+    "legacy",
+    "modern",
+  ] as const) {
+    it(`accepts a clean non-repository directory when Git reports the ${variant} not-a-repository wording`, async () => {
+      const plain = join(dir, `plain-${variant}`); mkdirSync(plain);
+      setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["default"] } });
+      const bin = join(dir, `bin-${variant}`); mkdirSync(bin);
+      process.env.PATH = `${bin}:${savedEnv.PATH}`;
+      const body = variant === "legacy"
+        ? "echo 'fatal: not a git repository (or any of the parent directories): .' >&2; exit 128"
+        : "printf 'fatal: not a git repository (or any parent up to mount point /)\\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\\n' >&2; exit 128";
+      writeFileSync(join(bin, "git"), `#!/bin/sh\n${body}\n`); chmodSync(join(bin, "git"), 0o755);
+      const binding = (await resolveGoalVerification(plain)).binding;
+      assert.equal(binding.identity.kind, "directory", "Clean non-repository dir must resolve to a directory identity");
+      assert.equal(binding.source, "default");
+      assert.deepEqual(binding.requiredCommands, ["default"]);
+    });
+  }
+
   it("preserves selected-policy authority across unrelated B changes, including restart-style fresh validation", async () => {
     setPluginConfig(policies()); const { task, authority } = await admitted(repoA, ["extra"]), binding = structuredClone(task.goalVerificationBinding);
     setPluginConfig(policies(undefined, ["different B"]));
