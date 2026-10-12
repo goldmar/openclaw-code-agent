@@ -5,16 +5,16 @@
 For the current candidate, run:
 
 ```sh
-node --import tsx scripts/e2e/oca-session-reference-transport.mjs
+pnpm test:file tests/session-reference-transport.test.ts
 ```
 
-This opt-in probe loads the actual pinned OpenClaw package and the candidate's
+This isolated test loads the actual pinned OpenClaw package and the candidate's
 response tool. A synthetic manager holds an older intended session and a newer
 unrelated one. The published `tool_call` control dispatches canonical
 `ocaSessionId`, legacy `session`, and matching dual inputs; conflicts, unknown
 references, and unresolved masked references cause no sends. Separate transcript
 rendering checks distinguish display masking from unchanged original/dispatch
-arguments. The summary records the candidate SHA, host version, and compiled
+arguments. The summary records the candidate SHA, tracked-clean status, host version, and compiled
 module hashes. Internal host export discovery fails closed on unsupported shapes.
 
 This is synthetic dispatcher evidence, not a production Gateway, model, native
