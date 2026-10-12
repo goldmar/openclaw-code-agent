@@ -206,7 +206,7 @@ describe("OCA plugin workflow integration coverage", () => {
       (sm as any).sessions.set(session.id, session);
 
       const revise = await executeRespond(sm, {
-        session: session.id,
+        codeAgentSessionId: session.id,
         message: "Revise",
         userInitiated: true,
       });
@@ -216,7 +216,7 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.equal(session.lifecycle, "awaiting_user_input");
 
       const staleApproval = await executeRespond(sm, {
-        session: session.id,
+        codeAgentSessionId: session.id,
         message: "Approved. Go ahead.",
         approve: true,
         userInitiated: true,
@@ -238,7 +238,7 @@ describe("OCA plugin workflow integration coverage", () => {
       };
 
       const approved = await executeRespond(sm, {
-        session: session.id,
+        codeAgentSessionId: session.id,
         message: "Approved. Go ahead.",
         approve: true,
         userInitiated: true,
@@ -265,7 +265,7 @@ describe("OCA plugin workflow integration coverage", () => {
       (sm as any).sessions.set(rejectSession.id, rejectSession);
 
       const rejected = await executeRespond(sm, {
-        session: rejectSession.id,
+        codeAgentSessionId: rejectSession.id,
         message: "Reject",
         userInitiated: true,
       });

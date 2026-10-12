@@ -6,7 +6,7 @@ import type { OpenClawPluginToolContext, ThreadAction } from "../types";
 type ReviewTargetParam = "uncommitted" | "base_branch" | "commit" | "custom";
 
 interface AgentSessionActionParams {
-  session: string;
+  codeAgentSessionId: string;
   action: "compact" | "review";
   review_target?: ReviewTargetParam;
   base_branch?: string;
@@ -19,7 +19,7 @@ const REVIEW_TARGETS: readonly ReviewTargetParam[] = ["uncommitted", "base_branc
 function isParams(value: unknown): value is AgentSessionActionParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  if (typeof params.session !== "string" || !params.session.trim()) return false;
+  if (typeof params.codeAgentSessionId !== "string" || !params.codeAgentSessionId.trim()) return false;
   if (params.action !== "compact" && params.action !== "review") return false;
   if (params.review_target !== undefined && !REVIEW_TARGETS.includes(params.review_target as ReviewTargetParam)) return false;
   for (const key of ["base_branch", "commit_sha", "instructions"] as const) {
@@ -32,7 +32,7 @@ type ReviewSession = Pick<Session, "worktreeBranch" | "worktreeBaseBranch" | "wo
 
 /** Resolve the review target, defaulting worktree sessions to their branch diff. */
 export function resolveReviewTarget(
-  params: Omit<AgentSessionActionParams, "session" | "action">,
+  params: Omit<AgentSessionActionParams, "codeAgentSessionId" | "action">,
   session: ReviewSession,
 ): { kind: "ok"; action: ThreadAction } | { kind: "error"; error: string } {
   const defaultBase = session.worktreeBranch
@@ -79,7 +79,7 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
     description:
       "Codex only, running session: 'compact' frees context; 'review' runs Codex's code reviewer in the session (worktree sessions: branch vs base; else uncommitted changes). Queued behind a running turn; read results with agent_output.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID" }),
+      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
       action: Type.StringEnum(["compact", "review"]),
       review_target: Type.Optional(Type.StringEnum(["uncommitted", "base_branch", "commit", "custom"],
       )),
@@ -92,11 +92,11 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
       if (!isParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, action: 'compact' | 'review', review_target?, base_branch?, commit_sha?, instructions? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { codeAgentSessionId, action: 'compact' | 'review', review_target?, base_branch?, commit_sha?, instructions? }." }] };
       }
-      const session = sessionManager.resolve(params.session);
+      const session = sessionManager.resolve(params.codeAgentSessionId);
       if (!session) {
-        return { isError: true, content: [{ type: "text", text: `Error: Session "${params.session}" is not active. Resume it with agent_respond first.` }] };
+        return { isError: true, content: [{ type: "text", text: `Error: Session "${params.codeAgentSessionId}" is not active. Resume it with agent_respond first.` }] };
       }
       // A finished session has no live backend; an action would never run.
       if (session.status !== "running") {

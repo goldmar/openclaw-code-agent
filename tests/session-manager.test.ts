@@ -2376,11 +2376,11 @@ describe("SessionManager resumed launch routing", () => {
           if (args[0].sessionIdOverride === row.sessionId) queuedResolve();
           return result;
         });
-        const approving = executeRespond(sm, { session: row.sessionId!, message: "Approve", userInitiated: true });
+        const approving = executeRespond(sm, { codeAgentSessionId: row.sessionId!, message: "Approve", userInitiated: true });
         try {
           await (boundary === "queue" ? queued : started);
           const changed = await executeRespond(sm, {
-            session: row.sessionId!, message: decision, userInitiated: true, fromOrchestratorTurn: true,
+            codeAgentSessionId: row.sessionId!, message: decision, userInitiated: true, fromOrchestratorTurn: true,
           });
           assert.notEqual(changed.isError, true);
           releasePolicy();

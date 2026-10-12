@@ -134,17 +134,17 @@ function createReal(): Real {
   const mergeTool = (() => ({
     execute: async (_id: string, params: { session: string }) => {
       await Promise.resolve();
-      actions.push({ sessionId: params.session, kind: "worktree-merge" });
-      const success = outcome(params.session);
-      if (success) persisted.get(params.session)!.worktreeMerged = true;
+      actions.push({ sessionId: params.codeAgentSessionId, kind: "worktree-merge" });
+      const success = outcome(params.codeAgentSessionId);
+      if (success) persisted.get(params.codeAgentSessionId)!.worktreeMerged = true;
       return toolResult(success);
     },
   })) as unknown as typeof makeAgentMergeTool;
   const prTool = (() => ({
     execute: async (_id: string, params: { session: string }) => {
       await Promise.resolve();
-      actions.push({ sessionId: params.session, kind: "worktree-create-pr" });
-      return toolResult(outcome(params.session));
+      actions.push({ sessionId: params.codeAgentSessionId, kind: "worktree-create-pr" });
+      return toolResult(outcome(params.codeAgentSessionId));
     },
   })) as unknown as typeof makeAgentPrTool;
 

@@ -184,7 +184,7 @@ async function setup(options: {
     persisted: () => sm.getPersistedSession(SESSION_ID),
     commit,
     async run(params = {}) {
-      return await makeAgentPrTool().execute("call-1", { session: SESSION_NAME, ...params }) as AgentPrResult;
+      return await makeAgentPrTool().execute("call-1", { codeAgentSessionId: SESSION_NAME, ...params }) as AgentPrResult;
     },
   };
 }
@@ -584,7 +584,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       assert.equal(localRefs(f), refsBefore);
 
       // The user's button then updates the open PR.
-      const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as AgentPrResult;
+      const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME }) as AgentPrResult;
       assert.equal(approved.meta.success, true, textOf(approved));
       assert.equal(f.persisted()?.worktreePrUrl, open.url);
       assert.notEqual(f.gh.remoteHead(f.branch), "");
@@ -654,7 +654,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     assert.equal(asked.count(), 1);
     assert.notEqual(result.meta.state, "merged");
     assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
-    const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as AgentPrResult;
+    const approved = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME }) as AgentPrResult;
     assert.equal(approved.meta.success, true, textOf(approved));
     assert.equal(f.persisted()?.worktreePrUrl, open.url);
   });
@@ -676,7 +676,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       assert.equal(f.gh.remoteHead(f.branch), "", "nothing was pushed");
       assert.equal(f.gh.ghCalls("create").length, 0);
 
-      const merge = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      const merge = await makeAgentMergeTool().execute("call-merge", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
       assert.equal(asked.count(), 2);
       assert.match(merge.content.map((entry) => entry.text).join("\n"), /^❌ Not merged: /);
       assert.equal(git(f.gh.repoDir, "rev-parse", "main"), mainBefore, "nothing was merged");
@@ -1095,7 +1095,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       assert.equal(await resolveLandingBaseBranch({ worktreeBaseBranch: "develop" }, f.gh.repoDir), "develop");
       assert.equal(await resolveLandingBaseBranch({ worktreeBaseBranch: "develop" }, f.gh.repoDir, "release"), "release");
 
-      const status = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      const status = await makeAgentWorktreeStatusTool().execute("call-status", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
       const statusText = status.content.map((entry) => entry.text).join("\n");
       assert.ok(statusText.includes(`${f.branch} → main`), statusText);
       assert.match(statusText, /PR base:\s+release/, statusText);
@@ -1103,11 +1103,11 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       // a lifecycle base rewritten by something else is never shown as the PR's.
       assert.equal(f.persisted()?.worktreePrBaseBranch, "release");
       f.sm.updatePersistedSession(SESSION_ID, { worktreeLifecycle: { ...f.persisted()!.worktreeLifecycle!, baseBranch: "main" } });
-      const afterRewrite = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      const afterRewrite = await makeAgentWorktreeStatusTool().execute("call-status", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
       assert.match(afterRewrite.content.map((entry) => entry.text).join("\n"), /PR base:\s+release/);
       // A row from before the field existed shows no PR base rather than a guess.
       f.sm.updatePersistedSession(SESSION_ID, { worktreePrBaseBranch: undefined, worktreeLifecycle: { ...f.persisted()!.worktreeLifecycle!, baseBranch: "release" } });
-      const oldRow = await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      const oldRow = await makeAgentWorktreeStatusTool().execute("call-status", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
       assert.doesNotMatch(oldRow.content.map((entry) => entry.text).join("\n"), /PR base:/);
       f.sm.updatePersistedSession(SESSION_ID, { worktreePrBaseBranch: "release" });
       // The recorded URL is not this branch's PR: the PR shown is the one found by
@@ -1115,14 +1115,14 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
       const ownPrUrl = f.persisted()!.worktreePrUrl!;
       const other = f.gh.seedPr({ headRefName: "another-branch", state: "OPEN", baseRefName: "hotfix" });
       f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: other.url, worktreePrBaseBranch: "hotfix" });
-      const foundByBranch = (await makeAgentWorktreeStatusTool().execute("call-status", { session: SESSION_NAME }) as { content: Array<{ text: string }> })
+      const foundByBranch = (await makeAgentWorktreeStatusTool().execute("call-status", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> })
         .content.map((entry) => entry.text).join("\n");
       assert.ok(foundByBranch.includes(ownPrUrl), foundByBranch);
       assert.doesNotMatch(foundByBranch, /PR base:/);
       f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: ownPrUrl, worktreePrBaseBranch: "release" });
 
       // A bare merge goes to the landing base, as the 🔀 prompt would say.
-      const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+      const merged = await makeAgentMergeTool().execute("call-merge", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
       const text = merged.content.map((entry) => entry.text).join("\n");
       assert.match(text, /Merged: `[^`]+` → `main`/, text);
       assert.equal(git(f.gh.repoDir, "rev-parse", "release"), mainBefore, "the PR's base is untouched");
@@ -1138,7 +1138,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
     await f.sm.setRepoPolicy(f.gh.repoDir, "never-pr");
     const mainBefore = git(f.gh.repoDir, "rev-parse", "main");
 
-    const merged = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    const merged = await makeAgentMergeTool().execute("call-merge", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
     const text = merged.content.map((entry) => entry.text).join("\n");
     assert.doesNotMatch(text, /Merged: /, text);
     assert.match(text, /gone-branch/, text);
@@ -1147,7 +1147,7 @@ describe("agent_pr execute(): merged, closed, and force_new", () => {
 
     // A session that already merged stays "Already merged" when its base was deleted afterwards.
     f.sm.updatePersistedSession(SESSION_ID, { worktreeMerged: true });
-    const repeat = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    const repeat = await makeAgentMergeTool().execute("call-merge", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
     assert.equal(repeat.content.map((entry) => entry.text).join("\n"), "ℹ️ [pr-flow] Already merged.");
     f.sm.updatePersistedSession(SESSION_ID, { worktreeMerged: undefined });
 
@@ -1644,7 +1644,7 @@ describe("worktree outcome completion", () => {
     cleanups.push(() => { github.dispose(); github = previousGitHub; });
   }
   const runMerge = async (): Promise<string> => {
-    const result = await makeAgentMergeTool().execute("call-merge", { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    const result = await makeAgentMergeTool().execute("call-merge", { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
     return result.content.map((entry) => entry.text).join("\n");
   };
 
@@ -1742,7 +1742,7 @@ describe("worktree outcome completion", () => {
     assert.equal(f.persisted()?.worktreeStrategy, "auto-merge");
     assert.equal(checkmarks(f).length, 0);
 
-    const result = await makeAgentMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME }) as { content: Array<{ text: string }> };
+    const result = await makeAgentMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME }) as { content: Array<{ text: string }> };
     assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — Merged: /);
     assert.equal(result.content[0]?.text.split("\n")[0], f.outcomes[0]?.line, "the tool result starts with the line the user got");
     assert.equal(f.persisted()?.deferredCompletionCycle, undefined, "consumed");
@@ -1759,12 +1759,12 @@ describe("worktree outcome completion", () => {
     assert.equal(f.persisted()?.worktreeStrategy, "auto-pr");
     assert.equal(checkmarks(f).length, 0);
 
-    const opened = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME, title: "Feature", body: "Adds a feature." }) as AgentPrResult;
+    const opened = await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME, title: "Feature", body: "Adds a feature." }) as AgentPrResult;
     assert.deepEqual(opened.meta, { success: true, state: "created", outcomeNotified: true });
     assert.match(f.outcomes[0]?.line ?? "", /^✅ \[pr-flow\] Completed — PR opened: /);
 
     f.commit("more.txt", "more\n", "feat: add more");
-    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME });
+    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME });
     assert.match(f.outcomes[1]?.line ?? "", /^ℹ️ \[pr-flow\] PR updated: /);
     assert.equal(checkmarks(f).length, 1, "exactly one ✅ for the terminal cycle");
   });
@@ -1915,7 +1915,7 @@ describe("worktree outcome completion", () => {
         f.sm["store"].replacePersistedSession({ ...captured, status: "running" });
         return JSON.parse(LLM_METADATA);
       } },
-    }).execute("auto-pr", { session: SESSION_ID });
+    }).execute("auto-pr", { codeAgentSessionId: SESSION_ID });
     assert.equal(result.meta.success, true);
     assert.equal(captured.status, "completed", "the initially captured row is now stale");
     assert.equal(f.persisted()?.status, "running");
@@ -1936,7 +1936,7 @@ describe("worktree outcome completion", () => {
       terminalCompletion: true,
       // The same live session started another turn; its stored row still says completed.
       metadataProvider: { generatePrMetadata: async () => { live.status = "running"; return JSON.parse(LLM_METADATA); } },
-    }).execute("auto-pr", { session: SESSION_ID });
+    }).execute("auto-pr", { codeAgentSessionId: SESSION_ID });
     assert.equal(result.meta.success, true);
     assert.equal(f.persisted()?.status, "completed");
     assert.equal(f.sm.get(SESSION_ID)?.status, "running");
@@ -2074,7 +2074,7 @@ describe("5.2 follow-up evidence", () => {
     assert.equal(f.dispatches.filter((notice) => notice.label === "worktree-merge-ask").length, 1);
     assert.ok(f.persisted()?.deferredCompletionCycle);
     assert.equal(f.gh.remoteHead(f.branch), "");
-    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: SESSION_NAME, title: "Hooks", body: "Hooks." });
+    await makeAgentPrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: SESSION_NAME, title: "Hooks", body: "Hooks." });
     assert.equal(f.outcomes.filter((notice) => notice.line.startsWith("✅")).length, 1);
   });
   it("Task 2.2: pruned merged head still detects newer commits", async () => {

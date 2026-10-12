@@ -5,7 +5,7 @@ import { executeRespond } from "../actions/respond";
 import type { OpenClawPluginToolContext } from "../types";
 
 interface AgentRespondParams {
-  session: string;
+  codeAgentSessionId: string;
   message: string;
   interrupt?: boolean;
   userInitiated?: boolean;
@@ -16,7 +16,7 @@ interface AgentRespondParams {
 function isAgentRespondParams(value: unknown): value is AgentRespondParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string"
+  return typeof params.codeAgentSessionId === "string"
     && typeof params.message === "string"
     && ["interrupt", "userInitiated", "approve"].every((key) => params[key] === undefined || typeof params[key] === "boolean")
     && (params.approval_rationale === undefined || typeof params.approval_rationale === "string");
@@ -29,7 +29,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
     description:
       "Send a message to a session: a follow-up, an answer to its question (option number or label; comma-separated for multi-select), or plan feedback. A stopped, suspended or completed session that still has its conversation is resumed.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID" }),
+      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
       message: Type.String(),
       interrupt: Type.Optional(Type.Boolean({ description: "Stop the current turn first" })),
       userInitiated: Type.Optional(
@@ -47,11 +47,11 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentRespondParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
       }
 
       const result = await executeRespond(sessionManager, {
-        session: params.session,
+        codeAgentSessionId: params.codeAgentSessionId,
         message: params.message,
         interrupt: params.interrupt,
         userInitiated: params.userInitiated,

@@ -940,7 +940,7 @@ export function createCallbackHandler(
             const recoveryMessage = recoveredQuestionAnswerMessage(token);
             if (recoveryMessage && resumableQuestionAnswerTarget(persisted)) {
               const result = await executeRespond(sessionManager, {
-                session: sessionId,
+                codeAgentSessionId: sessionId,
                 message: recoveryMessage,
                 userInitiated: true,
                 // One message: the `💬 … Answer sent … The session resumed.`
@@ -1061,7 +1061,7 @@ export function createCallbackHandler(
         const result = await withPlanDecisionLock(decisionLockKey, tokenId, async () => {
           await clearApprovalPrompt();
           return executeRespond(sessionManager, {
-            session: planToken.sessionId,
+            codeAgentSessionId: planToken.sessionId,
             message: "Approved. Go ahead.",
             approve: true,
             userInitiated: true,
@@ -1202,7 +1202,7 @@ export function createCallbackHandler(
         // Read-only buttons (N47): they keep the message's other buttons and stay
         // usable, so they are neither consumed nor cleared.
         if (token.kind === "view-output") {
-          const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
+          const result = await makeAgentOutputTool().execute("callback", { codeAgentSessionId: sessionId, lines: 50 });
           await replyText(ctx, toolResultText(result));
           return { handled: true };
         }
@@ -1328,7 +1328,7 @@ export function createCallbackHandler(
           }
 
           case "worktree-merge": {
-            const result = await makeMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
+            const result = await makeMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: sessionId });
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
               await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
@@ -1382,14 +1382,14 @@ export function createCallbackHandler(
             // on success; if the PR creation fails the flag remains set so reminders
             // continue until the user tries again.
             let result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
-              session: sessionId,
+              codeAgentSessionId: sessionId,
               // The New PR button, offered after its PR was found closed without merging.
               ...(consumedToken.prForceNew ? { force_new: true } : {}),
             });
             // The PR was reopened or merged since New PR was offered: the press
             // is then a normal PR action (sync the open PR, or record the merge).
             if (consumedToken.prForceNew && toolResultState(result) === "force_new_refused") {
-              result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { session: sessionId });
+              result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { codeAgentSessionId: sessionId });
             }
             const text = toolResultText(result);
             if (toolResultSucceeded(result)) {
@@ -1578,7 +1578,7 @@ export function createCallbackHandler(
               break;
             }
             const result = await executeRespond(sessionManager, {
-              session: sessionId,
+              codeAgentSessionId: sessionId,
               // A resume button may carry its own instruction (for example "commit your changes").
               message: consumedToken.launchPrompt ?? "Continue where you left off.",
               userInitiated: true,

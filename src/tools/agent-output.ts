@@ -5,7 +5,7 @@ import type { OpenClawPluginToolContext } from "../types";
 import { getSessionOutputText } from "../application/session-view";
 
 interface AgentOutputParams {
-  session: string;
+  codeAgentSessionId: string;
   lines?: number;
   full?: boolean;
 }
@@ -13,7 +13,7 @@ interface AgentOutputParams {
 function isAgentOutputParams(value: unknown): value is AgentOutputParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string"
+  return typeof params.codeAgentSessionId === "string"
     && (params.lines === undefined || typeof params.lines === "number")
     && (params.full === undefined || typeof params.full === "boolean");
 }
@@ -24,7 +24,7 @@ export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
     name: "agent_output",
     description: "Recent output of a session, with its status header. Use full=true to read a whole plan or result.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID" }),
+      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
       lines: Type.Optional(Type.Number({ description: "Default 50" })),
       full: Type.Optional(Type.Boolean()),
     }),
@@ -33,13 +33,13 @@ export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentOutputParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, lines?, full? }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, lines?, full? }.");
       }
       const sm = sessionManager;
-      if (!sm.resolve(params.session) && !sm.getPersistedSession(params.session)) {
-        return unknownSessionError(params.session);
+      if (!sm.resolve(params.codeAgentSessionId) && !sm.getPersistedSession(params.codeAgentSessionId)) {
+        return unknownSessionError(params.codeAgentSessionId);
       }
-      const text = getSessionOutputText(sm, params.session, {
+      const text = getSessionOutputText(sm, params.codeAgentSessionId, {
         full: params.full,
         lines: params.lines,
         readerSessionKey: ctx?.sessionKey || undefined,

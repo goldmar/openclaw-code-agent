@@ -159,7 +159,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(fixture.session.approvalState, "changes_requested");
 
       const feedback = "Put the migration behind a feature flag";
-      const sent = await executeRespond(fixture.sm, { session: fixture.session.id, message: feedback, userInitiated: true });
+      const sent = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: feedback, userInitiated: true });
       assert.equal(sent.isError, undefined, sent.text);
       await expectRevisionRequested(v1, feedback);
 
@@ -195,7 +195,7 @@ for (const name of BACKEND_NAMES) {
       it(`rejects on a plain "Reject" reply (userInitiated=${userInitiated})`, async () => {
         fixture = await start(name);
         const round = await proposePlan();
-        const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: "Reject", userInitiated });
+        const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: "Reject", userInitiated });
         assert.match(result.text, /Plan rejected/);
         await expectStopped(round);
       });
@@ -210,7 +210,7 @@ for (const name of BACKEND_NAMES) {
       assert.match(text, /Reply "approve"/);
       assert.match(text, /Reply "reject"/);
 
-      const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: "Approve", userInitiated: true });
+      const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: "Approve", userInitiated: true });
       assert.equal(result.isError, undefined, result.text);
       await expectImplementationStarted(round);
     });
@@ -218,10 +218,10 @@ for (const name of BACKEND_NAMES) {
     it("treats a plain \"Revise\" reply as a change request and forwards the next reply as feedback", async () => {
       fixture = await start(name, { planPromptDelivery: "failed" });
       const round = await proposePlan();
-      const revise = await executeRespond(fixture.sm, { session: fixture.session.id, message: "Revise", userInitiated: true });
+      const revise = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: "Revise", userInitiated: true });
       assert.match(revise.text, /Reply with the changes you want/);
       assert.equal(fixture.session.approvalState, "changes_requested");
-      await executeRespond(fixture.sm, { session: fixture.session.id, message: "Drop step 3", userInitiated: true });
+      await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: "Drop step 3", userInitiated: true });
       await expectRevisionRequested(round, "Drop step 3");
     });
 
@@ -234,7 +234,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(fixture.buttons("plan-approval").length, 0, "the user gets no buttons yet");
 
       const result = await executeRespond(fixture.sm, {
-        session: fixture.session.id,
+        codeAgentSessionId: fixture.session.id,
         message: "Approved. Go ahead.",
         approve: true,
         approvalRationale: "Scope matches the task and the change is low risk.",
@@ -272,7 +272,7 @@ for (const name of BACKEND_NAMES) {
       assert.match(text, /approval_rationale/);
 
       await executeRespond(fixture.sm, {
-        session: fixture.session.id,
+        codeAgentSessionId: fixture.session.id,
         message: "Approved. Go ahead.",
         approve: true,
         approvalRationale: "Read the full plan; it only touches the task's files.",

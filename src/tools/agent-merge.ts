@@ -27,7 +27,7 @@ import { createLogger } from "../logger";
 const log = createLogger("agent-merge");
 
 interface AgentMergeParams {
-  session: string;
+  codeAgentSessionId: string;
   base_branch?: string;
   strategy?: "merge" | "squash";
   push?: boolean;
@@ -38,7 +38,7 @@ interface AgentMergeParams {
 function isAgentMergeParams(value: unknown): value is AgentMergeParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string"
+  return typeof params.codeAgentSessionId === "string"
     && (params.base_branch === undefined || typeof params.base_branch === "string")
     && (params.strategy === undefined || params.strategy === "merge" || params.strategy === "squash")
     && ["push", "delete_branch"].every((key) => params[key] === undefined || typeof params[key] === "boolean")
@@ -133,7 +133,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
     name: "agent_merge",
     description: "Merge a session's worktree branch into its base branch locally, then remove the worktree. Posts the outcome to the user.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID" }),
+      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
       base_branch: Type.Optional(Type.String({ description: "Default: the session's recorded base (worktree_base_branch at launch), else the repository's detected default branch" })),
       strategy: Type.Optional(
         Type.StringEnum(["merge", "squash"], {
@@ -153,14 +153,14 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // must still be recorded on the manager (and store) that started it.
       const sm = sessionManager;
       if (!isAgentMergeParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, base_branch?, strategy?, push?, delete_branch?, summary? }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, base_branch?, strategy?, push?, delete_branch?, summary? }.");
       }
 
       // Unknown targets perform zero Git operations, including ref validation.
-      const target = resolveWorktreeToolTarget(sm, params.session);
+      const target = resolveWorktreeToolTarget(sm, params.codeAgentSessionId);
       const targetSession = target.activeSession;
       const persistedSession = target.persistedSession;
-      if (!targetSession && !persistedSession) return unknownSessionError(params.session);
+      if (!targetSession && !persistedSession) return unknownSessionError(params.codeAgentSessionId);
       const admitted = captureWorktreeTarget(target);
       if (params.base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.base_branch);
@@ -326,7 +326,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Push base branch if requested
           if (shouldPush) {
             if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
-              const pushFailedText = `⚠️ [${target.sessionName ?? params.session}] Merged \`${branchName}\` → \`${baseBranch}\` locally, but failed to push \`${baseBranch}\``;
+              const pushFailedText = `⚠️ [${target.sessionName ?? params.codeAgentSessionId}] Merged \`${branchName}\` → \`${baseBranch}\` locally, but failed to push \`${baseBranch}\``;
               sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
                 pushFailedText,

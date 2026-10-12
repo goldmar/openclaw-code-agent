@@ -76,7 +76,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     // Now simulate agent_respond(approve=true) through executeRespond
     const sm = createStubSessionManager({ [session.id]: session });
     const result = await executeRespond(sm, {
-      session: session.id,
+      codeAgentSessionId: session.id,
       message: "Approved. Go ahead.",
       approve: true,
     });
@@ -262,7 +262,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     } as unknown as import("../src/session-manager").SessionManager;
 
     const result = await executeRespond(sm, {
-      session: "dead-id",
+      codeAgentSessionId: "dead-id",
       message: "Approved. Go ahead.",
       approve: true,
     });
@@ -320,7 +320,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     } as unknown as import("../src/session-manager").SessionManager;
 
     await executeRespond(sm, {
-      session: "dead-default",
+      codeAgentSessionId: "dead-default",
       message: "Continue please.",
       approve: true,
     });
@@ -367,7 +367,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     } as unknown as import("../src/session-manager").SessionManager;
 
     const result = await executeRespond(sm, {
-      session: "dead-plan-2",
+      codeAgentSessionId: "dead-plan-2",
       message: "Please change the approach and add more steps before approving.",
       approve: true,
     });
@@ -473,7 +473,7 @@ describe("Plan mode E2E: delayed approval (race condition test)", () => {
 
     const sm = createStubSessionManager({ [session.id]: session });
     const result = await executeRespond(sm, {
-      session: session.id,
+      codeAgentSessionId: session.id,
       message: "Approved. Go ahead.",
       approve: true,
     });

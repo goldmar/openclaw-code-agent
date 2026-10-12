@@ -6,7 +6,7 @@ import type { OpenClawPluginToolContext } from "../types";
 type EscalationKind = "plan" | "worktree";
 
 interface AgentEscalateParams {
-  session: string;
+  codeAgentSessionId: string;
   kind: EscalationKind;
   summary: string;
 }
@@ -14,7 +14,7 @@ interface AgentEscalateParams {
 function isAgentEscalateParams(value: unknown): value is AgentEscalateParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string"
+  return typeof params.codeAgentSessionId === "string"
     && (params.kind === "plan" || params.kind === "worktree")
     && typeof params.summary === "string"
     && params.summary.trim().length > 0;
@@ -32,7 +32,7 @@ export function makeAgentEscalateTool(_ctx?: OpenClawPluginToolContext) {
     description:
       "Hand a decision to the user with buttons, once per decision. kind='plan': Approve/Revise/Reject for a session waiting on plan approval. kind='worktree': Merge/Open PR/Later/Discard for a finished worktree session. Then wait for the user.",
     parameters: Type.Object({
-      session: Type.String({ description: "Session name or ID" }),
+      codeAgentSessionId: Type.String({ description: "Session name or ID" }),
       kind: Type.StringEnum(["plan", "worktree"]),
       summary: Type.String({ description: "Shown to the user: why you escalate, what changes, risk, and open questions. A few short lines." }),
     }),
@@ -41,11 +41,11 @@ export function makeAgentEscalateTool(_ctx?: OpenClawPluginToolContext) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
       if (!isAgentEscalateParams(params)) {
-        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { session, kind: 'plan' | 'worktree', summary }.");
+        return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { codeAgentSessionId, kind: 'plan' | 'worktree', summary }.");
       }
       const sm = sessionManager;
-      const session = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
-      if (!session) return unknownSessionError(params.session);
+      const session = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
+      if (!session) return unknownSessionError(params.codeAgentSessionId);
       const ref = "id" in session ? session.id : session.sessionId ?? session.backendRef?.conversationId ?? session.harnessSessionId;
       const text = params.kind === "plan"
         ? sm.requestPlanApprovalFromUser(ref, params.summary)

@@ -40,7 +40,7 @@ async function askAndWait(questions: QuestionSpec[]): Promise<{ answered: Return
 
 async function respond(message: string) {
   const f = fixture!;
-  return await executeRespond(f.sm, { session: f.session.id, message, userInitiated: true });
+  return await executeRespond(f.sm, { codeAgentSessionId: f.session.id, message, userInitiated: true });
 }
 
 /** Buttons of the latest question notification that carries buttons. */
@@ -189,7 +189,7 @@ for (const name of BACKEND_NAMES) {
     it("interrupts on request even while a question waits for an answer", async () => {
       fixture = await startInteractionFixture(name);
       await askAndWait([COLOR]);
-      const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: "", interrupt: true, userInitiated: true });
+      const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: "", interrupt: true, userInitiated: true });
       assert.doesNotMatch(result.text, /Answer not submitted/);
     });
 

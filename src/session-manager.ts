@@ -462,7 +462,7 @@ export class SessionManager {
       runAutoPr: async (session, baseBranch, retry) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
         const result = await makeAgentPrTool(undefined, { terminalCompletion: !retry }).execute("auto-pr", {
-          session: session.id,
+          codeAgentSessionId: session.id,
           base_branch: baseBranch,
         }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean; decisionRequested?: boolean } };
         const success = result?.meta?.success === true;

@@ -104,7 +104,7 @@ for (const name of BACKEND_NAMES) {
       it(`maps the agent_respond reply "${reply}" to ${decision}`, async () => {
         fixture = await start(name);
         const { decided } = await requestAndWait();
-        const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: reply, userInitiated: true });
+        const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: reply, userInitiated: true });
         assert.equal(result.isError, undefined, result.text);
         assert.match(result.text, /Pending input request submitted/);
         assert.deepEqual(await decided, { decision });
@@ -115,7 +115,7 @@ for (const name of BACKEND_NAMES) {
       fixture = await start(name);
       const { decided } = await requestAndWait();
       const feedback = "Use the dry-run flag instead";
-      const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: feedback, userInitiated: true });
+      const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: feedback, userInitiated: true });
       assert.equal(result.isError, undefined, result.text);
       if (name === "codex") {
         assert.deepEqual(await decided, { decision: "decline" });
@@ -128,7 +128,7 @@ for (const name of BACKEND_NAMES) {
     it("rejects an empty reply without deciding the request", async () => {
       fixture = await start(name);
       const { decided } = await requestAndWait();
-      const result = await executeRespond(fixture.sm, { session: fixture.session.id, message: " ", userInitiated: true });
+      const result = await executeRespond(fixture.sm, { codeAgentSessionId: fixture.session.id, message: " ", userInitiated: true });
       assert.equal(result.isError, true);
       assert.match(result.text, /The answer is empty/);
       assert.equal(fixture.session.pendingInputState?.kind, "approval", "the request stays pending");

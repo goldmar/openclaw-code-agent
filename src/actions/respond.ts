@@ -18,7 +18,7 @@ import { resolvePendingInputAnswer } from "../pending-input-normalization";
 import type { PersistedSessionInfo, PlanApprovalMode, SessionConfig } from "../types";
 
 interface RespondParams {
-  session: string;
+  codeAgentSessionId: string;
   message: string;
   interrupt?: boolean;
   userInitiated?: boolean;
@@ -583,12 +583,12 @@ export async function executeRespond(
   sm: SessionManager,
   params: RespondParams,
 ): Promise<RespondResult> {
-  const session = sm.resolve(params.session);
-  const persisted = session ? undefined : sm.getPersistedSession(params.session);
+  const session = sm.resolve(params.codeAgentSessionId);
+  const persisted = session ? undefined : sm.getPersistedSession(params.codeAgentSessionId);
 
   if (!session && !persisted) {
-    const failure = unknownSessionError(params.session);
-    return { text: failure.content[0].text, isError: true, details: failure.details, userText: `❌ Session "${params.session}" not found.` };
+    const failure = unknownSessionError(params.codeAgentSessionId);
+    return { text: failure.content[0].text, isError: true, details: failure.details, userText: `❌ Session "${params.codeAgentSessionId}" not found.` };
   }
 
   const target = session ?? persisted!;
@@ -625,7 +625,7 @@ export async function executeRespond(
     text: "Error: The pending input request changed during authorization. Review the current question before replying.", isError: true,
   });
   const assertActionIsCurrent = (): void => {
-    const current = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
+    const current = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
     if ((session && current !== session) || planAuthorizationSignature(current) !== decisionSignature
       || !goalOwnerUnchanged(current, originalGoalOwner, session)) throw new Error("The plan or session changed during authorization. Review the current plan before retrying.");
     if (!params.approve && !params.interrupt && !pendingInputIsCurrent()) throw new Error(stalePendingInput().text.replace(/^Error: /, ""));
@@ -637,7 +637,7 @@ export async function executeRespond(
       return { text: `Error: ${errorMessage(err)}`, isError: true, userText: fail(errorMessage(err)) };
     }
   }
-  const currentTarget = sm.resolve(params.session) ?? sm.getPersistedSession(params.session);
+  const currentTarget = sm.resolve(params.codeAgentSessionId) ?? sm.getPersistedSession(params.codeAgentSessionId);
   if (textPlanDecision !== "reject" && ((session && currentTarget !== session)
     || planAuthorizationSignature(currentTarget) !== decisionSignature || !goalOwnerUnchanged(currentTarget, originalGoalOwner, session))) {
     return { text: "Error: The plan decision changed during authorization. Review the current plan before retrying.", isError: true };
@@ -652,12 +652,12 @@ export async function executeRespond(
     });
   }
   if (textPlanDecision === "revise") {
-    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session, {
+    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.codeAgentSessionId, {
       fromOrchestratorTurn: params.fromOrchestratorTurn,
     });
   }
   if (textPlanDecision === "reject") {
-    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session, { repliedToUser: params.replyIsNotice });
+    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.codeAgentSessionId, { repliedToUser: params.replyIsNotice });
   }
 
   if (params.approve) {

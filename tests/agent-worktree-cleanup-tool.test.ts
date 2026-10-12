@@ -84,9 +84,9 @@ describe("agent_worktree_status", () => {
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
-    for (const params of ["bad", { session: 42 }, []] as const) {
+    for (const params of ["bad", { codeAgentSessionId: 42 }, []] as const) {
       const result = await tool.execute("tool-id", params);
-      assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { session? }.");
+      assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { codeAgentSessionId? }.");
     }
   });
 
@@ -131,7 +131,7 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const tool = makeAgentWorktreeStatusTool();
-      const result = await tool.execute("tool-id", { session: "released-status" });
+      const result = await tool.execute("tool-id", { codeAgentSessionId: "released-status" });
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /Session: released-status \[s-released-status\]/);
@@ -182,7 +182,7 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const tool = makeAgentWorktreeStatusTool();
-      const result = await tool.execute("tool-id", { session: "conflict-resolving-status" });
+      const result = await tool.execute("tool-id", { codeAgentSessionId: "conflict-resolving-status" });
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /^  Lifecycle: conflict resolving$/m);
@@ -270,7 +270,7 @@ describe("agent_worktree_status", () => {
       } as any);
 
       const statusTool = makeAgentWorktreeStatusTool();
-      const statusResult = await statusTool.execute("tool-id", { session: "pr-314-comments-cleanup" });
+      const statusResult = await statusTool.execute("tool-id", { codeAgentSessionId: "pr-314-comments-cleanup" });
       const statusText = (statusResult.content[0] as { text: string }).text;
 
       assert.match(statusText, /^  Lifecycle: pr open$/m);

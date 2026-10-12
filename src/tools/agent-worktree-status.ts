@@ -18,7 +18,7 @@ function isAgentWorktreeStatusParams(value: unknown): value is AgentWorktreeStat
   if (value == null) return true;
   if (Array.isArray(value)) return false;
   if (typeof value !== "object") return false;
-  const session = (value as Record<string, unknown>).session;
+  const session = (value as Record<string, unknown>).codeAgentSessionId;
   return session === undefined || typeof session === "string";
 }
 
@@ -34,14 +34,14 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
     name: "agent_worktree_status",
     description: "Worktree state per session: lifecycle (active, pending decision, PR open, merged, released, dismissed, no change), whether cleanup is safe, and why a worktree is kept.",
     parameters: Type.Object({
-      session: Type.Optional(Type.String({ description: "Session name or ID; omit for all" })),
+      codeAgentSessionId: Type.Optional(Type.String({ description: "Session name or ID; omit for all" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
       if (!isAgentWorktreeStatusParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { codeAgentSessionId? }." }] };
       }
 
       const targetSession = params && typeof params === "object"

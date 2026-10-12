@@ -588,7 +588,7 @@ describe("SessionNotificationService", () => {
       completedAt: 1_780_000_002_000,
     } as any;
     const laterCycleRequest = worktreeMessages.buildNoChangeNotification({
-      session: resumedSession,
+      codeAgentSessionId: resumedSession,
      
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup-b",

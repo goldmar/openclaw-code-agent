@@ -34,8 +34,8 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       mode: Type.Optional(Type.StringEnum(["preview_safe", "clean_safe", "preview_all"], {
         description: "clean_safe (default) removes; preview_safe lists what would be removed; preview_all also lists kept worktrees and why",
       })),
-      session: Type.Optional(Type.String({ description: "Only this session" })),
-      dismiss_session: Type.Optional(Type.Boolean({ description: "With session: delete its branch and worktree even if unmerged (cannot be undone)" })),
+      codeAgentSessionId: Type.Optional(Type.String({ description: "Only this session" })),
+      dismiss_session: Type.Optional(Type.Boolean({ description: "With codeAgentSessionId: delete its branch and worktree even if unmerged (cannot be undone)" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
@@ -55,7 +55,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
       }
 
-      const sessionRef = params.session;
+      const sessionRef = params.codeAgentSessionId;
       const mode = params.mode ?? "clean_safe";
       const dryRun = mode !== "clean_safe";
       const includeRetained = mode === "preview_all" || mode === "clean_safe";

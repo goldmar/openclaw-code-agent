@@ -467,7 +467,7 @@ describe("goal-owned session execution boundaries", () => {
         harnessSessionId: "thread", switchPermissionMode: () => { releases += 1; }, sendMessage: async () => { releases += 1; } });
       (manager as any).sessions.set(owner.id, owner);
       manager.launchAndAwaitRunning = async () => { releases += 1; throw new Error("must not resume"); };
-      const result = await executeRespond(manager, { session: owner.id, message: "Approved", approve: true, userInitiated: true, userApproval: "button" });
+      const result = await executeRespond(manager, { codeAgentSessionId: owner.id, message: "Approved", approve: true, userInitiated: true, userApproval: "button" });
       assert.equal(result.isError, true);
       assert.equal(releases, 0);
     }
@@ -541,18 +541,18 @@ describe("goal-owned session execution boundaries", () => {
     assert.equal(current.status, "failed");
     assert.equal(harness.consumedPrompts.length, before);
     // The goal controller's own reply never detaches the session.
-    const controllerReply = await executeRespond(manager, { session: session.id, message: "auto", userInitiated: false, fromGoalController: true });
+    const controllerReply = await executeRespond(manager, { codeAgentSessionId: session.id, message: "auto", userInitiated: false, fromGoalController: true });
     assert.equal(controllerReply.isError, true);
     assert.equal(session.goalDetached, false);
     assert.equal(session.goalTaskId, "goal");
     const evidence = JSON.stringify(f.store.get("goal"));
-    const reply = await executeRespond(manager, { session: session.id, message: "One more tweak", userInitiated: true });
+    const reply = await executeRespond(manager, { codeAgentSessionId: session.id, message: "One more tweak", userInitiated: true });
     assert.equal(reply.isError, undefined, reply.text);
     assert.equal(session.goalDetached, true);
     assert.equal(session.goalTaskId, undefined, "a detached session is an ordinary session");
     await tick(5);
     assert.equal(harness.consumedPrompts.length, before + 1);
-    const lateControllerReply = await executeRespond(manager, { session: session.id, message: "auto", userInitiated: false, fromGoalController: true });
+    const lateControllerReply = await executeRespond(manager, { codeAgentSessionId: session.id, message: "auto", userInitiated: false, fromGoalController: true });
     assert.equal(lateControllerReply.isError, true, "goal-loop replies never reach a detached session");
     await tick(5);
     assert.equal(harness.consumedPrompts.length, before + 1);
@@ -648,7 +648,7 @@ describe("goal-owned session execution boundaries", () => {
     await (f.controller as any).markTaskSucceeded(current, "done");
     assert.equal(f.store.get("goal")?.status, "succeeded");
     const evidence = JSON.stringify(f.store.get("goal"));
-    assert.equal((await executeRespond(manager, { session: sessions.reply!.id, message: "One more tweak", userInitiated: true })).isError, undefined);
+    assert.equal((await executeRespond(manager, { codeAgentSessionId: sessions.reply!.id, message: "One more tweak", userInitiated: true })).isError, undefined);
     assert.equal(sessions.reply!.goalTaskId, undefined);
     await sessions.compact!.requestThreadAction({ kind: "compact" } as any);
     assert.equal(sessions.compact!.goalTaskId, undefined);

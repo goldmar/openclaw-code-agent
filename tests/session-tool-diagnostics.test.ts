@@ -141,18 +141,18 @@ describe("native session diagnostics", () => {
     setSessionManager({ resolve: (ref: string) => ref === "***" || ref === session.id ? session : undefined,
       getPersistedSession: (): undefined => undefined } as unknown as SessionManager);
     const tool = makeAgentRespondTool();
-    const invalid = await tool.execute("same", { session: "***", message: 1 });
+    const invalid = await tool.execute("same", { codeAgentSessionId: "***", message: 1 });
     assert.equal((invalid as any).details.code, "invalid_parameters");
     assert.equal(sends, 0);
     for (const callId of ["same", "same", "different"]) {
-      assert.equal((await tool.execute(callId, { session: "***", message: "1" })).isError, false);
+      assert.equal((await tool.execute(callId, { codeAgentSessionId: "***", message: "1" })).isError, false);
     }
-    await Promise.all([tool.execute("concurrent", { session: "exact-older", message: "1" }), tool.execute("concurrent", { session: "exact-older", message: "1" })]);
+    await Promise.all([tool.execute("concurrent", { codeAgentSessionId: "exact-older", message: "1" }), tool.execute("concurrent", { codeAgentSessionId: "exact-older", message: "1" })]);
     assert.equal(sends, 5, "call IDs are not durable backend delivery receipts");
     for (const failure of ["backend rejected handoff", "backend acceptance unknown"]) {
       const before: number = sends;
       session.sendMessage = async () => { sends++; throw new Error(failure); };
-      const failed = await tool.execute("failed", { session: "***", message: "1" });
+      const failed = await tool.execute("failed", { codeAgentSessionId: "***", message: "1" });
       assert.equal(failed.isError, true);
       assert.equal(sends, before + 1);
       assert.equal((failed as any).details, undefined, "never claim not-started after a handoff attempt");
