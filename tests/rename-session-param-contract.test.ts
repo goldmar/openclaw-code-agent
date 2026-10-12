@@ -93,18 +93,18 @@ describe("public OCA session reference contract", () => {
     assert.deepEqual(normalizeSessionReferenceParams({}, false), { ok: true, params: {} });
   });
 
-  it("delivers to the older exact session and preserves approval and boolean validation", async () => {
+  it("delivers repaired booleans to the older exact session and preserves approval and invalid-value refusal", async () => {
     const sent: string[] = [];
     const older = createStubSession({ id: "older-exact", name: "older", sendMessage: async () => { sent.push("older"); } });
     const newer = createStubSession({ id: "newer-exact", name: "newer", sendMessage: async () => { sent.push("newer"); } });
     const sessions = new Map([[older.id, older], [newer.id, newer]]);
     setSessionManager({ resolve: (ref: string) => sessions.get(ref), getPersistedSession: (): undefined => undefined } as unknown as SessionManager);
     for (const reference of [{ ocaSessionId: older.id }, { session: older.id }, { ocaSessionId: older.id, session: older.id }]) {
-      assert.equal((await makeAgentRespondTool().execute("send", { ...reference, message: "Follow up" })).isError, false);
+      assert.equal((await makeAgentRespondTool().execute("send", { ...reference, message: "Follow up", approve: "false", userInitiated: "false", interrupt: "false" })).isError, false);
     }
     assert.deepEqual(sent, ["older", "older", "older"]);
     for (const key of ["approve", "userInitiated", "interrupt"]) {
-      assert.equal((await makeAgentRespondTool().execute("boolean", { ocaSessionId: older.id, message: "approve", [key]: "false" })).isError, true);
+      assert.equal((await makeAgentRespondTool().execute("boolean", { ocaSessionId: older.id, message: "approve", [key]: "FALSE" })).isError, true);
     }
     older.pendingPlanApproval = true;
     older.planApproval = "ask";

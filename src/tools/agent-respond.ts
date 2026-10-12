@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
@@ -32,25 +33,25 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
     parameters: Type.Object({
       ...sessionReferenceProperties(),
       message: Type.String(),
-      interrupt: Type.Optional(Type.Boolean({ description: "Stop the current turn first" })),
+      interrupt: Type.Optional(Type.BooleanLike({ description: "Stop the current turn first" })),
       userInitiated: Type.Optional(
-        Type.Boolean({ description: "true when forwarding the user's own words. Forward each user message whole, in one call. For a pending plan, a message that is only 'approve', 'reject' or 'revise' decides it; any other message (including 'revise …' with the changes) is one revision with that feedback." }),
+        Type.BooleanLike({ description: "true when forwarding the user's own words. Forward each user message whole, in one call. For a pending plan, a message that is only 'approve', 'reject' or 'revise' decides it; any other message (including 'revise …' with the changes) is one revision with that feedback." }),
       ),
       approve: Type.Optional(
-        Type.Boolean({ description: "Approve the pending plan (delegate/approve modes). Refused when planApproval is 'ask': only the user approves there. On a default-mode session: switch to bypassPermissions." }),
+        Type.BooleanLike({ description: "Approve the pending plan (delegate/approve modes). Refused when planApproval is 'ask': only the user approves there. On a default-mode session: switch to bypassPermissions." }),
       ),
       approval_rationale: Type.Optional(
         Type.String({ description: "With approve=true: one short line on why the plan is safe; shown to the user in the approval notice" }),
       ),
     }, requiredSessionReference),
-    async execute(_id: string, params: unknown) {
+    async execute(_id: string, rawParams: unknown) {
       if (!sessionManager) {
         return sessionToolError("service_unavailable", "Error: SessionManager not initialized. The code-agent service must be running.");
       }
-      const normalized = normalizeSessionReferenceParams(params);
+      const normalized = normalizeSessionReferenceParams(rawParams);
       if (normalized.ok === false) return normalized.error;
-      params = normalized.params;
-      if (!isAgentRespondParams(params)) {
+      const params = normalizeBooleanParams(normalized.params, ["interrupt", "userInitiated", "approve"], isAgentRespondParams);
+      if (!params) {
         return sessionToolError("invalid_parameters", "Error: Invalid parameters. Expected { ocaSessionId, message, interrupt?, userInitiated?, approve?, approval_rationale? }.");
       }
 

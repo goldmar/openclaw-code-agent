@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { setSessionManager as setSingletonManager } from "../src/singletons";
 import { SessionNotificationService } from "../src/session-notifications";
 import { formatCleanupOutcome, makeAgentMergeTool } from "../src/tools/agent-merge";
-import { createWorktree, getBranchName } from "../src/worktree";
+import { branchExists, createWorktree, getBranchName } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
@@ -341,6 +341,27 @@ describe("agent_merge push behavior", () => {
       rmSync(remoteDir, { recursive: true, force: true });
     }
   });
+
+  for (const push of [undefined, false, "false", true, "true"]) {
+    for (const cleanup of [undefined, false, "false", true, "true"]) {
+      it(`normalizes push=${JSON.stringify(push)} and delete_branch=${JSON.stringify(cleanup)} before real Git effects`, async () => {
+        const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-booleans");
+        try {
+          const sessionName = "merge-booleans";
+          const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
+          installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+          const before = remoteHead(repoDir, "main");
+          const result = await makeAgentMergeTool().execute("boolean", { ocaSessionId: sessionName, push, delete_branch: cleanup });
+          assert.match(result.content[0].text, /Fast-forward|Merge commit/);
+          assert.equal(remoteHead(repoDir, "main") === before, push !== true && push !== "true");
+          assert.equal(await branchExists(repoDir, branchName), cleanup === false || cleanup === "false");
+        } finally {
+          rmSync(repoDir, { recursive: true, force: true });
+          rmSync(remoteDir, { recursive: true, force: true });
+        }
+      });
+    }
+  }
 
   it("keeps the merged base branch local by default", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-default");

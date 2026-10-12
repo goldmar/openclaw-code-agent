@@ -1,3 +1,4 @@
+import { normalizeBooleanParams } from "./boolean-normalization";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { resolveAgentChannel } from "../config";
@@ -9,6 +10,13 @@ type SessionsFilter = "all" | "running" | "waiting" | "completed" | "failed" | "
 interface AgentSessionsParams {
   status?: SessionsFilter;
   full?: boolean;
+}
+
+function isAgentSessionsParams(value: unknown): value is AgentSessionsParams {
+  if (!value || typeof value !== "object") return false;
+  const params = value as Record<string, unknown>;
+  return (params.status === undefined || ["all", "running", "waiting", "completed", "failed", "killed"].some((status) => status === params.status))
+    && (params.full === undefined || typeof params.full === "boolean");
 }
 
 function parseStatus(params: unknown): SessionsFilter {
@@ -39,7 +47,7 @@ export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
         ),
       ),
       full: Type.Optional(
-        Type.Boolean(),
+        Type.BooleanLike(),
       ),
     }),
     async execute(_id: string, params: AgentSessionsParams | unknown) {
@@ -47,9 +55,11 @@ export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
 
-      const filter = parseStatus(params);
+      const input = normalizeBooleanParams(params ?? {}, ["full"], isAgentSessionsParams);
+      if (!input) return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { status?, full? }." }] };
+      const filter = parseStatus(input);
       const originChannel = ctx?.workspaceDir ? resolveAgentChannel(ctx.workspaceDir) : undefined;
-      const full = !!(params && typeof params === "object" && (params as Record<string, unknown>).full === true);
+      const full = input.full === true;
       const text = getSessionsListingText(sessionManager, filter, originChannel, { full });
       return { content: [{ type: "text", text }] };
     },

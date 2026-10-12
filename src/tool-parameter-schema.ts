@@ -19,4 +19,9 @@ function StringEnum<const T extends readonly [string, ...string[]]>(values: T, o
   return Enum([...values] as unknown as T, { type: "string", ...options });
 }
 
-export const Type = { Array, Boolean, Literal, Number, Object, Optional, String, StringEnum, Union };
+/** Public representation repair; execution normalizes before validating typed input. */
+function BooleanLike(options: { description?: string } = {}) {
+  return Union([Boolean(), Literal("true"), Literal("false")], options);
+}
+
+export const Type = { Array, Boolean, BooleanLike, Literal, Number, Object, Optional, String, StringEnum, Union };

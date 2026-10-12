@@ -515,6 +515,63 @@ describe("agent_pr execute(): existing open PRs", () => {
 });
 
 describe("agent_pr execute(): merged, closed, and force_new", () => {
+  for (const forceNew of [undefined, false, "false", true, "true"]) {
+    it(`normalizes force_new=${JSON.stringify(forceNew)} before handling a closed recorded PR`, async () => {
+      const f = await setup({ llmReplies: [LLM_METADATA] });
+      const closed = f.gh.seedPr({ headRefName: f.branch, state: "CLOSED" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: closed.url, worktreePrNumber: closed.number });
+      const before = f.gh.remoteHead(f.branch);
+      const result = await f.run({ force_new: forceNew });
+      const creates = forceNew === true || forceNew === "true";
+      assert.equal(result.meta.state, creates ? "created" : "closed");
+      assert.equal(f.gh.ghCalls("create").length, creates ? 1 : 0);
+      assert.equal(f.gh.remoteHead(f.branch) === before, !creates);
+    });
+    it(`normalizes force_new=${JSON.stringify(forceNew)} before handling an open PR`, async () => {
+      const f = await setup();
+      f.gh.seedPr({ headRefName: f.branch });
+      const before = f.gh.remoteHead(f.branch);
+      const result = await f.run({ force_new: forceNew });
+      const refuses = forceNew === true || forceNew === "true";
+      assert.equal(result.meta.state, refuses ? "force_new_refused" : "pr_updated");
+      assert.equal(f.gh.remoteHead(f.branch) === before, refuses);
+      assert.equal(f.gh.ghCalls("create").length, 0);
+    });
+  }
+  for (const forceNew of [undefined, false, "false", true, "true"]) {
+    it(`normalizes force_new=${JSON.stringify(forceNew)} before handling a merged PR`, async () => {
+      const f = await setup();
+      f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
+      const result = await f.run({ force_new: forceNew });
+      assert.equal(result.meta.state, forceNew === true || forceNew === "true" ? "force_new_refused" : "merged");
+      assert.equal(f.gh.remoteHead(f.branch), "");
+      assert.equal(f.gh.ghCalls("create").length, 0);
+    });
+  }
+  it("invalid booleans cannot push or change PR metadata even for a valid existing target", async () => {
+    const f = await setup();
+    const seeded = f.gh.seedPr({ headRefName: f.branch, title: "Human title", body: "Human body" });
+    for (const field of ["force_new", "update_metadata"]) for (const value of [null, 0, 1, "TRUE", "false ", [], {}]) {
+      const result = await f.run({ [field]: value });
+      assert.match(textOf(result), /Invalid parameters/);
+      assert.equal(f.gh.remoteHead(f.branch), "");
+      assert.deepEqual(f.gh.readState().prs.find((row) => row.number === seeded.number), seeded);
+      assert.equal(f.gh.ghCalls("create").length, 0);
+    }
+  });
+
+  for (const update of [undefined, false, "false", true, "true"]) {
+    it(`normalizes update_metadata=${JSON.stringify(update)} before modifying human-authored metadata`, async () => {
+      const f = await setup({ llmReplies: [LLM_METADATA] });
+      const seeded = f.gh.seedPr({ headRefName: f.branch, title: "Human title", body: "Human body" });
+      f.sm.updatePersistedSession(SESSION_ID, { worktreePrUrl: seeded.url, worktreePrNumber: seeded.number });
+      const result = await f.run({ update_metadata: update });
+      assert.equal(result.meta.success, true);
+      const pr = f.gh.readState().prs.find((row) => row.number === seeded.number);
+      assert.equal(pr?.title, update === true || update === "true" ? "Add the feature file" : "Human title");
+    });
+  }
+
   it("records a merged PR and points at branch cleanup", async () => {
     const f = await setup({ llmReplies: [LLM_METADATA] });
     const seeded = f.gh.seedPr({ headRefName: f.branch, state: "MERGED" });
