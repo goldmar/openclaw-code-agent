@@ -507,7 +507,7 @@ def normalize_message(message, users=None):
         "messageId": message.get("id"),
         "chatId": message.get("chat_id"),
         "senderId": sender_id,
-        "senderUsername": sender_user.get("username") or "",
+        "senderUsername": primary_username(sender_user),
         "date": message.get("date"),
         "replyToMessageId": reply_to_message_id,
         "threadId": thread_id,
@@ -662,19 +662,32 @@ def command_terminate_desktop_sessions(args):
     print_result({"ok": True, "terminated": terminated}, args.json, getattr(args, "output", ""))
 
 
+def primary_username(user):
+    # Modern TDLib exposes the primary username first in active_usernames.
+    # An editable or disabled name must not be treated as active. Only older
+    # schemas without the usernames field use the legacy username property.
+    if "usernames" in user:
+        usernames = user.get("usernames")
+        active = usernames.get("active_usernames") if isinstance(usernames, dict) else None
+        value = active[0] if isinstance(active, list) and active else None
+    else:
+        value = user.get("username")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def public_user(user):
     return {
         "id": user.get("id"),
         "firstName": user.get("first_name"),
         "lastName": user.get("last_name"),
-        "username": user.get("username"),
+        "username": primary_username(user),
         "isBot": user.get("type", {}).get("@type") == "userTypeBot",
     }
 
 
 def save_tester_identity(config, user):
     config["testerUserId"] = user.get("id")
-    config["testerUsername"] = user.get("username") or ""
+    config["testerUsername"] = primary_username(user)
     config["testerFirstName"] = user.get("first_name") or ""
     config["testerLastName"] = user.get("last_name") or ""
     write_json_private(CONFIG_PATH, config)

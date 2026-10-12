@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Read modern TDLib primary usernames from `usernames.active_usernames` for QA identity, cached export metadata and sender matching, retaining legacy-schema support. Disabled or merely editable usernames are not treated as active.
 - Reject Start Plan offers without a direct delivery route instead of reporting a queued offer for an internal system route.
 - Native Telegram QA export/restore supports accounts without a public username, retaining numeric user identity. Proof setup preserves Desktop sessions instead of revoking the saved authorization before use.
 
