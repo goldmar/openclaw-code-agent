@@ -7,7 +7,7 @@ import { setSessionManager } from "../src/singletons";
 import type { SessionManager } from "../src/session-manager";
 import { createCronCompatibilityProvider } from "../scripts/lib/openclaw-compatibility-cron.mjs";
 
-async function runProbe(dispatcher: boolean, offerResult?: string) {
+async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "background" | "utility" | "previous" | "duplicate", stream = false) {
   setPluginConfig({});
   setSessionManager({ sendPlanOffer() { throw new Error("The probe must not queue a notification"); } } as unknown as SessionManager);
   const provider = await createCronCompatibilityProvider();
@@ -15,18 +15,30 @@ async function runProbe(dispatcher: boolean, offerResult?: string) {
   provider.configure(config);
   const endpoint = config.models.providers["oca-fixture"].baseUrl + "/chat/completions";
   let job: any;
+  let previousBody: Record<string, unknown> | undefined;
+  const unrelatedReplies: Array<{ tool_calls?: unknown }> = [];
   const calls: Array<{ tool: string; allowed: boolean; args: unknown }> = [];
-  const request = async (body: unknown) => {
-    const response = await fetch(endpoint, { method: "POST", body: JSON.stringify(body) });
+  const request = async (body: Record<string, unknown>) => {
+    const response = await fetch(endpoint, { method: "POST", body: JSON.stringify({ ...body, stream }) });
     assert.equal(response.status, 200);
+    if (stream) {
+      assert.equal(response.headers.get("content-type"), "text/event-stream");
+      const events = (await response.text()).split("\n\n");
+      assert.equal(events.at(-2), "data: [DONE]", "SSE events require real blank-line delimiters");
+      assert.equal(events.at(-1), "");
+      return JSON.parse(events[0].slice("data: ".length)).choices[0].delta;
+    }
     return (await response.json() as any).choices[0].message;
   };
   try {
     await provider.check(async () => {
       const names = dispatcher ? ["tool_call"] : job.payload.toolsAllow;
       const body = { model: "oca-compatibility", tools: names.map((name: string) => ({ function: { name } })),
-        messages: [{ role: "user", content: job.payload.message }] };
+        messages: [{ role: "user", content: stream ? [{ type: "text", text: job.payload.message }] : job.payload.message }] };
+      if (noise === "background") unrelatedReplies.push(await request({ ...body, messages: [{ role: "user", content: "Unrelated background turn" }] }));
+      if (noise === "previous" && previousBody) unrelatedReplies.push(await request(previousBody));
       const assistant = await request(body);
+      if (noise === "duplicate") await request(body);
       const call = assistant.tool_calls[0];
       const args = JSON.parse(call.function.arguments);
       const tool = dispatcher ? args.id : call.function.name;
@@ -40,8 +52,11 @@ async function runProbe(dispatcher: boolean, offerResult?: string) {
       const content = allowed
         ? JSON.stringify(dispatcher ? { tool: { name: tool }, result: output } : output)
         : `Error: Unknown tool ${dispatcher ? "id" : "name"}: ${tool}`;
-      await request({ ...body, messages: [...body.messages, assistant,
-        { role: "tool", tool_call_id: call.id, content }] });
+      const resultBody = { ...body, messages: [...body.messages, assistant,
+        { role: "tool", tool_call_id: call.id, content }] };
+      if (noise === "utility") unrelatedReplies.push(await request({ ...resultBody, model: "oca-title" }));
+      await request(resultBody);
+      previousBody = body;
       return { stdout: JSON.stringify({ completed: true, status: "ok",
         run: { completionStatus: "succeeded", runId: "fixture-run", sessionKey: "fixture-session" } }) };
     }, async (method: string, params: any) => {
@@ -49,6 +64,7 @@ async function runProbe(dispatcher: boolean, offerResult?: string) {
       if (method === "tools.invoke") return { ok: true, output: { content: [{ type: "text", text: "Initialized metrics" }] } };
       assert.equal(method, "cron.remove");
     }, { offerEnabled: true });
+    assert.ok(unrelatedReplies.every((reply) => reply.tool_calls === undefined), "unrelated traffic must not receive a tool call");
     return calls;
   } finally {
     await provider.close();
@@ -73,4 +89,23 @@ it("invokes Start Plan under allowed and denied caps through either host tool in
 
 it("rejects a generic Start Plan execution error even when the scheduler succeeds", async () => {
   await assert.rejects(runProbe(true, "Error: SessionManager not initialized."));
+});
+
+for (const noise of ["background", "utility", "previous"] as const) {
+  it(`isolates cron observations from ${noise} requests`, async () => {
+    for (const dispatcher of [false, true]) await runProbe(dispatcher, undefined, noise);
+  });
+}
+
+it("still rejects duplicate tool requests for the same cron probe", async () => {
+  for (const dispatcher of [false, true]) {
+    await assert.rejects(runProbe(dispatcher, undefined, "duplicate"),
+      (error: unknown) => error instanceof assert.AssertionError && error.actual === 2 && error.expected === 1);
+  }
+});
+
+it("returns valid SSE frames for probe and unrelated traffic", async () => {
+  for (const dispatcher of [false, true]) {
+    await runProbe(dispatcher, undefined, "background", true);
+  }
 });
