@@ -59,7 +59,8 @@ describe("literal worktree ref boundary", () => {
         [makeAgentWorktreeCleanupTool(), { base_branch: value }],
       ] as const) {
         const result = await tool.execute("test", params);
-        assert.match(result.content[0].text, /Error: Expected/);
+        // Complete typed input validation rejects nonstrings before the Git-ref validator.
+        assert.match(result.content[0].text, typeof value === "string" ? /^Error: Expected/ : /^Error: Invalid parameters/);
       }
     }
   });
