@@ -34,7 +34,7 @@ it("published tool_call preserves exact OCA references independently of display 
   for (const key of ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]) process.env[key] = scratch;
   process.env.OPENCLAW_CONFIG_PATH = join(scratch, "absent-config.json");
   const modules: Record<string, { file: string; sha256: string }> = {};
-  
+
   async function exported<T>(name: string): Promise<T> {
     for (const file of readdirSync(dist).filter((file) => file.endsWith(".mjs"))) {
       const source = readFileSync(join(dist, file), "utf8");
@@ -47,7 +47,7 @@ it("published tool_call preserves exact OCA references independently of display 
     }
     throw new Error(`Missing host export ${name}`);
   }
-  
+
   let clearManager: (() => void) | undefined;
   try {
     const create = await exported<(ctx: { catalogRef: unknown; config: object }) => HostControl[]>("createToolSearchTools");
