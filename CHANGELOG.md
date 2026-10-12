@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.2] - 2026-10-12
+
+### Fixed
+
+- Use `ocaSessionId` across public session-targeting tools and generated guidance. Keep `session` as a deprecated alias; supplied aliases must match exactly. Reject malformed, blank, conflicting, unknown or masked references without selecting another session. The proposed `codeAgentSessionId` spelling remains unsupported. Thanks to Fred Ghilini and Flux for #536.
+- Accept native JSON booleans and exact lowercase `"true"` / `"false"` strings for all 15 public boolean parameters, normalizing before validation, branch selection or effects. Preserve false and omission behavior, user-only plan approval, route ownership, stale-generation and repository safeguards. Thanks to Fred Ghilini and Flux for #538 (issue #537).
+- Recognize modern Git "not a git repository" diagnostics for directory identity checks while retaining fail-closed handling of broken or unreadable Git repositories.
+- Require authoritative ClawHub publication and artifact verification before publishing the same retained tarball to npm and GitHub Release.
+
+### Verification and compatibility
+
+- Transport regressions exercise the pinned OpenClaw `tool_call` validator and dispatcher with synthetic OCA fixtures. They do not prove the reporter's live MiniMax/Telegram environment or production channel delivery.
+- Keep the OpenClaw 2026.10.1 build/SDK target and installation minimum, the 2026.9.7 public API/Gateway/npm peer floor, and the supported Node floors 24.16.0 and 26.1.0. This release ships merged tool fixes; it does not retarget OpenClaw 2026.10.2 or require a configuration migration.
+
 ## [5.2.1] - 2026-10-11
 
 ### Fixed

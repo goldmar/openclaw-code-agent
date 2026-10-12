@@ -82,7 +82,8 @@ describe("release workflow", () => {
     const npm = job("publish-npm");
     assert.match(npm, /environment: release/u);
     assert.match(npm, /permissions:\n\s+contents: read\n\s+id-token: write\n/u);
-    assert.doesNotMatch(npm, /contents: write|secrets\.|actions\/checkout|npm (ci|install)|clawhub|pnpm/u);
+    assert.doesNotMatch(npm, /contents: write|secrets\.|actions\/checkout|npm (ci|install)|pnpm/u);
+    assert.doesNotMatch(npm.slice(npm.indexOf("steps:")), /clawhub/u);
     assert.match(npm, /npm publish "\.\/artifact\/\$TARBALL" --access public --provenance/u);
     assert.match(npm, /Reverify artifact digest/u);
   });
@@ -112,8 +113,19 @@ describe("release workflow", () => {
     assert.match(tag, /permissions:\n\s+contents: write\n/u);
     assert.doesNotMatch(tag, /actions\/checkout|id-token/u);
     assert.match(tag, /test "\$existing" = "\$COMMIT"/u);
-    assert.match(job("publish-npm"), /needs: \[verify, tag\]/u);
+    assert.match(job("publish-npm"), /needs: \[verify, tag, publish-clawhub\]/u);
     assert.match(job("publish-clawhub"), /needs: \[verify, tag\]/u);
+  });
+
+  it("blocks npm and GitHub publication until ClawHub publication and artifact verification succeed", () => {
+    assert.match(job("publish-npm"), /^ {4}needs: \[verify, tag, publish-clawhub\]$/mu);
+    assert.match(job("github-release"), /^ {4}needs: \[verify, publish-npm, publish-clawhub\]$/mu);
+    for (const name of ["publish-clawhub", "publish-npm", "github-release"]) {
+      const publication = job(name);
+      const jobConfiguration = publication.slice(0, publication.indexOf("steps:"));
+      assert.doesNotMatch(jobConfiguration, /^ {4}if:/mu, `${name} must retain the default success dependency gate`);
+      assert.doesNotMatch(publication, /continue-on-error:/u, `${name} must fail closed on publication or verification failure`);
+    }
   });
 
   it("creates the GitHub release after both registries without persisted credentials", () => {
