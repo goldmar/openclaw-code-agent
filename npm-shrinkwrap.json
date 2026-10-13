@@ -10,9 +10,9 @@
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.296",
-        "@anthropic-ai/sdk": "0.128.0",
+        "@anthropic-ai/sdk": "0.133.0",
         "@hono/node-server": "2.1.4",
-        "@modelcontextprotocol/sdk": "1.32.0",
+        "@modelcontextprotocol/sdk": "1.32.1",
         "express-rate-limit": "8.7.0",
         "fast-uri": "3.1.8",
         "hono": "4.13.11",
@@ -168,9 +168,9 @@
       ]
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.128.0",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.128.0.tgz",
-      "integrity": "sha512-tl5cBFZC1jVFrTuQyvQObA4WmuNgcYVeXfriqOumgtLAHUm4gPUj18YnszBW60v0PrjDB8nBDOC6wd9CmHQFlA==",
+      "version": "0.133.0",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.133.0.tgz",
+      "integrity": "sha512-jlqUN8p8ESTJj+GJnA4KjzbEfF1waEoGzRT8jwytlYGFFgv+/DUQOxlYGvYw10UzhD1kwLqYzxvA3FrTB2YWuQ==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -210,9 +210,9 @@
       }
     },
     "node_modules/@modelcontextprotocol/sdk": {
-      "version": "1.32.0",
-      "resolved": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz",
-      "integrity": "sha512-8BviX/hK4Gd2eL1KdTwm0gfl4d3wdoErW0Jd00h6nomUAtk6IJk5vwQJc6kfWtJTzN5OEV/lgIiJKI8fiDGAlA==",
+      "version": "1.32.1",
+      "resolved": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.1.tgz",
+      "integrity": "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==",
       "license": "MIT",
       "dependencies": {
         "@hono/node-server": "^1.19.9 || ^2.0.5",
