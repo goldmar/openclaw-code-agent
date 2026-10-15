@@ -13,10 +13,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-export function goalCommandStrings(raw: unknown, allowEmpty = false): string[] {
+export function goalCommandStrings(raw: unknown, allowEmpty = false, errorMessage = CONFIG_ERROR): string[] {
   const entries = Array.isArray(raw) ? Array.from(raw) : undefined;
   if (!entries || (!allowEmpty && entries.length === 0)
-    || entries.some(entry => typeof entry !== "string" || !entry.trim())) throw new Error(CONFIG_ERROR);
+    || entries.some(entry => typeof entry !== "string" || !entry.trim())) throw new Error(errorMessage);
   return (entries as string[]).map(entry => entry.trim());
 }
 
