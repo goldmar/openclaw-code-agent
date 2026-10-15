@@ -33,16 +33,28 @@ export class UsageAccumulator {
     }
     if (
       event.type !== "session.step.ended" &&
-      event.type !== "session.step.failed"
+      event.type !== "session.step.failed" &&
+      event.type !== "session.compaction.ended"
     )
       return;
     if (this.seen.has(event.id)) return;
     this.seen.add(event.id);
     const d = event.data;
-    if (!("tokens" in d) || !d.tokens) return;
-    const t = d.tokens;
-    const value = this.models.get(this.current) ?? {
-      model: this.current,
+    if (!d.tokens && d.cost === undefined) return;
+    const t = d.tokens ?? {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    };
+    const model =
+      event.type === "session.compaction.ended"
+        ? event.data.model
+          ? `${event.data.model.providerID}/${event.data.model.id}`
+          : "unknown"
+        : this.current;
+    const value = this.models.get(model) ?? {
+      model,
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -56,8 +68,8 @@ export class UsageAccumulator {
     value.reasoningTokens += t.reasoning;
     value.cacheReadTokens += t.cache.read;
     value.cacheWriteTokens += t.cache.write;
-    this.models.set(this.current, value);
-    this.contextTokens = t.input + t.cache.read + t.cache.write;
+    this.models.set(model, value);
+    if (d.tokens) this.contextTokens = t.input + t.cache.read + t.cache.write;
     return this.snapshot();
   }
   snapshot(): HarnessUsage {

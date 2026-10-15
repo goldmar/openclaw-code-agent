@@ -522,28 +522,165 @@ describe("OpenCode 2.0 harness", () => {
     await c.done;
     assert.equal(fake.requests.length, 0);
   });
-  it("does not cache a server that dies during version negotiation",async()=>{
-    const fake=new OpenCodeFakeServer();fake.autoComplete=true;let starts=0;
-    const h=new OpenCodeHarness({fetch:fake.fetch,serverIdleShutdownMs:0,createServer:async()=>{
-      starts++;const server=fake.handle();
-      return starts===1?{...server,onExit:(listener:(reason:string)=>void)=>listener("startup exit")}:server;
-    }});
-    const first=collect(h.launch({prompt:"one",cwd:"/tmp"}));await first.done;
-    assert.match(terminal(first.events)!.result!,/version negotiation/);
-    assert.equal(first.events.filter(e=>e.type==="run_started").length,1);
-    const second=collect(h.launch({prompt:"two",cwd:"/tmp"}));await second.done;
-    assert.equal(terminal(second.events)?.success,true);assert.equal(starts,2);
+  it("does not cache a server that dies during version negotiation", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.autoComplete = true;
+    let starts = 0;
+    const h = new OpenCodeHarness({
+      fetch: fake.fetch,
+      serverIdleShutdownMs: 0,
+      createServer: async () => {
+        starts++;
+        const server = fake.handle();
+        return starts === 1
+          ? {
+              ...server,
+              onExit: (listener: (reason: string) => void) =>
+                listener("startup exit"),
+            }
+          : server;
+      },
+    });
+    const first = collect(h.launch({ prompt: "one", cwd: "/tmp" }));
+    await first.done;
+    assert.match(terminal(first.events)!.result!, /version negotiation/);
+    assert.equal(
+      first.events.filter((e) => e.type === "run_started").length,
+      1,
+    );
+    const second = collect(h.launch({ prompt: "two", cwd: "/tmp" }));
+    await second.done;
+    assert.equal(terminal(second.events)?.success, true);
+    assert.equal(starts, 2);
   });
 
-  it("discovers effort variants in the requested project location",async()=>{
-    const fake=new OpenCodeFakeServer();fake.autoComplete=true;
-    fake.modelList=[{id:"test",modelID:"test",providerID:"p",name:"Test",capabilities:{tools:true,input:["text"],output:["text"]},variants:[{id:"high"}],time:{released:0},cost:[],status:"active",enabled:true,limit:{context:10000,output:1000}}];
-    let directory:string|undefined;
-    const h=new OpenCodeHarness({createServer:async()=>fake.handle(),serverIdleShutdownMs:0,fetch:async(input,init)=>{
-      const url=new URL(typeof input === "string"?input:input instanceof URL?input.href:input.url);if(url.pathname === "/api/model")directory=url.searchParams.get("location[directory]") ?? undefined;return fake.fetch(input,init);
-    }});
-    const c=collect(h.launch({prompt:"hello",cwd:"/tmp/project with spaces",model:"p/test",reasoningEffort:"high"}));await c.done;
-    assert.equal(directory,"/tmp/project with spaces");assert.equal(fake.requests.find(r=>r.method === "POST" && r.path === "/api/session")?.body?.model.variant,"high");assert.equal(terminal(c.events)?.success,true);
+  it("discovers effort variants in the requested project location", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.autoComplete = true;
+    fake.modelList = [
+      {
+        id: "test",
+        modelID: "test",
+        providerID: "p",
+        name: "Test",
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [{ id: "high" }],
+        time: { released: 0 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        limit: { context: 10000, output: 1000 },
+      },
+    ];
+    let directory: string | undefined;
+    const h = new OpenCodeHarness({
+      createServer: async () => fake.handle(),
+      serverIdleShutdownMs: 0,
+      fetch: async (input, init) => {
+        const url = new URL(
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url,
+        );
+        if (url.pathname === "/api/model")
+          directory = url.searchParams.get("location[directory]") ?? undefined;
+        return fake.fetch(input, init);
+      },
+    });
+    const c = collect(
+      h.launch({
+        prompt: "hello",
+        cwd: "/tmp/project with spaces",
+        model: "p/test",
+        reasoningEffort: "high",
+      }),
+    );
+    await c.done;
+    assert.equal(directory, "/tmp/project with spaces");
+    assert.equal(
+      fake.requests.find(
+        (r) => r.method === "POST" && r.path === "/api/session",
+      )?.body?.model.variant,
+      "high",
+    );
+    assert.equal(terminal(c.events)?.success, true);
   });
 
+  it("keeps the parent turn alive while its child session is active", async () => {
+    const fake = new OpenCodeFakeServer();
+    const h = new OpenCodeHarness({
+      createServer: async () => fake.handle(),
+      fetch: fake.fetch,
+      serverIdleShutdownMs: 0,
+      turnTimeoutMs: 500,
+    });
+    const session = h.launch({ prompt: "delegate work", cwd: "/tmp" });
+    const c = collect(session);
+    await waitFor(() => fake.busy.size === 1);
+    const root = [...fake.busy][0];
+    const child = fake.create();
+    child.parentID = root;
+    fake.event("session.created", {
+      sessionID: child.id,
+      parentID: root,
+      projectID: "prj_test",
+      location: { directory: "/tmp" },
+      slug: "child",
+      version: "2.0.29",
+    });
+    const activity = setInterval(
+      () =>
+        fake.event("session.text.delta", {
+          sessionID: child.id,
+          assistantMessageID: "msg_child",
+          ordinal: 0,
+          delta: "child work",
+        }),
+      100,
+    );
+    try {
+      await new Promise((r) => setTimeout(r, 1200));
+      assert.equal(terminal(c.events), undefined);
+      fake.end(root, "parent answer");
+      await c.done;
+      assert.equal(terminal(c.events)?.result, "parent answer");
+      assert.equal(terminal(c.events)?.success, true);
+    } finally {
+      clearInterval(activity);
+      await session.close?.();
+    }
+  });
+
+  it("includes compaction usage once under its reported model", () => {
+    const fake = new OpenCodeFakeServer();
+    const usage = new UsageAccumulator();
+    const event = fake.event("session.compaction.ended", {
+      sessionID: "ses_1",
+      reason: "manual",
+      model: { providerID: "p", id: "summary" },
+      text: "summary",
+      recent: "msg_recent",
+      cost: 0.5,
+      tokens: {
+        input: 10,
+        output: 2,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    });
+    usage.apply(event);
+    usage.apply(event);
+    assert.deepEqual(
+      usage
+        .snapshot()
+        .models.map((m) => ({
+          model: m.model,
+          cost: m.costUsd,
+          input: m.inputTokens,
+        })),
+      [{ model: "p/summary", cost: 0.5, input: 10 }],
+    );
+  });
 });

@@ -163,11 +163,16 @@ export function launchOpenCodeSession(
       run.settled ||
       !event.data ||
       typeof event.data !== "object" ||
-      !("sessionID" in event.data) ||
-      event.data.sessionID !== sessionID
+      !("sessionID" in event.data)
     )
       return;
     run.activity = Date.now();
+    // The hub has already verified this session's parent/child relationship.
+    // Child activity keeps the parent alive without replacing its answer/usage.
+    if (event.data.sessionID !== sessionID) {
+      emit({ type: "activity" });
+      return;
+    }
     for (const message of run.mapper.map(event)) emit(message);
     const snapshot = usage.apply(event);
     if (snapshot) emit({ type: "usage_updated", usage: snapshot });
@@ -180,8 +185,11 @@ export function launchOpenCodeSession(
           message: String(e),
         }),
       );
-    if (event.type === "session.status" && event.data.status.type === "idle")
-      run.idle ??= Date.now();
+    if (event.type === "session.status") {
+      if (event.data.status.type === "idle") run.idle ??= Date.now();
+      else run.idle = undefined;
+    }
+    if (event.type === "session.execution.started") run.idle = undefined;
     const outcome = run.tracker.apply(event);
     if (outcome) finish(outcome);
     if (run.tracker.continuing) run.continuing ??= Date.now();
@@ -373,7 +381,12 @@ export function launchOpenCodeSession(
       deps.hubs.delete(generation);
     });
     const client = lease.client;
-    models = await client.data("GET /api/model",{},undefined,`?${new URLSearchParams({"location[directory]":options.cwd})}`);
+    models = await client.data(
+      "GET /api/model",
+      {},
+      undefined,
+      `?${new URLSearchParams({ "location[directory]": options.cwd })}`,
+    );
     const requested = options.model;
     let model: S_Model_Ref | undefined;
     if (requested) {
@@ -645,8 +658,12 @@ export function launchOpenCodeSession(
           emit({ type: "prompt_settled" });
           continue;
         }
-        try {await ensureSession();} catch(error) {
-          runCounter++;emit({type:"run_started",runId:newMessageId()});throw error;
+        try {
+          await ensureSession();
+        } catch (error) {
+          runCounter++;
+          emit({ type: "run_started", runId: newMessageId() });
+          throw error;
         }
         const id = newMessageId();
         const tracker = new TurnTracker();
