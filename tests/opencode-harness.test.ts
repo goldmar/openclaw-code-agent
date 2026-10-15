@@ -535,4 +535,15 @@ describe("OpenCode 2.0 harness", () => {
     assert.equal(terminal(second.events)?.success,true);assert.equal(starts,2);
   });
 
+  it("discovers effort variants in the requested project location",async()=>{
+    const fake=new OpenCodeFakeServer();fake.autoComplete=true;
+    fake.modelList=[{id:"test",modelID:"test",providerID:"p",name:"Test",capabilities:{tools:true,input:["text"],output:["text"]},variants:[{id:"high"}],time:{released:0},cost:[],status:"active",enabled:true,limit:{context:10000,output:1000}}];
+    let directory:string|undefined;
+    const h=new OpenCodeHarness({createServer:async()=>fake.handle(),serverIdleShutdownMs:0,fetch:async(input,init)=>{
+      const url=new URL(typeof input === "string"?input:input instanceof URL?input.href:input.url);if(url.pathname === "/api/model")directory=url.searchParams.get("location[directory]") ?? undefined;return fake.fetch(input,init);
+    }});
+    const c=collect(h.launch({prompt:"hello",cwd:"/tmp/project with spaces",model:"p/test",reasoningEffort:"high"}));await c.done;
+    assert.equal(directory,"/tmp/project with spaces");assert.equal(fake.requests.find(r=>r.method === "POST" && r.path === "/api/session")?.body?.model.variant,"high");assert.equal(terminal(c.events)?.success,true);
+  });
+
 });

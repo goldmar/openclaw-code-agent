@@ -373,7 +373,7 @@ export function launchOpenCodeSession(
       deps.hubs.delete(generation);
     });
     const client = lease.client;
-    models = await client.data("GET /api/model");
+    models = await client.data("GET /api/model",{},undefined,`?${new URLSearchParams({"location[directory]":options.cwd})}`);
     const requested = options.model;
     let model: S_Model_Ref | undefined;
     if (requested) {
