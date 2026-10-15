@@ -798,7 +798,15 @@ export function launchOpenCodeSession(
           const compact =
             (next.value as { ocaAction?: string })?.ocaAction === "compact";
           if (answering) {
-            await inputs.text(promptText(next.value));
+            try {
+              await inputs.text(promptText(next.value));
+            } catch (error) {
+              // The coordinator retains failed replies (and resets invalid
+              // forms). Keep this attached execution waiting for a retry.
+              createLogger("opencode-harness").warn(
+                `Saved input reply failed (${classifyApiError(error)}); request remains pending.`,
+              );
+            }
             if (!closed && !run.settled) await reconcile();
           } else await submit(promptText(next.value), id, "queue", compact);
           outcome = await done;

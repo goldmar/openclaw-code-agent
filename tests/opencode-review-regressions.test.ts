@@ -1,18 +1,22 @@
 import "./test-env";
 import { it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { OpenCodeHarness } from "../src/harness/opencode";
 import { PendingInputCoordinator, type InputReply } from "../src/harness/opencode/interaction";
 import { OpenCodeApiError } from "../src/harness/opencode/errors";
 import { EventMapper } from "../src/harness/opencode/mapper";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
 import { OpenCodeFakeServer } from "./opencode-fake-server";
-import type { S_Model_Info } from "../src/harness/opencode/protocol/api";
+import type { S_Model_Info, S_Session_Message_Assistant } from "../src/harness/opencode/protocol/api";
 import { checkServerVersion } from "../src/harness/opencode/endpoint";
 import { OpenCodeClient } from "../src/harness/opencode/client";
 import { UsageAccumulator } from "../src/harness/opencode/usage";
 import { assessResumeCandidate } from "../src/session-resume";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
+import { resolveOpenCodeCommand } from "../src/harness/opencode/command";
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000;
@@ -349,4 +353,87 @@ it("deduplicates compaction message usage using the native projector identity", 
   usage.apply(ended);
   usage.merge([{ id: "msg_compact", type: "compaction", time: { created: 1 }, status: "completed", reason: "manual", model: { providerID: "p", id: "test" }, summary: "summary", recent: "recent", cost: 1, tokens }], 1);
   assert.equal(usage.snapshot().models?.[0].costUsd, 1);
+});
+
+for (const failure of ["invalid-form", "temporary-form", "temporary-permission"] as const) {
+  it(`keeps the resumed execution waiting after a ${failure} reply failure`, async () => {
+    const fake = new OpenCodeFakeServer();
+    const info = fake.create();
+    fake.busy.add(info.id);
+    const permission = failure === "temporary-permission";
+    const reply = permission ? fake.askPermission(info.id, "command") : fake.askForm(info.id, [{ key: "q0", type: "string" }]);
+    let attempts = 0;
+    fake.override = (r) => {
+      if (r.path.endsWith("/reply") && ++attempts === 1)
+        return Response.json({ _tag: failure === "invalid-form" ? "FormInvalidAnswerError" : "Unavailable", message: "try again" }, { status: failure === "invalid-form" ? 400 : 503 });
+    };
+    const session = harness(fake).launch({ prompt: permission ? "Allow once" : "first answer", cwd: "/tmp", resumeSessionId: info.id });
+    const c = collect(session);
+    try {
+      await waitFor(() => attempts === 1 && fake.requests.filter((r) => r.method === "GET" && r.path.endsWith(permission ? "/permission" : "/form")).length >= 2);
+      assert.equal(result(c.events), undefined, "a failed reply must not terminate the resumed run");
+      assert.equal(fake.requests.filter((r) => r.path.endsWith("/prompt")).length, 0);
+      assert.equal(await session.submitPendingInputText!(permission ? "Allow once" : "corrected answer"), true);
+      const sent = await reply;
+      if (!permission) assert.deepEqual(sent.body?.answer, { q0: "corrected answer" });
+      fake.end(info.id, "Reply recovered");
+      await c.done;
+      assert.equal(result(c.events)?.success, true);
+      assert.equal(result(c.events)?.result, "Reply recovered");
+      assert.deepEqual(fake.protocolViolations, []);
+    } finally {
+      await session.close!();
+    }
+  });
+}
+
+for (const includesLiveStep of [false, true]) {
+  it(`preserves the latest context count when recovery ${includesLiveStep ? "includes" : "predates"} an already-seen live step`, () => {
+    const fake = new OpenCodeFakeServer();
+    const usage = new UsageAccumulator();
+    const ref = { providerID: "p", id: "test" };
+    const tokens = (input: number) => ({ input, output: 2, reasoning: 0, cache: { read: 3, write: 4 } });
+    usage.apply(fake.event("session.step.started", { sessionID: "ses_1", assistantMessageID: "msg_b", agent: "build", model: ref, started: 200 }));
+    usage.apply(fake.event("session.step.ended", { sessionID: "ses_1", assistantMessageID: "msg_b", finish: "stop", cost: 1, tokens: tokens(100) }));
+    const older: S_Session_Message_Assistant = { id: "msg_a", type: "assistant", agent: "build", time: { created: 100, completed: 150 }, model: ref, content: [], cost: 1, tokens: tokens(10) };
+    const newer = { ...older, id: "msg_b", time: { created: 200, completed: 250 }, tokens: tokens(100) };
+    usage.merge(includesLiveStep ? [older, newer] : [older], 2);
+    assert.equal(usage.snapshot().contextTokens, 107);
+    assert.equal(usage.snapshot().models?.[0].inputTokens, 110);
+    assert.equal(usage.snapshot().models?.[0].costUsd, 2);
+  });
+}
+
+it("uses the same opencode2 preference and command override for acceptance and harness discovery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "oca-command-discovery-"));
+  const previousPath = process.env.PATH;
+  const previousOverride = process.env.OPENCLAW_OPENCODE_COMMAND;
+  try {
+    process.env.PATH = directory;
+    delete process.env.OPENCLAW_OPENCODE_COMMAND;
+    await writeFile(join(directory, "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    assert.equal(resolveOpenCodeCommand(), join(directory, "opencode2"));
+    await writeFile(join(directory, "opencode"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    assert.equal(resolveOpenCodeCommand(), join(directory, "opencode2"));
+    process.env.OPENCLAW_OPENCODE_COMMAND = join(directory, "opencode");
+    assert.equal(resolveOpenCodeCommand(), join(directory, "opencode"));
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousOverride === undefined) delete process.env.OPENCLAW_OPENCODE_COMMAND;
+    else process.env.OPENCLAW_OPENCODE_COMMAND = previousOverride;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("cancels native in-memory forms on interruption before a stopped conversation resumes", async () => {
+  const fake = new OpenCodeFakeServer();
+  const info = fake.create();
+  fake.busy.add(info.id);
+  const reply = fake.askForm(info.id, [{ key: "q0", type: "string" }]);
+  const client = new OpenCodeClient("http://opencode.test", undefined, fake.fetch);
+  await client.request("POST /api/session/{sessionID}/interrupt", { sessionID: info.id }, undefined, "?resume=false");
+  assert.equal((await reply).method, "DELETE");
+  assert.deepEqual(await client.data("GET /api/session/{sessionID}/form", { sessionID: info.id }), []);
+  assert.deepEqual(fake.protocolViolations, []);
 });

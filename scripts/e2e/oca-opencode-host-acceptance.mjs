@@ -11,11 +11,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { createIsolatedOpenClawEnv } from "../check-plugin-security.mjs";
+import { tsImport } from "tsx/esm/api";
 
 const execute = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const hostRoot = resolve(process.env.OCA_ACCEPTANCE_HOST_ROOT || join(root, "node_modules/openclaw"));
-const native = process.env.OPENCLAW_OPENCODE_COMMAND || "opencode";
+const { resolveOpenCodeCommand } = await tsImport("../../src/harness/opencode/command.ts", import.meta.url);
+const native = resolveOpenCodeCommand();
 const artifact = resolve(process.env.OCA_ACCEPTANCE_REPORT || join(tmpdir(), "oca-opencode-host-acceptance.json"));
 const profile = await mkdtemp(join(tmpdir(), "oca-opencode-gateway-"));
 const env = createIsolatedOpenClawEnv(profile, { PATH: process.env.PATH });

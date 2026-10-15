@@ -246,7 +246,7 @@ Use `pnpm smoke:opencode-live` with `@opencode/cli >= 2.0.25`. It checks auth, s
 
 ### OpenCode Gateway And Orchestrator Acceptance
 
-After a protocol change, also run `node scripts/e2e/oca-opencode-host-acceptance.mjs` with a supported native OpenCode binary on PATH. `OPENCLAW_OPENCODE_COMMAND` selects an absolute binary path; `OCA_ACCEPTANCE_HOST_ROOT` selects an installed OpenClaw package directory (default: this checkout's `node_modules/openclaw`); `OCA_ACCEPTANCE_REPORT` selects the JSON receipt path (default: the system temp directory).
+After a protocol change, also run `node scripts/e2e/oca-opencode-host-acceptance.mjs` with a supported native OpenCode binary on PATH. The runner uses harness command discovery, preferring `opencode2` over `opencode`. `OPENCLAW_OPENCODE_COMMAND` overrides the binary; `OCA_ACCEPTANCE_HOST_ROOT` selects an installed OpenClaw package directory (default: this checkout's `node_modules/openclaw`); `OCA_ACCEPTANCE_REPORT` selects the JSON receipt path (default: the system temp directory).
 
 The opt-in runner packs the current plugin, loads the artifact into an isolated real Gateway on an ephemeral port, and uses native OpenCode. A local model provider drives actual orchestrator tool calls through the Gateway: launch, read output, answer a structured question, allow a shell command, approve a plan, and resume a conversation. It checks pending and final model-visible messages, WebChat history, restart with a question/plan pending, completed-session resume, per-conversation identity and owned-process shutdown. Tool results must be consumed by the orchestrator before a phase passes, including when a lifecycle wake has queued another turn.
 

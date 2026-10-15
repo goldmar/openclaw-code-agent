@@ -446,6 +446,16 @@ export class OpenCodeFakeServer {
       return this.json(req, { data: item });
     }
     if (suffix === "/interrupt") {
+      // Native Form.ask cancels its in-memory request when the execution is
+      // interrupted (core/src/form.ts, Effect.onInterrupt). A later resume
+      // receives the user's answer as a prompt, not a stale form reply.
+      for (const form of [...this.forms.values()]) {
+        if (form.sessionID !== id) continue;
+        this.forms.delete(form.id);
+        this.event("form.cancelled", { sessionID: id, id: form.id });
+        this.replyWaiters.get(form.id)?.({ method: "DELETE", path: `/api/session/${id}/form/${form.id}` });
+        this.replyWaiters.delete(form.id);
+      }
       if (this.busy.has(id)) this.end(id, "", "interrupted");
       return this.json(req, { interrupted: true });
     }
