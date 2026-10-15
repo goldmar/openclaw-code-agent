@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.0.0] - Unreleased
+## [6.0.0] - 2026-10-14
 
-- BREAKING: OpenCode requires `@opencode/cli >= 2.0.25` (2.x). Retire 1.x session resume while retaining historical rows.
+### Breaking
+
+- OpenCode requires `@opencode/cli >= 2.0.25` (2.x); OpenCode 1.x is no longer supported. Retire 1.x session resume and fork while retaining historical rows. Upgrade OpenCode to 2.x before installing this release (#551, closes #550).
+
+### Changed
+
 - Run an OCA-owned private stdio server/database with typed v2 API/events, durable replay, pending permission/form reconciliation and inbox-correlated execution outcomes.
-- Add active-turn steer, compact, in-place conversation rewind, supported effort variants, cumulative usage, and configurable command/environment/agent defaults.
+- Add active-turn steer, compact, in-place conversation rewind, supported effort variants, cumulative usage, and configurable command/environment/agent defaults (`harnesses.opencode.command`, `passEnv`, `defaultAgent`, `serverMode`).
 - Deny shell and subagent delegation in plan mode, retain failed replies, and use durable system instruction entries with a synthetic-message fallback.
+
+### Fixed
+
+- `agent_goal` launches with invalid caller `verifier_commands` now report the invalid caller field instead of `Invalid goalVerificationPolicies`; accepted inputs are unchanged and operator-policy errors remain distinguishable (#552, related to #549).
+
+### Verification and compatibility
+
+- Keep the OpenClaw 2026.10.1 build/SDK target and installation minimum, the 2026.9.7 public API/Gateway/npm peer floor, and the supported Node floors 24.16.0 and 26.1.0. Claude Code and Codex harness configuration needs no migration.
 
 ## [5.2.2] - 2026-10-12
 
