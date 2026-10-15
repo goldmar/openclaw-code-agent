@@ -135,7 +135,7 @@ it("issue #537: the wrapper admits native/string launch flags and preserves kill
   setPluginConfig({ harnesses: { opencode: { defaultModel: "minimax-coding-plan/MiniMax-M3" } } });
   const saved = {
     sessionId: "stable-id", name: "stopped", status: "killed", lifecycle: "terminal", killReason: "shutdown",
-    resumable: true, harness: "opencode", harnessSessionId: "backend-thread", backendRef: { kind: "opencode-server", conversationId: "backend-thread" },
+    resumable: true, harness: "opencode", harnessSessionId: "backend-thread", backendRef: { kind: "opencode-v2", conversationId: "backend-thread" },
     workdir: "/tmp", originSessionKey: TEST_ROUTE.sessionKey,
   };
   let launches: Record<string, unknown>[] = [];

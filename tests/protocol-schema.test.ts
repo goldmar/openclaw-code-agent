@@ -39,7 +39,7 @@ describe("protocol schema validator", () => {
     assert.deepEqual(codexNotificationErrors("serverRequest/resolved", { threadId: "t-1", requestId: 3 }), []);
     assert.match(codexNotificationErrors("serverRequest/resolved", { threadId: "t-1" }).join("\n"), /missing required property "requestId"/);
     assert.throws(() => codexClientRequestErrors("constructor", {}), /not in the vendored Codex clientRequests/);
-    assert.deepEqual(openCodeEventErrors({ directory: "/tmp", payload: { id: "evt_1", type: "session.idle", properties: { sessionID: "ses_1" } } }), []);
-    assert.notDeepEqual(openCodeEventErrors({ directory: "/tmp", payload: { type: "session.idle", properties: { sessionID: "ses_1" } } }), []);
+    assert.deepEqual(openCodeEventErrors({ id:"evt_1", created:1, type:"session.text.delta", data:{sessionID:"ses_1",assistantMessageID:"msg_1",ordinal:0,delta:"hello"} }), []);
+    assert.notDeepEqual(openCodeEventErrors({ type:"session.text.delta", data:{sessionID:"ses_1"} }), []);
   });
 });

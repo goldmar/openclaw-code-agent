@@ -84,3 +84,5 @@ Use `agent_goal(action="launch", goal, verifier_commands?)` only when the user a
 ## Files
 
 Do not ask the agent to write plan or notes files, or to commit them, unless the user asked for a file.
+
+OpenCode uses the 2.x API (>=2.0.25, @opencode/cli). Persisted 1.x sessions cannot resume. `rewind_turns` works in place or on a fork; `compact` and active-turn steer are supported.

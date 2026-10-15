@@ -49,7 +49,7 @@ export function formatReasoningMetadataSuffix(input: ReasoningDisplayInput): str
 function formatReasoningSuffix(input: ReasoningDisplayInput): string {
   const effort = input.reasoningEffort;
   if (!effort || !REASONING_EFFORTS.includes(effort)) return "";
-  if ((input.harness === "claude-code" || input.harness === "codex") && typeof input.reasoningEffortSupported === "boolean") {
+  if ((input.harness === "claude-code" || input.harness === "codex" || input.harness === "opencode") && typeof input.reasoningEffortSupported === "boolean") {
     return input.reasoningEffortSupported ? ` | reasoning: ${effort}` : "";
   }
   // Capability checks use the base ID consistently; display retains the exact ID.

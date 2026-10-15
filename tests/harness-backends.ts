@@ -23,6 +23,7 @@ import type {
   TurnSteerResponse,
 } from "../src/harness/codex-app-server-protocol";
 import { OpenCodeHarness } from "../src/harness/opencode";
+import { OpenCodeFakeServer } from "./opencode-fake-server";
 import type { AgentHarness } from "../src/harness/types";
 import { checkProtocol, openCodeEventErrors, openCodeRequestErrors, openCodeResponseErrors } from "./protocol-schema";
 import {
@@ -561,271 +562,39 @@ export class CodexBackend implements BackendDriver {
 // OpenCode: fake HTTP/SSE server behind OpenCodeHarness
 // ---------------------------------------------------------------------------
 
-type OpenCodeRequest = { method: string; path: string; body?: Record<string, unknown> };
-
-const OPENCODE_DIRECTORY = "/tmp";
-const OPENCODE_MODEL = { providerID: "opencode", modelID: "test" } as const;
-
 export class OpenCodeBackend implements BackendDriver {
-  readonly name = "opencode" as const;
-  readonly harness: AgentHarness;
-  readonly turns: BackendTurn[] = [];
-  readonly steers: string[] = [];
-  readonly supportsPermissionRequests = true;
-  readonly nativePlanDecisions = true;
-  readonly requests: OpenCodeRequest[] = [];
-  /** Requests, responses, and events that do not match the vendored OpenAPI document. */
-  readonly protocolViolations: string[] = [];
-  private readonly streams: ReadableStreamDefaultController<Uint8Array>[] = [];
-  private readonly encoder = new TextEncoder();
-  private readonly messages = new Map<string, unknown[]>();
-  private sessionCounter = 0;
-  private requestCounter = 0;
-  private eventCounter = 0;
-  private activeSessionId: string | undefined;
-  private busy = false;
-  private readonly replyWaiters = new Map<string, (request: OpenCodeRequest) => void>();
-  private pendingRequestId: string | undefined;
-  private pendingKind: "question" | "permission" | undefined;
-
-  constructor() {
-    this.harness = new OpenCodeHarness({
-      createServer: async () => ({
-        baseUrl: "http://opencode.test",
-        onExit: (listener: (reason: string) => void) => { this.serverExit = listener; },
-        close: async () => {
-          for (const stream of this.streams.splice(0)) {
-            try { stream.close(); } catch { /* already closed */ }
-          }
-        },
-      }),
-      fetch: this.fetch,
-      serverIdleShutdownMs: 0,
-      fallbackPollIntervalMs: 5,
-      streamReconnectDelayMs: 5,
-    });
+  readonly name="opencode" as const;
+  readonly fake=new OpenCodeFakeServer();
+  readonly turns:BackendTurn[]=[];
+  readonly steers:string[]=[];
+  readonly supportsPermissionRequests=true;
+  readonly nativePlanDecisions=true;
+  readonly harness:AgentHarness;
+  private activeSessionId:string|undefined;
+  get requests(){return this.fake.requests;}
+  get protocolViolations(){return this.fake.protocolViolations;}
+  get fetch(){return this.fake.fetch;}
+  get openEventStreams(){return this.fake.streams.size;}
+  constructor(){
+    this.fake.onPrompt=(id,text,delivery)=>{this.activeSessionId=id;if(delivery === "steer")this.steers.push(text);else this.turns.push({text,planMode:this.fake.sessions.get(id).agent === "plan"});};
+    this.harness=new OpenCodeHarness({createServer:async()=>this.fake.handle(),fetch:this.fake.fetch,serverIdleShutdownMs:0,streamReconnectDelayMs:5});
   }
-
-  private session(id: string): Record<string, unknown> {
-    return {
-      id,
-      slug: id,
-      projectID: "prj_test",
-      directory: OPENCODE_DIRECTORY,
-      title: "OCA test session",
-      version: "1.18.32",
-      cost: 0,
-      time: { created: 1, updated: 1 },
-    };
+  waitForTurns(count:number):Promise<void>{return waitUntil(()=>this.turns.length>=count && this.fake.streams.size>0,`${count} OpenCode turn(s)`);}
+  async ask(questions:QuestionSpec[]):Promise<QuestionOutcome>{
+    const request=await this.fake.askForm(this.activeSessionId!,questions.map((q,i)=>({key:`q${i}`,title:q.header ?? q.id,description:q.question,type:q.multiSelect?"multiselect":"string",options:(q.options ?? []).map(label=>({label,value:label,description:`${label} option`})),custom:q.other!==false})));
+    if(request.method === "DELETE")return {kind:"cancelled",reason:"question rejected by the server"};
+    const answers:QuestionAnswers={};questions.forEach((q,i)=>{const a=request.body?.answer?.[`q${i}`];if(a!==undefined)answers[q.question]=Array.isArray(a)?a:[a];});return {kind:"answered",answers};
   }
-
-  /** A JSON response, checked against the documented response schema. */
-  private json(method: string, path: string, value: unknown): Response {
-    checkProtocol(this.protocolViolations, `OpenCode ${method} ${path} response`, openCodeResponseErrors(method, path, 200, value));
-    return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
-  }
-
-  /** The fake server's request handler (in-memory `fetch`, or behind a real HTTP listener). */
-  readonly fetch: typeof fetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : (input as Request).url);
-    const method = init?.method ?? "GET";
-    const path = url.pathname;
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
-    const request = { method, path, body };
-    this.requests.push(request);
-    // Every route OCA calls must be documented, and its JSON body must match.
-    checkProtocol(this.protocolViolations, `OCA's OpenCode ${method} ${path} request`, openCodeRequestErrors(method, path, body));
-    if (path === "/global/event") {
-      return new Response(new ReadableStream<Uint8Array>({
-        start: (controller) => { this.streams.push(controller); },
-      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+  async requestPermission(description:string):Promise<PermissionOutcome>{const reply=await this.fake.askPermission(this.activeSessionId!,description);return {decision:reply.body?.decision === "once"?"accept":reply.body?.decision === "always"?"acceptForSession":"decline",...(reply.body?.message?{message:reply.body.message}:{})};}
+  proposePlan(markdown:string):undefined{void this.endTurn(markdown);return undefined;}
+  async endTurn(text="Done."):Promise<void>{this.fake.end(this.activeSessionId!,text);}
+  dropEventStreams():void{this.fake.dropStreams();}
+  async crashMidTurn():Promise<void>{this.fake.crash();}
+  async expirePendingRequest():Promise<void>{
+    for(const value of this.fake.forms.values()){
+      this.fake.forms.delete(value.id);this.fake.event("form.cancelled",{sessionID:value.sessionID,id:value.id});this.fake.replyWaiters.get(value.id)?.({method:"DELETE",path:`/api/session/${value.sessionID}/form/${value.id}`});this.fake.replyWaiters.delete(value.id);
     }
-    if (method === "POST" && path === "/session") {
-      this.sessionCounter += 1;
-      const id = `ses_${this.sessionCounter}`;
-      this.messages.set(id, []);
-      return this.json(method, path, this.session(id));
-    }
-    if (method === "GET" && path === "/session/status") {
-      return this.json(method, path, this.activeSessionId && this.busy ? { [this.activeSessionId]: { type: "busy" } } : {});
-    }
-    const messageMatch = /^\/session\/([^/]+)\/message$/.exec(path);
-    if (method === "GET" && messageMatch) return this.json(method, path, this.messages.get(messageMatch[1]!) ?? []);
-    const promptMatch = /^\/session\/([^/]+)\/prompt_async$/.exec(path);
-    if (method === "POST" && promptMatch) {
-      const id = promptMatch[1]!;
-      this.activeSessionId = id;
-      this.busy = true;
-      const parts = Array.isArray(body?.parts) ? body.parts : [];
-      const text = parts.map((part) => String((part as { text?: unknown }).text ?? "")).join("");
-      this.turns.push({ text, planMode: body?.agent === "plan" });
-      this.messages.get(id)?.push({
-        info: {
-          role: "user",
-          id: `msg_user_${this.turns.length}`,
-          sessionID: id,
-          time: { created: this.turns.length * 1_000 },
-          agent: typeof body?.agent === "string" ? body.agent : "build",
-          model: { ...OPENCODE_MODEL },
-        },
-        parts: [],
-      });
-      queueMicrotask(() => this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "busy" } } }));
-      checkProtocol(this.protocolViolations, `OpenCode ${method} ${path} response`, openCodeResponseErrors(method, path, 204, undefined));
-      return new Response(null, { status: 204 });
-    }
-    if (method === "POST" && /^\/session\/[^/]+\/abort$/.test(path)) return this.json(method, path, true);
-    if (method === "GET" && path === "/config/providers") return this.json(method, path, { providers: [], default: {} });
-    const sessionMatch = /^\/session\/([^/]+)$/.exec(path);
-    if (sessionMatch && (method === "GET" || method === "PATCH")) return this.json(method, path, this.session(sessionMatch[1]!));
-    const replyMatch = /^\/(permission|question)\/([^/]+)\/reply$/.exec(path);
-    if (method === "POST" && replyMatch) {
-      const kind = replyMatch[1] as "permission" | "question";
-      const requestId = replyMatch[2]!;
-      const waiter = this.replyWaiters.get(requestId);
-      this.replyWaiters.delete(requestId);
-      waiter?.(request);
-      if (this.pendingRequestId === requestId) {
-        const sessionID = this.activeSessionId;
-        this.pendingRequestId = undefined;
-        const properties = kind === "permission"
-          ? { sessionID, requestID: requestId, reply: body?.reply }
-          : { sessionID, requestID: requestId, answers: body?.answers ?? [] };
-        queueMicrotask(() => this.emit({ type: `${kind}.replied`, properties }));
-      }
-      return this.json(method, path, true);
-    }
-    return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
-  };
-
-  /** Broadcast one `/global/event` frame, checked against the documented event schema. */
-  private emit(payload: { type: string; properties: Record<string, unknown> }): void {
-    this.eventCounter += 1;
-    const frame = { directory: OPENCODE_DIRECTORY, payload: { id: `evt_${this.eventCounter}`, ...payload } };
-    checkProtocol(this.protocolViolations, `OpenCode ${payload.type} event`, openCodeEventErrors(frame));
-    const bytes = this.encoder.encode(`data: ${JSON.stringify(frame)}\n\n`);
-    for (const stream of this.streams) {
-      try { stream.enqueue(bytes); } catch { /* closed */ }
-    }
-  }
-
-  waitForTurns(count: number): Promise<void> {
-    return waitUntil(() => this.turns.length >= count && this.busy && this.streams.length > 0, `${count} OpenCode turn(s)`);
-  }
-
-  private raise(kind: "question" | "permission", properties: Record<string, unknown>): Promise<OpenCodeRequest> {
-    if (!this.activeSessionId) throw new Error("no active OpenCode session");
-    this.requestCounter += 1;
-    const id = `${kind === "question" ? "que" : "per"}_${this.requestCounter}`;
-    this.pendingRequestId = id;
-    this.pendingKind = kind;
-    const reply = new Promise<OpenCodeRequest>((resolve) => { this.replyWaiters.set(id, resolve); });
-    this.emit({ type: `${kind}.asked`, properties: { id, sessionID: this.activeSessionId, ...properties } });
-    return reply;
-  }
-
-  async ask(questions: QuestionSpec[]): Promise<QuestionOutcome> {
-    const reply = await Promise.race([
-      this.raise("question", {
-        questions: questions.map((question) => ({
-          question: question.question,
-          header: question.header ?? question.id,
-          options: (question.options ?? []).map((label) => ({ label, description: `${label} option` })),
-          ...(question.multiSelect ? { multiple: true } : {}),
-          ...(question.other === false ? { custom: false } : {}),
-        })),
-      }),
-      this.expiry,
-    ]);
-    if (!reply) return { kind: "cancelled", reason: "question rejected by the server" };
-    const raw = (reply.body?.answers ?? []) as string[][];
-    const answers: QuestionAnswers = {};
-    questions.forEach((question, index) => {
-      if (raw[index]) answers[question.question] = raw[index];
-    });
-    return { kind: "answered", answers };
-  }
-
-  private expire: (() => void) | undefined;
-  private expiry = this.newExpiry();
-
-  private newExpiry(): Promise<undefined> {
-    return new Promise<undefined>((resolve) => { this.expire = () => resolve(undefined); });
-  }
-
-  async requestPermission(description: string): Promise<PermissionOutcome> {
-    const reply = await this.raise("permission", { permission: "bash", patterns: [description], metadata: {}, always: [] });
-    const value = String(reply.body?.reply ?? "");
-    const message = typeof reply.body?.message === "string" ? reply.body.message : undefined;
-    const decision = value === "once" ? "accept" : value === "always" ? "acceptForSession" : "decline";
-    return { decision, ...(message ? { message } : {}) };
-  }
-
-  proposePlan(markdown: string): undefined {
-    void this.endTurn(markdown);
-    return undefined;
-  }
-
-  async endTurn(text = "Done."): Promise<void> {
-    const id = this.activeSessionId;
-    if (!id) throw new Error("no active OpenCode session");
-    const records = this.messages.get(id) ?? [];
-    const created = 1_000 + records.length * 1_000;
-    const messageID = `msg_asst_${records.length}`;
-    const partID = `prt_${records.length}`;
-    records.push({
-      info: {
-        role: "assistant",
-        id: messageID,
-        sessionID: id,
-        parentID: `msg_user_${this.turns.length}`,
-        providerID: OPENCODE_MODEL.providerID,
-        modelID: OPENCODE_MODEL.modelID,
-        mode: "build",
-        agent: "build",
-        path: { cwd: OPENCODE_DIRECTORY, root: OPENCODE_DIRECTORY },
-        cost: 0,
-        tokens: { total: 2, input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: { created, completed: created + 10 },
-      },
-      parts: [{ id: partID, sessionID: id, messageID, type: "text", text }],
-    });
-    this.busy = false;
-    this.emit({ type: "message.part.delta", properties: { sessionID: id, field: "text", delta: text, messageID, partID } });
-    this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "idle" } } });
-    this.emit({ type: "session.idle", properties: { sessionID: id } });
-  }
-
-  /** Drop every open `/global/event` stream (a network blip); the harness reconnects. */
-  dropEventStreams(): void {
-    for (const stream of this.streams.splice(0)) {
-      try { stream.error(new Error("socket hang up")); } catch { /* already closed */ }
-    }
-  }
-
-  /** Number of `/global/event` streams currently open. */
-  get openEventStreams(): number {
-    return this.streams.length;
-  }
-
-  async crashMidTurn(): Promise<void> {
-    if (!this.busy) throw new Error("no running OpenCode turn");
-    this.busy = false;
-    const onExit = this.serverExit;
-    if (!onExit) throw new Error("the OpenCode harness registered no server-exit handler");
-    onExit("opencode serve exited with code 1");
-  }
-
-  private serverExit: ((reason: string) => void) | undefined;
-
-  async expirePendingRequest(): Promise<void> {
-    const requestId = this.pendingRequestId;
-    if (!requestId) throw new Error("no pending OpenCode request");
-    this.pendingRequestId = undefined;
-    this.replyWaiters.delete(requestId);
-    this.emit({ type: `${this.pendingKind}.rejected`, properties: { sessionID: this.activeSessionId, requestID: requestId } });
-    this.expire?.();
-    this.expiry = this.newExpiry();
+    for(const value of this.fake.permissions.values()){this.fake.permissions.delete(value.id);this.fake.event("permission.replied",{sessionID:value.sessionID,requestID:value.id,reply:"reject"});}
   }
 }
 

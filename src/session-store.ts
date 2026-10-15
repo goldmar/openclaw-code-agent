@@ -629,7 +629,7 @@ export class SessionStore {
     const fallbackKind = harnessName === "codex"
       ? "codex-app-server"
       : harnessName === "opencode"
-        ? "opencode-server"
+        ? "opencode-v2"
         : "claude-code";
     return session.backendRef ?? {
       kind: session.backendKind ?? fallbackKind,

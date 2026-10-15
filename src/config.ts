@@ -65,6 +65,10 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     const existing = harnesses[name] ?? {};
     const next: HarnessConfig = {
       ...existing,
+      ...(value.command !== undefined ? {command:value.command} : {}),
+      ...(value.passEnv !== undefined ? {passEnv:[...value.passEnv]} : {}),
+      ...(value.defaultAgent !== undefined ? {defaultAgent:value.defaultAgent} : {}),
+      ...(value.serverMode !== undefined ? {serverMode:value.serverMode} : {}),
       defaultModel: value.defaultModel ?? existing.defaultModel,
       reasoningEffort: value.reasoningEffort ?? existing.reasoningEffort,
       fastMode: value.fastMode ?? existing.fastMode,

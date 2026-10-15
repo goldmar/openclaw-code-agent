@@ -27,10 +27,10 @@ describe("backend contract smoke", () => {
     assert.equal(claude.capabilities.nativePlanDecisions, true);
     assert.equal(claude.capabilities.threadActions, undefined);
 
-    assert.equal(opencode.backendKind, "opencode-server");
+    assert.equal(opencode.backendKind, "opencode-v2");
     assert.equal(opencode.capabilities.nativePendingInput, true);
     assert.equal(opencode.capabilities.nativePlanArtifacts, false);
     assert.equal(opencode.capabilities.nativePlanDecisions, true);
-    assert.equal(opencode.capabilities.threadActions, undefined);
+    assert.deepEqual(opencode.capabilities.threadActions, ["compact"]);
   });
 });

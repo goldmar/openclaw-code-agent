@@ -34,7 +34,7 @@ describe("assessResumeCandidate()", () => {
 
   it("keeps completed OpenCode server sessions resumable", () => {
     const assessment = assessResumeCandidate(completedSession("opencode", {
-      kind: "opencode-server",
+      kind: "opencode-v2",
       conversationId: "ses_opencode",
     }));
 

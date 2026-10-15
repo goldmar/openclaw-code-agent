@@ -73,7 +73,10 @@ class LoopbackOpenCodeServer {
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
     this.requests.push({ generation, method: req.method ?? "GET", path: url.pathname, connection: req.headers.connection });
+    const controller = new AbortController();
+    res.once("close",()=>controller.abort());
     const response = await this.handler(url.href, {
+      signal:controller.signal,
       method: req.method,
       ...(chunks.length > 0 ? { body: Buffer.concat(chunks).toString("utf8") } : {}),
     });
@@ -102,6 +105,7 @@ async function runTurn(harness: OpenCodeHarness, backend: OpenCodeBackend, turn:
   await backend.waitForTurns(turn);
   await backend.endTurn(text);
   await collected;
+  await session.close?.();
   return messages;
 }
 
@@ -120,7 +124,6 @@ describe("OpenCode server restarts on the same port", () => {
     const harness = new OpenCodeHarness({
       createServer: () => server.start(),
       serverIdleShutdownMs: 60_000,
-      fallbackPollIntervalMs: 5,
       streamReconnectDelayMs: 5,
     });
 
@@ -134,7 +137,7 @@ describe("OpenCode server restarts on the same port", () => {
     const completed = second.find((message): message is Extract<HarnessMessage, { type: "run_completed" }> => message.type === "run_completed");
     assert.equal(completed?.data.success, true, JSON.stringify(completed?.data));
     assert.equal(server.generation, 2);
-    assert.ok(server.requests.some((request) => request.generation === 2 && request.path === "/session"));
+    assert.ok(server.requests.some((request) => request.generation === 2 && request.path === "/api/session"));
     assert.deepEqual(
       server.requests.filter((request) => request.connection !== "close"),
       [],
@@ -164,7 +167,7 @@ describe("OpenCode request retry", () => {
     let resets = 0;
     const flakyFetch: typeof fetch = async (input, init) => {
       const url = new URL(typeof input === "string" ? input : (input as Request).url);
-      if ((init?.method ?? "GET") === "GET" && url.pathname.endsWith("/message") && resets === 0) {
+      if ((init?.method ?? "GET") === "GET" && url.pathname === "/api/info" && resets === 0) {
         resets += 1;
         throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
       }
@@ -174,7 +177,6 @@ describe("OpenCode request retry", () => {
       createServer: async () => ({ baseUrl: "http://opencode.test", close: async () => undefined }),
       fetch: flakyFetch,
       serverIdleShutdownMs: 0,
-      fallbackPollIntervalMs: 5,
       streamReconnectDelayMs: 5,
     });
 

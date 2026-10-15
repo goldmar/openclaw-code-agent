@@ -27,7 +27,7 @@ const HANDLED_KEYWORDS = new Set([
   "propertyNames", "items", "prefixItems", "minItems", "maxItems", "uniqueItems", "minimum", "maximum",
   "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "pattern", "anyOf", "oneOf", "allOf", "not",
   // Nested definition containers are only reached through $ref.
-  "definitions", "v2",
+  "definitions", "$defs", "v2",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -301,12 +301,20 @@ export function openCodeResponseErrors(method: string, path: string, status: num
   return openCode().validate(body, schema);
 }
 
-/** One `/global/event` server-sent event (`{directory, payload}`). */
+/** Validate both the event envelope and the type-specific data schema. */
+const eventDocument = new SchemaDocument(JSON.parse(readFileSync(new URL("./protocol/opencode-events.schema.json", import.meta.url), "utf8")));
 export function openCodeEventErrors(frame: unknown): string[] {
-  const { operation } = openCodeOperation("GET", "/global/event");
-  const schema = operation.responses?.["200"]?.content?.["text/event-stream"]?.schema;
-  if (!schema) throw new Error("protocol-schema: vendored OpenCode OpenAPI has no /global/event schema");
-  return openCode().validate(frame, schema);
+  return eventDocument.validate(frame, eventDocument.root);
+}
+
+/** Session logs carry either a durable event or the replay watermark. */
+const logSynced = new SchemaDocument(eventDocument.root["x-oca-log-synced"] as Record<string,unknown>);
+export function openCodeLogErrors(frame:unknown):string[] {
+  const value=typeof frame === "string"?JSON.parse(frame):frame;
+  if(isRecord(value) && value.type === "log.synced")return logSynced.validate(value,logSynced.root);
+  const errors=openCodeEventErrors(value);
+  if(isRecord(value) && !("durable" in value))errors.push("$: log events must be durable");
+  return errors;
 }
 
 /** Record and throw a protocol violation so it cannot be swallowed by a harness catch. */

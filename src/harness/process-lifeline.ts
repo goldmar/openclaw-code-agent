@@ -162,15 +162,16 @@ function startWatchdog(server: number, marker: string): ChildProcess | undefined
 export function spawnWithLifeline(
   command: string,
   args: readonly string[],
-  options: Omit<SpawnOptionsWithoutStdio, "stdio" | "detached">,
+  options: Omit<SpawnOptionsWithoutStdio, "stdio" | "detached"> & { stdin?: "pipe" | "ignore" },
 ): LifelineChild {
+  const { stdin = "ignore", ...spawnOptions } = options;
   const supported = lifelineSupported();
   const marker = randomBytes(16).toString("hex");
   const child = spawn(command, [...args], {
-    ...options,
+    ...spawnOptions,
     env: { ...(options.env ?? process.env), [LIFELINE_ENV]: marker },
     detached: supported,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdin, "pipe", "pipe"],
   }) as unknown as ChildProcessWithoutNullStreams;
   const watchdog = supported && child.pid ? startWatchdog(child.pid, marker) : undefined;
   const stopWatchdog = (): void => {

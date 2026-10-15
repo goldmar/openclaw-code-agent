@@ -9,6 +9,14 @@ type SessionIdentity = {
   backendRef?: SessionBackendRef;
 };
 
+/** Retire recorded 1.x conversations, not v2 launches stopped before creation. */
+export function isRetiredOpenCodeSession(session: SessionIdentity, harness?: string): boolean {
+  return session.backendRef?.kind === "opencode-server" || (
+    harness === "opencode" &&
+    !session.backendRef && !!session.harnessSessionId
+  );
+}
+
 /**
  * The backend conversation id. A live session sets `harnessSessionId` only from
  * its backend ref, and every loadable persisted row carries a backend ref (4.x
