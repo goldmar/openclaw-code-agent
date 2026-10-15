@@ -7,7 +7,8 @@ export type ResumableSessionLike = Session | PersistedSessionInfo;
 export type ResumeUnavailableReason =
   | "already_running"
   | "completed"
-  | "missing_backend_state";
+  | "missing_backend_state"
+  | "backend_protocol_retired";
 
 export type ResumeAssessment =
   | {
@@ -45,7 +46,7 @@ export function isCompletedByDefault(session: ResumableSessionLike): boolean {
 const RESUMABLE_COMPLETED_BACKENDS: ReadonlySet<string> = new Set([
   "claude-code",
   "codex-app-server",
-  "opencode-server",
+  "opencode-v2",
 ]);
 
 function canResumeCompletedSession(session: ResumableSessionLike): boolean {
@@ -59,6 +60,9 @@ function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {
 }
 
 export function assessResumeCandidate(session: ResumableSessionLike): ResumeAssessment {
+  if (session.backendRef?.kind === "opencode-server" || ("harnessName" in session ? session.harnessName : session.harness) === "opencode" && !session.backendRef) {
+    return {kind:"unavailable",reason:"backend_protocol_retired",stableSessionId:getStableSessionId(session)};
+  }
   if (session.status === "running") {
     return { kind: "direct", reason: "already_running" };
   }

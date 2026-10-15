@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
-  "version": "5.2.2",
+  "version": "6.0.0",
   "contracts": {
     "tools": [
       "agent_launch",
@@ -159,6 +159,28 @@
                 "auto_review"
               ],
               "description": "Codex-only reviewer for approval requests: 'user' (requests are sent to the chat as approval buttons) or 'auto_review' (opt-in; Codex's reviewer subagent approves or denies each request based on the task and its risk). Unset follows the host tools.exec.mode: 'auto_review' for 'auto', 'user' otherwise."
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "passEnv": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "uniqueItems": true
+            },
+            "defaultAgent": {
+              "type": "string",
+              "minLength": 1
+            },
+            "serverMode": {
+              "type": "string",
+              "enum": [
+                "private"
+              ]
             }
           }
         }
@@ -350,7 +372,7 @@
     },
     "defaultHarness": {
       "label": "Default harness",
-      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine. Pick OpenCode when local opencode >= 1.16.2 and provider auth are ready.",
+      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine. Pick OpenCode when local opencode >= 2.0.29 (@opencode/cli) and provider auth are ready.",
       "placeholder": "claude-code"
     },
     "permissionMode": {
@@ -417,6 +439,18 @@
       "label": "Repository goal verification policies",
       "help": "Operator-owned repository paths and complete required suites, with optional explicit defaultRequiredCommands. Goal checks append to the baseline. Linked worktrees share repository identity. Active goals are invalidated only when their selected policy or identity changes.",
       "advanced": true
+    },
+    "harnesses.opencode.command": {
+      "label": "OpenCode command"
+    },
+    "harnesses.opencode.passEnv": {
+      "label": "OpenCode environment allowlist"
+    },
+    "harnesses.opencode.defaultAgent": {
+      "label": "OpenCode build agent"
+    },
+    "harnesses.opencode.serverMode": {
+      "label": "OpenCode server mode"
     }
   },
   "skills": [

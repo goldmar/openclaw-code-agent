@@ -141,7 +141,7 @@ export interface HarnessLaunchOptions {
    * Drop the latest N backend turns before continuing. With `forkSession` the
    * fork is created before those turns; without it the resumed conversation
    * continues from before them (Codex reverts the thread, Claude Code resumes
-   * at an earlier message; OpenCode supports only the fork). Files are not
+   * at an earlier message; OpenCode supports in-place rewind). Files are not
    * reverted.
    */
   rewindTurns?: number;

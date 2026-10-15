@@ -1,0 +1,54 @@
+{
+  "messages": [
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "text_delta",
+      "text": "OPENCODE_OK"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    },
+    {
+      "type": "activity"
+    }
+  ],
+  "result": "OPENCODE_OK"
+}

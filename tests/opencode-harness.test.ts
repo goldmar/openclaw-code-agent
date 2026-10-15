@@ -1,1414 +1,525 @@
 import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
 import {
-  candidateSearchPaths,
-  findOpenCodeModelInfo,
   OpenCodeHarness,
-  openCodeAgentForMode,
   permissionRulesForMode,
+  privateServerEnvironment,
   resolveCommandPath,
-  startOpenCodeServer,
-  type OpenCodeServerHandle,
+  candidateSearchPaths,
 } from "../src/harness/opencode";
-import type { HarnessLaunchOptions, HarnessMessage, HarnessSession } from "../src/harness/types";
-import { resolvePendingInputAnswer } from "../src/pending-input-normalization";
-
-type RequestRecord = {
-  method: string;
-  path: string;
-  directory?: string;
-  body?: any;
-  query?: URLSearchParams;
-  authorization?: string;
-};
-
-type MockSession = {
-  id: string;
-  directory?: string;
-  messages: unknown[];
-};
-
-/**
- * In-memory OpenCode server: classic JSON routes with `?directory=`, one
- * `/global/event` SSE stream (events wrapped as `{directory, payload}`).
- */
-class MockOpenCodeServer {
-  requests: RequestRecord[] = [];
-  closed = false;
-  createCount = 0;
-  sessionCost: number | undefined = 0.25;
-  /** Automatically answer each prompt and emit busy → idle events. */
-  autoComplete = true;
-  replyText = "Final.";
-  replyError: unknown;
-  statuses: Record<string, { type: string }> = {};
-  failQuestionReplies = false;
-  failSessionPatch = false;
-  failRoute?: (method: string, path: string) => Response | Promise<Response> | undefined;
-  readonly sessions = new Map<string, MockSession>();
-  providers: unknown = { providers: [], default: {} };
-  private nextSession = 0;
-  private streams: ReadableStreamDefaultController<Uint8Array>[] = [];
-  private readonly encoder = new TextEncoder();
-  private exitListeners: Array<(reason: string) => void> = [];
-
-  fetch: typeof fetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : (input as Request).url);
-    const method = init?.method ?? "GET";
-    const path = url.pathname;
-    const directory = url.searchParams.get("directory") ?? undefined;
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    this.requests.push({ method, path, directory, body, query: url.searchParams, authorization: headers.Authorization });
-
-    const override = await this.failRoute?.(method, path);
-    if (override) return override;
-
-    if (path === "/global/event") {
-      return new Response(new ReadableStream<Uint8Array>({
-        start: (controller) => {
-          this.streams.push(controller);
-        },
-        cancel: () => undefined,
-      }), { status: 200, headers: { "content-type": "text/event-stream" } });
-    }
-    if (method === "POST" && path === "/session") {
-      const id = `ses_${++this.nextSession}`;
-      this.sessions.set(id, { id, directory, messages: [] });
-      return json({ id, directory });
-    }
-    const forkMatch = /^\/session\/([^/]+)\/fork$/.exec(path);
-    if (method === "POST" && forkMatch) {
-      const id = `ses_fork_${++this.nextSession}`;
-      // Like OpenCode: the fork copies the messages before `messageID`.
-      const source = this.session(forkMatch[1]).messages;
-      const cut = body?.messageID ? source.findIndex((entry) => (entry as { info: { id: string } }).info.id === body.messageID) : -1;
-      this.sessions.set(id, { id, directory, messages: cut >= 0 ? source.slice(0, cut) : [...source] });
-      return json({ id });
-    }
-    if (method === "GET" && path === "/session/status") return json(this.statuses);
-    const messageMatch = /^\/session\/([^/]+)\/message$/.exec(path);
-    if (method === "GET" && messageMatch) {
-      // Like OpenCode: `limit` returns the newest N messages (oldest first);
-      // `x-next-cursor` pages to older ones via `before`.
-      const all = this.session(messageMatch[1]).messages;
-      const limit = url.searchParams.get("limit");
-      if (limit === null) return json(all);
-      const end = url.searchParams.get("before") ? Number(url.searchParams.get("before")) : all.length;
-      const start = Math.max(0, end - Number(limit));
-      const response = json(all.slice(start, end));
-      if (start > 0) response.headers.set("x-next-cursor", String(start));
-      return response;
-    }
-    if (method === "GET" && path === "/config/providers") return json(this.providers);
-    const promptMatch = /^\/session\/([^/]+)\/prompt_async$/.exec(path);
-    if (method === "POST" && promptMatch) {
-      const id = promptMatch[1];
-      this.session(id).messages.push({ info: { role: "user", id: `msg_user_${this.requests.length}` }, parts: [] });
-      if (this.autoComplete) queueMicrotask(() => this.completeTurn(id));
-      return new Response(null, { status: 204 });
-    }
-    const abortMatch = /^\/session\/([^/]+)\/abort$/.exec(path);
-    if (method === "POST" && abortMatch) return json(true);
-    const sessionMatch = /^\/session\/([^/]+)$/.exec(path);
-    if (method === "GET" && sessionMatch) return json({ id: sessionMatch[1], cost: this.sessionCost });
-    if (method === "PATCH" && sessionMatch) {
-      if (this.failSessionPatch) return new Response(JSON.stringify({ error: "permission patch failed" }), { status: 500 });
-      return json({ id: sessionMatch[1] });
-    }
-    if (method === "POST" && path.startsWith("/permission/") && path.endsWith("/reply")) return json(true);
-    if (method === "POST" && path.startsWith("/question/") && path.endsWith("/reply")) {
-      if (this.failQuestionReplies) return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
-      return json(true);
-    }
-    return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
-  };
-
-  session(id: string): MockSession {
-    let session = this.sessions.get(id);
-    if (!session) {
-      session = { id, messages: [] };
-      this.sessions.set(id, session);
-    }
-    return session;
-  }
-
-  /** Append an assistant reply and emit the busy → text → idle event sequence. */
-  completeTurn(id: string, text = this.replyText): void {
-    const created = 1_000 + this.session(id).messages.length * 1_000;
-    this.session(id).messages.push({
-      info: {
-        role: "assistant",
-        id: `msg_asst_${this.session(id).messages.length}`,
-        providerID: "openai",
-        modelID: "gpt-5.5",
-        cost: 0.1,
-        tokens: { total: 1_600, input: 1_000, output: 200, reasoning: 50, cache: { read: 400, write: 0 } },
-        time: { created, completed: created + 750 },
-        ...(this.replyError ? { error: this.replyError } : {}),
-      },
-      parts: [{ type: "text", text }],
-    });
-    this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "busy" } } });
-    this.emit({ type: "message.part.delta", properties: { sessionID: id, field: "text", delta: text } });
-    this.emit({ type: "session.status", properties: { sessionID: id, status: { type: "idle" } } });
-    this.emit({ type: "session.idle", properties: { sessionID: id } });
-  }
-
-  emit(payload: unknown, directory = "/repo"): void {
-    const frame = this.encoder.encode(`data: ${JSON.stringify({ directory, payload })}\n\n`);
-    for (const stream of this.streams) {
-      try {
-        stream.enqueue(frame);
-      } catch {
-        // closed stream
-      }
-    }
-  }
-
-  dropStreams(): void {
-    for (const stream of this.streams.splice(0)) {
-      try {
-        stream.close();
-      } catch {
-        // already closed
-      }
-    }
-  }
-
-  crash(reason = "OpenCode server exited unexpectedly (SIGKILL)."): void {
-    this.dropStreams();
-    for (const listener of this.exitListeners) listener(reason);
-  }
-
-  handle(): OpenCodeServerHandle {
-    this.createCount += 1;
-    this.closed = false;
-    return {
-      baseUrl: "http://opencode.test",
-      close: async () => {
-        this.closed = true;
-        this.dropStreams();
-      },
-      onExit: (listener) => {
-        this.exitListeners.push(listener);
-      },
-    };
-  }
-
-  requestsTo(method: string, pattern: RegExp): RequestRecord[] {
-    return this.requests.filter((request) => request.method === method && pattern.test(request.path));
-  }
-}
-
-function json(value: unknown): Response {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function htmlShell(): Response {
-  return new Response("<!doctype html><html><head><title>OpenCode</title></head><body><div id=\"root\"></div></body></html>", {
-    status: 200,
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
-}
-
-function harnessFor(mock: MockOpenCodeServer, deps: Record<string, unknown> = {}): OpenCodeHarness {
-  return new OpenCodeHarness({
-    createServer: async () => mock.handle(),
-    fetch: mock.fetch,
-    serverIdleShutdownMs: 0,
-    fallbackPollIntervalMs: 5,
-    streamReconnectDelayMs: 5,
-    ...deps,
-  });
-}
-
-/** Multi-turn prompt source like Session's MessageStream. */
-function promptStream() {
-  const queue: unknown[] = [];
-  let wake: (() => void) | undefined;
-  let ended = false;
-  return {
-    push(text: string) {
-      queue.push({ type: "user", text });
-      wake?.();
-    },
-    end() {
-      ended = true;
-      wake?.();
-    },
-    async *[Symbol.asyncIterator]() {
-      while (true) {
-        while (queue.length > 0) yield queue.shift();
-        if (ended) return;
-        await new Promise<void>((resolve) => { wake = resolve; });
-        wake = undefined;
-      }
-    },
-  };
-}
-
-class Collector {
-  readonly messages: HarnessMessage[] = [];
-  private waiters: Array<{ predicate: (messages: HarnessMessage[]) => boolean; resolve: () => void }> = [];
-  readonly done: Promise<void>;
-
-  constructor(readonly session: HarnessSession) {
-    this.done = (async () => {
-      for await (const message of session.messages) {
-        this.messages.push(message);
-        this.check();
-      }
-      this.check();
-    })();
-  }
-
-  private check(): void {
-    for (const waiter of [...this.waiters]) {
-      if (waiter.predicate(this.messages)) {
-        this.waiters.splice(this.waiters.indexOf(waiter), 1);
-        waiter.resolve();
-      }
-    }
-  }
-
-  async until(predicate: (messages: HarnessMessage[]) => boolean, label = "condition", timeoutMs = 2_000): Promise<void> {
-    if (predicate(this.messages)) return;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}; saw ${this.messages.map((m) => m.type).join(",")}`)), timeoutMs);
-      this.waiters.push({ predicate, resolve: () => { clearTimeout(timer); resolve(); } });
-    });
-  }
-
-  completions() {
-    return this.messages.filter((message): message is Extract<HarnessMessage, { type: "run_completed" }> => message.type === "run_completed");
-  }
-
-  async untilCompletions(count: number): Promise<void> {
-    await this.until((messages) => messages.filter((message) => message.type === "run_completed").length >= count, `${count} completion(s)`);
-  }
-
-  pending() {
-    return this.messages.filter((message): message is Extract<HarnessMessage, { type: "pending_input" }> => message.type === "pending_input");
-  }
-}
-
-function launch(harness: OpenCodeHarness, options: Partial<HarnessLaunchOptions> = {}) {
-  const stream = promptStream();
-  const session = harness.launch({ prompt: stream, cwd: "/repo", ...options });
-  return { stream, session, collector: new Collector(session) };
-}
-
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_000): Promise<void> {
-  const startedAt = Date.now();
+import { OpenCodeFakeServer } from "./opencode-fake-server";
+import type { HarnessMessage, HarnessSession } from "../src/harness/types";
+import { TurnTracker } from "../src/harness/opencode/turn";
+import { EventMapper } from "../src/harness/opencode/mapper";
+import { EventCursor } from "../src/harness/opencode/event-cursor";
+import { OpenCodeClient } from "../src/harness/opencode/client";
+import { newMessageId } from "../src/harness/opencode/ids";
+import { sseFrames } from "../src/harness/opencode/sse";
+import { assessResumeCandidate } from "../src/session-resume";
+import { setPluginConfig, pluginConfig } from "../src/config";
+import { PendingInputCoordinator } from "../src/harness/opencode/interaction";
+import { OpenCodeApiError } from "../src/harness/opencode/errors";
+import { UsageAccumulator } from "../src/harness/opencode/usage";
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const end = Date.now() + 3000;
   while (!predicate()) {
-    if (Date.now() - startedAt > timeoutMs) throw new Error(`Timed out waiting for ${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    if (Date.now() > end) throw new Error("timed out");
+    await new Promise((r) => setTimeout(r, 5));
   }
 }
-
-function installFakeOpenCodeServer(script: string, dir = mkdtempSync(join(tmpdir(), "openclaw-opencode-test-"))): string {
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, "opencode");
-  writeFileSync(file, `#!/usr/bin/env node\n${script}`);
-  chmodSync(file, 0o755);
-  return file;
+function collect(session: HarnessSession) {
+  const events: HarnessMessage[] = [];
+  const done = (async () => {
+    for await (const e of session.messages) events.push(e);
+  })();
+  return { events, done };
 }
-
-async function withOpenCodeCommand<T>(command: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_OPENCODE_COMMAND;
-  process.env.OPENCLAW_OPENCODE_COMMAND = command;
-  try {
-    return await fn();
-  } finally {
-    if (previous === undefined) delete process.env.OPENCLAW_OPENCODE_COMMAND;
-    else process.env.OPENCLAW_OPENCODE_COMMAND = previous;
-  }
+function harness(fake: OpenCodeFakeServer) {
+  return new OpenCodeHarness({
+    fetch: fake.fetch,
+    createServer: async () => fake.handle(),
+    serverIdleShutdownMs: 0,
+    streamReconnectDelayMs: 5,
+  });
 }
-
-describe("OpenCodeHarness static properties", () => {
-  const h = new OpenCodeHarness();
-
-  it("exposes the OpenCode backend contract", () => {
-    assert.equal(h.name, "opencode");
-    assert.equal(h.backendKind, "opencode-server");
-    assert.deepEqual([...h.supportedPermissionModes], ["default", "plan", "bypassPermissions"]);
-    assert.equal(h.capabilities.nativePendingInput, true);
-    assert.equal(h.capabilities.nativePlanArtifacts, false);
-    assert.equal(Object.hasOwn(h.capabilities, "worktrees"), false);
-    assert.equal(h.capabilities.nativePlanDecisions, true);
-  });
-
-  it("builds user messages without a session id", () => {
-    assert.deepEqual(h.buildUserMessage("hello", "ses_1"), { type: "user", text: "hello" });
-  });
-
-  it("maps permission modes to built-in agents and a minimal permission overlay", () => {
-    assert.equal(openCodeAgentForMode("plan"), "plan");
-    assert.equal(openCodeAgentForMode("default"), "build");
-    assert.equal(openCodeAgentForMode("bypassPermissions"), "build");
-    assert.deepEqual(permissionRulesForMode("plan"), [
-      { permission: "bash", pattern: "*", action: "deny" },
-      { permission: "external_directory", pattern: "*", action: "deny" },
-    ]);
-    assert.ok(permissionRulesForMode("default").every((rule) => rule.action === "ask"));
-    assert.ok(permissionRulesForMode("bypassPermissions").every((rule) => rule.action === "allow"));
-    assert.deepEqual(permissionRulesForMode("default").map((rule) => rule.permission), ["edit", "bash", "task", "todowrite", "external_directory"]);
-  });
-
-  it("parses multi-select answers from labels or option numbers", () => {
-    const question = {
-      id: "sizes",
-      question: "Sizes?",
-      multiSelect: true,
-      options: [{ label: "Small", value: "S" }, { label: "Medium" }, { label: "Large", value: "L" }],
-    };
-    assert.deepEqual(resolvePendingInputAnswer(question, "1, large\nMedium, custom"), { ok: true, answers: ["S", "L", "Medium", "custom"] });
-  });
-});
-
-describe("OpenCodeHarness turns on the shared server", () => {
-  it("creates a directory-scoped session, prompts the build agent, and completes on SSE idle", async () => {
-    const mock = new MockOpenCodeServer();
-    const { stream, collector } = launch(harnessFor(mock), {
-      cwd: "/work/repo",
-      model: "openai/gpt-5.5",
-      reasoningEffort: "high",
-      permissionMode: "default",
-    });
-    stream.push("Do the task");
-    await collector.untilCompletions(1);
-
-    const [create] = mock.requestsTo("POST", /^\/session$/);
-    assert.equal(create?.directory, "/work/repo");
-    assert.deepEqual(create?.body.model, { id: "gpt-5.5", providerID: "openai" });
-    assert.deepEqual(create?.body.permission, permissionRulesForMode("default"));
-    const [prompt] = mock.requestsTo("POST", /\/prompt_async$/);
-    assert.equal(prompt?.directory, "/work/repo");
-    assert.equal(prompt?.body.agent, "build");
-    assert.equal(prompt?.body.variant, "high");
-    assert.deepEqual(prompt?.body.model, { providerID: "openai", modelID: "gpt-5.5" });
-    assert.ok(mock.requests.every((request) => request.path === "/global/event" || request.directory === "/work/repo"));
-
-    const [completion] = collector.completions();
-    assert.equal(completion?.data.success, true);
-    assert.equal(completion?.data.result, "Final.");
-    assert.equal(completion?.data.session_id, "ses_1");
-    assert.equal(completion?.data.total_cost_usd, 0.25, "session record cost wins");
-    assert.equal(completion?.data.duration_ms, 750, "duration comes from the assistant records");
-    assert.deepEqual(completion?.data.usage?.models, [{
-      model: "openai/gpt-5.5",
-      costUsd: 0.1,
-      inputTokens: 1_000,
-      outputTokens: 200,
-      reasoningTokens: 50,
-      cacheReadTokens: 400,
-      cacheWriteTokens: 0,
-    }]);
-    assert.equal(completion?.data.usage?.contextTokens, 1_600);
-    assert.ok(collector.messages.some((message) => message.type === "backend_ref" && message.ref.conversationId === "ses_1"));
-    assert.ok(collector.messages.some((message) => message.type === "text_delta" && message.text === "Final."));
-    assert.equal(mock.requestsTo("GET", /^\/session\/status$/).length, 0, "no status polling while the stream is healthy");
-    stream.end();
-    await collector.done;
-    assert.equal(mock.closed, true);
-  });
-
-  it("falls back to summed message costs when the session record has no cost", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.sessionCost = undefined;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.total_cost_usd, 0.1);
-    stream.end();
-    await collector.done;
-  });
-
-  it("uses the read-only plan agent in plan mode and switches to build after approval", async () => {
-    const mock = new MockOpenCodeServer();
-    const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "plan" });
-    stream.push("Plan it");
-    await collector.untilCompletions(1);
-    assert.deepEqual(mock.requestsTo("POST", /^\/session$/)[0]?.body.permission, permissionRulesForMode("plan"));
-    assert.equal(mock.requestsTo("POST", /\/prompt_async$/)[0]?.body.agent, "plan");
-
-    await session.setPermissionMode?.("bypassPermissions");
-    const [patch] = mock.requestsTo("PATCH", /^\/session\/ses_1$/);
-    assert.deepEqual(patch?.body.permission, permissionRulesForMode("bypassPermissions"));
-    await collector.until(
-      (messages) => messages.some((message) => message.type === "settings_changed" && message.permissionMode === "bypassPermissions"),
-      "settings change",
+function terminal(events: HarnessMessage[]) {
+  return events.findLast(
+    (e): e is Extract<HarnessMessage, { type: "run_completed" }> =>
+      e.type === "run_completed",
+  )?.data;
+}
+describe("OpenCode 2.0 harness", () => {
+  it("runs through the v2 envelope, full text and authoritative terminal", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.autoComplete = true;
+    const { events, done } = collect(
+      harness(fake).launch({
+        prompt: "hello",
+        cwd: "/tmp",
+        systemPrompt: "system",
+      }),
     );
-
-    stream.push("Approved. Go ahead.");
-    await collector.untilCompletions(2);
-    assert.equal(mock.requestsTo("POST", /\/prompt_async$/)[1]?.body.agent, "build");
-    stream.end();
-    await collector.done;
+    await done;
+    assert.equal(terminal(events)?.outcome, "completed");
+    assert.equal(terminal(events)?.outcomeAuthoritative, true);
+    assert.equal(terminal(events)?.result, "Done.");
+    assert.ok(terminal(events)!.duration_ms < 10000);
+    assert.equal(events[0].type, "backend_ref");
+    assert.equal(events.filter((e) => e.type === "run_started").length, 1);
+    assert.ok(fake.instructions.size);
+    assert.deepEqual(fake.protocolViolations, []);
   });
-
-  it("does not emit settings changes when the permission patch fails", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.failSessionPatch = true;
-    const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "plan" });
-    stream.push("Plan it");
-    await collector.untilCompletions(1);
-    await assert.rejects(() => session.setPermissionMode!("bypassPermissions"), /permission patch failed/);
-    assert.equal(collector.messages.some((message) => message.type === "settings_changed"), false);
-    stream.end();
-    await collector.done;
+  it("enforces plan subagent denial without a blanket bypass rule", () => {
+    assert.ok(
+      permissionRulesForMode("plan").some(
+        (r) => r.action === "subagent" && r.effect === "deny",
+      ),
+    );
+    assert.ok(
+      permissionRulesForMode("plan").some(
+        (r) => r.action === "shell" && r.effect === "deny",
+      ),
+    );
+    assert.ok(
+      permissionRulesForMode("bypassPermissions").every(
+        (r) => r.action !== "*",
+      ),
+    );
   });
-
-  it("stores permission mode changes before startup without starting OpenCode", async () => {
-    const mock = new MockOpenCodeServer();
-    const harness = harnessFor(mock);
-    const { stream, session, collector } = launch(harness, { permissionMode: "plan" });
-    await session.setPermissionMode?.("bypassPermissions");
-    assert.equal(mock.createCount, 0);
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.deepEqual(mock.requestsTo("POST", /^\/session$/)[0]?.body.permission, permissionRulesForMode("bypassPermissions"));
-    assert.equal(mock.requestsTo("POST", /\/prompt_async$/)[0]?.body.agent, "build");
-    stream.end();
-    await collector.done;
-  });
-
-  it("sends the system prompt with every prompt: OpenCode reads only the latest message's system (B13)", async () => {
-    const mock = new MockOpenCodeServer();
-    const { stream, collector } = launch(harnessFor(mock), { systemPrompt: "  Stay in the worktree.  " });
-    stream.push("one");
-    await collector.untilCompletions(1);
-    stream.push("two");
-    await collector.untilCompletions(2);
-    const prompts = mock.requestsTo("POST", /\/prompt_async$/);
-    assert.equal(prompts[0]?.body.system, "Stay in the worktree.");
-    assert.equal(prompts[1]?.body.system, "Stay in the worktree.");
-    stream.end();
-    await collector.done;
-  });
-
-  it("confirms an idle event that arrives without turn activity before completing", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    mock.statuses = { ses_1: { type: "busy" } };
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    // A stale idle with no new assistant message must not complete the turn.
-    mock.emit({ type: "session.idle", properties: { sessionID: "ses_1" } });
-    await waitFor(() => mock.requestsTo("GET", /^\/session\/status$/).length >= 1, "idle confirmation");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(collector.completions().length, 0);
-
-    mock.statuses = {};
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-
-  it("fails the turn from session.error events", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "session.error", properties: { sessionID: "ses_1", error: { name: "APIError", data: { message: "Provider rejected the request" } } } });
-    await collector.untilCompletions(1);
-    const [completion] = collector.completions();
-    assert.equal(completion?.data.success, false);
-    assert.equal(completion?.data.outcome, "failed");
-    assert.equal(completion?.data.result, "Provider rejected the request");
-    stream.end();
-    await collector.done;
-  });
-
-  it("fails a completed turn whose last assistant record carries an error", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.replyError = { name: "ProviderAuthError", data: { message: "Token refresh failed: 401" } };
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.outcome, "failed");
-    assert.equal(collector.completions()[0]?.data.result, "Token refresh failed: 401");
-    stream.end();
-    await collector.done;
-  });
-
-  it("streams text deltas and reports each tool call once with its input", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    const toolPart = (status: string, input: unknown) => ({
-      type: "message.part.updated",
-      properties: { part: { sessionID: "ses_1", type: "tool", tool: "bash", callID: "call_1", state: { status, input } } },
-    });
-    mock.emit(toolPart("pending", {}));
-    mock.emit(toolPart("running", { command: "ls" }));
-    mock.emit(toolPart("completed", { command: "ls" }));
-    mock.emit({ type: "message.part.delta", properties: { sessionID: "ses_1", field: "reasoning", delta: "hidden" } });
-    mock.emit({ type: "message.part.delta", properties: { sessionID: "ses_1", field: "text", delta: "visible" } });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    const tools = collector.messages.filter((message) => message.type === "tool_call");
-    assert.deepEqual(tools, [{ type: "tool_call", name: "bash", input: { command: "ls" } }]);
-    const texts = collector.messages.filter((message) => message.type === "text_delta").map((message) => message.type === "text_delta" ? message.text : "");
-    // Text from different parts/messages is separated for agent_output.
-    assert.deepEqual(texts, ["visible", "\n\n", "Final."]);
-    stream.end();
-    await collector.done;
-  });
-
-  it("separates text parts but not deltas of the same part", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    const delta = (partID: string, text: string) => ({
-      type: "message.part.delta",
-      properties: { sessionID: "ses_1", messageID: "msg_1", partID, field: "text", delta: text },
-    });
-    mock.emit(delta("prt_1", "Hello "));
-    mock.emit(delta("prt_1", "world."));
-    mock.emit(delta("prt_2", "Second part."));
-    await collector.until((messages) => messages.some((message) => message.type === "text_delta" && message.text === "Second part."), "second part");
-    const texts = collector.messages.filter((message) => message.type === "text_delta").map((message) => message.type === "text_delta" ? message.text : "");
-    assert.equal(texts.join(""), "Hello world.\n\nSecond part.");
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
-  });
-
-  it("sends a follow-up queued during a running turn as the next turn instead of dropping it", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("first");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "first prompt");
-    stream.push("second");
-    await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
-    mock.completeTurn("ses_1");
-    // The first turn's result is deferred to the queued turn, so the session
-    // never sees an idle end while the follow-up is pending.
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 2, "follow-up prompt");
-    assert.equal(collector.completions().length, 0);
-    const prompts = mock.requestsTo("POST", /\/prompt_async$/);
-    assert.match(JSON.stringify(prompts[1]?.body), /second/);
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-
-  it("normalizes numbered v2 sync event names", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "sync", name: "session.next.text.delta.1", data: { sessionID: "ses_1", delta: "v2 text" } });
-    mock.emit({ type: "sync", name: "session.next.tool.called.1", data: { sessionID: "ses_1", tool: "read", input: { path: "a" } } });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.ok(collector.messages.some((message) => message.type === "text_delta" && message.text === "v2 text"));
-    assert.ok(collector.messages.some((message) => message.type === "tool_call" && message.name === "read"));
-    stream.end();
-    await collector.done;
-  });
-
-  it("rejects HTML 200 responses instead of accepting the OpenCode app shell as JSON", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.failRoute = (method, path) => (method === "POST" && path === "/session" ? htmlShell() : undefined);
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.success, false);
-    assert.match(collector.completions()[0]?.data.result ?? "", /expected JSON API response but received content-type text\/html.*OpenCode web UI HTML app shell/);
-    stream.end();
-    await collector.done;
-  });
-
-  it("fails a turn with no activity for the limit and aborts it on the server (B15)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock, { turnTimeoutMs: 30 }));
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.match(collector.completions()[0]?.data.result ?? "", /showed no activity for 0 s; the turn was aborted/);
-    await waitFor(() => mock.requestsTo("POST", /\/abort$/).length === 1, "server-side abort");
-    stream.end();
-    await collector.done;
-  });
-
-  it("restarts the turn limit on activity and pauses it while a question waits for the user (B15)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock, { turnTimeoutMs: 120 }));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    // Activity every 60 ms for 300 ms: longer than the limit in total, never idle that long.
-    for (let tick = 0; tick < 5; tick += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      mock.emit({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } });
-    }
-    mock.emit({ type: "question.asked", properties: { id: "que_wait", sessionID: "ses_1", question: "Which branch?" } });
-    await collector.until(() => collector.pending().length === 1, "question");
-    // The user takes far longer than the limit to answer.
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    assert.equal(collector.completions().length, 0, "waiting for the user does not count");
-    assert.equal(mock.requestsTo("POST", /\/abort$/).length, 0);
-    assert.equal(await session.submitPendingInputText?.("main"), true);
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-});
-
-describe("OpenCodeHarness shared server lifecycle", () => {
-  it("shares one server across concurrent sessions and demultiplexes events by session", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const harness = harnessFor(mock);
-    const a = launch(harness, { cwd: "/repo-a" });
-    const b = launch(harness, { cwd: "/repo-b" });
-    a.stream.push("task a");
-    b.stream.push("task b");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 2, "both prompts");
-    assert.equal(mock.createCount, 1, "one shared server");
-    assert.equal(mock.requestsTo("GET", /^\/global\/event$/).length, 1, "one shared event stream");
-    const createDirs = mock.requestsTo("POST", /^\/session$/).map((request) => request.directory).sort();
-    assert.deepEqual(createDirs, ["/repo-a", "/repo-b"]);
-
-    const sessionFor = (dir: string) => [...mock.sessions.values()].find((session) => session.directory === dir)!.id;
-    mock.completeTurn(sessionFor("/repo-b"), "B done");
-    await b.collector.untilCompletions(1);
-    assert.equal(a.collector.completions().length, 0, "events for another session are ignored");
-    assert.equal(b.collector.completions()[0]?.data.result, "B done");
-
-    b.stream.end();
-    await b.collector.done;
-    assert.equal(mock.closed, false, "server stays up while a session holds it");
-    mock.completeTurn(sessionFor("/repo-a"), "A done");
-    await a.collector.untilCompletions(1);
-    a.stream.end();
-    await a.collector.done;
-    assert.equal(mock.closed, true, "last session releases the server");
-  });
-
-  it("keeps the shared server warm for the idle-shutdown window", async () => {
-    const mock = new MockOpenCodeServer();
-    const harness = harnessFor(mock, { serverIdleShutdownMs: 40 });
-    const first = launch(harness);
-    first.stream.push("one");
-    await first.collector.untilCompletions(1);
-    first.stream.end();
-    await first.collector.done;
-    assert.equal(mock.closed, false);
-
-    const second = launch(harness);
-    second.stream.push("two");
-    await second.collector.untilCompletions(1);
-    assert.equal(mock.createCount, 1, "a session within the window reuses the server");
-    second.stream.end();
-    await second.collector.done;
-    await waitFor(() => mock.closed, "idle shutdown");
-  });
-
-  it("falls back to status polling while the event stream is disconnected", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    mock.statuses = { ses_1: { type: "busy" } };
-    let blockStream = false;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = new URL(typeof input === "string" ? input : (input as Request).url);
-      if (blockStream && url.pathname === "/global/event") {
-        return await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-        });
-      }
-      return await mock.fetch(input, init);
-    };
-    const { stream, collector } = launch(harnessFor(mock, { fetch: fetchImpl }));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    blockStream = true;
-    mock.dropStreams();
-    await waitFor(() => mock.requestsTo("GET", /^\/session\/status$/).length >= 2, "fallback polling");
-    assert.equal(collector.completions().length, 0, "busy status keeps waiting");
-
-    // The turn finishes while no events can be delivered.
-    mock.session("ses_1").messages.push({ info: { role: "assistant", id: "late" }, parts: [{ type: "text", text: "Finished offline." }] });
-    mock.statuses = {};
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.result, "Finished offline.");
-    stream.end();
-    await collector.done;
-  });
-
-  it("fails in-flight turns when the server dies and restarts it for the next turn", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("first");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.crash("OpenCode server exited unexpectedly (SIGKILL).");
-    await collector.untilCompletions(1);
-    const [failed] = collector.completions();
-    assert.equal(failed?.data.success, false);
-    assert.match(failed?.data.result ?? "", /OpenCode server exited unexpectedly \(SIGKILL\)\..*session can continue in a new turn/);
-
-    mock.autoComplete = true;
-    stream.push("second");
-    await collector.untilCompletions(2);
-    assert.equal(mock.createCount, 2, "a fresh server starts for the next turn");
-    assert.equal(mock.requestsTo("POST", /^\/session$/).length, 1, "the OpenCode session continues");
-    assert.equal(collector.completions()[1]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-
-  it("interrupts only the in-flight turn and keeps accepting prompts", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock));
-    stream.push("long task");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    await session.interrupt?.();
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.outcome, "interrupted");
-    assert.equal(mock.requestsTo("POST", /\/abort$/).length, 1);
-
-    mock.autoComplete = true;
-    stream.push("redirected task");
-    await collector.untilCompletions(2);
-    assert.equal(collector.completions()[1]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-
-  it("aborts the in-flight turn on the server, releases the server and stops on close (B18)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    await session.close?.();
-    assert.equal(mock.requestsTo("POST", /\/abort$/).length, 1, "the shared server stops working on the turn");
-    assert.equal(mock.closed, true);
-    stream.end();
-    await collector.done;
-    assert.ok(collector.completions().every((completion) => completion.data.success === false));
-  });
-
-  it("interrupts startup before session creation when the launch is aborted", async () => {
-    const mock = new MockOpenCodeServer();
-    const serverRequested = Promise.withResolvers<void>();
-    let releaseServer!: () => void;
-    const serverGate = new Promise<void>((resolve) => { releaseServer = resolve; });
-    const abortController = new AbortController();
-    const harness = new OpenCodeHarness({
-      createServer: async () => {
-        serverRequested.resolve();
-        await serverGate;
-        return mock.handle();
+  it("keeps only explicitly restored scrubbed keys and replaces inherited passwords", () => {
+    const env = privateServerEnvironment(
+      {
+        PATH: "/bin",
+        GH_TOKEN: "hidden",
+        MY_PROVIDER: "yes",
+        OPENCODE_SERVER_PASSWORD: "old",
+        OPENCODE_PASSWORD: "old",
       },
-      fetch: mock.fetch,
-      serverIdleShutdownMs: 0,
-    });
-    const { stream, collector } = launch(harness, { abortController });
-    stream.push("go");
-    await serverRequested.promise;
-    abortController.abort();
-    releaseServer();
-    stream.end();
-    await collector.done;
-    assert.equal(mock.requestsTo("POST", /^\/session$/).length, 0);
-    const completion = collector.completions()[0];
-    if (completion) assert.equal(completion.data.success, false);
+      "/tmp/private.db",
+      "random",
+      ["GH_TOKEN", "OPENCODE_SERVER_PASSWORD"],
+    );
+    assert.equal(env.GH_TOKEN, "hidden");
+    assert.equal(env.OPENCODE_PASSWORD, "random");
+    assert.equal(env.OPENCODE_SERVER_PASSWORD, undefined);
+    assert.equal(env.OPENCODE_DB, "/tmp/private.db");
+    assert.equal(
+      privateServerEnvironment({ GH_TOKEN: "hidden" }, "db", "pw").GH_TOKEN,
+      undefined,
+    );
   });
-
-  it("shuts down a server whose only waiting launch was cancelled during startup", async () => {
-    const mock = new MockOpenCodeServer();
-    const serverRequested = Promise.withResolvers<void>();
-    let releaseServer!: () => void;
-    const serverGate = new Promise<void>((resolve) => { releaseServer = resolve; });
-    const abortController = new AbortController();
-    const harness = new OpenCodeHarness({
-      createServer: async () => {
-        serverRequested.resolve();
-        await serverGate;
-        return mock.handle();
-      },
-      fetch: mock.fetch,
-      serverIdleShutdownMs: 0,
-    });
-    const { stream, collector } = launch(harness, { abortController });
-    stream.push("go");
-    await serverRequested.promise;
-    abortController.abort();
-    stream.end();
-    await collector.done;
-    releaseServer();
-    await waitFor(() => mock.closed, "orphaned server shutdown");
-    assert.equal(mock.createCount, 1);
-  });
-
-  it("reports the OpenCode route that times out during session creation", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.failRoute = (method, path) => (method === "POST" && path === "/session"
-      ? new Promise<Response>(() => undefined)
-      : undefined);
-    const { stream, collector } = launch(harnessFor(mock, { requestTimeoutMs: 5 }));
-    stream.push("go");
-    await collector.untilCompletions(1);
-    assert.match(collector.completions()[0]?.data.result ?? "", /OpenCode POST \/session timed out after 5ms/);
-    assert.equal(collector.messages.some((message) => message.type === "backend_ref"), false);
-    stream.end();
-    await collector.done;
-  });
-});
-
-describe("OpenCodeHarness resume and fork", () => {
-  it("validates a resumed session once and reuses it across turns", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.session("ses_existing").directory = "/repo";
-    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_existing" });
-    stream.push("one");
-    await collector.untilCompletions(1);
-    stream.push("two");
-    await collector.untilCompletions(2);
-    assert.equal(mock.requestsTo("POST", /^\/session$/).length, 0);
-    assert.equal(mock.requestsTo("POST", /^\/session\/ses_existing\/prompt_async$/).length, 2);
-    assert.ok(collector.messages.some((message) => message.type === "backend_ref" && message.ref.conversationId === "ses_existing"));
-    stream.end();
-    await collector.done;
-  });
-
-  it("forks a resumed session once and continues on the fork", async () => {
-    const mock = new MockOpenCodeServer();
-    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_existing", forkSession: true });
-    stream.push("one");
-    await collector.untilCompletions(1);
-    stream.push("two");
-    await collector.untilCompletions(2);
-    assert.equal(mock.requestsTo("POST", /\/fork$/).length, 1);
-    const forkId = collector.completions()[0]?.data.session_id;
-    assert.match(forkId ?? "", /^ses_fork_/);
-    assert.equal(mock.requestsTo("POST", new RegExp(`^/session/${forkId}/prompt_async$`)).length, 2);
-    stream.end();
-    await collector.done;
-  });
-});
-
-describe("OpenCodeHarness pending input", () => {
-  it("maps permission requests to pending input and replies on the directory-scoped route", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "default" });
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "permission.asked", properties: { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["rm -rf build"] } });
-    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "permission prompt");
-    const [pending] = collector.pending();
-    assert.equal(pending?.state.kind, "approval");
-    assert.deepEqual(pending?.state.options, ["Allow once", "Always allow", "Reject"]);
-    assert.match(pending?.state.promptText ?? "", /bash permission for rm -rf build/);
-
-    assert.equal(await session.submitPendingInputOption?.(1, { requestId: "per_1" }), true);
-    const [reply] = mock.requestsTo("POST", /^\/permission\/per_1\/reply$/);
-    assert.deepEqual(reply?.body, { reply: "always" });
-    assert.equal(reply?.directory, "/repo");
-    mock.emit({ type: "permission.replied", properties: { sessionID: "ses_1", requestID: "per_1" } });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.messages.filter((message) => message.type === "pending_input_resolved").length, 1, "echoed reply is deduplicated");
-    stream.end();
-    await collector.done;
-  });
-
-  it("auto-approves permission requests in bypassPermissions mode", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock), { permissionMode: "bypassPermissions" });
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "permission.asked", properties: { id: "per_2", sessionID: "ses_1", permission: "edit" } });
-    await waitFor(() => mock.requestsTo("POST", /^\/permission\/per_2\/reply$/).length === 1, "auto reply");
-    assert.deepEqual(mock.requestsTo("POST", /^\/permission\/per_2\/reply$/)[0]?.body, { reply: "once" });
-    assert.equal(collector.pending().length, 0);
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
-  });
-
-  it("answers multi-question requests with one answer array per question", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock));
-    stream.push("ask me");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({
-      type: "question.asked",
-      properties: {
-        id: "que_1",
-        sessionID: "ses_1",
-        questions: [
-          { question: "Pick a color", header: "Color", options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] },
-          { question: "Pick sizes", header: "Sizes", options: [{ label: "S" }, { label: "M" }, { label: "L" }], multiple: true },
-          { question: "Anything else?", header: "Notes", options: [], custom: true },
-        ],
-      },
-    });
-    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "question");
-    const first = collector.pending()[0]!.state;
-    assert.equal(first.activeQuestionIndex, 0);
-    assert.deepEqual(first.options, ["Red", "Blue"]);
-    assert.equal(first.questions?.[1]?.multiSelect, true);
-    assert.equal(first.questions?.[1]?.allowsFreeText, true);
-
-    assert.equal(await session.submitPendingInputOption?.(1, { requestId: "que_1" }), true);
-    await collector.until(() => collector.pending().length === 2, "second question");
-    assert.equal(collector.pending()[1]?.state.activeQuestionIndex, 1);
-    assert.equal(mock.requestsTo("POST", /^\/question\//).length, 0, "no reply until every question is answered");
-
-    assert.equal(await session.submitPendingInputText?.("1, L"), true);
-    await collector.until(() => collector.pending().length === 3, "third question");
-    assert.equal(await session.submitPendingInputText?.("Ship it Friday"), true);
-
-    const [reply] = mock.requestsTo("POST", /^\/question\/que_1\/reply$/);
-    assert.deepEqual(reply?.body, { answers: [["Blue"], ["S", "L"], ["Ship it Friday"]] });
-    assert.equal(reply?.directory, "/repo");
-    mock.emit({ type: "question.replied", properties: { sessionID: "ses_1", requestID: "que_1" } });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.messages.filter((message) => message.type === "pending_input_resolved").length, 1);
-    stream.end();
-    await collector.done;
-  });
-
-  it("reports the running session cost after a finished step and while a question is pending", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    mock.sessionCost = 0;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("ask");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    const runningCosts = (): number[] => collector.messages.flatMap((message) => (
-      message.type === "usage_updated" && message.usage.costUsd !== undefined ? [message.usage.costUsd] : []
-    ));
-
-    // A finished step (OpenCode prices a step only once it finishes).
-    mock.session("ses_1").messages.push({
-      info: { role: "assistant", id: "msg_step_1", providerID: "openai", modelID: "gpt-5.5", cost: 0.02, tokens: { total: 900, input: 800, output: 100, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1_000, completed: 1_500 } },
-      parts: [{ type: "step-finish", cost: 0.02 }],
-    });
-    mock.sessionCost = 0.02;
-    mock.emit({ type: "message.part.updated", properties: { sessionID: "ses_1", part: { type: "step-finish", cost: 0.02 } } });
-    await collector.until(() => runningCosts().length === 1, "running cost after step");
-    assert.equal(runningCosts()[0], 0.02);
-    // N25: mid-turn updates read only the session's cost (no history fetch);
-    // the per-model breakdown arrives with the turn result.
-    assert.equal(mock.requestsTo("GET", /\/message$/).filter((request) => request.query?.get("limit") === null).length, 0);
-
-    // The next step asks a question; the cost so far is refreshed for the waiting view.
-    mock.sessionCost = 0.03;
-    mock.emit({ type: "question.asked", properties: { id: "que_cost", sessionID: "ses_1", question: "Which branch?" } });
-    await collector.until(() => runningCosts().length === 2, "running cost at question");
-    assert.equal(runningCosts()[1], 0.03);
-
-    mock.emit({ type: "question.replied", properties: { sessionID: "ses_1", requestID: "que_cost" } });
-    mock.sessionCost = 0.25;
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    assert.equal(collector.completions()[0]?.data.total_cost_usd, 0.25);
-    stream.end();
-    await collector.done;
-  });
-
-  it("submits structured option values for single questions", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock));
-    stream.push("ask");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({
-      type: "question.asked",
-      properties: {
-        id: "que_2",
-        sessionID: "ses_1",
-        questions: [{ question: "Policy source?", options: [{ label: "Plugin store", value: "plugin_store" }, { label: "Local" }] }],
-      },
-    });
-    await collector.until(() => collector.pending().length === 1, "question");
-    assert.equal(await session.submitPendingInputOption?.(0), true);
-    assert.deepEqual(mock.requestsTo("POST", /^\/question\/que_2\/reply$/)[0]?.body, { answers: [["plugin_store"]] });
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
-  });
-
-  it("clears a question when its turn ends, so the next prompt starts a new turn (B19)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("ask");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "question.asked", properties: { id: "que_3", sessionID: "ses_1", question: "Which branch?" } });
-    await collector.until(() => collector.pending().length === 1, "question");
-    // The turn ends without an answer (failed, aborted, or the server went away).
-    mock.emit({ type: "session.error", properties: { sessionID: "ses_1", error: { name: "UnknownError", data: { message: "boom" } } } });
-    await collector.untilCompletions(1);
-    await collector.until((messages) => messages.some((message) => message.type === "pending_input_resolved"), "stale question resolved");
-    mock.autoComplete = true;
-    stream.push("Reply with MANGO.");
-    await collector.untilCompletions(2);
-    assert.equal(mock.requestsTo("POST", /\/prompt_async$/).length, 2, "the prompt starts a new turn");
-    assert.equal(mock.requestsTo("POST", /^\/question\/que_3\/reply$/).length, 0, "it is not swallowed as an answer");
-    assert.equal(collector.completions()[1]?.data.success, true);
-    stream.end();
-    await collector.done;
-  });
-});
-
-describe("startOpenCodeServer", () => {
-  it("resolves relative OpenCode command overrides against the Gateway cwd, not the server's temp cwd", () => {
-    const base = mkdtempSync(join(tmpdir(), "openclaw-opencode-relative-"));
-    try {
-      const binDir = join(base, "bin");
-      const command = installFakeOpenCodeServer("", binDir);
-      assert.equal(resolveCommandPath("./bin/opencode", "", base), `${base}/./bin/opencode`);
-      assert.equal(realpathSync(resolveCommandPath("./bin/opencode", "", base)), realpathSync(command));
-      assert.equal(realpathSync(resolveCommandPath("opencode", "bin", base)), realpathSync(command));
-      assert.equal(resolveCommandPath("/abs/link/../opencode", "", base), "/abs/link/../opencode", "absolute overrides are not normalized");
-      assert.equal(resolveCommandPath("missing-opencode", "", base), "missing-opencode");
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
-  it("starts `opencode serve --port 0` and reads the bound URL from stdout", async () => {
-    const command = installFakeOpenCodeServer(`
-console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.");
-console.log("opencode server listening on http://127.0.0.1:43123");
-console.error(JSON.stringify(process.argv.slice(2)));
-setInterval(() => {}, 1000);
-`);
-    await withOpenCodeCommand(command, async () => {
-      const handle = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
-      try {
-        assert.equal(handle.baseUrl, "http://127.0.0.1:43123");
-      } finally {
-        await handle.close();
-      }
-    });
-    rmSync(dirname(command), { recursive: true, force: true });
-  });
-
-  it("fails with a readiness diagnostic when the listening line never appears", async () => {
-    const command = installFakeOpenCodeServer(`console.log("booting"); setInterval(() => {}, 1000);`);
-    await withOpenCodeCommand(command, async () => {
-      await assert.rejects(
-        () => startOpenCodeServer({ startupTimeoutMs: 1_500 }),
-        (error: Error) => {
-          assert.match(error.message, /Timed out waiting for OpenCode server readiness after 1500ms/);
-          assert.match(error.message, /Command: .*opencode serve --hostname 127\.0\.0\.1 --port 0 --print-logs/);
-          assert.match(error.message, /Output:\nbooting/);
-          assert.match(error.message, /PATH:/);
-          return true;
+  it("copies OpenCode configuration without sharing the allowlist array", () => {
+    const passEnv = ["PROVIDER_TOKEN"];
+    setPluginConfig({
+      harnesses: {
+        opencode: {
+          command: "/bin/opencode2",
+          passEnv,
+          defaultAgent: "custom",
+          serverMode: "private",
         },
+      },
+    });
+    passEnv.push("LATER");
+    assert.deepEqual(pluginConfig.harnesses.opencode.passEnv, [
+      "PROVIDER_TOKEN",
+    ]);
+    assert.equal(pluginConfig.harnesses.opencode.defaultAgent, "custom");
+    setPluginConfig({});
+  });
+  it("rejects old servers with an actionable version diagnostic", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.version = "1.19.0";
+    const { events, done } = collect(
+      harness(fake).launch({ prompt: "hello", cwd: "/tmp" }),
+    );
+    await done;
+    assert.equal(terminal(events)?.errorCode, "opencode_version");
+    assert.match(terminal(events)!.result!, /@opencode\/cli/);
+    assert.ok(!fake.requests.some((r) => r.path === "/api/session"));
+  });
+  it("does not settle on idle or a foreign terminal before delivery", () => {
+    const fake = new OpenCodeFakeServer();
+    const info = fake.create();
+    const turn = new TurnTracker();
+    turn.begin("msg_ours");
+    assert.equal(
+      turn.apply(
+        fake.event("session.execution.succeeded", { sessionID: info.id }),
+      ),
+      undefined,
+    );
+    turn.apply(
+      fake.event("session.inbox.delivered", {
+        sessionID: info.id,
+        inboxID: "msg_ours",
+      }),
+    );
+    assert.equal(
+      turn.apply(
+        fake.event("session.status", {
+          sessionID: info.id,
+          status: { type: "idle" },
+        }),
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      turn.apply(
+        fake.event("session.execution.succeeded", { sessionID: info.id }),
+      ),
+      { outcome: "completed" },
+    );
+  });
+  for (const reason of ["user", "shutdown", "inactivity", "superseded"]) {
+    it(`classifies ${reason} interruption`, () => {
+      const fake = new OpenCodeFakeServer();
+      const turn = new TurnTracker();
+      turn.begin("msg_ours");
+      turn.apply(
+        fake.event("session.inbox.delivered", {
+          sessionID: "ses_1",
+          inboxID: "msg_ours",
+        }),
+      );
+      const result = turn.apply(
+        fake.event("session.execution.interrupted", {
+          sessionID: "ses_1",
+          reason,
+        }),
+      );
+      assert.equal(
+        result?.outcome,
+        ["shutdown", "inactivity"].includes(reason) ? "failed" : "interrupted",
       );
     });
-    rmSync(dirname(command), { recursive: true, force: true });
+  }
+  it("continues across a late steer's next execution", () => {
+    const fake = new OpenCodeFakeServer();
+    const turn = new TurnTracker();
+    turn.begin("msg_a");
+    turn.apply(
+      fake.event("session.inbox.delivered", {
+        sessionID: "ses_1",
+        inboxID: "msg_a",
+      }),
+    );
+    turn.begin("msg_b");
+    assert.equal(
+      turn.apply(
+        fake.event("session.execution.succeeded", { sessionID: "ses_1" }),
+      ),
+      undefined,
+    );
+    assert.equal(turn.continuing, true);
+    turn.apply(
+      fake.event("session.inbox.delivered", {
+        sessionID: "ses_1",
+        inboxID: "msg_b",
+      }),
+    );
+    assert.deepEqual(
+      turn.apply(
+        fake.event("session.execution.succeeded", { sessionID: "ses_1" }),
+      ),
+      { outcome: "completed" },
+    );
   });
-
-  it("reports an early exit before readiness", async () => {
-    const command = installFakeOpenCodeServer(`console.error("config invalid"); process.exit(3);`);
-    await withOpenCodeCommand(command, async () => {
-      await assert.rejects(() => startOpenCodeServer({ startupTimeoutMs: 5_000 }), /exited before readiness \(code 3\).*config invalid/s);
-    });
-    rmSync(dirname(command), { recursive: true, force: true });
-  });
-
-  it("notifies exit listeners when the server dies after readiness", async () => {
-    const command = installFakeOpenCodeServer(`
-console.log("opencode server listening on http://127.0.0.1:43124");
-setTimeout(() => process.exit(9), 50);
-`);
-    await withOpenCodeCommand(command, async () => {
-      const handle = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
-      const reason = await new Promise<string>((resolve) => handle.onExit?.(resolve));
-      assert.match(reason, /OpenCode server exited unexpectedly \(code 9\)/);
-    });
-    rmSync(dirname(command), { recursive: true, force: true });
-  });
-
-  it("resolves OpenCode from a Homebrew bin next to a Gateway node opt path", async () => {
-    const previousPath = process.env.PATH;
-    const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
-    const prefix = mkdtempSync(join(tmpdir(), "openclaw-opencode-prefix-"));
-    installFakeOpenCodeServer(`console.log("not ready"); setInterval(() => {}, 1000);`, join(prefix, "bin"));
-    mkdirSync(join(prefix, "opt", "node", "bin"), { recursive: true });
-    delete process.env.OPENCLAW_OPENCODE_COMMAND;
-    process.env.PATH = join(prefix, "opt", "node", "bin");
-    try {
-      await assert.rejects(
-        () => startOpenCodeServer({ startupTimeoutMs: 100 }),
-        new RegExp(`Command: ${join(prefix, "bin", "opencode").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(resolved from opencode\\)`),
-      );
-    } finally {
-      process.env.PATH = previousPath;
-      if (previousCommand === undefined) delete process.env.OPENCLAW_OPENCODE_COMMAND;
-      else process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
-      rmSync(prefix, { recursive: true, force: true });
-    }
-  });
-
-  it("surfaces startup failures as a failed completion without a backend ref", async () => {
-    const command = installFakeOpenCodeServer(`process.exit(1);`);
-    await withOpenCodeCommand(command, async () => {
-      const harness = new OpenCodeHarness({ startupTimeoutMs: 5_000, serverIdleShutdownMs: 0 });
-      const { stream, collector } = launch(harness, { cwd: process.cwd() });
-      stream.push("go");
-      await collector.untilCompletions(1);
-      assert.equal(collector.messages.some((message) => message.type === "backend_ref"), false);
-      assert.match(collector.completions()[0]?.data.result ?? "", /exited before readiness/);
-      stream.end();
-      await collector.done;
-    });
-    rmSync(dirname(command), { recursive: true, force: true });
-  });
-});
-
-describe("OpenCodeHarness harness consistency (N1, N6, N16–N25)", () => {
-  it("gives every server spawn its own password and sends it with each request (N1)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-opencode-auth-"));
-    const command = installFakeOpenCodeServer(`
-const { appendFileSync } = require("node:fs");
-appendFileSync(${JSON.stringify(join(dir, "passwords.txt"))}, (process.env.OPENCODE_SERVER_USERNAME || "") + ":" + (process.env.OPENCODE_SERVER_PASSWORD || "") + "\\n");
-console.log("opencode server listening on http://127.0.0.1:43125");
-setInterval(() => {}, 1000);
-`, join(dir, "bin"));
-    try {
-      await withOpenCodeCommand(command, async () => {
-        const first = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
-        const second = await startOpenCodeServer({ startupTimeoutMs: 5_000 });
-        await first.close();
-        await second.close();
-        const seen = readFileSync(join(dir, "passwords.txt"), "utf8").trim().split("\n");
-        assert.equal(seen.length, 2);
-        assert.ok(seen.every((entry) => /^opencode:[A-Za-z0-9_-]{32}$/.test(entry)), seen.join(" | "));
-        assert.notEqual(seen[0], seen[1], "each spawn has its own password");
-        assert.equal(first.authorization, `Basic ${Buffer.from(seen[0]!).toString("base64")}`);
-      });
-      const mock = new MockOpenCodeServer();
-      const handle = mock.handle();
-      const harness = new OpenCodeHarness({
-        createServer: async () => ({ ...handle, authorization: "Basic dGVzdDpzZWNyZXQ=" }),
-        fetch: mock.fetch,
-        serverIdleShutdownMs: 0,
-      });
-      const { stream, collector } = launch(harness);
-      stream.push("hi");
-      await collector.untilCompletions(1);
-      stream.end();
-      await collector.done;
-      assert.ok(mock.requests.length > 2);
-      assert.ok(mock.requests.every((request) => request.authorization === "Basic dGVzdDpzZWNyZXQ="));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not search hard-coded Homebrew or Linuxbrew prefixes for the OpenCode command (N6)", () => {
-    const paths = candidateSearchPaths("/custom/bin");
-    assert.deepEqual(paths, ["/custom/bin", "/usr/local/bin", "/usr/bin", "/bin"]);
-    assert.equal(paths.some((path) => path.includes("linuxbrew") || path.includes("homebrew")), false);
-  });
-
-  it("reports OpenCode error classes as error codes with an authoritative outcome (N16)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.replyError = { name: "ProviderAuthError", data: { message: "Invalid API key" } };
-    const { stream, collector } = launch(harnessFor(mock));
-    stream.push("hi");
-    await collector.untilCompletions(1);
-    const failed = collector.completions()[0]!.data;
-    assert.equal(failed.success, false);
-    assert.equal(failed.outcomeAuthoritative, true);
-    assert.equal(failed.errorCode, "ProviderAuthError");
-    assert.equal(failed.result, "Invalid API key");
-    stream.end();
-    await collector.done;
-
-    const event = new MockOpenCodeServer();
-    event.autoComplete = false;
-    const second = launch(harnessFor(event));
-    second.stream.push("hi");
-    await waitFor(() => event.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    event.emit({ type: "session.error", properties: { sessionID: "ses_1", error: { name: "APIError", data: { message: "overloaded" } } } });
-    await second.collector.untilCompletions(1);
-    assert.equal(second.collector.completions()[0]!.data.errorCode, "APIError");
-    assert.equal(second.collector.completions()[0]!.data.outcomeAuthoritative, true);
-    second.stream.end();
-    await second.collector.done;
-  });
-
-  it("validates the effort against the model's variants and reports backend info and the context window (N19)", async () => {
-    const providers = {
-      default: {},
-      providers: [{ id: "deepseek", models: { "deepseek-flash": { variants: { low: {}, high: {}, max: {} }, limit: { context: 1_000_000, output: 393_216 } } } }],
+  it("repairs missing suffixes and joins all parts of the last assistant message", () => {
+    const fake = new OpenCodeFakeServer();
+    const mapper = new EventMapper();
+    const data = {
+      sessionID: "ses_1",
+      assistantMessageID: "msg_a",
+      ordinal: 0,
     };
-    assert.deepEqual(findOpenCodeModelInfo(providers, "deepseek/deepseek-flash"), { variants: ["low", "high", "max"], contextWindow: 1_000_000 });
-    for (const [effort, sent, supported] of [["high", "high", true], ["medium", undefined, false]] as const) {
-      const mock = new MockOpenCodeServer();
-      mock.providers = providers;
-      const { stream, collector } = launch(harnessFor(mock), { model: "deepseek/deepseek-flash", reasoningEffort: effort });
-      stream.push("hi");
-      await collector.untilCompletions(1);
-      stream.end();
-      await collector.done;
-      const prompt = mock.requestsTo("POST", /\/prompt_async$/)[0]!;
-      assert.equal(prompt.body.variant, sent, effort);
-      const info = collector.messages.find((message) => message.type === "backend_info");
-      assert.deepEqual(info?.type === "backend_info" ? info.info : undefined, {
-        model: "deepseek/deepseek-flash",
-        reasoningEffort: supported ? effort : null,
-        reasoningEffortSupported: supported,
-      });
-      assert.equal(collector.completions()[0]?.data.usage?.contextWindow, 1_000_000);
-      assert.equal(mock.requestsTo("GET", /^\/config\/providers$/).length, 1);
-    }
+    mapper.map(fake.event("session.text.delta", { ...data, delta: "hel" }));
+    assert.equal(
+      mapper
+        .map(fake.event("session.text.ended", { ...data, text: "hello" }))
+        .at(-1)?.type,
+      "text_delta",
+    );
+    mapper.map(
+      fake.event("session.text.ended", { ...data, ordinal: 1, text: "world" }),
+    );
+    assert.equal(mapper.result(), "hello\n\nworld");
+    mapper.map(
+      fake.event("session.text.ended", {
+        ...data,
+        assistantMessageID: "msg_b",
+        text: "final",
+      }),
+    );
+    assert.equal(mapper.result(), "final");
   });
-
-  it("learns a default-model session's model from its first turn and checks it from then on (N19)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.providers = { default: {}, providers: [{ id: "openai", models: { "gpt-5.5": { variants: { low: {} }, limit: { context: 400_000, output: 1 } } } }] };
-    const { stream, collector } = launch(harnessFor(mock), { reasoningEffort: "high" });
-    stream.push("one");
-    await collector.untilCompletions(1);
-    stream.push("two");
-    await collector.untilCompletions(2);
-    stream.end();
-    await collector.done;
-    const info = collector.messages.find((message) => message.type === "backend_info");
-    assert.deepEqual(info?.type === "backend_info" ? info.info : undefined, { model: "openai/gpt-5.5", reasoningEffort: null, reasoningEffortSupported: false });
-    assert.equal(collector.completions()[0]?.data.usage?.contextWindow, 400_000);
-    const prompts = mock.requestsTo("POST", /\/prompt_async$/);
-    assert.equal(prompts[0]!.body.variant, "high", "the first turn runs before the model is known");
-    assert.equal(prompts[1]!.body.variant, undefined, "later turns drop the unsupported variant");
+  it("emits one tool call per ID", () => {
+    const fake = new OpenCodeFakeServer();
+    const mapper = new EventMapper();
+    const data = {
+      sessionID: "ses_1",
+      assistantMessageID: "msg_a",
+      id: "tool_1",
+    };
+    mapper.map(
+      fake.event("session.tool.input.started", { ...data, name: "shell" }),
+    );
+    const called = fake.event("session.tool.called", {
+      ...data,
+      input: { command: "ls" },
+      executed: true,
+    });
+    assert.equal(
+      mapper.map(called).filter((e) => e.type === "tool_call").length,
+      1,
+    );
+    assert.equal(
+      mapper.map(called).filter((e) => e.type === "tool_call").length,
+      0,
+    );
   });
-
-  it("shows one request at a time and queues concurrent ones in order (N20)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock));
-    stream.push("go");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "permission.asked", properties: { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["npm test"] } });
-    mock.emit({ type: "question.asked", properties: { id: "que_2", sessionID: "ses_1", questions: [{ question: "Which branch?", options: [{ label: "main" }] }] } });
-    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "first request");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(collector.pending().map((message) => message.state.requestId), ["per_1"], "the second request waits");
-    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "que_2" }), false);
-    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "per_1" }), true);
-    await collector.until((messages) => messages.filter((message) => message.type === "pending_input").length === 2, "second request");
-    assert.equal(collector.pending()[1]?.state.requestId, "que_2");
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
+  it("deduplicates durable replay and respects aggregate-specific cursors", async () => {
+    const fake = new OpenCodeFakeServer();
+    const info = fake.create();
+    fake.event("session.execution.started", { sessionID: info.id });
+    const cursor = new EventCursor();
+    let count = 0;
+    const client = new OpenCodeClient(
+      "http://opencode.test",
+      undefined,
+      fake.fetch,
+    );
+    await cursor.catchUp(client, info.id, () => {
+      count++;
+    });
+    await cursor.catchUp(client, info.id, () => {
+      count++;
+    });
+    assert.equal(count, 1);
   });
-
-  it("rewinds by forking before the user message of the N-th last turn (N23)", async () => {
-    const mock = new MockOpenCodeServer();
-    const source = mock.session("ses_src");
-    for (const turn of [1, 2, 3]) {
-      source.messages.push({ info: { role: "user", id: `msg_u${turn}` }, parts: [] });
-      source.messages.push({ info: { role: "assistant", id: `msg_a${turn}` }, parts: [{ type: "text", text: `answer ${turn}` }] });
-    }
-    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_src", forkSession: true, rewindTurns: 2 });
-    stream.push("continue");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
-    const fork = mock.requestsTo("POST", /\/fork$/)[0]!;
-    assert.deepEqual(fork.body, { messageID: "msg_u2" });
-    const forkedId = [...mock.sessions.keys()].find((id) => id.startsWith("ses_fork_"))!;
-    const kept = mock.session(forkedId).messages.map((entry) => (entry as { info: { id: string } }).info.id);
-    assert.deepEqual(kept.slice(0, 2), ["msg_u1", "msg_a1"]);
-
-    const inPlace = launch(harnessFor(new MockOpenCodeServer()), { resumeSessionId: "ses_src", rewindTurns: 1 });
-    inPlace.stream.push("continue");
-    await inPlace.collector.untilCompletions(1);
-    assert.match(inPlace.collector.completions()[0]?.data.result ?? "", /only rewind into a fork/);
-    inPlace.stream.end();
-    await inPlace.collector.done;
+  it("steers an active turn and refuses after settlement", async () => {
+    const fake = new OpenCodeFakeServer();
+    const session = harness(fake).launch({ prompt: "hello", cwd: "/tmp" });
+    const collected = collect(session);
+    await waitFor(() => fake.busy.size === 1);
+    assert.equal(await session.steer!("next"), true);
+    fake.end([...fake.busy][0]);
+    await collected.done;
+    assert.equal(await session.steer!("late"), false);
+    assert.equal(terminal(collected.events)?.success, true);
   });
-
-  it("surfaces a subagent's permission prompt and ignores its idle (N24)", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.autoComplete = false;
-    const { stream, session, collector } = launch(harnessFor(mock), { permissionMode: "default" });
-    stream.push("delegate");
-    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
-    mock.emit({ type: "session.created", properties: { info: { id: "ses_child", parentID: "ses_1" } } });
-    // A grandchild is attributed to the same root session.
-    mock.emit({ type: "session.created", properties: { info: { id: "ses_grandchild", parentID: "ses_child" } } });
-    mock.emit({ type: "permission.asked", properties: { id: "per_sub", sessionID: "ses_grandchild", permission: "bash", patterns: ["echo hi > sub.txt"] } });
-    await collector.until((messages) => messages.some((message) => message.type === "pending_input"), "subagent prompt");
-    assert.match(collector.pending()[0]!.state.promptText, /An OpenCode subagent requests bash permission/);
-    // The subagent finishing does not end the parent's turn.
-    mock.emit({ type: "session.idle", properties: { sessionID: "ses_child" } });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(collector.completions().length, 0);
-    assert.equal(await session.submitPendingInputOption?.(0, { requestId: "per_sub" }), true);
-    assert.equal(mock.requestsTo("POST", /^\/permission\/per_sub\/reply$/)[0]?.body.reply, "once");
-    mock.completeTurn("ses_1");
-    await collector.untilCompletions(1);
-    stream.end();
-    await collector.done;
+  it("keeps a permission pending when the transport cannot send a reply", async () => {
+    const fake = new OpenCodeFakeServer();
+    const session = harness(fake).launch({ prompt: "hello", cwd: "/tmp" });
+    const c = collect(session);
+    await waitFor(() => fake.busy.size === 1);
+    void fake.askPermission([...fake.busy][0], "ls");
+    await waitFor(() => c.events.some((e) => e.type === "pending_input"));
+    fake.override = (r) =>
+      r.path.endsWith("/reply")
+        ? new Response(JSON.stringify({ _tag: "Offline" }), { status: 503 })
+        : undefined;
+    await assert.rejects(session.submitPendingInputOption!(0));
+    assert.equal(
+      c.events.filter((e) => e.type === "pending_input_resolved").length,
+      0,
+    );
+    fake.override = undefined;
+    assert.equal(await session.submitPendingInputOption!(0), true);
+    fake.end([...fake.busy][0]);
+    await c.done;
   });
-
-  it("reads only each turn's own messages instead of the whole history (N25)", async () => {
-    const mock = new MockOpenCodeServer();
-    const history = mock.session("ses_long");
-    for (let turn = 0; turn < 120; turn += 1) {
-      history.messages.push({ info: { role: "user", id: `msg_old_u${turn}` }, parts: [] });
-      history.messages.push({
-        info: { role: "assistant", id: `msg_old_a${turn}`, providerID: "openai", modelID: "gpt-5.5", cost: 0.01, tokens: { input: 10, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } },
-        parts: [],
-      });
-    }
-    const { stream, collector } = launch(harnessFor(mock), { resumeSessionId: "ses_long" });
-    for (const [index, prompt] of ["one", "two", "three"].entries()) {
-      stream.push(prompt);
-      await collector.untilCompletions(index + 1);
-    }
-    stream.end();
-    await collector.done;
-    const reads = mock.requestsTo("GET", /\/message$/);
-    assert.equal(reads.filter((request) => request.query?.get("limit") === null).length, 0, "never an unbounded read");
-    // The earlier history is read once (5 pages of 50), then each turn reads one page.
-    const pages = reads.filter((request) => request.query?.get("limit") === "50").length;
-    assert.ok(pages <= 5 + 3, `pages read: ${pages}`);
-    const models = collector.completions().at(-1)?.data.usage?.models;
-    assert.equal(models?.[0]?.inputTokens, 120 * 10 + 3 * 1_000, "cumulative usage still covers the whole session");
+  it("retains a form after FormInvalidAnswerError", async () => {
+    const events: HarnessMessage[] = [];
+    let reject = true;
+    const inputs = new PendingInputCoordinator(
+      (e) => events.push(e),
+      async () => {
+        if (reject)
+          throw new OpenCodeApiError(400, "FormInvalidAnswerError", "invalid");
+      },
+    );
+    inputs.add({
+      kind: "form",
+      value: {
+        id: "frm_1",
+        sessionID: "ses_1",
+        title: "Q",
+        fields: [{ key: "q0", type: "string" }],
+      },
+    });
+    await assert.rejects(inputs.text("hello"));
+    assert.equal(inputs.pending, true);
+    reject = false;
+    assert.equal(await inputs.text("fixed"), true);
+    assert.equal(inputs.pending, false);
+  });
+  it("reconciles pending asks after a stream gap", async () => {
+    const fake = new OpenCodeFakeServer();
+    const session = harness(fake).launch({ prompt: "hello", cwd: "/tmp" });
+    const c = collect(session);
+    await waitFor(() => fake.busy.size === 1);
+    fake.dropStreams();
+    const id = [...fake.busy][0];
+    void fake.askPermission(id, "ls");
+    await waitFor(() => c.events.some((e) => e.type === "pending_input"));
+    await session.submitPendingInputOption!(0);
+    fake.end(id);
+    await c.done;
+    assert.deepEqual(fake.protocolViolations, []);
+  });
+  it("runs compact through the same tracked prompt path", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.autoComplete = true;
+    const h = harness(fake);
+    const prompt = (async function* () {
+      yield h.buildThreadActionMessage({ kind: "compact" });
+    })();
+    const c = collect(h.launch({ prompt, cwd: "/tmp" }));
+    await c.done;
+    assert.equal(terminal(c.events)?.success, true);
+    assert.ok(fake.requests.some((r) => r.path.endsWith("/compact")));
+  });
+  it("does not automatically resume historical v1 sessions", () => {
+    const candidate = {
+      sessionId: "old",
+      status: "completed",
+      backendRef: { kind: "opencode-server", conversationId: "ses_old" },
+    } as any;
+    assert.equal(assessResumeCandidate(candidate).kind, "unavailable");
+    assert.equal(
+      (assessResumeCandidate(candidate) as any).reason,
+      "backend_protocol_retired",
+    );
+  });
+  it("generates ordered native IDs", () => {
+    const ids = Array.from({ length: 20 }, () => newMessageId(1000));
+    assert.ok(ids.every((id) => /^msg_[a-f0-9]{12}[a-zA-Z0-9]{14}$/.test(id)));
+    assert.deepEqual([...ids].sort(), ids);
+  });
+  it("parses split CRLF and multiline SSE data", async () => {
+    const chunks = ['event: hi\r\ndata: {"a":\r\n', "data: 1}\r\n\r\n"];
+    const response = new Response(
+      new ReadableStream({
+        start(c) {
+          for (const x of chunks) c.enqueue(new TextEncoder().encode(x));
+          c.close();
+        },
+      }),
+    );
+    const frames = [];
+    for await (const f of sseFrames(response)) frames.push(f);
+    assert.deepEqual(frames, [{ event: "hi", data: { a: 1 } }]);
+  });
+  it("resolves commands against the original cwd", () => {
+    assert.equal(
+      resolveCommandPath("./opencode2", undefined, "/tmp/base"),
+      "/tmp/base/./opencode2",
+    );
+    assert.ok(candidateSearchPaths("/bin").includes("/bin"));
+  });
+  it("accumulates each durable usage step once", () => {
+    const fake = new OpenCodeFakeServer();
+    const u = new UsageAccumulator();
+    u.apply(
+      fake.event("session.step.started", {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_1",
+        agent: "build",
+        model: { providerID: "p", id: "m" },
+        started: 1,
+      }),
+    );
+    const step = fake.event("session.step.ended", {
+      sessionID: "ses_1",
+      assistantMessageID: "msg_1",
+      finish: "stop",
+      cost: 1,
+      tokens: {
+        input: 10,
+        output: 2,
+        reasoning: 1,
+        cache: { read: 3, write: 4 },
+      },
+    });
+    u.apply(step);
+    u.apply(step);
+    assert.equal(u.snapshot().models[0].costUsd, 1);
+    assert.equal(u.snapshot().contextTokens, 17);
+  });
+  it("interrupts successfully while the terminal closes the stream", async () => {
+    const fake = new OpenCodeFakeServer();
+    const session = harness(fake).launch({ prompt: "hello", cwd: "/tmp" });
+    const c = collect(session);
+    await waitFor(() => fake.busy.size === 1);
+    await session.interrupt!();
+    await c.done;
+    assert.equal(terminal(c.events)?.outcome, "interrupted");
+  });
+  it("rewinds a resumed session in place while preserving files", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.autoComplete = true;
+    const h = harness(fake);
+    const first = collect(h.launch({ prompt: "one", cwd: "/tmp" }));
+    await first.done;
+    const id = terminal(first.events)!.session_id;
+    const second = collect(
+      h.launch({
+        prompt: "two",
+        cwd: "/tmp",
+        resumeSessionId: id,
+        rewindTurns: 1,
+      }),
+    );
+    await second.done;
+    assert.equal(terminal(second.events)?.success, true);
+    const stage = fake.requests.find((r) => r.path.endsWith("/revert/stage"));
+    assert.equal(stage?.body?.files, false);
+    assert.ok(fake.requests.some((r) => r.path.endsWith("/revert/commit")));
+    assert.ok(!fake.requests.some((r) => r.path.endsWith("/fork")));
+  });
+  it("refuses resume with a different working directory", async () => {
+    const fake = new OpenCodeFakeServer();
+    const existing = fake.create("/one");
+    const c = collect(
+      harness(fake).launch({
+        prompt: "hello",
+        cwd: "/two",
+        resumeSessionId: existing.id,
+      }),
+    );
+    await c.done;
+    assert.match(terminal(c.events)!.result!, /location differs/);
+  });
+  it("does not retry a prompt with unconfirmed admission", async () => {
+    const fake = new OpenCodeFakeServer();
+    fake.override = (r) => {
+      if (r.path.endsWith("/prompt")) throw new TypeError("lost submit reply");
+      if (
+        r.path.endsWith("/inbox") &&
+        fake.requests.some((q) => q.path.endsWith("/prompt"))
+      )
+        throw new TypeError("read unavailable");
+      return undefined;
+    };
+    const c = collect(harness(fake).launch({ prompt: "hello", cwd: "/tmp" }));
+    await c.done;
+    assert.equal(
+      fake.requests.filter((r) => r.path.endsWith("/prompt")).length,
+      1,
+    );
+    assert.equal(terminal(c.events)?.success, false);
+    assert.match(terminal(c.events)!.result!, /confirm|deliver/i);
+  });
+  it("does not start a server for an already aborted launch", async () => {
+    const fake = new OpenCodeFakeServer();
+    const abortController = new AbortController();
+    abortController.abort();
+    const c = collect(
+      harness(fake).launch({ prompt: "hello", cwd: "/tmp", abortController }),
+    );
+    await c.done;
+    assert.equal(fake.requests.length, 0);
   });
 });

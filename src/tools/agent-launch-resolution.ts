@@ -71,6 +71,7 @@ type SessionManagerLike = {
     harnessName?: string;
     model?: string;
     reasoningEffort?: PersistedSessionInfo["reasoningEffort"];
+    backendRef?: import("../types").SessionBackendRef;
     backendConversationId?: string;
     harnessSessionId?: string;
   } | undefined;
@@ -262,13 +263,10 @@ export function resolveAgentLaunchRequest(
       return { kind: "error", text: "Error: rewind_turns requires resume_session_id (optionally with fork_session=true)." };
     }
     // N23: Codex (thread fork/revert), Claude Code (resumeSessionAt) and
-    // OpenCode (fork at a message) can drop the latest turns. OpenCode's
-    // in-place revert also restores files, so it only rewinds into a fork.
+    // OpenCode (fork or in-place revert) can drop the latest turns.
+    // The v2 files:false revert flag preserves files.
     if (harness !== "codex" && harness !== "claude-code" && harness !== "opencode") {
       return { kind: "error", text: `Error: rewind_turns is not supported by the "${harness}" harness.` };
-    }
-    if (harness === "opencode" && params.fork_session !== true) {
-      return { kind: "error", text: "Error: rewind_turns with the OpenCode harness requires fork_session=true (an in-place OpenCode revert would also undo file changes)." };
     }
   }
   const activeResumeSession = params.resume_session_id
@@ -277,6 +275,10 @@ export function resolveAgentLaunchRequest(
   const persistedResumeSession = params.resume_session_id
     ? sessionManager.getPersistedSession?.(params.resume_session_id)
     : undefined;
+  const resumeTarget = activeResumeSession ?? persistedResumeSession;
+  if (resumeTarget?.backendRef?.kind === "opencode-server" || (resumeTarget && ("harnessName" in resumeTarget ? resumeTarget.harnessName : "harness" in resumeTarget ? resumeTarget.harness : undefined)) === "opencode" && !resumeTarget.backendRef) {
+    return {kind:"error",text:"OpenCode 1.x backend protocol retired (backend_protocol_retired). Launch a fresh OpenCode 2.x session; legacy sessions cannot resume or fork."};
+  }
   const defaultModel = resolveDefaultModelForHarness(harness);
   const rawResolvedModel = params.model
     ?? (activeResumeSession?.harnessName === harness ? activeResumeSession.model : undefined)

@@ -1401,6 +1401,37 @@ describe("SessionStore path resolution", () => {
     assert.equal(store.getPersistedSession("ses_opencode")?.harness, "opencode");
   });
 
+  it("normalizes and indexes new OpenCode v2 backend refs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-opencode-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [
+      {
+        sessionId: "opencode-session",
+        harnessSessionId: "compat-opencode",
+        backendRef: {
+          kind: "opencode-v2",
+          conversationId: "ses_opencode",
+        },
+        name: "opencode-session",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "terminal",
+        runtimeState: "stopped",
+        costUsd: 0,
+        harness: "opencode",
+      },
+    ]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.getPersistedSession("opencode-session")?.backendRef?.kind, "opencode-v2");
+    assert.equal(store.getPersistedSession("ses_opencode")?.harness, "opencode");
+  });
+
   it("backs up and drops current-schema sessions that are missing route metadata", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-route-"));
     const indexPath = join(dir, "sessions.json");

@@ -1,207 +1,133 @@
 import "./test-env";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { OpenCodeHarness, startOpenCodeServer } from "../src/harness/opencode";
-import type { HarnessMessage } from "../src/harness/types";
-
-const RUN_LIVE = process.env.OPENCLAW_RUN_LIVE_OPENCODE_SMOKE === "1";
-const RUN_COMPLETION = process.env.OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE === "1";
-/** Optional `provider/model` for the completion smoke (e.g. a free OpenCode Zen model). */
-const SMOKE_MODEL = process.env.OPENCLAW_OPENCODE_SMOKE_MODEL?.trim() || undefined;
-
-type LiveServer = {
-  baseUrl: string;
-  authorization: string;
-  cwd: string;
-  close(): Promise<void>;
-};
-
-// The next smoke starts another server, usually on the same port. Keep this
-// test's raw fetches out of Undici's connection pool after that server closes.
-const connectionClose = { connection: "close" };
-
-/** Start the real server exactly as the harness does (`--port 0`, URL from stdout). */
-async function startLiveServer(): Promise<LiveServer> {
-  const cwd = await mkdtemp(join(tmpdir(), "openclaw-opencode-smoke-"));
-  try {
-    const handle = await startOpenCodeServer({ startupTimeoutMs: 20_000 });
-    return {
-      baseUrl: handle.baseUrl,
-      authorization: handle.authorization,
-      cwd,
-      async close(): Promise<void> {
-        await handle.close();
-        await rm(cwd, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    await rm(cwd, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-async function requestJson<T>(
-  server: LiveServer,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; contentType: string; data: T; text: string }> {
-  const url = new URL(`${server.baseUrl}${path}`);
-  url.searchParams.set("directory", server.cwd);
-  const response = await fetch(url, {
-    method,
-    headers: {
-      ...connectionClose,
-      Authorization: server.authorization,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(5_000),
-  });
-  const text = await response.text();
-  const contentType = response.headers.get("content-type") ?? "";
-  assert.match(contentType, /application\/json/, `${method} ${path} returned ${response.status} ${contentType}: ${text.slice(0, 300)}`);
-  return {
-    status: response.status,
-    contentType,
-    data: JSON.parse(text) as T,
-    text,
-  };
-}
-
-async function requestNoContent(
-  server: LiveServer,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<void> {
-  const url = new URL(`${server.baseUrl}${path}`);
-  url.searchParams.set("directory", server.cwd);
-  const response = await fetch(url, {
-    method,
-    headers: {
-      ...connectionClose,
-      Authorization: server.authorization,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(5_000),
-  });
-  const text = await response.text();
-  assert.equal(response.status, 204, `${method} ${path} returned ${response.status} ${response.headers.get("content-type")}: ${text.slice(0, 300)}`);
-}
-
-async function collectUntilCompleted(session: { messages: AsyncIterable<HarnessMessage> }): Promise<HarnessMessage[]> {
-  const messages: HarnessMessage[] = [];
-  const deadline = Date.now() + 45_000;
-  for await (const message of session.messages) {
-    messages.push(message);
-    if (message.type === "run_completed") return messages;
-    if (Date.now() > deadline) {
-      throw new Error(`Timed out waiting for OpenCode live completion. Saw message types: ${messages.map((msg) => msg.type).join(", ")}`);
-    }
-  }
-  return messages;
-}
-
-function assertOpenCodeVersion(): void {
-  const command = process.env.OPENCLAW_OPENCODE_COMMAND?.trim() || "opencode";
-  const version = execFileSync(command, ["--version"], { encoding: "utf8" }).trim();
-  const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
-  assert.ok(major > 1 || (major === 1 && minor >= 16), `expected opencode >= 1.16, got ${version}`);
-}
-
-describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
-  let routeServer: LiveServer | undefined;
-  after(async () => { await routeServer?.close(); });
-
-  it("validates the real classic lifecycle route contract without model inference", async () => {
-    assertOpenCodeVersion();
-    const server = await startLiveServer();
-    // Keep this server alive while the next test starts another one. Closing it
-    // first can leave a pooled socket for the same loopback port in this process.
-    routeServer = server;
-    // `/api/*` is OpenCode's v2 surface: the web-app HTML shell on 1.16.x, a
-    // separate v2 JSON API on 1.18+. The harness uses the classic routes.
-    const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
-      method: "POST",
-      headers: { ...connectionClose, Authorization: server.authorization, "content-type": "application/json" },
-      body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    await apiCreate.body?.cancel();
-
-    const permission = [
-      { permission: "edit", pattern: "*", action: "ask" },
-      { permission: "bash", pattern: "*", action: "ask" },
-    ];
-    const created = await requestJson<{ id: string }>(server, "POST", "/session", {
-      metadata: { client: "openclaw-code-agent-route-smoke" },
-      permission,
-    });
-    assert.equal(created.status, 200);
-    assert.match(created.data.id, /^ses/);
-
-    const messages = await requestJson<unknown[]>(server, "GET", `/session/${created.data.id}/message`);
-    assert.equal(Array.isArray(messages.data), true);
-
-    const statuses = await requestJson<Record<string, unknown>>(server, "GET", "/session/status");
-    assert.equal(typeof statuses.data, "object");
-
-    const forked = await requestJson<{ id: string }>(server, "POST", `/session/${created.data.id}/fork`, {});
-    assert.match(forked.data.id, /^ses/);
-
-    await requestNoContent(server, "POST", `/session/${created.data.id}/prompt_async`, {
-      noReply: true,
-      parts: [{ type: "text", text: "OPENCLAW_OPENCODE_ROUTE_SMOKE" }],
-    });
-
-    const abort = await requestJson<boolean>(server, "POST", `/session/${created.data.id}/abort`);
-    assert.equal(abort.data, true);
-
-    // The harness demultiplexes one shared stream for every project directory.
-    const events = await fetch(`${server.baseUrl}/global/event`, {
-      headers: { ...connectionClose, Authorization: server.authorization },
-      signal: AbortSignal.timeout(5_000),
-    });
-    assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
-    await events.body?.cancel();
-  });
-
-  it("runs a trivial prompt through opencode serve", { skip: !RUN_COMPLETION }, async () => {
-    assertOpenCodeVersion();
-
-    const transportFailures: string[] = [];
-    const diagnosticFetch: typeof fetch = async (input, init) => {
-      try {
-        return await fetch(input, init);
-      } catch (error) {
-        const url = input instanceof Request ? input.url : String(input);
-        const cause = error instanceof Error ? (error as Error & { cause?: { code?: unknown } }).cause : undefined;
-        transportFailures.push(`${init?.method ?? "GET"} ${new URL(url).pathname}: ${error instanceof Error ? error.name : "unknown"} (${typeof cause?.code === "string" ? cause.code : "no code"})`);
-        throw error;
+import { OpenCodeClient } from "../src/harness/opencode/client";
+import { checkServerVersion } from "../src/harness/opencode/endpoint";
+import { EventCursor } from "../src/harness/opencode/event-cursor";
+import { rulesForMode } from "../src/harness/opencode/permissions";
+import { sseFrames } from "../src/harness/opencode/sse";
+const enabled = process.env.OPENCLAW_RUN_LIVE_OPENCODE_SMOKE === "1";
+describe("OpenCode 2.0 live smoke", { skip: !enabled }, () => {
+  it("validates auth, private stdio, version, session settings, durable log and fork without inference", async () => {
+    const server = await startOpenCodeServer();
+    try {
+      const client = new OpenCodeClient(server.baseUrl, server.authorization);
+      await checkServerVersion(client);
+      const unauth = await fetch(server.baseUrl + "/api/info");
+      assert.equal(unauth.status, 401);
+      await unauth.body?.cancel();
+      const info = await client.data(
+        "POST /api/session",
+        {},
+        {
+          location: { directory: "/tmp" },
+          permissions: rulesForMode("plan"),
+          agent: "plan",
+        },
+      );
+      const p = { sessionID: info.id };
+      assert.equal(info.location.directory, "/tmp");
+      await client.request(
+        "PUT /api/experimental/session/{sessionID}/instructions/entries/{key}",
+        { ...p, key: "oca.system" },
+        { value: "Route smoke. No inference." },
+      );
+      await client.request("PATCH /api/session/{sessionID}", p, {
+        permissions: rulesForMode("default"),
+      });
+      await client.request("POST /api/session/{sessionID}/agent", p, {
+        agent: "build",
+      });
+      await client.request("POST /api/session/{sessionID}/synthetic", p, {
+        text: "Synthetic durable log probe",
+        resume: false,
+      });
+      const frames = [];
+      const cursor = new EventCursor();
+      const replayed = await cursor.catchUp(client, info.id, (e) =>
+        frames.push(e),
+      );
+      assert.ok(frames.length > 0 || (!replayed && cursor.replayUnavailable));
+      const fork = await client.data(
+        "POST /api/session/{sessionID}/fork",
+        p,
+        {},
+      );
+      assert.notEqual(fork.id, info.id);
+      const controller = new AbortController();
+      const stream = await client.raw(
+        "GET",
+        "/api/event",
+        undefined,
+        controller.signal,
+        true,
+      );
+      for await (const frame of sseFrames(stream)) {
+        assert.equal((frame.data as any).type, "server.connected");
+        break;
       }
-    };
-    const harness = new OpenCodeHarness({ fetch: diagnosticFetch, requestTimeoutMs: 45_000, serverIdleShutdownMs: 0 });
-    const messages = await collectUntilCompleted(harness.launch({
-      prompt: "Reply with exactly: OPENCLAW_OPENCODE_SMOKE",
-      cwd: process.cwd(),
-      permissionMode: "default",
-      ...(SMOKE_MODEL ? { model: SMOKE_MODEL } : {}),
-    }));
-
-    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
-    assert.equal(result?.data.success, true, JSON.stringify({
-      outcome: result?.data.outcome,
-      errorCode: result?.data.errorCode,
-      result: result?.data.result?.slice(0, 300),
-      messageTypes: messages.map((message) => message.type),
-      transportFailures,
-    }));
-    assert.match(result?.data.result ?? messages.map((message) => message.type === "text_delta" ? message.text : "").join(""), /OPENCLAW_OPENCODE_SMOKE/);
+      controller.abort();
+      assert.deepEqual(
+        await client.data("GET /api/session/{sessionID}/permission", p),
+        [],
+      );
+      assert.deepEqual(
+        await client.data("GET /api/session/{sessionID}/form", p),
+        [],
+      );
+    } finally {
+      await server.close();
+    }
   });
+  it(
+    "completes, steers, compacts, rewinds in place and resumes a real conversation",
+    {
+      skip: process.env.OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE !== "1",
+      timeout: 180000,
+    },
+    async () => {
+      const harness = new OpenCodeHarness({ serverIdleShutdownMs: 0 });
+      let conversationId: string | undefined;
+      async function complete(
+        prompt: unknown,
+        extra: Record<string, unknown> = {},
+      ) {
+        const session = harness.launch({
+          prompt:
+            typeof prompt === "string"
+              ? prompt
+              : (async function* () {
+                  yield prompt;
+                })(),
+          cwd: "/tmp",
+          model: process.env.OPENCLAW_OPENCODE_SMOKE_MODEL,
+          ...extra,
+        });
+        const messages = [];
+        try {
+          for await (const m of session.messages) {
+            messages.push(m);
+            if (m.type === "backend_ref") conversationId = m.ref.conversationId;
+            if (m.type === "run_started" && typeof prompt === "string")
+              await session.steer?.("Keep the reply brief.");
+          }
+        } finally {
+          await session.close?.();
+        }
+        const result = messages.findLast((m) => m.type === "run_completed");
+        assert.equal(result?.data.success, true, JSON.stringify(result));
+        return messages;
+      }
+      await complete("Reply exactly OPENCODE_OK.");
+      assert.ok(conversationId);
+      await complete(harness.buildThreadActionMessage({ kind: "compact" }), {
+        resumeSessionId: conversationId,
+      });
+      await complete("Reply RESUMED.", {
+        resumeSessionId: conversationId,
+        rewindTurns: 1,
+      });
+    },
+  );
 });

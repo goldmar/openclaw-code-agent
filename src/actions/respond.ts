@@ -137,7 +137,9 @@ function formatResumeUnavailable(
   reason: ResumeUnavailableReason,
   details?: string,
 ): RespondResult {
-  const guidance = reason === "completed"
+  const guidance = reason === "backend_protocol_retired"
+    ? "This OpenCode 1.x protocol is retired. Launch a fresh OpenCode 2.0 session; historical output remains available."
+    : reason === "completed"
     ? `This session is closed by default. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
     : reason === "missing_backend_state"
       ? `No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
@@ -150,7 +152,7 @@ function formatResumeUnavailable(
       ? details.replace(/^Backend resume failed: /u, "Resume failed: ")
       : session.status === "starting" ? "Still starting; try again in a moment." : `Cannot resume: ${reason === "completed"
         ? "the session is closed"
-        : reason === "already_running" ? "the session is already running" : "nothing is left to resume from"}.${
+        : reason === "already_running" ? "the session is already running" : reason === "backend_protocol_retired" ? "the OpenCode 1.x protocol is retired" : "nothing is left to resume from"}.${
         reason === "already_running" ? "" : " Start a new one."}`}`,
   };
 }

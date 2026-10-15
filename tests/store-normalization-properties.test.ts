@@ -82,7 +82,7 @@ const routeArb: fc.Arbitrary<unknown> = fc.oneof(
 
 const backendRefArb: fc.Arbitrary<unknown> = fc.oneof(
   fc.record({
-    kind: fc.constantFrom("claude-code", "codex-app-server", "opencode-server", "codex-native"),
+    kind: fc.constantFrom("claude-code", "codex-app-server", "opencode-server", "opencode-v2", "codex-native"),
     conversationId: fc.constantFrom("conv-1", "", "0b7c1c1e"),
     runId: fc.option(fc.string({ maxLength: 6 }), { nil: undefined }),
     worktreePath: fc.option(fc.constantFrom("/srv/wt/a", "/srv/wt/b"), { nil: undefined }),

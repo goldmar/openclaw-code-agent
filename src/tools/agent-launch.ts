@@ -122,7 +122,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       resume_session_id: Type.Optional(Type.String({ description: "Session to continue (or fork with fork_session=true)" })),
       fork_session: Type.Optional(Type.BooleanLike({ description: "With resume_session_id: start a new session from its context" })),
       rewind_turns: Type.Optional(
-        Type.Number({ minimum: 1, description: "With resume_session_id: drop the last N turns first (Codex, Claude Code; OpenCode only with fork_session=true, which keeps the original). Files are not reverted." }),
+        Type.Number({ minimum: 1, description: "With resume_session_id: drop the last N turns first (Codex, Claude Code and OpenCode; fork_session=true keeps the original). Files are not reverted." }),
       ),
       force_new_session: Type.Optional(Type.BooleanLike({ description: "Start a new session even if a linked one could be resumed" })),
       permission_mode: Type.Optional(

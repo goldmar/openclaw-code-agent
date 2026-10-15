@@ -186,7 +186,7 @@ Additional smoke entry points:
 - `pnpm test:integ:crabbox` for deterministic Codex proof/Crabbox harness coverage; live Telegram Desktop proof stays disabled unless `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live` are both used
 - `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available (developer instructions, resume, steering, compaction, and rewind-fork; uses `gpt-6-luna` unless `OPENCLAW_CODEX_SMOKE_MODEL` is set)
 - `pnpm smoke:codex-release` for the opt-in release check covering structured plan delivery and resume after a plan turn
-- `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` is available. Add `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` to run a real prompt (needs provider auth), `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model` to pick its model, and `OPENCLAW_OPENCODE_COMMAND` to test a different `opencode` binary
+- `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 2.0.29 from @opencode/cli` is available. Add `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` to run a real prompt (needs provider auth), `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model` to pick its model, and `OPENCLAW_OPENCODE_COMMAND` to test a different `opencode` binary
 
 ### User-Interaction Flow Tests
 
@@ -236,11 +236,13 @@ Before running it:
 
 ### OpenCode OpenAPI Document
 
-`tests/protocol/opencode-openapi.json` is generated from `opencode serve` (`GET /doc`) by `pnpm sync:opencode-openapi`, pruned to the operations the harness calls (listed in `scripts/sync-opencode-openapi.mjs`) and the component schemas they reference. The server runs under a throwaway `HOME`/XDG profile. The document records the OpenCode version it came from in `x-oca-source-version` (currently `opencode 1.18.32`; the harness supports `opencode >= 1.16.2`). Check drift against the installed OpenCode with `pnpm sync:opencode-openapi --check`, and after an OpenCode upgrade regenerate it, rerun the OpenCode tests, and run the live smoke below.
+`pnpm sync:opencode-openapi` starts an isolated `opencode2 serve --stdio` and reads `/openapi.json`. `--source https://opencode.ai/v2/openapi.json` can read the published API instead. The generator vendors the used route subset, installs `@opencode/schema@2.0.29` only in a temporary directory to export `EventManifest`, and generates the event JSON Schema plus TypeScript API/event types. No Effect runtime is bundled. Artifacts carry `x-oca-source-version: 2.0.29`; `--check` compares all artifacts. Tests validate every request, response and event from `tests/opencode-fake-server.ts`.
+
+`node scripts/record-opencode-fixture.mjs --url http://127.0.0.1:PORT --output tests/fixtures/opencode-v2/NAME.ndjson` records an isolated live stream using `OPENCODE_PASSWORD` for auth. Use synthetic work only, inspect recordings before committing, and compare the mapper replay against golden harness messages in `tests/opencode-replay.test.ts`. Recordings must come from a real server, not the fake.
 
 ### Live OpenCode Smoke Check
 
-Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve` the way the harness does (`--port 0`) and checks the classic session routes (create, messages, status, fork, `prompt_async`, abort) and the `/global/event` stream without a model call. With `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` it also runs a trivial prompt through `OpenCodeHarness` and checks the reply, which needs provider auth. It intentionally stays out of `pnpm verify` because it depends on a local OpenCode installation.
+Use `pnpm smoke:opencode-live` with `@opencode/cli >= 2.0.29`. It checks auth, stdio startup, version, session permissions/agent, instruction entries, durable log replay, fork and public events without inference. `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` additionally exercises real completion, steer, compact, rewind and resume with provider auth; select a model with `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model`. The runner isolates OCA state. `tests/opencode-native.test.ts` uses the same opt-in switch to run the real binary against a deterministic local provider, exercising permissions, child routing, forms, steer, compact, rewind, interrupt and resume without external inference. Gateway plan approval, tool permission/form round trips, process-tree cleanup and restart/resume still require the manual acceptance checklist above.
 
 ## Extending The Plugin
 

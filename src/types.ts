@@ -90,7 +90,7 @@ export type CodexApprovalsReviewer = typeof CODEX_APPROVALS_REVIEWERS[number];
 export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 export const REASONING_EFFORT_SET: ReadonlySet<ReasoningEffort> = new Set(REASONING_EFFORTS);
-export type SessionBackendKind = "claude-code" | "codex-app-server" | "opencode-server";
+export type SessionBackendKind = "claude-code" | "codex-app-server" | "opencode-v2" | "opencode-server";
 
 export interface SessionBackendRef {
   kind: SessionBackendKind;
@@ -345,6 +345,14 @@ export interface SessionCompletionSummaryRecord {
 
 /** Harness-scoped launch defaults and model restrictions. */
 export interface HarnessConfig {
+  /** OpenCode only: private server executable override. */
+  command?: string;
+  /** OpenCode only: explicit environment variable names retained through scrubbing. */
+  passEnv?: string[];
+  /** OpenCode only: primary agent outside plan mode. */
+  defaultAgent?: string;
+  /** Reserved for private OpenCode endpoints; shared service is not supported. */
+  serverMode?: "private";
   defaultModel?: string;
   allowedModels?: string[];
   reasoningEffort?: ReasoningEffort;
