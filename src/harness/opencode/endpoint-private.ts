@@ -58,11 +58,12 @@ export async function startOpenCodeServer(
   );
   const child = lifeline.process;
   let closed = false;
+  let exitReason:string|undefined;
   const listeners = new Set<(reason: string) => void>();
   child.on("exit", (code, signal) => {
+    exitReason=`OpenCode server exited (${signal ?? code})`;
     if (!closed)
-      for (const listener of listeners)
-        listener(`OpenCode server exited (${signal ?? code})`);
+      for (const listener of listeners)listener(exitReason);
   });
   // Drain diagnostics without copying server environment or credentials into logs.
   child.stderr.resume();
@@ -113,6 +114,7 @@ export async function startOpenCodeServer(
         "Basic " + Buffer.from("opencode:" + password).toString("base64"),
       onExit: (listener) => {
         listeners.add(listener);
+        if(exitReason && !closed)listener(exitReason);
       },
       close: async () => {
         closed = true;
@@ -180,6 +182,7 @@ export class PrivateEndpoint implements OpenCodeEndpoint {
       });
       await this.starting;
     }
+    if(!this.server)throw new Error("OpenCode server exited during version negotiation; retry the launch.");
     this.leases++;
     const generation = this.generation;
     const server = this.server!;

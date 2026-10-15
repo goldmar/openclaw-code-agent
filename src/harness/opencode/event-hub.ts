@@ -83,6 +83,7 @@ export class EventHub {
     return id;
   }
   private async run(): Promise<void> {
+    let failures=0;
     while (!this.controller.signal.aborted) {
       try {
         const response = await this.lease.client.raw(
@@ -97,6 +98,7 @@ export class EventHub {
           if (event.type === "server.connected") {
             const reconnect = this.connected;
             this.connected = true;
+            failures=0;
             this.readyResolve();
             if (reconnect) for (const l of this.listeners) await l.gap();
             continue;
@@ -123,6 +125,7 @@ export class EventHub {
         }
       }
       if (this.controller.signal.aborted) break;
+      const backoff=Math.min(30000,this.delay * 2 ** Math.min(failures++,5));
       await new Promise<void>((resolve) => {
         const onAbort = () => {
           clearTimeout(timer);
@@ -131,7 +134,7 @@ export class EventHub {
         const timer = setTimeout(() => {
           this.controller.signal.removeEventListener("abort", onAbort);
           resolve();
-        }, this.delay);
+        }, backoff);
         this.controller.signal.addEventListener("abort", onAbort, {
           once: true,
         });

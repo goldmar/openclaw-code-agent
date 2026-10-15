@@ -522,4 +522,17 @@ describe("OpenCode 2.0 harness", () => {
     await c.done;
     assert.equal(fake.requests.length, 0);
   });
+  it("does not cache a server that dies during version negotiation",async()=>{
+    const fake=new OpenCodeFakeServer();fake.autoComplete=true;let starts=0;
+    const h=new OpenCodeHarness({fetch:fake.fetch,serverIdleShutdownMs:0,createServer:async()=>{
+      starts++;const server=fake.handle();
+      return starts===1?{...server,onExit:(listener:(reason:string)=>void)=>listener("startup exit")}:server;
+    }});
+    const first=collect(h.launch({prompt:"one",cwd:"/tmp"}));await first.done;
+    assert.match(terminal(first.events)!.result!,/version negotiation/);
+    assert.equal(first.events.filter(e=>e.type==="run_started").length,1);
+    const second=collect(h.launch({prompt:"two",cwd:"/tmp"}));await second.done;
+    assert.equal(terminal(second.events)?.success,true);assert.equal(starts,2);
+  });
+
 });
