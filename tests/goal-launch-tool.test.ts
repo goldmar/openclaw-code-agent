@@ -14,6 +14,33 @@ describe("agent_goal action=launch", () => {
     setGoalController(null);
   });
 
+  it("names verifier_commands for invalid caller checks and never launches a task", async () => {
+    let launches = 0;
+    setGoalController({ async launchTask() { launches += 1; } } as any);
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp" } as any);
+    const invalidCommands: unknown[] = [
+      [""], [" \t\n "], ["npm test", " "], ["npm test", 1], Array(1),
+      { item: { item: ["npm test"] } },
+    ];
+    for (const verifier_commands of invalidCommands) {
+      const result = await tool.execute("invalid-checks", { action: "launch", goal: "Run checks", verifier_commands });
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, "Error: verifier_commands must be a dense array of non-blank shell commands.");
+    }
+    assert.equal(launches, 0);
+  });
+
+  it("keeps operator policy errors distinct from valid caller checks", async () => {
+    setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [" "] } });
+    let launches = 0;
+    setGoalController({ async launchTask() { launches += 1; } } as any);
+    const tool = makeAgentGoalTool({ workspaceDir: "/tmp" } as any);
+    const result = await tool.execute("invalid-policy", { action: "launch", goal: "Run checks", verifier_commands: ["npm test"] });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /^Error: Invalid goalVerificationPolicies:/);
+    assert.equal(launches, 0);
+  });
+
   it("canonicalizes a provider-qualified Claude default before starting a goal", async () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",

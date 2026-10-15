@@ -724,6 +724,29 @@ One tool for explicit goal loops. `action` selects the operation.
 - **Limits.** `max_iterations` defaults to 8 and is capped at 25; restarts after a Gateway restart or an idle suspension count as iterations. The task stops after the same failure fingerprint repeats 3 times in a row. `max_cost_usd` stops the task before the next iteration once its sessions cost that much. A session that bills nothing per token (Codex with a ChatGPT login) counts at the API-price estimate of the tokens it used, so the limit still bounds it; a session with neither a price nor token usage counts as $0.
 - **Verifier execution.** Each command runs with `bash -c` (no login profile) in the task workdir, with the minimal environment from [Child process environments](#child-process-environments), in its own process group. Only the last 64 KiB of output is kept (a noisy passing check still passes), and on timeout (default 10 minutes, bounded to 1 second..30 minutes) the whole process group is terminated.
 
+### Troubleshooting verifier arguments
+
+Pass `verifier_commands` as a native array of non-blank command strings:
+
+```json
+{
+  "action": "launch",
+  "goal": "Make the tests pass",
+  "goal_mode": "verifier",
+  "verifier_commands": ["npm test", "npm run lint"]
+}
+```
+
+If OpenClaw rejects this field before OCA runs, send the slash command directly as a user message on a channel that supports it:
+
+```text
+/agent_goal launch --workdir /path/to/repo --mode verifier --verify "npm test" --verify "npm run lint" Make the tests pass
+```
+
+Repeated `--verify` arguments build the command array without model-generated array arguments. These user-entered commands count as explicit verifier approval; the normal plan gate still applies. Switching to Ralph mode and omitting the commands removes those additional machine-checked completion requirements. Operator-required checks still apply in both modes.
+
+When reporting an argument-shape error, include the exact OpenClaw and OCA versions, the calling/orchestrator provider and model, whether Tool Search or code mode is active, and redacted raw tool arguments. The orchestrator constructs `agent_goal` arguments before the selected OCA harness starts, so the calling model and the harness's model are separate settings. Objects such as `{"item":{"item":["npm test"]}}` are not valid command arrays and are rejected.
+
 ### Repository goal verification policies
 
 Configure the operator-owned policy in `plugins.entries["openclaw-code-agent"].config`:
