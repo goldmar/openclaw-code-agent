@@ -346,6 +346,7 @@ export function launchOpenCodeSession(
         // Repair text before the hub forwards any post-gap deltas, including
         // parts whose text.ended event was lost while the execution stayed active.
         const messages = [];
+        const usageMessages = [];
         let messageCursor: string | undefined;
         do {
           const page = await lease.client.request(
@@ -356,12 +357,15 @@ export function launchOpenCodeSession(
               ? `?limit=100&cursor=${encodeURIComponent(messageCursor)}`
               : "?order=desc&limit=100",
           );
+          usageMessages.push(...page.data);
           messages.push(...page.data.filter((m) => m.time.created >= recoveringRun.start));
           messageCursor = page.data.some((m) => m.time.created < recoveringRun.start)
             ? undefined
             : page.cursor.next ?? undefined;
         } while (messageCursor);
         if (run !== recoveringRun || recoveringRun.settled || closed) return;
+        usage.merge(usageMessages.reverse(), info.cost);
+        emit({ type: "usage_updated", usage: usage.snapshot() });
         recoveringRun.mapper.beginRecovery();
         for (const message of [...messages].reverse())
           if (message.type === "assistant")
@@ -372,7 +376,7 @@ export function launchOpenCodeSession(
         if (
           !active[sessionID] &&
           info.time.idle >= recoveringRun.start &&
-          recoveringRun.tracker.delivered.size &&
+          (recoveringRun.tracker.delivered.size || recoveringRun.tracker.attached) &&
           ![...recoveringRun.tracker.owned].some(
             (id) => !recoveringRun.tracker.delivered.has(id),
           ) &&
@@ -731,10 +735,7 @@ export function launchOpenCodeSession(
       while (!closed) {
         const next = await nextPrompt();
         if (next.done || closed) break;
-        if (inputs.pending && (await inputs.text(promptText(next.value)))) {
-          emit({ type: "prompt_settled" });
-          continue;
-        }
+        const promptStarted = Date.now();
         try {
           await ensureSession();
         } catch (error) {
@@ -746,7 +747,9 @@ export function launchOpenCodeSession(
         await modelUpdate;
         const id = newMessageId();
         const tracker = new TurnTracker();
-        tracker.begin(id);
+        const answering = inputs.pending;
+        if (answering) tracker.attach();
+        else tracker.begin(id);
         let resolve!: (o: TurnOutcome) => void;
         const done = new Promise<TurnOutcome>((r) => {
           resolve = r;
@@ -755,7 +758,7 @@ export function launchOpenCodeSession(
           tracker,
           mapper: new EventMapper(),
           resolve,
-          start: Date.now(),
+          start: promptStarted,
           activity: Date.now(),
           settled: false,
         };
@@ -794,7 +797,10 @@ export function launchOpenCodeSession(
         try {
           const compact =
             (next.value as { ocaAction?: string })?.ocaAction === "compact";
-          await submit(promptText(next.value), id, "queue", compact);
+          if (answering) {
+            await inputs.text(promptText(next.value));
+            if (!closed && !run.settled) await reconcile();
+          } else await submit(promptText(next.value), id, "queue", compact);
           outcome = await done;
         } catch (e) {
           outcome = {

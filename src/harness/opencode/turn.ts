@@ -11,6 +11,12 @@ export class TurnTracker {
   running = false;
   continuing = false;
   interruptRequested = false;
+  attached = false;
+  /** A server-confirmed pending request belongs to an existing execution. */
+  attach(): void {
+    this.attached = true;
+    this.running = true;
+  }
   begin(id: string): void {
     this.owned.add(id);
     this.running = true;
@@ -30,7 +36,7 @@ export class TurnTracker {
     if (
       !e.type.startsWith("session.execution.") ||
       e.type === "session.execution.started" ||
-      !this.delivered.size
+      (!this.delivered.size && !this.attached)
     )
       return;
     if ([...this.owned].some((id) => !this.delivered.has(id))) {

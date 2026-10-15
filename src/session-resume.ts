@@ -1,4 +1,4 @@
-import { getBackendConversationId } from "./session-backend-ref";
+import { getBackendConversationId, isRetiredOpenCodeSession } from "./session-backend-ref";
 import type { Session } from "./session";
 import type { PersistedSessionInfo } from "./types";
 
@@ -60,7 +60,7 @@ function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {
 }
 
 export function assessResumeCandidate(session: ResumableSessionLike): ResumeAssessment {
-  if (session.backendRef?.kind === "opencode-server" || ("harnessName" in session ? session.harnessName : session.harness) === "opencode" && !session.backendRef) {
+  if (isRetiredOpenCodeSession(session, "harnessName" in session ? session.harnessName : session.harness)) {
     return {kind:"unavailable",reason:"backend_protocol_retired",stableSessionId:getStableSessionId(session)};
   }
   if (session.status === "running") {

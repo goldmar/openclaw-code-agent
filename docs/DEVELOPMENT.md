@@ -244,6 +244,14 @@ Before running it:
 
 Use `pnpm smoke:opencode-live` with `@opencode/cli >= 2.0.25`. It checks auth, stdio startup, version, session permissions/agent, instruction entries, durable log replay, fork and public events without inference. `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` additionally exercises real completion, steer, compact, rewind and resume with provider auth; select a model with `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model`. The runner isolates OCA state. `tests/opencode-native.test.ts` uses the same opt-in switch to run the real binary against a deterministic local provider, exercising permissions, child routing, forms, steer, compact, rewind, interrupt and resume without external inference. Gateway plan approval, tool permission/form round trips, process-tree cleanup and restart/resume still require the manual acceptance checklist above.
 
+### OpenCode Gateway And Orchestrator Acceptance
+
+After a protocol change, also run `node scripts/e2e/oca-opencode-host-acceptance.mjs` with a supported native OpenCode binary on PATH. `OPENCLAW_OPENCODE_COMMAND` selects an absolute binary path; `OCA_ACCEPTANCE_HOST_ROOT` selects an installed OpenClaw package directory (default: this checkout's `node_modules/openclaw`); `OCA_ACCEPTANCE_REPORT` selects the JSON receipt path (default: the system temp directory).
+
+The opt-in runner packs the current plugin, loads the artifact into an isolated real Gateway on an ephemeral port, and uses native OpenCode. A local model provider drives actual orchestrator tool calls through the Gateway: launch, read output, answer a structured question, allow a shell command, approve a plan, and resume a conversation. It checks pending and final model-visible messages, WebChat history, restart with a question/plan pending, completed-session resume, per-conversation identity and owned-process shutdown. Tool results must be consumed by the orchestrator before a phase passes, including when a lifecycle wake has queued another turn.
+
+Only model transport is simulated. This gate uses no production credentials or external inference/delivery, and does not certify external provider authentication, model decision quality, or Telegram/Discord button transport. Keep the live user-interaction checklist for those release acceptance checks. The runner retains a private scratch profile on failure; successful runs remove their profile and leave a receipt containing versions, artifact digest and passed checks.
+
 ## Extending The Plugin
 
 ### Add A Tool

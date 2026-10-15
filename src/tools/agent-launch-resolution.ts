@@ -21,7 +21,7 @@ import {
 } from "../harness-models";
 import { resolveRequiredAsyncLaunchRoute } from "../async-launch-route";
 import { userStatusWord } from "../application/session-control";
-import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
+import { getBackendConversationId, getPrimarySessionLookupRef, isRetiredOpenCodeSession } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo, SessionRoute } from "../types";
 
 export interface AgentLaunchParams {
@@ -78,7 +78,7 @@ type SessionManagerLike = {
   getPersistedSession?: (ref: string) => Pick<
     PersistedSessionInfo,
     "harness" | "model" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
-  > | undefined;
+  > & { harnessSessionId?: string } | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
 };
 
@@ -276,7 +276,7 @@ export function resolveAgentLaunchRequest(
     ? sessionManager.getPersistedSession?.(params.resume_session_id)
     : undefined;
   const resumeTarget = activeResumeSession ?? persistedResumeSession;
-  if (resumeTarget?.backendRef?.kind === "opencode-server" || (resumeTarget && ("harnessName" in resumeTarget ? resumeTarget.harnessName : "harness" in resumeTarget ? resumeTarget.harness : undefined)) === "opencode" && !resumeTarget.backendRef) {
+  if (resumeTarget && isRetiredOpenCodeSession(resumeTarget, activeResumeSession?.harnessName ?? persistedResumeSession?.harness)) {
     return {kind:"error",text:"OpenCode 1.x backend protocol retired (backend_protocol_retired). Launch a fresh OpenCode 2.x session; legacy sessions cannot resume or fork."};
   }
   const defaultModel = resolveDefaultModelForHarness(harness);
