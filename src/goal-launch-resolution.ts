@@ -102,7 +102,8 @@ export async function resolveGoalLaunchRequest(
   let verifierCommands: GoalVerifierSpec[];
   let additionalVerifierCommands: GoalVerifierSpec[];
   try {
-    additionalVerifierCommands = normalizeGoalVerifiers(goalCommandStrings(request.verifierCommands ?? [], true));
+    additionalVerifierCommands = normalizeGoalVerifiers(goalCommandStrings(request.verifierCommands ?? [], true,
+      "verifier_commands must be a dense array of non-blank shell commands."));
     const selection = await resolveGoalVerification(workdir, additionalVerifierCommands);
     verifierCommands = effectiveGoalVerifiers(selection.binding, additionalVerifierCommands);
   } catch (err) {
