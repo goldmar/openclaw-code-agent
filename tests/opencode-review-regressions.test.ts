@@ -355,24 +355,35 @@ it("deduplicates compaction message usage using the native projector identity", 
   assert.equal(usage.snapshot().models?.[0].costUsd, 1);
 });
 
-for (const failure of ["invalid-form", "temporary-form", "temporary-permission"] as const) {
+for (const failure of ["invalid-form", "temporary-form", "temporary-permission", "offline-form", "offline-permission"] as const) {
   it(`keeps the resumed execution waiting after a ${failure} reply failure`, async () => {
     const fake = new OpenCodeFakeServer();
     const info = fake.create();
     fake.busy.add(info.id);
-    const permission = failure === "temporary-permission";
+    const permission = failure.endsWith("permission");
     const reply = permission ? fake.askPermission(info.id, "command") : fake.askForm(info.id, [{ key: "q0", type: "string" }]);
     let attempts = 0;
+    let offline = false;
+    let recoveryReads = 0;
     fake.override = (r) => {
-      if (r.path.endsWith("/reply") && ++attempts === 1)
+      if (offline && r.method === "GET") {
+        recoveryReads++;
+        throw new Error("recovery unavailable during reply outage");
+      }
+      if (r.path.endsWith("/reply") && ++attempts === 1) {
+        offline = failure.startsWith("offline");
         return Response.json({ _tag: failure === "invalid-form" ? "FormInvalidAnswerError" : "Unavailable", message: "try again" }, { status: failure === "invalid-form" ? 400 : 503 });
+      }
     };
     const session = harness(fake).launch({ prompt: permission ? "Allow once" : "first answer", cwd: "/tmp", resumeSessionId: info.id });
     const c = collect(session);
     try {
-      await waitFor(() => attempts === 1 && fake.requests.filter((r) => r.method === "GET" && r.path.endsWith(permission ? "/permission" : "/form")).length >= 2);
+      await waitFor(() => attempts === 1);
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(result(c.events), undefined, "a failed reply must not terminate the resumed run");
+      assert.equal(recoveryReads, 0, "retained input must not require recovery reads during an outage");
       assert.equal(fake.requests.filter((r) => r.path.endsWith("/prompt")).length, 0);
+      offline = false;
       assert.equal(await session.submitPendingInputText!(permission ? "Allow once" : "corrected answer"), true);
       const sent = await reply;
       if (!permission) assert.deepEqual(sent.body?.answer, { q0: "corrected answer" });

@@ -807,7 +807,10 @@ export function launchOpenCodeSession(
                 `Saved input reply failed (${classifyApiError(error)}); request remains pending.`,
               );
             }
-            if (!closed && !run.settled) await reconcile();
+            // Validation failures, partial forms and uncertain replies still
+            // await user input. A recovery read during the same outage must
+            // not turn that retained request into a failed execution.
+            if (!inputs.pending && !closed && !run.settled) await reconcile();
           } else await submit(promptText(next.value), id, "queue", compact);
           outcome = await done;
         } catch (e) {
