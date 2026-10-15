@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.0.0] - Unreleased
 
-- BREAKING: OpenCode requires `@opencode/cli >= 2.0.29` (2.x). Retire 1.x session resume while retaining historical rows.
+- BREAKING: OpenCode requires `@opencode/cli >= 2.0.25` (2.x). Retire 1.x session resume while retaining historical rows.
 - Run an OCA-owned private stdio server/database with typed v2 API/events, durable replay, pending permission/form reconciliation and inbox-correlated execution outcomes.
 - Add active-turn steer, compact, in-place conversation rewind, supported effort variants, cumulative usage, and configurable command/environment/agent defaults.
 - Deny shell and subagent delegation in plan mode, retain failed replies, and use durable system instruction entries with a synthetic-message fallback.

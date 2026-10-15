@@ -46,6 +46,7 @@ export class OpenCodeFakeServer {
   autoComplete = false;
   version = "2.0.29";
   modelList: any[] = [];
+  defaultModel: { providerID: string; id: string; variant?: string } | undefined;
   onPrompt: ((id: string, text: string, delivery: string) => void) | undefined;
   override: ((request: OpenCodeRequest) => Response | undefined) | undefined;
   private count = 0;
@@ -68,6 +69,7 @@ export class OpenCodeFakeServer {
     this.exits.clear();
   }
   create(directory = "/tmp", agent = "build", model?: any): any {
+    model ??= this.defaultModel;
     const id = `ses_${++this.count}`;
     const info = {
       id,
@@ -371,12 +373,22 @@ export class OpenCodeFakeServer {
       return this.json(req, undefined, 204);
     }
     if (suffix === "/message")
+    {
+      const cursor = url.searchParams.get("cursor")?.split(":");
+      const descending = cursor ? cursor[1] === "desc" : url.searchParams.get("order") !== "asc";
+      const records = [...(this.records.get(id) ?? [])].filter(
+        (m) => !url.searchParams.has("type") || m.type === url.searchParams.get("type"),
+      );
+      if (descending) records.reverse();
+      const offset = Number(cursor?.[0] ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 100);
       return this.json(req, {
-        data: [...(this.records.get(id) ?? [])]
-          .reverse()
-          .slice(0, Number(url.searchParams.get("limit") ?? 100)),
-        cursor: {},
+        data: records.slice(offset, offset + limit),
+        cursor: offset + limit < records.length
+          ? { next: `${offset + limit}:${descending ? "desc" : "asc"}` }
+          : {},
       });
+    }
     if (suffix.startsWith("/message/")) {
       const record = this.records
         .get(id)

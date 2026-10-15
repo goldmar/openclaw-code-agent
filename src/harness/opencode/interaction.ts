@@ -106,7 +106,9 @@ export class PendingInputCoordinator {
     return {
       id: field.key,
       header: field.title,
-      question: field.description ?? field.title ?? field.key,
+      question: field.type === "external"
+        ? `${field.description ?? field.title ?? "Complete the external step"}: ${field.url}\nReply here to cancel this form, or complete it externally.`
+        : field.description ?? field.title ?? field.key,
       options: options.map((o) => ({
         label: o.label,
         value: o.value,
@@ -131,10 +133,10 @@ export class PendingInputCoordinator {
       };
     else {
       const fields = this.fields(r.value);
-      const f = fields[this.index];
-      if (!f) return;
-      const questions = fields.map((f) => this.question(f));
+      const external = r.value.fields.filter((f) => f.type === "external");
+      const questions = (fields.length ? fields : external).map((f) => this.question(f));
       const q = questions[this.index];
+      if (!q) return;
       state = {
         requestId: r.value.id,
         kind: "question",
@@ -142,7 +144,9 @@ export class PendingInputCoordinator {
         activeQuestionIndex: this.index,
         options: q.options.map((o) => o.label),
         allowsFreeText: q.allowsFreeText,
-        promptText: formatPendingInputWizardQuestion(
+        promptText: (fields.length && external.length
+          ? external.map((f) => this.question(f).question).join("\n") + "\n\n"
+          : "") + formatPendingInputWizardQuestion(
           q,
           this.index,
           questions.length,
@@ -198,7 +202,11 @@ export class PendingInputCoordinator {
       }
       const fields = this.fields(r.value);
       const field = fields[this.index];
-      if (!field) return false;
+      if (!field) {
+        if (!r.value.fields.some((f) => f.type === "external")) return false;
+        await this.send(r, { kind: "cancel", message: text });
+        return true;
+      }
       const parsed = resolvePendingInputAnswer(this.question(field), text);
       if (!parsed.ok) {
         await this.send(r, { kind: "cancel", message: text });
@@ -238,6 +246,10 @@ export class PendingInputCoordinator {
         e instanceof OpenCodeApiError &&
         e._tag === "FormInvalidAnswerError"
       ) {
+        // The server validates the whole answer, without identifying a field.
+        // Restart the wizard so an earlier invalid answer can be corrected.
+        this.answers = {};
+        this.index = 0;
         this.show();
         throw e;
       }

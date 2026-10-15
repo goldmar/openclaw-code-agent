@@ -11,7 +11,7 @@ export class OpenCodeApiError extends Error {
 export class OpenCodeVersionError extends Error {
   constructor() {
     super(
-      "OpenCode requires >= 2.0.29 from @opencode/cli (opencode2). OpenCode 1.x is not supported.",
+      "OpenCode requires >= 2.0.25 from @opencode/cli (opencode2). OpenCode 1.x is not supported.",
     );
     this.name = "OpenCodeVersionError";
   }

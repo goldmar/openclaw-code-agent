@@ -170,7 +170,7 @@ Claude Code launches use `opus` when no model is supplied. Provider-qualified Cl
 
 ### OpenCode
 
-Make sure local `opencode >= 2.0.29 (@opencode/cli)` is available and configured with provider auth. The plugin lazily starts one shared `opencode serve` process on localhost for all OpenCode sessions (each request names its project with `?directory=`), detects turn completion from the server's event stream, and uses OpenCode's classic session routes for prompts, messages, and replies. The server shuts down about 30 seconds after the last OpenCode session ends. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
+Install OpenCode **2.0.25 or later in 2.x** from `@opencode/cli`; OCA prefers `opencode2` on PATH, then `opencode`. OCA starts a private `serve --stdio --hostname 127.0.0.1 --port 0` server and stores its sessions and credentials in `<stateDir>/plugin-state/openclaw-code-agent/opencode/opencode.db`. Your provider configuration still applies, but OAuth/subscription providers need a separate login in this database: `OPENCODE_DB=<absolute path to OCA's opencode.db> opencode2 auth login` (use `opencode` if that is your 2.x command). OCA never attaches to your shared server or database. The private server shuts down about 30 seconds after the last session ends. Leave `harnesses.opencode.defaultModel` unset to use OpenCode's configured default, or pass `provider/model` explicitly. See [the OpenCode reference](docs/REFERENCE.md#harness-readiness-guidance) for readiness and [private-server details](docs/REFERENCE.md#harnesses).
 
 ## First Session
 
@@ -214,7 +214,7 @@ Revisions stay attached to the same session, so the newest plan is the actionabl
 
 When an agent asks a question (Claude Code `AskUserQuestion`, Codex `request_user_input`, or an OpenCode question), answer in the thread or with `agent_respond`: option numbers, labels, several options for multi-select questions, or free text. An empty answer or an option number outside the list is rejected with the question shown again. A question answered, or a plan approved, after a Gateway restart resumes the session.
 
-Messages sent while a Codex turn is running steer that turn instead of waiting in a queue; `agent_respond(..., interrupt=true)` still interrupts. To go back, launch with `resume_session_id` and `rewind_turns=N`: Codex and Claude Code drop the latest N turns in place, or fork a new session from before them with `fork_session: true` (OpenCode supports the fork only). Rewind covers conversation history only; files are not reverted. For a running Codex session, `agent_session_action` can compact the context or run an inline review of the worktree branch diff, uncommitted changes, a commit, or custom instructions.
+Messages sent while a Codex turn is running steer that turn instead of waiting in a queue; `agent_respond(..., interrupt=true)` still interrupts. To go back, launch with `resume_session_id` and `rewind_turns=N`: Codex and Claude Code drop the latest N turns in place, or fork a new session from before them with `fork_session: true` (OpenCode supports both). Rewind covers conversation history only; files are not reverted. For a running Codex session, `agent_session_action` can compact the context or run an inline review of the worktree branch diff, uncommitted changes, a commit, or custom instructions.
 
 `agent_respond`, `agent_merge`, `agent_escalate`, and `agent_output` refuse unresolved session references with native structured errors. Recover the intended exact OCA ID from the original launch receipt or an existing session lookup you are authorized to use. A masked-looking transcript value does not prove the host changed the executed argument; OCA does not reconstruct IDs or select an unrelated recent session. Exact names and backend aliases keep their existing lookup semantics, including a literal `***` name that actually resolves.
 
@@ -313,4 +313,4 @@ Chat commands mirror the common workflows when you want explicit commands instea
 
 MIT. See [LICENSE](LICENSE).
 
-OpenCode requires `@opencode/cli >= 2.0.29` (prefer `opencode2`). OCA uses a private database/server; 1.x sessions remain visible but cannot resume. OpenCode supports steer, compact and in-place conversation rewind. See [the reference](docs/REFERENCE.md) for private-database authentication and configuration.
+OpenCode requires `@opencode/cli >= 2.0.25` (prefer `opencode2`). OCA uses a private database/server; 1.x sessions remain visible but cannot resume. OpenCode supports steer, compact and in-place conversation rewind. See [the reference](docs/REFERENCE.md) for private-database authentication and configuration.

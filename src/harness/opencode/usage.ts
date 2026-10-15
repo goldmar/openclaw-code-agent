@@ -1,5 +1,10 @@
 import type { HarnessUsage, HarnessModelUsage } from "../types";
-import type { S_Model_Info, S_Model_Ref } from "./protocol/api";
+import type {
+  S_Model_Info,
+  S_Model_Ref,
+  S_Session_Message_Info,
+  S_TokenUsage_Info,
+} from "./protocol/api";
 import type { OpenCodeEvent } from "./protocol/events";
 export function modelFacts(
   models: S_Model_Info[],
@@ -21,12 +26,58 @@ export function modelFacts(
 export class UsageAccumulator {
   private seen = new Set<string>();
   private models = new Map<string, HarnessModelUsage>();
-  private current = "unknown";
+  private current: S_Model_Ref | undefined;
   private cost = 0;
   private contextTokens: number | undefined;
+  restore(messages: S_Session_Message_Info[], cost: number): void {
+    this.seen.clear();
+    this.models.clear();
+    this.contextTokens = undefined;
+    this.current = undefined;
+    this.cost = cost;
+    for (const message of messages) {
+      if (message.type !== "assistant" && message.type !== "compaction")
+        continue;
+      if (message.type === "compaction" && message.status === "running")
+        continue;
+      if (message.type === "assistant" && !message.time.completed) continue;
+      this.seen.add(message.id);
+      this.add(
+        "model" in message ? message.model : undefined,
+        message.cost,
+        message.tokens,
+      );
+    }
+  }
+  private add(
+    model: S_Model_Ref | undefined,
+    cost: number | undefined,
+    tokens: S_TokenUsage_Info | undefined,
+  ): void {
+    if (!tokens && cost === undefined) return;
+    const key = model ? `${model.providerID}/${model.id}` : "unknown";
+    const value = this.models.get(key) ?? {
+      model: key,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    value.costUsd += cost ?? 0;
+    value.inputTokens += tokens?.input ?? 0;
+    value.outputTokens += tokens?.output ?? 0;
+    value.reasoningTokens += tokens?.reasoning ?? 0;
+    value.cacheReadTokens += tokens?.cache.read ?? 0;
+    value.cacheWriteTokens += tokens?.cache.write ?? 0;
+    this.models.set(key, value);
+    if (tokens)
+      this.contextTokens = tokens.input + tokens.cache.read + tokens.cache.write;
+  }
   apply(event: OpenCodeEvent): HarnessUsage | undefined {
     if (event.type === "session.step.started")
-      this.current = `${event.data.model.providerID}/${event.data.model.id}`;
+      this.current = event.data.model;
     if (event.type === "session.usage.updated") {
       this.cost = event.data.cost;
       return this.snapshot();
@@ -37,39 +88,18 @@ export class UsageAccumulator {
       event.type !== "session.compaction.ended"
     )
       return;
-    if (this.seen.has(event.id)) return;
-    this.seen.add(event.id);
+    const key = event.type === "session.compaction.ended"
+      ? event.id
+      : event.data.assistantMessageID;
+    if (this.seen.has(key)) return;
+    this.seen.add(key);
     const d = event.data;
     if (!d.tokens && d.cost === undefined) return;
-    const t = d.tokens ?? {
-      input: 0,
-      output: 0,
-      reasoning: 0,
-      cache: { read: 0, write: 0 },
-    };
     const model =
       event.type === "session.compaction.ended"
         ? event.data.model
-          ? `${event.data.model.providerID}/${event.data.model.id}`
-          : "unknown"
         : this.current;
-    const value = this.models.get(model) ?? {
-      model,
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    };
-    value.costUsd += d.cost ?? 0;
-    value.inputTokens += t.input;
-    value.outputTokens += t.output;
-    value.reasoningTokens += t.reasoning;
-    value.cacheReadTokens += t.cache.read;
-    value.cacheWriteTokens += t.cache.write;
-    this.models.set(model, value);
-    if (d.tokens) this.contextTokens = t.input + t.cache.read + t.cache.write;
+    this.add(model, d.cost, d.tokens);
     return this.snapshot();
   }
   snapshot(): HarnessUsage {

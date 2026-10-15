@@ -372,7 +372,7 @@
     },
     "defaultHarness": {
       "label": "Default harness",
-      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine. Pick OpenCode when local opencode >= 2.0.29 (@opencode/cli) and provider auth are ready.",
+      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine. Pick OpenCode when local opencode >= 2.0.25 (@opencode/cli) and provider auth are ready.",
       "placeholder": "claude-code"
     },
     "permissionMode": {

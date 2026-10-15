@@ -7,6 +7,12 @@ export class EventMapper {
   private names = new Map<string, string>();
   private called = new Set<string>();
   private lastPart: string | undefined;
+  private emitted = new Map<string, string>();
+  private recovering = false;
+  /** Deltas after a gap have unknown offsets; wait for authoritative full text. */
+  beginRecovery(): void {
+    this.recovering = true;
+  }
   result(): string {
     return (
       [...this.messages.values()]
@@ -19,7 +25,7 @@ export class EventMapper {
     const output: HarnessMessage[] = [];
     parts.forEach((text, ordinal) => {
       const key = `${messageID}:${ordinal}`;
-      const previous = this.parts.get(key) ?? "";
+      const previous = this.emitted.get(key) ?? "";
       if (!this.parts.has(key)) {
         const keys = this.messages.get(messageID) ?? [];
         keys.push(key);
@@ -28,8 +34,10 @@ export class EventMapper {
         this.lastPart = key;
       }
       this.parts.set(key, text);
-      if (text.startsWith(previous) && text.length > previous.length)
+      if (text.startsWith(previous) && text.length > previous.length) {
         output.push({ type: "text_delta", text: text.slice(previous.length) });
+        this.emitted.set(key, text);
+      }
     });
     return output;
   }
@@ -54,18 +62,24 @@ export class EventMapper {
       const previous = this.parts.get(key)!;
       if (e.type === "session.text.delta") {
         this.parts.set(key, previous + e.data.delta);
-        output.push({ type: "text_delta", text: e.data.delta });
+        if (!this.recovering) {
+          output.push({ type: "text_delta", text: e.data.delta });
+          this.emitted.set(key, previous + e.data.delta);
+        }
       }
       if (e.type === "session.text.ended") {
         this.parts.set(key, e.data.text);
+        const emitted = this.emitted.get(key) ?? "";
         if (
-          e.data.text.startsWith(previous) &&
-          e.data.text.length > previous.length
-        )
+          e.data.text.startsWith(emitted) &&
+          e.data.text.length > emitted.length
+        ) {
           output.push({
             type: "text_delta",
-            text: e.data.text.slice(previous.length),
+            text: e.data.text.slice(emitted.length),
           });
+          this.emitted.set(key, e.data.text);
+        }
       }
     }
     if (e.type === "session.tool.input.started")

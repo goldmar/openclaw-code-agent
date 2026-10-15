@@ -140,6 +140,23 @@ export function launchOpenCodeSession(
         usage: { contextWindow: facts.contextWindow },
       });
   };
+  let modelUpdate: Promise<void> | undefined;
+  async function applyEffort(model: S_Model_Ref): Promise<S_Model_Ref> {
+    if (
+      !options.reasoningEffort ||
+      model.variant === options.reasoningEffort ||
+      !modelFacts(models, model, options.reasoningEffort)
+        .reasoningEffortSupported
+    )
+      return model;
+    const selected = { ...model, variant: options.reasoningEffort };
+    await assertLease().client.request(
+      "POST /api/session/{sessionID}/model",
+      params(),
+      { model: selected },
+    );
+    return selected;
+  }
   const apply = (event: OpenCodeEvent) => {
     if (event.type === "permission.asked") {
       if (mode === "bypassPermissions")
@@ -176,7 +193,26 @@ export function launchOpenCodeSession(
     for (const message of run.mapper.map(event)) emit(message);
     const snapshot = usage.apply(event);
     if (snapshot) emit({ type: "usage_updated", usage: snapshot });
-    if (event.type === "session.step.started") reportModel(event.data.model);
+    if (
+      event.type === "session.step.started" ||
+      event.type === "session.model.selected"
+    ) {
+      reportModel(event.data.model);
+      // Some servers first resolve their configured default during execution.
+      // Apply the requested variant as soon as that model becomes known.
+      if (!options.model && !modelUpdate) {
+        modelUpdate = applyEffort(event.data.model)
+          .then((): void => undefined)
+          .catch((error) => finish({
+            outcome: "failed",
+            errorCode: classifyApiError(error),
+            message: String(error),
+          }))
+          .finally(() => {
+            modelUpdate = undefined;
+          });
+      }
+    }
     if (event.type === "session.compaction.ended" && fallbackInstructions)
       void instructions().catch((e) =>
         finish({
@@ -289,6 +325,7 @@ export function launchOpenCodeSession(
           for (const p of permissions) await autoReply(p);
       }
       if (run && !run.settled) {
+        const recoveringRun = run;
         const [info, active, inbox] = await Promise.all([
           lease.client.data("GET /api/session/{sessionID}", params()),
           lease.client.data("GET /api/session/active"),
@@ -296,47 +333,53 @@ export function launchOpenCodeSession(
         ]);
         // Default CLI builds can expose /log without retaining its payloads.
         // Exact message lookup confirms delivery even when that log is empty.
-        for (const id of run.tracker.owned)
+        for (const id of recoveringRun.tracker.owned)
           if (
-            !run.tracker.delivered.has(id) &&
+            !recoveringRun.tracker.delivered.has(id) &&
             !inbox.some((i) => i.id === id)
           ) {
             const confirmed = await admitted(id);
-            if (confirmed === true) run.tracker.delivered.add(id);
-            else if (confirmed === undefined && run.tracker.continuing)
+            if (confirmed === true) recoveringRun.tracker.delivered.add(id);
+            else if (confirmed === undefined && recoveringRun.tracker.continuing)
               throw new FollowUpDeliveryUnconfirmedError();
           }
-        if (
-          !active[sessionID] &&
-          info.time.idle >= run.start &&
-          run.tracker.delivered.size &&
-          ![...run.tracker.owned].some(
-            (id) => !run!.tracker.delivered.has(id),
-          ) &&
-          info.outcome
-        ) {
-          const messages = await lease.client.data(
+        // Repair text before the hub forwards any post-gap deltas, including
+        // parts whose text.ended event was lost while the execution stayed active.
+        const messages = [];
+        let messageCursor: string | undefined;
+        do {
+          const page = await lease.client.request(
             "GET /api/session/{sessionID}/message",
             params(),
             undefined,
-            "?order=desc&limit=100",
+            messageCursor
+              ? `?limit=100&cursor=${encodeURIComponent(messageCursor)}`
+              : "?order=desc&limit=100",
           );
-          const latest = messages.find(
-            (m) =>
-              m.type === "assistant" &&
-              m.time.created >= run!.start &&
-              m.content.some((p) => p.type === "text"),
-          );
-          if (latest?.type === "assistant")
-            for (const message of run.mapper.restore(
-              latest.id,
-              latest.content
-                .filter((p) => p.type === "text")
-                .map((p) => p.text),
-            ))
-              emit(message);
+          messages.push(...page.data.filter((m) => m.time.created >= recoveringRun.start));
+          messageCursor = page.data.some((m) => m.time.created < recoveringRun.start)
+            ? undefined
+            : page.cursor.next ?? undefined;
+        } while (messageCursor);
+        if (run !== recoveringRun || recoveringRun.settled || closed) return;
+        recoveringRun.mapper.beginRecovery();
+        for (const message of [...messages].reverse())
+          if (message.type === "assistant")
+            for (const mapped of recoveringRun.mapper.restore(
+              message.id,
+              message.content.filter((p) => p.type === "text").map((p) => p.text),
+            )) emit(mapped);
+        if (
+          !active[sessionID] &&
+          info.time.idle >= recoveringRun.start &&
+          recoveringRun.tracker.delivered.size &&
+          ![...recoveringRun.tracker.owned].some(
+            (id) => !recoveringRun.tracker.delivered.has(id),
+          ) &&
+          info.outcome
+        ) {
           const idle = messages.find(
-            (m) => m.type === "idle" && m.time.created >= run!.start,
+            (m) => m.type === "idle" && m.time.created >= recoveringRun.start,
           );
           finish({
             outcome:
@@ -363,7 +406,12 @@ export function launchOpenCodeSession(
   }
   async function ensureSession(): Promise<void> {
     if (lease) return;
-    lease = await deps.endpoint.acquire();
+    const acquired = await deps.endpoint.acquire();
+    if (closed || lifetime.signal.aborted) {
+      await acquired.release();
+      throw new Error("OpenCode launch cancelled during endpoint startup.");
+    }
+    lease = acquired;
     const generation = lease.generation;
     lease.onLost((reason) => {
       if (lease?.generation !== generation) return;
@@ -387,6 +435,7 @@ export function launchOpenCodeSession(
       undefined,
       `?${new URLSearchParams({ "location[directory]": options.cwd })}`,
     );
+    assertLease();
     const requested = options.model;
     let model: S_Model_Ref | undefined;
     if (requested) {
@@ -480,23 +529,51 @@ export function launchOpenCodeSession(
       type: "backend_ref",
       ref: { kind: "opencode-v2", conversationId: sessionID! },
     });
-    if (model ?? info.model) reportModel(model ?? info.model!);
+    model ??= info.model;
+    if (model) model = await applyEffort(model);
+    if (model) reportModel(model);
     let hub = deps.hubs.get(generation);
     if (!hub || hub.closed) {
       hub = new EventHub(lease, deps.streamReconnectDelayMs);
       deps.hubs.set(generation, hub);
     }
-    unsubscribe = await hub.subscribe(
+    const subscription = await hub.subscribe(
       sessionID!,
       (e) => {
         if (e.type === "session.created" && e.data.parentID)
           children.add(e.data.sessionID);
         receive(e);
       },
-      reconcile,
+      async () => {
+        run?.mapper.beginRecovery();
+        await reconcile();
+      },
       lifetime.signal,
     );
+    if (closed) {
+      subscription();
+      throw new Error("OpenCode launch cancelled during event subscription.");
+    }
+    unsubscribe = subscription;
     await reconcile();
+    const history = [];
+    let historyCursor: string | undefined;
+    do {
+      const page = await client.request(
+        "GET /api/session/{sessionID}/message",
+        params(),
+        undefined,
+        historyCursor
+          ? `?limit=100&cursor=${encodeURIComponent(historyCursor)}`
+          : "?limit=100&order=asc",
+      );
+      history.push(...page.data);
+      historyCursor = page.cursor.next ?? undefined;
+      assertLease();
+    } while (historyCursor);
+    const baseline = await client.data("GET /api/session/{sessionID}", params());
+    usage.restore(history, baseline.cost);
+    emit({ type: "usage_updated", usage: usage.snapshot() });
     await instructions();
   }
   async function admitted(id: string): Promise<boolean | undefined> {
@@ -665,6 +742,8 @@ export function launchOpenCodeSession(
           emit({ type: "run_started", runId: newMessageId() });
           throw error;
         }
+        if (closed) break;
+        await modelUpdate;
         const id = newMessageId();
         const tracker = new TurnTracker();
         tracker.begin(id);

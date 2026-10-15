@@ -1,6 +1,6 @@
 import type { OpenCodeClient } from "./client";
 import { OpenCodeApiError, OpenCodeVersionError } from "./errors";
-export const MIN_OPENCODE_VERSION = "2.0.29";
+export const MIN_OPENCODE_VERSION = "2.0.25";
 export interface OpenCodeServerHandle {
   baseUrl: string;
   authorization?: string;
@@ -28,7 +28,7 @@ export async function checkServerVersion(
     if (
       !match ||
       Number(match[1]) !== 2 ||
-      (Number(match[2]) === 0 && Number(match[3]) < 29)
+      (Number(match[2]) === 0 && Number(match[3]) < Number(MIN_OPENCODE_VERSION.split(".")[2]))
     )
       throw new OpenCodeVersionError();
     return info;
