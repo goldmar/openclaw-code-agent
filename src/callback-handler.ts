@@ -93,6 +93,14 @@ function failureReply(sessionName: string | undefined, reason: string): string {
   return `❌ ${prefix}${(prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text) || "The action failed."}`;
 }
 
+/** Worktree decision buttons whose failure re-offers the decision. */
+const WORKTREE_BUTTON_ACTIONS: Partial<Record<string, "Merge" | "PR" | "Discard">> = {
+  "worktree-merge": "Merge",
+  "worktree-create-pr": "PR",
+  "worktree-update-pr": "PR",
+  "worktree-dismiss": "Discard",
+};
+
 /** `agent_pr`'s answer when the branch's PR was closed without merging. */
 const CLOSED_PR_PATTERN = /A PR exists but was closed without merging: (\S+)/u;
 
@@ -1238,358 +1246,373 @@ export function createCallbackHandler(
 
         // Route action
         let worktreeDecisionSucceeded = false;
-        switch (consumedToken.kind) {
-          case "plugin-update-install": {
-            await clearUpdateActionButtons(ctx, callbackAcknowledged);
-            logButtonDiagnostic("callback_update_action_started", {
-              channel: ctx.channel,
-              tokenHash: hashDiagnosticToken(tokenId),
-              actionKind: consumedToken.kind,
-              approvedVersion: consumedToken.pluginUpdateVersion,
-            });
-            if (!autoUpdateService) {
-              logButtonDiagnostic("callback_update_action_failed", {
+        try {
+          switch (consumedToken.kind) {
+            case "plugin-update-install": {
+              await clearUpdateActionButtons(ctx, callbackAcknowledged);
+              logButtonDiagnostic("callback_update_action_started", {
                 channel: ctx.channel,
                 tokenHash: hashDiagnosticToken(tokenId),
-                reason: pluginConfig.autoUpdate ? "service_unavailable" : "auto_update_disabled",
+                actionKind: consumedToken.kind,
+                approvedVersion: consumedToken.pluginUpdateVersion,
               });
-              await replyText(ctx, updateServiceUnavailableText());
-              break;
-            }
-            let text: string;
-            try {
-              text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
-                route: consumedToken.route,
-              });
-            } catch (err) {
-              logButtonDiagnostic("callback_update_action_failed", {
-                channel: ctx.channel,
-                tokenHash: hashDiagnosticToken(tokenId),
-                reason: "install_failed",
-              });
-              await replyText(ctx, failureReply(undefined, `Code Agent update failed: ${err instanceof Error ? err.message : String(err)}`));
-              break;
-            }
-            logButtonDiagnostic("callback_update_action_completed", {
-              channel: ctx.channel,
-              tokenHash: hashDiagnosticToken(tokenId),
-              approvedVersion: consumedToken.pluginUpdateVersion,
-            });
-            // Empty: the restart prompt (`⬆️ Code Agent X is installed. Restart…?`) is the answer.
-            if (!text) break;
-            try {
-              await replyText(ctx, `⬆️ ${text}`);
-            } catch (err) {
-              logButtonDiagnostic("callback_update_confirmation_failed", {
-                channel: ctx.channel,
-                tokenHash: hashDiagnosticToken(tokenId),
-                reason: "reply_failed",
-              });
-              log.warn(`[callback-handler] Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
-            }
-            break;
-          }
-
-          case "plugin-update-restart": {
-            await clearUpdateActionButtons(ctx, callbackAcknowledged);
-            if (!autoUpdateService) {
-              await replyText(ctx, updateServiceUnavailableText());
-              break;
-            }
-            try {
-              const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
-              await replyText(ctx, `⬆️ ${text}`);
-            } catch (err) {
-              await replyText(ctx, failureReply(undefined, `Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`));
-            }
-            break;
-          }
-
-          case "plugin-update-dismiss": {
-            await clearUpdateActionButtons(ctx, callbackAcknowledged);
-            const text = autoUpdateService
-              ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
-              : "Skipped this update.";
-            await replyText(ctx, `⏭️ ${text}`);
-            break;
-          }
-
-          case "plugin-update-remind-later": {
-            await clearUpdateActionButtons(ctx, callbackAcknowledged);
-            const text = autoUpdateService
-              ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
-              : "OK. The update will be offered again tomorrow.";
-            await replyText(ctx, `⏭️ ${text}`);
-            break;
-          }
-
-          case "worktree-merge": {
-            const result = await makeMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { ocaSessionId: sessionId });
-            const text = toolResultText(result);
-            if (toolResultSucceeded(result)) {
-              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-              worktreeDecisionSucceeded = true;
-              // Nothing was posted (already merged, …): the first line of the tool
-              // text is the answer; the rest is for the orchestrator.
-              if (!toolResultOutcomeNotified(result)) await replyText(ctx, text.split("\n")[0]!);
-              break;
-            }
-            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "Merge", text);
-            break;
-          }
-
-          case "worktree-decide-later": {
-            const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
-            const succeeded = worktreeActionTextSucceeded(result);
-            if (succeeded) {
-              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-              await replyText(ctx, result);
-              worktreeDecisionSucceeded = true;
-            } else {
-              await replyText(ctx, failureReply(actionSessionName, result));
-            }
-            break;
-          }
-
-          case "worktree-dismiss": {
-            const result = await sessionManager.dismissWorktree(sessionId);
-            const succeeded = worktreeActionTextSucceeded(result);
-            // Already discarded (a second Discard button): nothing is left to re-offer.
-            // Read from the worktree state, not from the reply text.
-            const alreadyDiscarded = !succeeded && (
-              resolvedWorktreeDecision(sessionManager.getPersistedSession?.(sessionId)) === "discarded"
-              || sessionManager.resolve?.(sessionId)?.worktreeState === "dismissed"
-            );
-            if (succeeded || alreadyDiscarded) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-            if (succeeded) worktreeDecisionSucceeded = true;
-            // On success the `🗑️ [name] Discarded: …` notice is the one answer.
-            if (alreadyDiscarded) await replyText(ctx, result.startsWith("Error") ? failureReply(actionSessionName, result) : result);
-            else if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "Discard", result);
-            break;
-          }
-
-          case "worktree-create-pr":
-          case "worktree-update-pr": {
-            // Do NOT pre-clear pendingWorktreeDecisionSince here.
-            // For the PR path the worktree directory must stay alive indefinitely so the
-            // user can push follow-up commits for PR review.  The worktree directory was
-            // already preserved by onSessionTerminal (which skips removeWorktree when
-            // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
-            // on success; if the PR creation fails the flag remains set so reminders
-            // continue until the user tries again.
-            let result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
-              ocaSessionId: sessionId,
-              // The New PR button, offered after its PR was found closed without merging.
-              ...(consumedToken.prForceNew ? { force_new: true } : {}),
-            });
-            // The PR was reopened or merged since New PR was offered: the press
-            // is then a normal PR action (sync the open PR, or record the merge).
-            if (consumedToken.prForceNew && toolResultState(result) === "force_new_refused") {
-              result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { ocaSessionId: sessionId });
-            }
-            const text = toolResultText(result);
-            if (toolResultSucceeded(result)) {
-              await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
-              worktreeDecisionSucceeded = true;
-              // Nothing was posted (PR already merged or up to date): the first line
-              // of the tool text is the answer; the rest is for the orchestrator.
-              if (!toolResultOutcomeNotified(result)) await replyText(ctx, text.split("\n")[0]!);
-              break;
-            }
-            await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "PR", text);
-            break;
-          }
-
-          case "plan-offer-start": {
-            if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
-              await clearInteractiveState(ctx, {
-                alreadyAcknowledged: callbackAcknowledged,
-                forceTelegramMarkupEdit: true,
-              });
-              await replyText(ctx, "⚠️ This action is missing the plan launch context.");
-              break;
-            }
-            let session: { id: string; name: string };
-            try {
-              session = await sessionManager.launchPlanOffer({
-                route: consumedToken.route,
-                prompt: consumedToken.launchPrompt,
-                workdir: consumedToken.launchWorkdir,
-                name: consumedToken.launchName,
-                worktreeStrategy: consumedToken.launchWorktreeStrategy,
-              });
-            } catch (err) {
-              const errText = err instanceof Error ? err.message : String(err);
-              await clearInteractiveState(ctx, {
-                alreadyAcknowledged: callbackAcknowledged,
-                forceTelegramMarkupEdit: true,
-              });
-              await replyText(ctx, failureReply(consumedToken.launchName, `Planning session did not start: ${errText}`));
-              break;
-            }
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            // The launch posts `🚀 [name] Launched | …` to the offer's route, the
-            // chat of this button. Without a route nothing is posted there.
-            if (!consumedToken.route) await replyText(ctx, `🚀 [${session.name}] Planning session started`);
-            break;
-          }
-
-          case "plan-offer-dismiss": {
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            await replyText(ctx, `⏭️ Plan offer dismissed.`);
-            break;
-          }
-
-          case "goal-verifiers-confirm":
-          case "goal-verifiers-decline": {
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            if (!goalController) {
-              await replyText(ctx, SERVICE_NOT_RUNNING);
-              break;
-            }
-            // The controller's notice is the one answer (`🎯 [task] Goal task started`,
-            // `⛔ [task] Goal task stopped`, `❌ [task] Goal task failed`, each with
-            // its reason); the button replies only when no notice is sent.
-            try {
-              const outcome = consumedToken.kind === "goal-verifiers-decline"
-                ? goalController.declineVerifierCommands(sessionId)
-                : await goalController.confirmVerifierCommands(sessionId);
-              if (!outcome) await replyText(ctx, "⚠️ That goal task no longer exists.");
-              else if (outcome.action === "not_waiting") {
-                await replyText(ctx, `⚠️ [${outcome.task.name}] Goal task is no longer waiting for confirmation (${userGoalStatusWord(outcome.task.status)}).`);
+              if (!autoUpdateService) {
+                logButtonDiagnostic("callback_update_action_failed", {
+                  channel: ctx.channel,
+                  tokenHash: hashDiagnosticToken(tokenId),
+                  reason: pluginConfig.autoUpdate ? "service_unavailable" : "auto_update_disabled",
+                });
+                await replyText(ctx, updateServiceUnavailableText());
+                break;
               }
-            } catch (err) {
-              // A failed start is reported by `❌ [task] Goal task failed`.
-              if (goalController.getTask?.(sessionId)?.status !== "failed") {
-                await replyText(ctx, failureReply(goalController.getTask?.(sessionId)?.name, `Goal task did not start: ${err instanceof Error ? err.message : String(err)}`));
+              let text: string;
+              try {
+                text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
+                  route: consumedToken.route,
+                });
+              } catch (err) {
+                logButtonDiagnostic("callback_update_action_failed", {
+                  channel: ctx.channel,
+                  tokenHash: hashDiagnosticToken(tokenId),
+                  reason: "install_failed",
+                });
+                await replyText(ctx, failureReply(undefined, `Code Agent update failed: ${err instanceof Error ? err.message : String(err)}`));
+                break;
               }
+              logButtonDiagnostic("callback_update_action_completed", {
+                channel: ctx.channel,
+                tokenHash: hashDiagnosticToken(tokenId),
+                approvedVersion: consumedToken.pluginUpdateVersion,
+              });
+              // Empty: the restart prompt (`⬆️ Code Agent X is installed. Restart…?`) is the answer.
+              if (!text) break;
+              try {
+                await replyText(ctx, `⬆️ ${text}`);
+              } catch (err) {
+                logButtonDiagnostic("callback_update_confirmation_failed", {
+                  channel: ctx.channel,
+                  tokenHash: hashDiagnosticToken(tokenId),
+                  reason: "reply_failed",
+                });
+                log.warn(`[callback-handler] Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+              break;
             }
-            break;
-          }
 
-          case "repo-policy-set": {
-            if (!consumedToken.repoPolicy || !consumedToken.repoPolicyWorkdir) {
+            case "plugin-update-restart": {
+              await clearUpdateActionButtons(ctx, callbackAcknowledged);
+              if (!autoUpdateService) {
+                await replyText(ctx, updateServiceUnavailableText());
+                break;
+              }
+              try {
+                const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
+                await replyText(ctx, `⬆️ ${text}`);
+              } catch (err) {
+                await replyText(ctx, failureReply(undefined, `Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`));
+              }
+              break;
+            }
+
+            case "plugin-update-dismiss": {
+              await clearUpdateActionButtons(ctx, callbackAcknowledged);
+              const text = autoUpdateService
+                ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
+                : "Skipped this update.";
+              await replyText(ctx, `⏭️ ${text}`);
+              break;
+            }
+
+            case "plugin-update-remind-later": {
+              await clearUpdateActionButtons(ctx, callbackAcknowledged);
+              const text = autoUpdateService
+                ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
+                : "OK. The update will be offered again tomorrow.";
+              await replyText(ctx, `⏭️ ${text}`);
+              break;
+            }
+
+            case "worktree-merge": {
+              const result = await makeMergeTool().execute(USER_BUTTON_TOOL_CALL_ID, { ocaSessionId: sessionId });
+              const text = toolResultText(result);
+              if (toolResultSucceeded(result)) {
+                await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+                worktreeDecisionSucceeded = true;
+                // Nothing was posted (already merged, …): the first line of the tool
+                // text is the answer; the rest is for the orchestrator.
+                if (!toolResultOutcomeNotified(result)) await replyText(ctx, text.split("\n")[0]!);
+                break;
+              }
+              await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "Merge", text);
+              break;
+            }
+
+            case "worktree-decide-later": {
+              const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
+              const succeeded = worktreeActionTextSucceeded(result);
+              if (succeeded) {
+                await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+                await replyText(ctx, result);
+                worktreeDecisionSucceeded = true;
+              } else {
+                await replyText(ctx, failureReply(actionSessionName, result));
+              }
+              break;
+            }
+
+            case "worktree-dismiss": {
+              const result = await sessionManager.dismissWorktree(sessionId);
+              const succeeded = worktreeActionTextSucceeded(result);
+              // Already discarded (a second Discard button): nothing is left to re-offer.
+              // Read from the worktree state, not from the reply text.
+              const alreadyDiscarded = !succeeded && (
+                resolvedWorktreeDecision(sessionManager.getPersistedSession?.(sessionId)) === "discarded"
+                || sessionManager.resolve?.(sessionId)?.worktreeState === "dismissed"
+              );
+              if (succeeded || alreadyDiscarded) await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+              if (succeeded) worktreeDecisionSucceeded = true;
+              // On success the `🗑️ [name] Discarded: …` notice is the one answer.
+              if (alreadyDiscarded) await replyText(ctx, result.startsWith("Error") ? failureReply(actionSessionName, result) : result);
+              else if (!succeeded) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "Discard", result);
+              break;
+            }
+
+            case "worktree-create-pr":
+            case "worktree-update-pr": {
+              // Do NOT pre-clear pendingWorktreeDecisionSince here.
+              // For the PR path the worktree directory must stay alive indefinitely so the
+              // user can push follow-up commits for PR review.  The worktree directory was
+              // already preserved by onSessionTerminal (which skips removeWorktree when
+              // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
+              // on success; if the PR creation fails the flag remains set so reminders
+              // continue until the user tries again.
+              let result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, {
+                ocaSessionId: sessionId,
+                // The New PR button, offered after its PR was found closed without merging.
+                ...(consumedToken.prForceNew ? { force_new: true } : {}),
+              });
+              // The PR was reopened or merged since New PR was offered: the press
+              // is then a normal PR action (sync the open PR, or record the merge).
+              if (consumedToken.prForceNew && toolResultState(result) === "force_new_refused") {
+                result = await makePrTool().execute(USER_BUTTON_TOOL_CALL_ID, { ocaSessionId: sessionId });
+              }
+              const text = toolResultText(result);
+              if (toolResultSucceeded(result)) {
+                await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+                worktreeDecisionSucceeded = true;
+                // Nothing was posted (PR already merged or up to date): the first line
+                // of the tool text is the answer; the rest is for the orchestrator.
+                if (!toolResultOutcomeNotified(result)) await replyText(ctx, text.split("\n")[0]!);
+                break;
+              }
+              await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, "PR", text);
+              break;
+            }
+
+            case "plan-offer-start": {
+              if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, "⚠️ This action is missing the plan launch context.");
+                break;
+              }
+              let session: { id: string; name: string };
+              try {
+                session = await sessionManager.launchPlanOffer({
+                  route: consumedToken.route,
+                  prompt: consumedToken.launchPrompt,
+                  workdir: consumedToken.launchWorkdir,
+                  name: consumedToken.launchName,
+                  worktreeStrategy: consumedToken.launchWorktreeStrategy,
+                });
+              } catch (err) {
+                const errText = err instanceof Error ? err.message : String(err);
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, failureReply(consumedToken.launchName, `Planning session did not start: ${errText}`));
+                break;
+              }
               await clearInteractiveState(ctx, {
                 alreadyAcknowledged: callbackAcknowledged,
                 forceTelegramMarkupEdit: true,
               });
-              await replyText(ctx, "⚠️ This action is missing the repo policy context.");
+              // The launch posts `🚀 [name] Launched | …` to the offer's route, the
+              // chat of this button. Without a route nothing is posted there.
+              if (!consumedToken.route) await replyText(ctx, `🚀 [${session.name}] Planning session started`);
               break;
             }
-            if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+
+            case "plan-offer-dismiss": {
               await clearInteractiveState(ctx, {
                 alreadyAcknowledged: callbackAcknowledged,
                 forceTelegramMarkupEdit: true,
               });
-              await replyText(ctx, "⚠️ This action is missing the launch context.");
+              await replyText(ctx, `⏭️ Plan offer dismissed.`);
               break;
             }
-            if (typeof sessionManager.resolveRepoPolicy === "function") {
-              const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
-              if (resolution.identity) {
-                const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
-                if (validationError) {
-                  await clearInteractiveState(ctx, {
-                    alreadyAcknowledged: callbackAcknowledged,
-                    forceTelegramMarkupEdit: true,
-                  });
-                  await replyText(ctx, `⚠️ ${validationError}`);
-                  break;
+
+            case "goal-verifiers-confirm":
+            case "goal-verifiers-decline": {
+              await clearInteractiveState(ctx, {
+                alreadyAcknowledged: callbackAcknowledged,
+                forceTelegramMarkupEdit: true,
+              });
+              if (!goalController) {
+                await replyText(ctx, SERVICE_NOT_RUNNING);
+                break;
+              }
+              // The controller's notice is the one answer (`🎯 [task] Goal task started`,
+              // `⛔ [task] Goal task stopped`, `❌ [task] Goal task failed`, each with
+              // its reason); the button replies only when no notice is sent.
+              try {
+                const outcome = consumedToken.kind === "goal-verifiers-decline"
+                  ? goalController.declineVerifierCommands(sessionId)
+                  : await goalController.confirmVerifierCommands(sessionId);
+                if (!outcome) await replyText(ctx, "⚠️ That goal task no longer exists.");
+                else if (outcome.action === "not_waiting") {
+                  await replyText(ctx, `⚠️ [${outcome.task.name}] Goal task is no longer waiting for confirmation (${userGoalStatusWord(outcome.task.status)}).`);
+                }
+              } catch (err) {
+                // A failed start is reported by `❌ [task] Goal task failed`.
+                if (goalController.getTask?.(sessionId)?.status !== "failed") {
+                  await replyText(ctx, failureReply(goalController.getTask?.(sessionId)?.name, `Goal task did not start: ${err instanceof Error ? err.message : String(err)}`));
                 }
               }
+              break;
             }
-            const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
-            if (!record) {
+
+            case "repo-policy-set": {
+              if (!consumedToken.repoPolicy || !consumedToken.repoPolicyWorkdir) {
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, "⚠️ This action is missing the repo policy context.");
+                break;
+              }
+              if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, "⚠️ This action is missing the launch context.");
+                break;
+              }
+              if (typeof sessionManager.resolveRepoPolicy === "function") {
+                const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
+                if (resolution.identity) {
+                  const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
+                  if (validationError) {
+                    await clearInteractiveState(ctx, {
+                      alreadyAcknowledged: callbackAcknowledged,
+                      forceTelegramMarkupEdit: true,
+                    });
+                    await replyText(ctx, `⚠️ ${validationError}`);
+                    break;
+                  }
+                }
+              }
+              const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
+              if (!record) {
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
+                break;
+              }
+              sessionManager.clearRepoPolicyChoiceTokens(consumedToken.sessionId);
+
+              try {
+                await sessionManager.launchAfterRepoPolicyChoice({
+                  route: consumedToken.route,
+                  prompt: consumedToken.launchPrompt,
+                  workdir: consumedToken.launchWorkdir,
+                  name: consumedToken.launchName,
+                  model: consumedToken.launchModel,
+                  reasoningEffort: consumedToken.launchReasoningEffort,
+                  fastMode: consumedToken.launchFastMode,
+                  systemPrompt: consumedToken.launchSystemPrompt,
+                  allowedTools: consumedToken.launchAllowedTools,
+                  resumeSessionId: consumedToken.launchResumeSessionId,
+                  resumedFromSessionName: consumedToken.launchResumedFromSessionName,
+                  resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
+                  sessionIdOverride: consumedToken.launchSessionIdOverride,
+                  rewindTurns: consumedToken.launchRewindTurns,
+                  forkSession: consumedToken.launchForkSession,
+                  forceNewSession: consumedToken.launchForceNewSession,
+                  permissionMode: consumedToken.launchPermissionMode,
+                  planApproval: consumedToken.launchPlanApproval,
+                  harness: consumedToken.launchHarness,
+                  worktreeStrategy: consumedToken.launchWorktreeStrategy,
+                  worktreeBaseBranch: consumedToken.launchWorktreeBaseBranch,
+                  worktreePrTargetRepo: consumedToken.launchWorktreePrTargetRepo,
+                  originAgentId: consumedToken.launchOriginAgentId,
+                });
+              } catch (err) {
+                const errText = err instanceof Error ? err.message : String(err);
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, failureReply(consumedToken.launchName, `Repo policy saved, but the launch failed: ${errText}`));
+                break;
+              }
+
               await clearInteractiveState(ctx, {
                 alreadyAcknowledged: callbackAcknowledged,
                 forceTelegramMarkupEdit: true,
               });
-              await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
+              // The `🚀 [name] Launched | …` notice follows; the launch summary is for the orchestrator.
+              await replyText(ctx, `🧭 Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`);
               break;
             }
-            sessionManager.clearRepoPolicyChoiceTokens(consumedToken.sessionId);
 
-            try {
-              await sessionManager.launchAfterRepoPolicyChoice({
-                route: consumedToken.route,
-                prompt: consumedToken.launchPrompt,
-                workdir: consumedToken.launchWorkdir,
-                name: consumedToken.launchName,
-                model: consumedToken.launchModel,
-                reasoningEffort: consumedToken.launchReasoningEffort,
-                fastMode: consumedToken.launchFastMode,
-                systemPrompt: consumedToken.launchSystemPrompt,
-                allowedTools: consumedToken.launchAllowedTools,
-                resumeSessionId: consumedToken.launchResumeSessionId,
-                resumedFromSessionName: consumedToken.launchResumedFromSessionName,
-                resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
-                sessionIdOverride: consumedToken.launchSessionIdOverride,
-                rewindTurns: consumedToken.launchRewindTurns,
-                forkSession: consumedToken.launchForkSession,
-                forceNewSession: consumedToken.launchForceNewSession,
-                permissionMode: consumedToken.launchPermissionMode,
-                planApproval: consumedToken.launchPlanApproval,
-                harness: consumedToken.launchHarness,
-                worktreeStrategy: consumedToken.launchWorktreeStrategy,
-                worktreeBaseBranch: consumedToken.launchWorktreeBaseBranch,
-                worktreePrTargetRepo: consumedToken.launchWorktreePrTargetRepo,
-                originAgentId: consumedToken.launchOriginAgentId,
+            case "session-restart":
+            case "session-resume": {
+              await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+              // A plain Resume on a session that already runs has nothing to do:
+              // no "Continue where you left off." is sent to the agent. A button
+              // with its own instruction (Commit changes) still delivers it.
+              if (!consumedToken.launchPrompt && sessionManager.resolve?.(sessionId)?.status === "running") {
+                await replyText(ctx, `ℹ️ [${actionSessionName}] Already running.`);
+                break;
+              }
+              const result = await executeRespond(sessionManager, {
+                session: sessionId,
+                // A resume button may carry its own instruction (for example "commit your changes").
+                message: consumedToken.launchPrompt ?? "Continue where you left off.",
+                userInitiated: true,
               });
-            } catch (err) {
-              const errText = err instanceof Error ? err.message : String(err);
-              await clearInteractiveState(ctx, {
-                alreadyAcknowledged: callbackAcknowledged,
-                forceTelegramMarkupEdit: true,
-              });
-              await replyText(ctx, failureReply(consumedToken.launchName, `Repo policy saved, but the launch failed: ${errText}`));
+              // A resume already posts its own notice (`▶️ [name] Resumed | …`, `Relaunched fresh`, `👍 Plan approved`).
+              if (result.isError) await replyText(ctx, result.userText ?? failureReply(actionSessionName, result.text));
+              // Nothing resumed (the instruction went to a running session): say what happened.
+              else if (!result.userNoticeSent) await replyText(ctx, result.userText ?? `▶️ [${actionSessionName}] Resumed.`);
               break;
             }
 
-            await clearInteractiveState(ctx, {
-              alreadyAcknowledged: callbackAcknowledged,
-              forceTelegramMarkupEdit: true,
-            });
-            // The `🚀 [name] Launched | …` notice follows; the launch summary is for the orchestrator.
-            await replyText(ctx, `🧭 Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`);
-            break;
-          }
-
-          case "session-restart":
-          case "session-resume": {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            // A plain Resume on a session that already runs has nothing to do:
-            // no "Continue where you left off." is sent to the agent. A button
-            // with its own instruction (Commit changes) still delivers it.
-            if (!consumedToken.launchPrompt && sessionManager.resolve?.(sessionId)?.status === "running") {
-              await replyText(ctx, `ℹ️ [${actionSessionName}] Already running.`);
+            default: {
+              await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+              await replyText(ctx, `⚠️ This button is not supported by the running version of the code agent.`);
               break;
             }
-            const result = await executeRespond(sessionManager, {
-              session: sessionId,
-              // A resume button may carry its own instruction (for example "commit your changes").
-              message: consumedToken.launchPrompt ?? "Continue where you left off.",
-              userInitiated: true,
-            });
-            // A resume already posts its own notice (`▶️ [name] Resumed | …`, `Relaunched fresh`, `👍 Plan approved`).
-            if (result.isError) await replyText(ctx, result.userText ?? failureReply(actionSessionName, result.text));
-            // Nothing resumed (the instruction went to a running session): say what happened.
-            else if (!result.userNoticeSent) await replyText(ctx, result.userText ?? `▶️ [${actionSessionName}] Resumed.`);
-            break;
           }
-
-          default: {
-            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-            await replyText(ctx, `⚠️ This button is not supported by the running version of the code agent.`);
-            break;
+        } catch (err) {
+          // The token is already spent: answer, and re-offer an open worktree
+          // decision with fresh buttons, instead of leaving a dead button and no reply.
+          worktreeDecisionSucceeded = false;
+          const reason = err instanceof Error ? err.message : String(err);
+          log.warn(`[callback-handler] Button action ${consumedToken.kind} failed: ${reason}`);
+          const worktreeAction = WORKTREE_BUTTON_ACTIONS[consumedToken.kind];
+          try {
+            if (worktreeAction) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, worktreeAction, `Error: ${reason}`);
+            else await replyText(ctx, failureReply(actionSessionName, reason));
+          } catch (replyErr) {
+            log.warn(`[callback-handler] Could not report the failed button action: ${replyErr instanceof Error ? replyErr.message : String(replyErr)}`);
           }
         }
 

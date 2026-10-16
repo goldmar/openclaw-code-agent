@@ -2620,6 +2620,42 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(failure.replies, ["❌ [ux-fix] Discard failed: branch deletion failed."]);
   });
 
+  it("answers and re-offers the decision when a button action throws after its token was spent", async () => {
+    const reoffers: string[] = [];
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      dismissWorktree: async () => { throw new Error("index.lock exists"); },
+      reofferWorktreeDecision: async (_ref: string, failure: string) => { reoffers.push(failure); return false; },
+    } as any);
+
+    const state = createCtx("token-dismiss-throws");
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(reoffers, ["Discard failed: index.lock exists."]);
+    assert.deepEqual(state.replies, ["❌ [ux-fix] Discard failed: index.lock exists."]);
+  });
+
+  it("answers when a non-worktree button action throws after its token was spent", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      snoozeWorktreeDecision: () => { throw new Error("store unavailable"); },
+    } as any);
+
+    const state = createCtx("token-snooze-throws");
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.replies.length, 1);
+    assert.match(state.replies[0] ?? "", /^❌ \[ux-fix\] .*store unavailable/);
+  });
+
   it("offers New PR after a PR button found its PR closed, and the New PR button opens a fresh one", async () => {
     const reoffers: Array<{ failure: string; closedPr?: boolean }> = [];
     const prCalls: Array<Record<string, unknown>> = [];
