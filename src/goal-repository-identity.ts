@@ -4,6 +4,12 @@ import { buildMinimalChildEnv } from "./child-env";
 import { runGit, type CommandError } from "./git-exec";
 import type { GoalRepositoryIdentity } from "./types";
 
+/**
+ * A timeout fails closed like any other Git error, and the caller then ends the
+ * goal, so allow for a busy host: identity is checked around every goal step.
+ */
+export const goalRepositoryIdentityInternals = { gitTimeoutMs: 10_000 };
+
 const IDENTITY_ERROR = "Cannot verify the goal's repository identity. Restore its original repository or start a new goal; no default policy is selected on an identity error.";
 
 async function identity(kind: GoalRepositoryIdentity["kind"], path: string): Promise<GoalRepositoryIdentity> {
@@ -19,7 +25,7 @@ export async function resolveGoalRepositoryIdentity(workdir: string): Promise<Go
     let output: string;
     try {
       output = await runGit(["rev-parse", "--is-inside-work-tree", "--path-format=absolute", "--git-common-dir"], {
-        cwd: directory.path, timeout: 1_000,
+        cwd: directory.path, timeout: goalRepositoryIdentityInternals.gitTimeoutMs,
         env: buildMinimalChildEnv(process.env, { LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" }),
       });
     } catch (error) {

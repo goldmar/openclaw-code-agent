@@ -2,7 +2,7 @@ import type { PersistedSessionInfo } from "../types";
 import { existsSync, readFileSync } from "fs";
 import type { ResolvedWorktreeLifecycle } from "../types";
 import type { Session } from "../session";
-import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
+import { getBackendConversationId } from "../session-backend-ref";
 import type { SessionManager } from "../session-manager";
 import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
 import { describeHookPathChanges, HOOK_CHECK_UNAVAILABLE_WARNING, listHookPathChanges, localBranchIsKnownMissing } from "../git-hooks";

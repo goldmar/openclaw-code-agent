@@ -335,7 +335,7 @@ export class SessionLifecycleService {
     // approval/rejection during persistence recovery and must not suppress a
     // real terminal worktree outcome after the decision has been resolved.
     if (session.pendingPlanApproval) {
-      if (session.killReason === "idle-timeout" && session.pendingPlanApproval) {
+      if (session.killReason === "idle-timeout") {
         this.emitIdleTimeoutPlanApproval(session);
       } else {
         await this.emitWaitingForInput(session);

@@ -8,7 +8,7 @@ import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId, resetCodexAllowlistWarningsForTests } from "../src/harness/codex";
 import { JsonRpcRemoteError, JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
 import { FollowUpDeliveryUnconfirmedError } from "../src/harness/follow-up-delivery-error";
-import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
+import { codexModelSupportsEffort, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { MIN_CODEX_CLI_VERSION, codexVersionError, codexVersionFromUserAgent } from "../src/harness/codex-protocol";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
 import { resolveDefaultModelForHarness, resolveReasoningEffortForHarness, setPluginConfig } from "../src/config";

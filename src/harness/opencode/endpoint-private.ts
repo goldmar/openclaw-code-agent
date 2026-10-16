@@ -26,8 +26,6 @@ export function privateServerEnvironment(
   passEnv: string[] = [],
 ): NodeJS.ProcessEnv {
   const env = buildHarnessChildEnv(base);
-  for (const key of Object.keys(env))
-    if (/^OPENCODE_.*PASSWORD$/.test(key)) delete env[key];
   for (const key of passEnv)
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && base[key] !== undefined)
       env[key] = base[key];

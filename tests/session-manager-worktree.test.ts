@@ -1086,6 +1086,57 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
+  it("retention cleanup never removes a worktree that a newer same-name session reuses", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-reused-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      // The old session merged long ago; a new session "foo" got the same path and branch.
+      const worktreePath = await createWorktree(repoDir, "foo");
+      const branchName = await getBranchName(worktreePath);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      const route = { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:group:12345" };
+      const longAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+      (sm as any).store.persisted.set("h-old", {
+        sessionId: "s-old", harnessSessionId: "h-old", backendRef: { kind: "claude-code", conversationId: "h-old" },
+        name: "foo", prompt: "old", createdAt: Date.now() - 9 * 24 * 60 * 60 * 1000, workdir: repoDir, route, status: "completed", costUsd: 0,
+        worktreePath, worktreeBranch: branchName, worktreeState: "merged", worktreeMerged: true, worktreeMergedAt: longAgo,
+        worktreeLifecycle: { state: "merged", updatedAt: longAgo, resolvedAt: longAgo },
+      });
+      (sm as any).store.persisted.set("h-new", {
+        sessionId: "s-new", harnessSessionId: "h-new", backendRef: { kind: "claude-code", conversationId: "h-new" },
+        name: "foo", prompt: "new", createdAt: Date.now(), workdir: repoDir, route, status: "completed", costUsd: 0,
+        worktreePath, worktreeBranch: branchName, worktreeState: "pending_decision",
+      });
+
+      (sm as any).store.idIndex.set("s-old", "h-old");
+      (sm as any).store.idIndex.set("s-new", "h-new");
+      // The newer session is live (its decision still open); the old runtime is gone.
+      const newerLive = { id: "s-new", name: "foo", harnessSessionId: "h-new", status: "completed", worktreePath, worktreeState: "pending_decision", pendingWorktreeDecisionSince: "2026-01-01T00:00:00.000Z" };
+      (sm as any).sessions.set("s-new", newerLive);
+
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-old"), Date.now());
+
+      assert.equal(newerLive.worktreeState, "pending_decision", "the old row's patch never reaches the newer live session");
+      assert.equal(newerLive.pendingWorktreeDecisionSince, "2026-01-01T00:00:00.000Z");
+      assert.equal(existsSync(worktreePath), true, "the newer session's worktree is kept");
+      assert.equal((sm as any).store.persisted.get("h-old").worktreePath, undefined, "the stale row forgets the path");
+      const newer = (sm as any).store.listPersistedSessions().find((row: { sessionId?: string; harnessSessionId?: string; worktreePath?: string }) => row.sessionId === "s-new");
+      assert.equal(newer?.worktreePath, worktreePath, JSON.stringify((sm as any).store.listPersistedSessions().map((row: { sessionId?: string; harnessSessionId?: string; worktreePath?: string }) => [row.sessionId, row.harnessSessionId, row.worktreePath])));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it("retention cleanup clears metadata for a resolved worktree that is already gone", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-gone-"));
     let cleanup = () => {};

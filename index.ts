@@ -35,6 +35,7 @@ import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setAutoUpdateService, setGoalController, setSessionManager } from "./src/singletons";
 import { getPluginRuntime, setPluginRuntime } from "./src/runtime-store";
+import { createLogger } from "./src/logger";
 import {
   acquireSharedRuntime,
   allocateRuntimeOwnerSequence,
@@ -90,6 +91,7 @@ function resolveBuildId(): string {
 }
 
 const BUILD_ID = resolveBuildId();
+const lifecycleLog = createLogger("lifecycle");
 
 type CodeAgentServices = {
   sm: SessionManager;
@@ -339,7 +341,13 @@ export function register(api: OpenClawPluginApi): void {
     return stopCodeAgentService();
   };
   api.lifecycle?.onDispose?.(retire);
-  api.lifecycle?.signal?.addEventListener("abort", () => { void retire(); }, { once: true });
+  // Nothing awaits an abort listener: a failed stop must not become an
+  // unhandled rejection in the Gateway.
+  api.lifecycle?.signal?.addEventListener("abort", () => {
+    retire().catch((err: unknown) => {
+      lifecycleLog.warn(`Stopping on lifecycle abort failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, { once: true });
 
   const registerCodeAgentTool = (
     tool: (ctx: OpenClawPluginToolContext) => unknown,

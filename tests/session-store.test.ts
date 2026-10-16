@@ -1872,3 +1872,57 @@ describe("SessionStore new worktree lifecycle fields", () => {
     assert.equal(persisted?.worktreeDisposition, undefined);
   });
 });
+
+describe("SessionStore retention", () => {
+  it("never evicts running rows, even when they alone exceed the cap", () => {
+    const store = new SessionStore();
+    store.persisted.clear();
+    for (const [id, status, completedAt] of [["run-1", "running"], ["run-2", "running"], ["done", "completed", 100]] as const) {
+      store.persisted.set(`thread-${id}`, {
+        sessionId: id, harnessSessionId: `thread-${id}`, backendRef: { kind: "claude-code", conversationId: `thread-${id}` },
+        name: id, prompt: "p", workdir: "/tmp", status, costUsd: 0, createdAt: 1, ...(completedAt ? { completedAt } : {}),
+      } as any);
+    }
+    (store as any).saveIndex = () => {};
+
+    const evicted = store.evictOldestPersisted(1).map((info) => info.sessionId);
+
+    assert.deepEqual(evicted, ["done"]);
+    assert.equal(store.persisted.size, 2);
+  });
+
+  it("evicts the oldest completed rows and keeps rows that have not completed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-retention-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      const row = (id: string, status: SessionStatus, completedAt?: number) => ({
+        sessionId: id,
+        harnessSessionId: `thread-${id}`,
+        backendRef: { kind: "claude-code", conversationId: `thread-${id}` },
+        name: id,
+        prompt: "p",
+        workdir: "/tmp",
+        status,
+        costUsd: 0,
+        createdAt: 1,
+        ...(completedAt === undefined ? {} : { completedAt }),
+      });
+      writeStore(indexPath, [
+        row("old", "completed", 100),
+        row("mid", "completed", 200),
+        row("new", "completed", 300),
+        row("open", "running"),
+      ]);
+      const store = new SessionStore({ indexPath, env: {} });
+      assert.equal(store.listPersistedSessions().length, 4);
+
+      const evicted = store.evictOldestPersisted(2).map((info) => info.sessionId).sort();
+
+      assert.deepEqual(evicted, ["mid", "old"]);
+      assert.ok(store.getPersistedSession("open"), "a row without completedAt is not the oldest");
+      assert.ok(store.getPersistedSession("new"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

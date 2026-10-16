@@ -42,6 +42,67 @@ describe("WakeDeliveryExecutor", () => {
     console.error = originalConsoleError;
   });
 
+  it("delivers once when the success hook throws, and logs the hook failure", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    const errors: string[] = [];
+    t.mock.method(console, "error", (message?: unknown, ...rest: unknown[]) => {
+      errors.push([message, ...rest].map((value) => String(value)).join(" "));
+    });
+    let deliveries = 0;
+    let finalFailures = 0;
+    let settled!: () => void;
+    const done = new Promise<void>((resolve) => { settled = resolve; });
+
+    executor.executePromise(
+      async () => { deliveries += 1; },
+      {
+        label: "interactive-notify",
+        sessionId: "session-hook-throws",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "telegram|12345",
+        messageKind: "notify",
+        onSuccess: () => {
+          setImmediate(settled);
+          throw new Error("bookkeeping failed");
+        },
+        onFinalFailure: () => { finalFailures += 1; },
+      },
+    );
+    await done;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(deliveries, 1);
+    assert.equal(finalFailures, 0);
+    assert.ok(errors.some((line) => line.includes("dispatch_success_hook_failed")));
+    executor.dispose();
+  });
+
+  it("records the outcome of a dispatch that started before dispose", async () => {
+    const executor = new WakeDeliveryExecutor();
+    let release!: () => void;
+    const delivered = new Promise<void>((resolve) => { release = resolve; });
+    let successes = 0;
+    executor.executePromise(
+      async () => { await delivered; },
+      {
+        label: "held-wake-on-stop",
+        sessionId: "session-stop",
+        target: "system.event",
+        phase: "wake",
+        routeSummary: "system:agent:main:main",
+        messageKind: "wake",
+        onSuccess: () => { successes += 1; },
+      },
+    );
+    executor.dispose();
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(successes, 1);
+  });
+
   it("times out hung promise dispatches and exhausts retries", async () => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];

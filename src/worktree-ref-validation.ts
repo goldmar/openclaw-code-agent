@@ -1,14 +1,26 @@
 import { runGit } from "./git-exec";
 
 const REF_FORMAT_TIMEOUT_MS = 5_000;
+const VALID_REF_CACHE_LIMIT = 512;
+
+/**
+ * Refs Git already accepted. The grammar is fixed, and one merge or status
+ * check validates the same few branch names many times, each with its own
+ * `git check-ref-format` process. Failures are not cached (a spawn failure or
+ * timeout is not a verdict on the name).
+ */
+const validRefs = new Set<string>();
 
 async function isValidRefFormat(ref: string): Promise<boolean> {
+  if (validRefs.has(ref)) return true;
   try {
     await runGit(["check-ref-format", ref], { timeout: REF_FORMAT_TIMEOUT_MS });
-    return true;
   } catch {
     return false;
   }
+  if (validRefs.size >= VALID_REF_CACHE_LIMIT) validRefs.clear();
+  validRefs.add(ref);
+  return true;
 }
 
 /** Local branch names only: reject standard full-ref namespaces, options, and revisions. */

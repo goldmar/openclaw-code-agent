@@ -268,7 +268,10 @@ async function removeWorktreeLocked(
   }
 
   try {
-    await runGit(["-C", repoDir, "worktree", "remove", ...(destructive ? ["--force"] : []), worktreePath], { timeout: 15_000 });
+    // A destructive removal deletes the directory either way (see the fallback
+    // below); a second --force lets git do it for a locked worktree too, so its
+    // registration goes with it and the branch can be deleted afterwards.
+    await runGit(["-C", repoDir, "worktree", "remove", ...(destructive ? ["--force", "--force"] : []), worktreePath], { timeout: 15_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] git worktree remove failed for ${worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -276,6 +279,13 @@ async function removeWorktreeLocked(
     try {
       rmSync(worktreePath, { recursive: true, force: true });
       log.info(`[worktree] Fallback rmSync succeeded for ${worktreePath}`);
+      // Drop git's registration too, or the branch still counts as checked
+      // out and the caller's branch deletion fails.
+      try {
+        await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 });
+      } catch (pruneErr) {
+        log.debug(`[worktree] git worktree prune after fallback removal failed: ${pruneErr instanceof Error ? pruneErr.message.split(/\r?\n/, 1)[0] : String(pruneErr)}`);
+      }
       return true;
     } catch (fallbackErr) {
       log.error(`[worktree] Both git worktree remove and rmSync failed for ${worktreePath}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);

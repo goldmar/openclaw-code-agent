@@ -181,7 +181,9 @@ export function getHarnessConfig(name: string): HarnessConfig {
   return {
     ...builtin,
     ...configured,
-    allowedModels: configured?.allowedModels ?? builtin?.allowedModels,
+    // setPluginConfig clears the built-in allowlist on purpose when a harness
+    // sets its own defaultModel; do not bring it back here.
+    allowedModels: configured ? configured.allowedModels : builtin?.allowedModels,
   };
 }
 

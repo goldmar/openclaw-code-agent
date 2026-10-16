@@ -1,4 +1,6 @@
 import { execFile, type ChildProcess } from "node:child_process";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { processShared } from "./process-runtime";
 
 /**
@@ -83,6 +85,43 @@ export function runGh(args: readonly string[], options: CommandOptions): Promise
   });
 }
 
+/**
+ * One key per repository however its directory is spelled: `/repo`, `/repo/`,
+ * a subdirectory, a symlink, or one of its linked worktrees all share the
+ * repository's common git directory. Resolved from the filesystem (no git
+ * process), so locking stays synchronous and ordered. Falls back to the
+ * resolved path when no repository is found.
+ */
+export function repoLockKey(dir: string): string {
+  let start: string;
+  try {
+    start = realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+  for (let current = start; ; current = dirname(current)) {
+    const dotGit = join(current, ".git");
+    try {
+      const info = statSync(dotGit);
+      if (info.isDirectory()) return dotGit;
+      if (info.isFile()) {
+        const gitDir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf-8"))?.[1]?.trim();
+        if (gitDir) {
+          const resolvedGitDir = resolve(current, gitDir);
+          try {
+            return realpathSync(resolve(resolvedGitDir, readFileSync(join(resolvedGitDir, "commondir"), "utf-8").trim()));
+          } catch {
+            return realpathSync(resolvedGitDir);
+          }
+        }
+      }
+    } catch {
+      // No usable .git here; keep walking up.
+    }
+    if (dirname(current) === current) return start;
+  }
+}
+
 // Process-wide so every plugin registry's module graph serializes on the same lock.
 const repoTails = processShared("git-repo-locks.v1", () => new Map<string, Promise<void>>());
 
@@ -93,6 +132,7 @@ const repoTails = processShared("git-repo-locks.v1", () => new Map<string, Promi
  * multi-step sequences against the same checkout.
  */
 export function withRepoLock<T>(repoDir: string, fn: () => Promise<T>): Promise<T> {
+  repoDir = repoLockKey(repoDir);
   const previous = repoTails.get(repoDir) ?? Promise.resolve();
   const next = previous.catch(() => {}).then(fn);
   const tail = next.then(() => {}, () => {});

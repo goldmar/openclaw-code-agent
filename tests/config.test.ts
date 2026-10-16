@@ -7,6 +7,8 @@ import {
   isCommandInRouteChat,
   resolveAgentChannel,
   extractAgentId,
+  getHarnessConfig,
+  resolveAllowedModelsForHarness,
   resolveAgentId,
   resolveOriginChannel,
   resolveOriginThreadId,
@@ -622,6 +624,9 @@ describe("setPluginConfig", () => {
 
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
     assert.equal(pluginConfig.harnesses.codex?.allowedModels, undefined);
+    // Every reader agrees: the built-in allowlist is not enforced and not restored.
+    assert.equal(resolveAllowedModelsForHarness("codex"), undefined);
+    assert.equal(getHarnessConfig("codex").allowedModels, undefined);
   });
 
   it("uses default for missing planApproval", () => {

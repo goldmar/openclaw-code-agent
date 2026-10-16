@@ -65,9 +65,6 @@ const MINIMAL_ENV_KEYS = [
   "LOCALAPPDATA",
 ] as const;
 
-/** Variables allowed into repository-controlled commands, in addition to `LC_*`. */
-export const MINIMAL_CHILD_ENV_KEYS: readonly string[] = MINIMAL_ENV_KEYS;
-
 /**
  * Minimal environment for repository-controlled commands: allowlisted keys from
  * `base`, plus `extra`. Shell startup hooks (`BASH_ENV`, `ENV`) are never set.

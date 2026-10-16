@@ -277,6 +277,26 @@ describe("AutoUpdateService", () => {
     }
   });
 
+  it("never sends the button prompt to WebChat; it uses the fallback channel when one is set", async () => {
+    const webchat = { provider: "webchat", target: "main", sessionKey: "agent:main:main" };
+    setPluginConfig({});
+    const withoutFallback = createService({ latestVersion: "4.6.1" });
+    withoutFallback.service.maybeCheckForUpdate({ route: webchat });
+    await withoutFallback.service.waitForIdle();
+    assert.equal(withoutFallback.sends.length, 0);
+
+    setPluginConfig({ fallbackChannel: "telegram|fallback-bot|12345" });
+    try {
+      const withFallback = createService({ latestVersion: "4.6.1" });
+      withFallback.service.maybeCheckForUpdate({ route: webchat });
+      await withFallback.service.waitForIdle();
+      assert.equal(withFallback.sends.length, 1);
+      assert.equal(withFallback.sends[0]?.route.channel, "telegram");
+    } finally {
+      setPluginConfig({});
+    }
+  });
+
   it("does not prompt without a direct route or fallback channel", async () => {
     setPluginConfig({});
     const harness = createService({ latestVersion: "4.6.1" });

@@ -6,9 +6,6 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { basename, join } from "path";
 import { tmpdir } from "os";
 
-// Mock execFileSync for testing
-const originalExecFileSync = execFileSync;
-
 describe("worktree utilities", () => {
   it("should export required functions", async () => {
     const worktree = await import("../src/worktree.js");
@@ -48,6 +45,15 @@ describe("sanitizeBranchName", () => {
 
     assert.equal(result, "a".repeat(99));
     assert.doesNotMatch(result, /[-.]$/);
+  });
+
+  it("drops a trailing .lock, which Git rejects in a branch name", async () => {
+    const { sanitizeBranchName } = await import("../src/worktree.js");
+    for (const name of ["fix-yarn.lock", "fix-yarn.lock.lock"]) {
+      const branch = `agent/${sanitizeBranchName(name)}`;
+      assert.equal(branch, "agent/fix-yarn");
+      execFileSync("git", ["check-ref-format", `refs/heads/${branch}`]);
+    }
   });
 
   it("preserves the session fallback for empty sanitized names", async () => {
@@ -951,6 +957,27 @@ describe("createWorktree branch selection", () => {
       assert.equal(branchName, "agent/resume-dir-collision");
       assert.equal(existsSync(join(worktreePath, "resume.txt")), true);
       assert.equal(existsSync(join(worktreePath, "leftover.txt")), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("removeWorktree destructive removal", () => {
+  it("removes a locked worktree with its registration, so the branch can be deleted afterwards", async () => {
+    const { removeWorktree, deleteBranch } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-remove-locked-"));
+    const worktreePath = join(repoDir, ".worktrees", "locked");
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["worktree", "add", "-b", "agent/locked", worktreePath], { cwd: repoDir, stdio: "ignore" });
+      // A single --force refuses a locked worktree; the old directory-only fallback left it registered.
+      execFileSync("git", ["worktree", "lock", worktreePath], { cwd: repoDir, stdio: "ignore" });
+
+      assert.equal(await removeWorktree(repoDir, worktreePath, { destructive: true }), true);
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(await deleteBranch(repoDir, "agent/locked"), true);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

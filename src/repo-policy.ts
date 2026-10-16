@@ -114,12 +114,23 @@ async function readGit(cwd: string, args: string[]): Promise<string | undefined>
   }
 }
 
+/**
+ * A stable, credential-free form of a remote URL. User info (a token in
+ * `https://x-access-token:TOKEN@github.com/...`) is dropped: the result is
+ * persisted as part of the policy key and shown to the user.
+ */
 export function normalizeRemoteUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
   const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
-  const ssh = trimmed.match(/^git@([^:]+):(.+)$/);
-  if (ssh) return `https://${ssh[1].toLowerCase()}/${ssh[2].toLowerCase()}`;
-  const https = trimmed.match(/^https?:\/\/([^/]+)\/(.+)$/i);
+  const scp = trimmed.match(/^[^@/:]+@([^:/]+):(?!\/)(.+)$/);
+  if (scp) return `https://${scp[1].toLowerCase()}/${scp[2].toLowerCase()}`;
+  // A non-default SSH port is a different server, so it stays in the identity.
+  const ssh = trimmed.match(/^ssh:\/\/(?:[^@/]*@)?([^/:]+)(?::(\d+))?\/(.+)$/i);
+  if (ssh) {
+    const port = ssh[2] && ssh[2] !== "22" ? `:${ssh[2]}` : "";
+    return `https://${ssh[1].toLowerCase()}${port}/${ssh[3].toLowerCase()}`;
+  }
+  const https = trimmed.match(/^https?:\/\/(?:[^@/]*@)?([^/]+)\/(.+)$/i);
   if (https) return `https://${https[1].toLowerCase()}/${https[2].toLowerCase()}`;
   return trimmed.toLowerCase();
 }
@@ -185,7 +196,7 @@ export function formatStoredRepoPolicyLine(record: RepoPolicyRecord, options: { 
     record.policy,
     record.provider,
     `${record.repoRoot}${storedRepoRootExists(record) ? "" : " (missing)"}`,
-    ...(options.includeRemote && record.remoteUrl ? [record.remoteUrl] : []),
+    ...(options.includeRemote && record.remoteUrl ? [normalizeRemoteUrl(record.remoteUrl)!] : []),
   ].join(" | ");
 }
 

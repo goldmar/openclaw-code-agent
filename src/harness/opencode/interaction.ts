@@ -82,8 +82,13 @@ export class PendingInputCoordinator {
         this.resolve(old.value.id);
     for (const r of requests) this.add(r);
   }
+  /** Drop every request; only the visible one was announced, so only it is resolved. */
   clear(): void {
-    for (const r of [...this.requests]) this.resolve(r.value.id);
+    const active = this.active;
+    this.requests = [];
+    this.answers = {};
+    this.index = 0;
+    if (active) this.emit({ type: "pending_input_resolved", requestId: active.value.id });
   }
   private fields(form: S_Form_Info): S_Form_Field[] {
     return form.fields.filter(

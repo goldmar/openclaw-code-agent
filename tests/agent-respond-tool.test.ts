@@ -62,4 +62,18 @@ describe("agent_respond tool parameter validation", () => {
     assert.deepEqual(sent, ["PRIVATE_MESSAGE"]);
     assert.equal(session.autoRespondCount, 0);
   });
+
+  it("withdraws the approval's permission switch when the approving message is not sent", async () => {
+    let pendingModeSwitch: string | undefined;
+    const session = createStubSession({ currentPermissionMode: "default",
+      switchPermissionMode: (mode: string) => { pendingModeSwitch = mode; },
+      cancelPendingModeSwitch: (mode: string) => { if (pendingModeSwitch === mode) pendingModeSwitch = undefined; },
+      sendMessage: async () => { throw new Error("model is no longer allowed"); },
+    });
+    setSessionManager({ resolve: () => session } as unknown as SessionManager);
+    const result = await makeAgentRespondTool().execute("call-id", { ocaSessionId: "test-id", message: "go", approve: true });
+    assert.equal(result.isError, true);
+    // Otherwise the next plain message (for example revision feedback) would approve.
+    assert.equal(pendingModeSwitch, undefined);
+  });
 });

@@ -55,6 +55,13 @@ export class SessionWorktreeDecisionService {
       || persistedSession?.worktreeDismissedAt
       || activeSession?.worktreeState === "dismissed"
     ) return alreadyResolvedReply(sessionName, "discarded");
+    // A merged session's recorded path and branch may already belong to a new
+    // session with the same name; a forced removal would destroy its work.
+    if (
+      persistedSession?.worktreeMerged
+      || persistedSession?.worktreeLifecycle?.state === "merged"
+      || persistedSession?.worktreeLifecycle?.state === "released"
+    ) return alreadyResolvedReply(sessionName, "merged");
 
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
     const repoDir = await this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the rows (and output files) of running and crash-recovered sessions when the persisted-session cap evicts old rows; rows without a completion time were evicted first.
+- A failed `agent_respond approve=true` no longer leaves the permission switch queued, so a later plain message cannot silently approve the plan in `bypassPermissions` mode.
+- A throwing bookkeeping hook after a successful delivery no longer retries (and re-delivers) the message; the hook failure is logged.
+- Discarding an already merged or released session no longer removes the worktree and branch that a newer session with the same name may now use.
+- `agent_worktree_cleanup` reports a worktree it could not remove instead of clearing its metadata; discarding a locked worktree also removes its git registration, so its branch is deleted.
+- Remote URLs with credentials (`https://x-access-token:…@github.com/…`) and `ssh://` remotes: new policies no longer store the token, `agent_repo_policy` no longer shows it for older records, and such GitHub remotes keep PR support. Repositories with these remotes (credential-bearing or `ssh://`) are asked for their repo policy once more, because their policy key changed; older records keep the token on disk until they are reset.
+- Goal repository-identity checks allow 10 s instead of 1 s for `git rev-parse`, so a slow Git call on a busy host no longer fails the goal.
+- OpenCode: clearing several queued permission/form requests no longer re-shows each one, and one session's failed reconcile after a reconnect no longer drops the event stream of the other sessions on that server.
+- The merge's "rebasing rewrote its commits" warning appears only after a rebase ran; commit subjects containing `|` show correctly in worktree summaries; session names ending in `.lock` get a valid branch name.
+- No unhandled rejections from a failed lifecycle-abort stop, a failed goal plan-decision recheck, or maintenance syncs started during shutdown.
+- Repository locks and the merge queue are per repository, however its directory is spelled (`/repo`, `/repo/`, a subdirectory, a symlink or a linked worktree), so two merges can no longer interleave in one checkout.
+- Retention cleanup of an old session no longer removes a worktree that a newer same-name session reuses, or one its own session was resumed in.
+- The update prompt is never sent to WebChat (which cannot show its buttons and made every call retry it); it goes to the fallback channel instead.
+- A button action that throws after its button was used now answers, and an open worktree decision is offered again with fresh buttons.
+- Wakes handed over during a Gateway stop record their delivery, so they are not delivered again after the restart.
+- A launch that fails after its worktree was created removes the worktree and branch again.
+- Only real rebase conflicts start a conflict resolver; other rebase failures (hooks, locks, timeouts) report their git error.
+- `getHarnessConfig` no longer restores the built-in model allowlist that a custom `defaultModel` cleared (it only affected the Codex unknown-model warning).
+
+### Changed
+
+- Branch names that `git check-ref-format` accepted are remembered, which removes most validation processes from merge, PR and status checks (the git-heavy test files run about 30% faster).
+
 ## [6.0.0] - 2026-10-14
 
 ### Breaking

@@ -54,6 +54,7 @@ import {
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import type { WorktreeDecisionSummaryProvider } from "./worktree-decision-summary";
+import { repoLockKey } from "./git-exec";
 import {
   createRuntimeQuestionContextSummaryProvider,
   type QuestionContextSummaryProvider,
@@ -505,7 +506,7 @@ export class SessionManager {
         manager.lastTerminalWakeMarkers.delete(sessionId);
       },
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
-      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      updateSessionGeneration: (generation, patch) => manager.updateSessionGeneration(generation, patch, { persisted: true }),
       getMaxPersistedSessions: () => manager.maxPersistedSessions,
     });
     store.onActionTokensChanged(() => {
@@ -911,49 +912,60 @@ export class SessionManager {
 
     do { config = await this.goalOwnedLaunch(config); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
     const preparedLaunch = await this.restore.prepareSpawn(config, name);
-    do { config = await this.goalOwnedLaunch(config, preparedLaunch.actualWorkdir); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
-    // Repo-policy lookup and worktree preparation await git; shutdown may have
-    // started meanwhile, and a session registered now would outlive it.
-    if (this.shuttingDown) {
-      if (preparedLaunch.worktreePath && !config.resumeSessionId && !config.resumeWorktreeFrom) {
-        await removeWorktree(preparedLaunch.originalWorkdir, preparedLaunch.worktreePath, { destructive: true });
-        if (preparedLaunch.worktreeBranchName) await deleteBranch(preparedLaunch.originalWorkdir, preparedLaunch.worktreeBranchName);
+    // Until the session is registered, nothing else knows about a worktree this
+    // launch just created: remove it again when the launch stops here.
+    let session: Session;
+    try {
+      do { config = await this.goalOwnedLaunch(config, preparedLaunch.actualWorkdir); } while (this.goalAdmissionTickets.get(config)?.isCurrent() === false);
+      // Repo-policy lookup and worktree preparation await git; shutdown may have
+      // started meanwhile, and a session registered now would outlive it.
+      if (this.shuttingDown) {
+        throw new Error("Cannot launch a session: the code-agent service is shutting down.");
       }
-      throw new Error("Cannot launch a session: the code-agent service is shutting down.");
-    }
 
-    if (!config.route?.provider || !config.route.target) {
-      throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
-    }
+      if (!config.route?.provider || !config.route.target) {
+        throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
+      }
 
-    // Reject/Revise may also arrive during asynchronous repo/worktree preparation.
-    assertCurrentApproval();
+      // Reject/Revise may also arrive during asynchronous repo/worktree preparation.
+      assertCurrentApproval();
 
-    // Inject AskUserQuestion intercept for CC sessions. Codex App Server exposes
-    // structured pending input natively, so only Claude needs the tool intercept.
-    // Use a late-bound wrapper so we can capture session.id after construction.
-    const harnessName = config.harness ?? "claude-code";
-    const selfRef = this;
-    let sessionIdRef: string | undefined;
-    const canUseTool = (harnessName === "claude-code" && !config.canUseTool)
-      ? async (_toolName: string, input: Record<string, unknown>, context?: AskUserQuestionResolutionContext) => {
-          if (!sessionIdRef) throw new Error("canUseTool called before session ID was set");
-          return selfRef.handleAskUserQuestion(sessionIdRef, input, context);
+      // Inject AskUserQuestion intercept for CC sessions. Codex App Server exposes
+      // structured pending input natively, so only Claude needs the tool intercept.
+      // Use a late-bound wrapper so we can capture session.id after construction.
+      const harnessName = config.harness ?? "claude-code";
+      const selfRef = this;
+      let sessionIdRef: string | undefined;
+      const canUseTool = (harnessName === "claude-code" && !config.canUseTool)
+        ? async (_toolName: string, input: Record<string, unknown>, context?: AskUserQuestionResolutionContext) => {
+            if (!sessionIdRef) throw new Error("canUseTool called before session ID was set");
+            return selfRef.handleAskUserQuestion(sessionIdRef, input, context);
+          }
+        : config.canUseTool;
+
+      session = new Session({
+        ...config,
+        workdir: preparedLaunch.actualWorkdir,
+        systemPrompt: preparedLaunch.effectiveSystemPrompt,
+        // The worktree preamble is added again when a resume prepares its worktree.
+        launchSystemPrompt: config.systemPrompt,
+        canUseTool,
+        ...(config.forkSession && config.resumeSessionId && !config.forkBaselineUsage
+          ? { forkBaselineUsage: this.resolveForkBaselineUsage(config.resumeSessionId) }
+          : {}),
+      }, name);
+      sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
+    } catch (err) {
+      if (preparedLaunch.worktreePath && !config.resumeSessionId && !config.resumeWorktreeFrom) {
+        try {
+          await removeWorktree(preparedLaunch.originalWorkdir, preparedLaunch.worktreePath, { destructive: true });
+          if (preparedLaunch.worktreeBranchName) await deleteBranch(preparedLaunch.originalWorkdir, preparedLaunch.worktreeBranchName);
+        } catch (cleanupErr) {
+          log.warn(`[SessionManager] Could not remove the worktree of a failed launch: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
         }
-      : config.canUseTool;
-
-    const session = new Session({
-      ...config,
-      workdir: preparedLaunch.actualWorkdir,
-      systemPrompt: preparedLaunch.effectiveSystemPrompt,
-      // The worktree preamble is added again when a resume prepares its worktree.
-      launchSystemPrompt: config.systemPrompt,
-      canUseTool,
-      ...(config.forkSession && config.resumeSessionId && !config.forkBaselineUsage
-        ? { forkBaselineUsage: this.resolveForkBaselineUsage(config.resumeSessionId) }
-        : {}),
-    }, name);
-    sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
+      }
+      throw err;
+    }
     // A question answered directly through the harness (agent_respond text or an
     // option) no longer needs the button-callback wait held by the question service.
     session.on("pendingInputAnswered", (answered: Session, requestId: string | undefined) => {
@@ -2624,7 +2636,8 @@ export class SessionManager {
     fn: () => Promise<void>,
     onQueued?: () => void,
   ): Promise<void> {
-    return this.mergeQueue.enqueue(repoDir, fn, onQueued);
+    // Serialize per repository, not per spelling of its directory.
+    return this.mergeQueue.enqueue(repoLockKey(repoDir), fn, onQueued);
   }
 
   /** Update fields on a persisted session record and flush to disk. */

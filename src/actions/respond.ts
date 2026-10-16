@@ -710,7 +710,10 @@ export async function executeRespond(
     };
   }
 
-
+  // A switch queued here applies with the next message sent to the session.
+  // When this action fails before its message consumes the switch, withdraw
+  // it, or a later plain message (such as revision feedback) would approve.
+  let queuedModeSwitch = false;
   try {
     if (params.approve) {
       const blockedReason = approvalBlockedReason(session);
@@ -774,10 +777,12 @@ export async function executeRespond(
     let sentAsPlanFeedback = false;
     if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
+      queuedModeSwitch = true;
       session.approvalRationale = approvalRationale;
     } else if (params.approve && session.currentPermissionMode === "default") {
       // Non-plan mode escalation — switch to bypassPermissions
       session.switchPermissionMode("bypassPermissions");
+      queuedModeSwitch = true;
     } else if (params.approve && session.currentPermissionMode === "bypassPermissions") {
       // Already at maximum permissions — no-op, just inform
       approvalWarning = `\nℹ️ approve=true was set but session is already in bypassPermissions mode.`;
@@ -830,6 +835,7 @@ export async function executeRespond(
       userText: `💬 [${session.name}] Message sent${sentAsPlanFeedback ? " as plan feedback" : ""}.`,
     };
   } catch (err: unknown) {
+    if (queuedModeSwitch) session.cancelPendingModeSwitch("bypassPermissions");
     if (err instanceof FollowUpDeliveryUnconfirmedError) {
       return {
         text: `Error: ${err.message}`, isError: true, userText: fail(err.message),

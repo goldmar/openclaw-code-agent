@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import { existsSync, statSync, writeFileSync } from "fs";
 import type {
   PersistedSessionInfo,
-  RepoIntegrationPolicy,
   RepoPolicyRecord,
   SessionStatus,
   SessionActionToken,
@@ -1009,12 +1008,6 @@ export class SessionStore {
     return next;
   }
 
-  updateRepoPolicy(key: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
-    const existing = this.repoPolicies.get(key);
-    if (!existing) return undefined;
-    return this.setRepoPolicy({ ...existing, policy });
-  }
-
   resetRepoPolicy(key: string): boolean {
     const deleted = this.repoPolicies.delete(key);
     if (deleted) this.saveIndex();
@@ -1057,10 +1050,19 @@ export class SessionStore {
 
   /** Enforce max persisted session retention by evicting oldest records and indexes. */
   evictOldestPersisted(maxPersistedSessions: number): PersistedSessionInfo[] {
-    const all = this.listPersistedSessions();
-    if (all.length <= maxPersistedSessions) return [];
+    if (this.persisted.size <= maxPersistedSessions) return [];
 
-    const toEvict = all.slice(maxPersistedSessions);
+    // A running session's row is never evicted, even when running rows alone
+    // exceed the cap: its output file would be deleted under it. Other rows
+    // without completedAt (recovered from a crash) rank as the newest.
+    const live = (row: PersistedSessionInfo): boolean => row.status === "running" || row.status === "starting";
+    const completedAt = (row: PersistedSessionInfo): number => row.completedAt ?? Number.POSITIVE_INFINITY;
+    const rows = [...this.persisted.values()];
+    const liveCount = rows.filter(live).length;
+    const toEvict = rows
+      .filter((row) => !live(row))
+      .sort((a, b) => completedAt(b) - completedAt(a))
+      .slice(Math.max(0, maxPersistedSessions - liveCount));
     for (const info of toEvict) {
       this.removePersistedIndexes(info);
     }
@@ -1104,10 +1106,7 @@ export class SessionStore {
   }
 
   hasOutputPathReference(outputPath: string): boolean {
-    for (const session of this.persisted.values()) {
-      if (session.outputPath === outputPath) return true;
-    }
-    return false;
+    return this.getReferencedOutputPaths().includes(outputPath);
   }
 
   /**

@@ -17,7 +17,6 @@ import type {
   SessionRuntimeRecoveryDiagnostics,
   SessionWorktreeState,
 } from "./types";
-import { getBackendConversationId } from "./session-backend-ref";
 import { formatCodexRateLimits } from "./harness/codex-rate-limits";
 import { formatHarnessModelLabel } from "./session-display";
 

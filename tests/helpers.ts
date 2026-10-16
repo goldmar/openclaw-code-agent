@@ -254,6 +254,7 @@ export function createStubSession(overrides: Record<string, any> = {}): any {
     sendMessage: async (_text: string) => {},
     interrupt: async () => true,
     switchPermissionMode: (_mode: string) => {},
+    cancelPendingModeSwitch: (_mode: string) => {},
     controlStateSnapshot: () => ({
       status: session.status,
       lifecycle: session.lifecycle,
