@@ -2,7 +2,7 @@ import { normalizeBooleanParams } from "./boolean-normalization";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
-import { formatStoredRepoPolicyLine, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { formatStoredRepoPolicyLine, normalizeRemoteUrl, validateRepoPolicyForPrAvailability } from "../repo-policy";
 import { quoteCommandArg } from "../commands/args";
 
 interface AgentRepoPolicyParams {
@@ -31,7 +31,8 @@ function formatPolicy(record: RepoPolicyRecord | undefined): string {
     `Repo policy: ${record.policy}`,
     `Repo: ${record.repoRoot}`,
     `Provider: ${record.provider}`,
-    ...(record.remoteUrl ? [`Remote: ${record.remoteUrl}`] : []),
+    // A record stored before credentials were stripped may still carry a token.
+    ...(record.remoteUrl ? [`Remote: ${normalizeRemoteUrl(record.remoteUrl)}`] : []),
     `Updated: ${record.updatedAt}`,
   ].join("\n");
 }

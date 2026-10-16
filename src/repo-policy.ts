@@ -192,7 +192,7 @@ export function formatStoredRepoPolicyLine(record: RepoPolicyRecord, options: { 
     record.policy,
     record.provider,
     `${record.repoRoot}${storedRepoRootExists(record) ? "" : " (missing)"}`,
-    ...(options.includeRemote && record.remoteUrl ? [record.remoteUrl] : []),
+    ...(options.includeRemote && record.remoteUrl ? [normalizeRemoteUrl(record.remoteUrl)!] : []),
   ].join(" | ");
 }
 

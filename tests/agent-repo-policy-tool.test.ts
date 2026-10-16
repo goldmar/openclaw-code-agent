@@ -15,6 +15,28 @@ describe("agent_repo_policy tool", () => {
     assert.doesNotMatch(tool.description, /\bOCA\b/);
   });
 
+  it("never shows credentials of a record stored with a token in its remote URL", async () => {
+    setSessionManager({
+      setRepoPolicy: () => ({
+        key: "/repo|https://x-access-token:secret@github.com/acme/widget",
+        policy: "pr-required",
+        repoRoot: "/repo",
+        provider: "github",
+        remoteUrl: "https://x-access-token:secret@github.com/acme/widget",
+        createdAt: "2026-06-11T00:00:00.000Z",
+        updatedAt: "2026-06-11T00:00:00.000Z",
+        source: "stored",
+      }),
+      continueLaunchAfterManualRepoPolicy: () => ({ kind: "none" }),
+    } as any);
+
+    const result = await makeAgentRepoPolicyTool({ workspaceDir: "/repo" } as any).execute("tool-id", { policy: "pr-required" });
+    const text = (result.content[0] as { text: string }).text;
+
+    assert.match(text, /Remote: https:\/\/github\.com\/acme\/widget/);
+    assert.doesNotMatch(text, /secret/);
+  });
+
   it("continues a matching deferred launch after setting policy manually", async () => {
     setSessionManager({
       setRepoPolicy: () => ({
