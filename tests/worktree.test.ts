@@ -47,6 +47,15 @@ describe("sanitizeBranchName", () => {
     assert.doesNotMatch(result, /[-.]$/);
   });
 
+  it("drops a trailing .lock, which Git rejects in a branch name", async () => {
+    const { sanitizeBranchName } = await import("../src/worktree.js");
+    for (const name of ["fix-yarn.lock", "fix-yarn.lock.lock"]) {
+      const branch = `agent/${sanitizeBranchName(name)}`;
+      assert.equal(branch, "agent/fix-yarn");
+      execFileSync("git", ["check-ref-format", `refs/heads/${branch}`]);
+    }
+  });
+
   it("preserves the session fallback for empty sanitized names", async () => {
     const { sanitizeBranchName } = await import("../src/worktree.js");
 

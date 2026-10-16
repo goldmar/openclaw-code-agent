@@ -37,6 +37,8 @@ export function sanitizeBranchName(name: string): string {
     .replace(/\.{2,}/g, "-")
     .replace(/^[-.]|[-.]$/g, "")
     .slice(0, 100)
+    // Git rejects a ref component that ends in ".lock".
+    .replace(/(?:[-.]*\.lock)+$/, "")
     .replace(/[-.]+$/, "");
 
   return sanitized || "session";
