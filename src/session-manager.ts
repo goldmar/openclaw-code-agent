@@ -54,6 +54,7 @@ import {
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import type { WorktreeDecisionSummaryProvider } from "./worktree-decision-summary";
+import { repoLockKey } from "./git-exec";
 import {
   createRuntimeQuestionContextSummaryProvider,
   type QuestionContextSummaryProvider,
@@ -2624,7 +2625,8 @@ export class SessionManager {
     fn: () => Promise<void>,
     onQueued?: () => void,
   ): Promise<void> {
-    return this.mergeQueue.enqueue(repoDir, fn, onQueued);
+    // Serialize per repository, not per spelling of its directory.
+    return this.mergeQueue.enqueue(repoLockKey(repoDir), fn, onQueued);
   }
 
   /** Update fields on a persisted session record and flush to disk. */
