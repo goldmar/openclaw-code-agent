@@ -1,5 +1,5 @@
 import { assertBranchName, localBranchRef, assertBranchOrRemoteTrackingRef } from "./worktree-ref-validation";
-import { runGit, withRepoLock } from "./git-exec";
+import { runGit, withRepoLock, type CommandError } from "./git-exec";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, isAbsolute, join } from "path";
@@ -196,6 +196,14 @@ async function saveHookChanges(repoDir: string, checkout: string, branch: string
 }
 
 /** Check `branch` out in a private temporary worktree; the directory is removed again if that fails. */
+async function hasUnmergedPaths(dir: string): Promise<boolean> {
+  try {
+    return (await runGit(["-C", dir, "diff", "--name-only", "--diff-filter=U"], { timeout: 10_000 })).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function addTemporaryWorktree(repoDir: string, branch: string, hooks: string[]): Promise<string> {
   const parent = mkdtempSync(join(tmpdir(), "oca-merge-"));
   const path = join(parent, "worktree");
@@ -267,11 +275,19 @@ async function mergeBranchLocked(
       }
       try {
         await runGit([...hooks, "-C", rebaseDir, "rebase", baseRef], { timeout: 60_000 });
-      } catch {
+      } catch (rebaseErr) {
+        // Only unmerged paths are a conflict. A rejecting hook, a held
+        // index.lock or a timeout must not start a conflict resolver.
+        const conflicted = await hasUnmergedPaths(rebaseDir);
         try {
           await runGit(["-C", rebaseDir, "rebase", "--abort"], { timeout: 15_000 });
         } catch (err) {
-          warnRecovery("Failed to abort rebase during recovery", err);
+          // Nothing to abort when the rebase never started.
+          if (conflicted) warnRecovery("Failed to abort rebase during recovery", err);
+        }
+        if (!conflicted) {
+          const reason = (rebaseErr as CommandError).stderr?.trim().split(/\r?\n/, 1)[0] || errorMessage(rebaseErr);
+          return withWarnings({ success: false, error: `Rebase of ${branch} onto ${base} failed: ${reason}` });
         }
         return withWarnings({
           success: false,

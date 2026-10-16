@@ -123,6 +123,29 @@ describe("mergeBranch", () => {
 });
 
 describe("rebase warnings and diff summaries", () => {
+  it("reports a rebase that a hook refused as a failure, not as a conflict", async () => {
+    const repoDir = createRepo();
+    const worktreePath = join(mkdtempSync(join(tmpdir(), "openclaw-merge-hook-wt-")), "wt");
+    try {
+      git(repoDir, "worktree", "add", "-b", "feature", worktreePath);
+      writeFileSync(join(worktreePath, "file.txt"), "feature\n", "utf-8");
+      git(worktreePath, "commit", "-am", "feature change");
+      writeFileSync(join(repoDir, "local.txt"), "main\n", "utf-8");
+      git(repoDir, "commit", "-am", "independent main change");
+      const hookPath = join(repoDir, ".git", "hooks", "pre-rebase");
+      writeFileSync(hookPath, "#!/bin/sh\necho 'rebase refused by policy' >&2\nexit 1\n", { mode: 0o755 });
+
+      const result = await mergeBranch(repoDir, "feature", "main", "merge", worktreePath);
+
+      assert.equal(result.success, false);
+      assert.equal(result.rebaseConflict, undefined);
+      assert.match(result.error ?? "", /Rebase of feature onto main failed: .*rebase refused by policy/);
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("warns that a pushed branch was rewritten only when the rebase happened", async () => {
     const repoDir = createRepo();
     const worktreePath = join(mkdtempSync(join(tmpdir(), "openclaw-merge-published-wt-")), "wt");
