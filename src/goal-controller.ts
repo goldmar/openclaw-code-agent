@@ -654,7 +654,7 @@ export class GoalController {
     const task = this.store.get(ref);
     if (!task) return undefined;
     if (task.status !== "awaiting_verifier_confirmation") return { task, action: "not_waiting" };
-    await this.authorizeTaskUntilCurrent(task);
+    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     if (task.status !== "awaiting_verifier_confirmation") return { task, action: "not_waiting" };
     task.status = "waiting_for_session";
     task.updatedAt = Date.now();
@@ -700,10 +700,10 @@ export class GoalController {
   }
 
   private async startTask(task: GoalTaskState, generation = this.generation, reply?: GoalReplyNotice): Promise<GoalTaskState> {
-    this.assertCurrent(generation); await this.authorizeTaskUntilCurrent(task);
+    this.assertCurrent(generation); while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     const session = await this.spawnTaskSession(task, buildInitialPrompt(task), generation);
     if (this.discardRetiredSession(task, session, generation)) this.assertCurrent(generation);
-    await this.authorizeTaskUntilCurrent(task);
+    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     this.attachSessionObservers(task, session);
     task.sessionId = session.id;
     task.sessionName = session.name;
@@ -757,7 +757,7 @@ export class GoalController {
       return { action: "not_editable", task };
     }
 
-    await this.authorizeTaskUntilCurrent(task);
+    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     const previousGoal = task.goal;
     task.goal = goal;
     task.updatedAt = Date.now();
@@ -772,7 +772,7 @@ export class GoalController {
 
   private async spawnManagedTaskSession(task: GoalTaskState, prompt: string, resumeRef?: string, generation = this.generation): Promise<Session> {
     this.assertCurrent(generation);
-    await this.authorizeTaskUntilCurrent(task);
+    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     const requestedResumeSessionId = resumeRef
       ? (this.sessionManager.resolveBackendConversationId(resumeRef) ?? resumeRef)
       : undefined;
@@ -804,7 +804,7 @@ export class GoalController {
     };
     const session = await this.sessionManager.launchAndAwaitRunning(config, { notifyLaunch: false });
     if (this.discardRetiredSession(task, session, generation)) this.assertCurrent(generation);
-    await this.authorizeTaskUntilCurrent(task);
+    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
     // Pin resolved settings for later iterations and restart recovery.
     task.harness = session.harnessName ?? task.harness;
     task.model = session.model ?? task.model;
@@ -867,7 +867,8 @@ export class GoalController {
         continue;
       }
       if (isTerminalGoalTaskStatus(task.status)) continue;
-      if (!(await this.currentTaskAuthorization(task))) continue;
+      { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+        if (!authorization) continue; }
       if (task.status !== "waiting_for_session" && task.status !== "running") continue;
       if (isInvalidVerifierTask(task)) {
         this.markTaskFailed(task, zeroVerifierFailureReason());
@@ -909,7 +910,8 @@ export class GoalController {
   }
 
   private async runVerifiers(task: GoalTaskState, generation = this.generation): Promise<GoalVerifierRunResult | undefined> {
-    if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return undefined;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation)) return undefined; }
     const verifierCommands = normalizeVerifierCommands(task.verifierCommands);
     if (verifierCommands.length === 0) {
       const result: GoalVerifierRunResult = {
@@ -932,9 +934,11 @@ export class GoalController {
 
     const steps: GoalVerifierStepResult[] = [];
     for (const command of verifierCommands) {
-      if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return undefined;
+      { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+        if (!authorization || !this.isCurrent(generation)) return undefined; }
       steps.push(await runVerifierCommand(task.workdir, command));
-      if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return undefined;
+      { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+        if (!authorization || !this.isCurrent(generation)) return undefined; }
 
     }
 
@@ -997,23 +1001,11 @@ export class GoalController {
       && this.store.get(task.id) === task && revision === getGoalVerifierPolicyRevision() && admitted === signature() };
   }
 
-  /** Authorize until the ticket is current; throws (and fails the task) when it is not authorized. */
-  private async authorizeTaskUntilCurrent(task: GoalTaskState): Promise<void> {
-    while (!(await this.authorizeTask(task)).isCurrent()) { /* retry changed admission */ }
-  }
-
-  /** A current ticket, re-checked while a transition makes it stale; undefined when not authorized. */
-  private async currentTaskAuthorization(task: GoalTaskState): Promise<GoalAuthorizationTicket | undefined> {
-    let authorization;
-    do { authorization = await this.checkTaskAuthorized(task); } while (authorization && !authorization.isCurrent());
-    return authorization;
-  }
-
-  private async currentVerifierProofAuthorization(task: GoalTaskState, revision: string): Promise<GoalAuthorizationTicket | undefined> {
-    let authorization;
-    do { authorization = await this.checkVerifierProofAuthorized(task, revision); } while (authorization && !authorization.isCurrent());
-    return authorization;
-  }
+  // Authorization freshness and the action it guards are one step: callers
+  // loop on the check themselves (`do … await check … while (!isCurrent())`)
+  // and act right after the loop. A helper that looped and returned would
+  // leave an await between its last isCurrent() and the caller's action, in
+  // which a queued stopTask or policy change could run unnoticed.
 
   private async checkVerifierProofAuthorized(task: GoalTaskState, revision: string): Promise<GoalAuthorizationTicket | undefined> {
     const ticket = await this.checkTaskAuthorized(task);
@@ -1044,7 +1036,8 @@ export class GoalController {
 
   private async setTaskRunningWithSession(task: GoalTaskState, session: Pick<Session, "id" | "name" | "harnessSessionId" | "route">): Promise<GoalAuthorizationTicket | undefined> {
     const generation = this.generation;
-    if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return undefined;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation)) return undefined; }
     const revision = getGoalVerifierPolicyRevision();
     task.sessionId = session.id;
     task.sessionName = session.name;
@@ -1159,7 +1152,8 @@ export class GoalController {
   }
 
   private async markTaskSucceeded(task: GoalTaskState, summary: string): Promise<void> {
-    if (!(await this.currentTaskAuthorization(task))) return;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization) return; }
     task.status = "succeeded";
     task.lastVerifierSummary = summary;
     task.updatedAt = Date.now();
@@ -1231,7 +1225,8 @@ export class GoalController {
   }
 
   private async handleRunningSession(task: GoalTaskState, session: Session, generation = this.generation): Promise<void> {
-    if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation)) return; }
     if (session.pendingPlanApproval) {
       // The first iteration's plan goes through the normal plan gate (the
       // user, or the orchestrator when planApproval allows it); the goal loop
@@ -1284,7 +1279,8 @@ export class GoalController {
   }
 
   private async resumeAfterIdleTimeout(task: GoalTaskState, session: Session, prompt: string, generation = this.generation): Promise<void> {
-    if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation)) return; }
     // A restart is an iteration too: an idle loop cannot restart forever.
     if (!this.consumeIteration(task, "The goal task was idle-suspended and would restart again.")) return;
     try {
@@ -1320,7 +1316,8 @@ export class GoalController {
     if (!this.isCurrent(generation)) return;
     const task = this.store.get(taskId);
     if (!task || task.status !== "waiting_for_plan_approval" || !task.sessionId) return;
-    if (!(await this.currentTaskAuthorization(task))) return;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization) return; }
     const current = this.sessionManager.resolve(task.sessionId);
     if (current && current !== suspended && (current.status === "starting" || current.status === "running")) {
       this.attachSessionObservers(task, current);
@@ -1338,7 +1335,8 @@ export class GoalController {
   }
 
   private async handleTerminalSession(task: GoalTaskState, session: Session, generation = this.generation): Promise<void> {
-    if (!(await this.currentTaskAuthorization(task)) || !this.isCurrent(generation)) return;
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation)) return; }
     if (!this.recordRunCost(task, session)) return;
     this.notePlanApproval(task, session);
 
@@ -1405,7 +1403,8 @@ export class GoalController {
         // Retain proof identity across the final await, through success/repair consumption.
         const proofRevision = JSON.stringify(task.goalVerificationBinding);
         const verifier = await this.runVerifiers(task, generation);
-        if (!(await this.currentVerifierProofAuthorization(task, proofRevision)) || !this.isCurrent(generation) || !verifier) return;
+        { let authorization; do authorization = await this.checkVerifierProofAuthorized(task, proofRevision); while (authorization && !authorization.isCurrent());
+          if (!authorization || !this.isCurrent(generation) || !verifier) return; }
         task.lastVerifierSummary = verifier.summary;
         task.updatedAt = Date.now();
 
@@ -1488,7 +1487,8 @@ export class GoalController {
 
     const proofRevision = JSON.stringify(task.goalVerificationBinding);
     const verifier = await this.runVerifiers(task, generation);
-    if (!(await this.currentVerifierProofAuthorization(task, proofRevision)) || !this.isCurrent(generation) || !verifier) return;
+    { let authorization; do authorization = await this.checkVerifierProofAuthorized(task, proofRevision); while (authorization && !authorization.isCurrent());
+      if (!authorization || !this.isCurrent(generation) || !verifier) return; }
     task.lastVerifierSummary = verifier.summary;
     task.updatedAt = Date.now();
 
@@ -1568,7 +1568,8 @@ export class GoalController {
         this.markTaskFailed(task, "Goal task was waiting for user input and cannot continue autonomously");
         return;
       }
-      if (!(await this.currentTaskAuthorization(task))) return;
+      { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+        if (!authorization) return; }
       if (isInvalidVerifierTask(task)) {
         this.markTaskFailed(task, zeroVerifierFailureReason());
         return;
