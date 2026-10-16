@@ -2639,6 +2639,30 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.replies, ["❌ [ux-fix] Discard failed: index.lock exists."]);
   });
 
+  it("keeps a successful merge a success when only its confirmation reply fails", async () => {
+    const reoffers: string[] = [];
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      queueOrchestratorContext: () => true,
+      reofferWorktreeDecision: async (_ref: string, failure: string) => { reoffers.push(failure); return true; },
+    } as any);
+    const handler = createCallbackHandler("telegram", {
+      makeAgentMergeTool: () => ({
+        // Nothing was posted, so the handler replies with the first line itself.
+        execute: async () => createToolResult("ℹ️ [ux-fix] Already merged.", true, false),
+      }) as any,
+    });
+
+    const state = createCtx("token-merge-reply-fails", "telegram", { replyError: new Error("chat unavailable") });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(reoffers, [], "no \"Merge failed\" re-offer for a merge that succeeded");
+  });
+
   it("answers when a non-worktree button action throws after its token was spent", async () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),

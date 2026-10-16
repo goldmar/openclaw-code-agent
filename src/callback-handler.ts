@@ -1602,17 +1602,22 @@ export function createCallbackHandler(
             }
           }
         } catch (err) {
-          // The token is already spent: answer, and re-offer an open worktree
-          // decision with fresh buttons, instead of leaving a dead button and no reply.
-          worktreeDecisionSucceeded = false;
           const reason = err instanceof Error ? err.message : String(err);
-          log.warn(`[callback-handler] Button action ${consumedToken.kind} failed: ${reason}`);
-          const worktreeAction = WORKTREE_BUTTON_ACTIONS[consumedToken.kind];
-          try {
-            if (worktreeAction) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, worktreeAction, `Error: ${reason}`);
-            else await replyText(ctx, failureReply(actionSessionName, reason));
-          } catch (replyErr) {
-            log.warn(`[callback-handler] Could not report the failed button action: ${replyErr instanceof Error ? replyErr.message : String(replyErr)}`);
+          // The decision already succeeded and only its confirmation reply
+          // failed: it stays a success (and keeps its pressed note).
+          if (worktreeDecisionSucceeded) {
+            log.warn(`[callback-handler] Reply after a successful ${consumedToken.kind} failed: ${reason}`);
+          } else {
+            // The token is already spent: answer, and re-offer an open worktree
+            // decision with fresh buttons, instead of leaving a dead button and no reply.
+            log.warn(`[callback-handler] Button action ${consumedToken.kind} failed: ${reason}`);
+            const worktreeAction = WORKTREE_BUTTON_ACTIONS[consumedToken.kind];
+            try {
+              if (worktreeAction) await reofferWorktreeDecisionAfterFailure(ctx, sessionId, actionSessionName, callbackAcknowledged, worktreeAction, `Error: ${reason}`);
+              else await replyText(ctx, failureReply(actionSessionName, reason));
+            } catch (replyErr) {
+              log.warn(`[callback-handler] Could not report the failed button action: ${replyErr instanceof Error ? replyErr.message : String(replyErr)}`);
+            }
           }
         }
 
