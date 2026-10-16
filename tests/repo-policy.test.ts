@@ -60,6 +60,9 @@ describe("repo policy resolution", () => {
     assert.equal(normalizeRemoteUrl("https://user@github.com/goldmar/openclaw-code-agent"), "https://github.com/goldmar/openclaw-code-agent");
     assert.equal(normalizeRemoteUrl("ssh://git@github.com/goldmar/openclaw-code-agent.git"), "https://github.com/goldmar/openclaw-code-agent");
     assert.equal(normalizeRemoteUrl("ssh://git@github.com:22/goldmar/openclaw-code-agent.git"), "https://github.com/goldmar/openclaw-code-agent");
+    // Servers on different SSH ports never share a policy.
+    assert.notEqual(normalizeRemoteUrl("ssh://git@git.example.com:2222/team/repo.git"), normalizeRemoteUrl("ssh://git@git.example.com:2223/team/repo.git"));
+    assert.equal(normalizeRemoteUrl("ssh://git@git.example.com:2222/team/repo.git"), "https://git.example.com:2222/team/repo");
     assert.equal(detectRepoProvider("https://x-access-token:SECRET@github.com/goldmar/openclaw-code-agent"), "github");
     assert.equal(detectRepoProvider("https://gitlab.com/example/repo"), "unsupported");
   });

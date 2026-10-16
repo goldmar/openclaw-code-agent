@@ -124,8 +124,12 @@ export function normalizeRemoteUrl(url: string | undefined): string | undefined 
   const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
   const scp = trimmed.match(/^[^@/:]+@([^:/]+):(?!\/)(.+)$/);
   if (scp) return `https://${scp[1].toLowerCase()}/${scp[2].toLowerCase()}`;
-  const ssh = trimmed.match(/^ssh:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i);
-  if (ssh) return `https://${ssh[1].toLowerCase()}/${ssh[2].toLowerCase()}`;
+  // A non-default SSH port is a different server, so it stays in the identity.
+  const ssh = trimmed.match(/^ssh:\/\/(?:[^@/]*@)?([^/:]+)(?::(\d+))?\/(.+)$/i);
+  if (ssh) {
+    const port = ssh[2] && ssh[2] !== "22" ? `:${ssh[2]}` : "";
+    return `https://${ssh[1].toLowerCase()}${port}/${ssh[3].toLowerCase()}`;
+  }
   const https = trimmed.match(/^https?:\/\/(?:[^@/]*@)?([^/]+)\/(.+)$/i);
   if (https) return `https://${https[1].toLowerCase()}/${https[2].toLowerCase()}`;
   return trimmed.toLowerCase();
