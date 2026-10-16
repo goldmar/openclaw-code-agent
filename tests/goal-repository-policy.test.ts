@@ -12,7 +12,7 @@ import { Session } from "../src/session";
 import { SessionManager } from "../src/session-manager";
 import { registerHarness } from "../src/harness";
 import { executeRespond, requestPlanDecisionChanges } from "../src/actions/respond";
-import { resolveGoalRepositoryIdentity } from "../src/goal-repository-identity";
+import { goalRepositoryIdentityInternals, resolveGoalRepositoryIdentity } from "../src/goal-repository-identity";
 import { effectiveGoalVerifiers, GoalVerificationAuthority, resolveGoalVerification } from "../src/goal-verifier-policy";
 import type { GoalTaskState } from "../src/types";
 import { createFakeHarness, createStubSession, tick } from "./helpers";
@@ -163,6 +163,12 @@ describe("actual repository goal policies", () => {
     await repository(repoA); await assert.rejects(replaced.authority.validate(replaced.task), /identity changed/);
   });
 
+  it("waits for a slow Git lookup instead of failing the goal after one second", async () => {
+    const bin = join(dir, "bin-slow"); mkdirSync(bin); process.env.PATH = `${bin}:${savedEnv.PATH}`;
+    writeFileSync(join(bin, "git"), "#!/bin/sh\nsleep 1.2\nexec /usr/bin/git \"$@\"\n"); chmodSync(join(bin, "git"), 0o755);
+    assert.equal((await resolveGoalRepositoryIdentity(repoA)).kind, "git");
+  });
+
   it("never treats broken Git markers, unexpected Git errors or timeout as nonrepository fallback", async () => {
     const plain = join(dir, "plain"); mkdirSync(plain);
     setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["default"] } });
@@ -170,9 +176,15 @@ describe("actual repository goal policies", () => {
     await assert.rejects(resolveGoalVerification(plain), /Cannot verify/);
     rmSync(join(plain, ".git"));
     const bin = join(dir, "bin"); mkdirSync(bin); process.env.PATH = `${bin}:${savedEnv.PATH}`;
-    for (const body of ["echo 'fatal: permission denied' >&2; exit 128", "sleep 2; exit 0"]) {
-      writeFileSync(join(bin, "git"), `#!/bin/sh\n${body}\n`); chmodSync(join(bin, "git"), 0o755);
-      await assert.rejects(resolveGoalVerification(plain), /Cannot verify/);
+    const savedTimeout = goalRepositoryIdentityInternals.gitTimeoutMs;
+    goalRepositoryIdentityInternals.gitTimeoutMs = 300;
+    try {
+      for (const body of ["echo 'fatal: permission denied' >&2; exit 128", "sleep 2; exit 0"]) {
+        writeFileSync(join(bin, "git"), `#!/bin/sh\n${body}\n`); chmodSync(join(bin, "git"), 0o755);
+        await assert.rejects(resolveGoalVerification(plain), /Cannot verify/);
+      }
+    } finally {
+      goalRepositoryIdentityInternals.gitTimeoutMs = savedTimeout;
     }
     writeFileSync(join(plain, ".git"), "gitdir: /does-not-exist\n");
     writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'fatal: not a git repository (or any of the parent directories): .git' >&2; exit 128\n");
