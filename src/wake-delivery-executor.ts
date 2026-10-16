@@ -402,10 +402,8 @@ export class WakeDeliveryExecutor {
 
     this.executePromiseWithTimeout(task)
       .then((result) => {
-        if (this.disposed) {
-          onSettled?.();
-          return;
-        }
+        // A dispatch that started before dispose (the dispatcher hands its held
+        // wakes over while stopping) still records its outcome; only retries stop.
         const elapsedMs = Date.now() - startedAt;
         if (result === "ambiguous") {
           this.settleAmbiguousResult(opts, onSettled);

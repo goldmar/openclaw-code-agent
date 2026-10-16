@@ -78,6 +78,31 @@ describe("WakeDeliveryExecutor", () => {
     executor.dispose();
   });
 
+  it("records the outcome of a dispatch that started before dispose", async () => {
+    const executor = new WakeDeliveryExecutor();
+    let release!: () => void;
+    const delivered = new Promise<void>((resolve) => { release = resolve; });
+    let successes = 0;
+    executor.executePromise(
+      async () => { await delivered; },
+      {
+        label: "held-wake-on-stop",
+        sessionId: "session-stop",
+        target: "system.event",
+        phase: "wake",
+        routeSummary: "system:agent:main:main",
+        messageKind: "wake",
+        onSuccess: () => { successes += 1; },
+      },
+    );
+    executor.dispose();
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(successes, 1);
+  });
+
   it("times out hung promise dispatches and exhausts retries", async () => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];
