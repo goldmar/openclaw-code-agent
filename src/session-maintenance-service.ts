@@ -108,6 +108,9 @@ export class SessionMaintenanceService {
    * recent request for a ref applies its schedule.
    */
   syncPersistedSessionMaintenance(session: PersistedSessionInfo, prLookups?: PrLookups): void {
+    // Shutdown disposes maintenance before it kills the sessions; their final
+    // persists must not start git work that nothing waits for.
+    if (this.disposed) return;
     const ref = this.persistedMaintenanceRef(session);
     if (!ref) return;
     const generation = this.nextPersistedSyncGeneration(ref);
@@ -132,11 +135,10 @@ export class SessionMaintenanceService {
   }
 
   private track(work: Promise<void>, description: string): void {
-    if (this.disposed) return;
     const pending = work
       .catch((err) => log.warn(`[SessionManager] ${description} failed: ${errorMessage(err)}`))
       .finally(() => this.pendingWork.delete(pending));
-    this.pendingWork.add(pending);
+    if (!this.disposed) this.pendingWork.add(pending);
   }
 
   private async syncPersistedSessionMaintenanceNow(session: PersistedSessionInfo, ref: string, generation: number, prLookups?: PrLookups): Promise<void> {
