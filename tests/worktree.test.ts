@@ -962,3 +962,24 @@ describe("createWorktree branch selection", () => {
     }
   });
 });
+
+describe("removeWorktree destructive removal", () => {
+  it("removes a locked worktree with its registration, so the branch can be deleted afterwards", async () => {
+    const { removeWorktree, deleteBranch } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-remove-locked-"));
+    const worktreePath = join(repoDir, ".worktrees", "locked");
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["worktree", "add", "-b", "agent/locked", worktreePath], { cwd: repoDir, stdio: "ignore" });
+      // A single --force refuses a locked worktree; the old directory-only fallback left it registered.
+      execFileSync("git", ["worktree", "lock", worktreePath], { cwd: repoDir, stdio: "ignore" });
+
+      assert.equal(await removeWorktree(repoDir, worktreePath, { destructive: true }), true);
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(await deleteBranch(repoDir, "agent/locked"), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});

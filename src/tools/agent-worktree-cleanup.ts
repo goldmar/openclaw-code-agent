@@ -115,8 +115,11 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
 
         try {
           const repoDir = target.workdir;
-          if (target.worktreePath) {
-            await removeWorktree(repoDir, target.worktreePath, { destructive: false });
+          // A worktree that became dirty after the lifecycle check is kept:
+          // keep its metadata too, or nothing would track it any more.
+          if (target.worktreePath && !(await removeWorktree(repoDir, target.worktreePath, { destructive: false }))) {
+            failures.push(`${target.name}: the worktree at ${target.worktreePath} was not removed (it may have new uncommitted changes)`);
+            continue;
           }
           if (target.worktreeBranch) {
             await deleteBranch(repoDir, target.worktreeBranch);
