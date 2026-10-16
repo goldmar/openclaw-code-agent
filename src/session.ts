@@ -925,14 +925,11 @@ export class Session extends EventEmitter {
     } };
   }
 
-  /**
-   * Re-check until the check is current: a goal transition during the await
-   * makes the ticket stale. The check throws when the work is not allowed.
-   */
-  private async assertModelAllowedUntilCurrent(goalWork?: boolean): Promise<void> {
-    let authorization: GoalAuthorizationTicket;
-    do { authorization = await this.assertCurrentModelAllowed(goalWork); } while (!authorization.isCurrent());
-  }
+  // Callers re-check until the ticket is current and act right after the
+  // loop (`while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent())`):
+  // a goal transition during the await makes the ticket stale, and the check
+  // throws when the work is not allowed. The loop stays at the call site so no
+  // await separates the last isCurrent() from the action it guards.
 
   // -- Lifecycle --
 
@@ -946,7 +943,7 @@ export class Session extends EventEmitter {
       hasBackendRef: Boolean(this.backendRef),
     });
     try {
-      await this.assertModelAllowedUntilCurrent();
+      while (!(await this.assertCurrentModelAllowed()).isCurrent()) { /* retry changed admission */ }
       let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
         this.messageStream = new MessageStream();
@@ -1020,14 +1017,14 @@ export class Session extends EventEmitter {
     let planSignature = this.planActionSignature();
     const assertPlanCurrent = (): void => this.assertPlanActionCurrent(handle, planSignature);
     const goalWork = this.beginAction();
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     assertPlanCurrent();
     this.resetIdleTimer();
     const planDecisionPending = !!this.pendingModeSwitch
       || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
     if (this.turnInProgress && !planDecisionPending && this.harnessHandle?.steer) {
       const steered = await this.harnessHandle.steer(text);
-      await this.assertModelAllowedUntilCurrent(goalWork);
+      while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
       assertPlanCurrent();
       if (steered) {
         this.logDiagnostic("turn.steered", { chars: text.length });
@@ -1035,7 +1032,7 @@ export class Session extends EventEmitter {
       }
     }
 
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     assertPlanCurrent();
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
@@ -1050,7 +1047,7 @@ export class Session extends EventEmitter {
       if (resolved) {
         // The backend received the approval as the native permission result
         // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
-        await this.assertModelAllowedUntilCurrent(goalWork);
+        while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
         assertPlanCurrent();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
@@ -1066,7 +1063,7 @@ export class Session extends EventEmitter {
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
-        await this.assertModelAllowedUntilCurrent(goalWork);
+        while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
         assertPlanCurrent();
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
@@ -1095,13 +1092,13 @@ export class Session extends EventEmitter {
       if (resolved) return "queued";
       if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
-      await this.assertModelAllowedUntilCurrent(goalWork);
+      while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
       assertPlanCurrent();
       // Re-assert plan mode at the backend level so revision stays read-only.
       if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode("plan");
-          await this.assertModelAllowedUntilCurrent(goalWork);
+          while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
           assertPlanCurrent();
           this.currentPermissionMode = "plan";
           this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: "plan" });
@@ -1111,7 +1108,7 @@ export class Session extends EventEmitter {
       }
     }
 
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     assertPlanCurrent();
     if (this.multiTurn && this.messageStream) {
         this.messageStream.push(
@@ -1137,7 +1134,7 @@ export class Session extends EventEmitter {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
     const goalWork = this.beginAction();
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     const supported = this.harness.capabilities.threadActions ?? [];
     if (!supported.includes(action.kind) || !this.harness.buildThreadActionMessage) {
       throw new Error(`The ${this.harness.name} harness does not support the "${action.kind}" thread action.`);
@@ -1146,7 +1143,7 @@ export class Session extends EventEmitter {
       throw new Error("Session does not support follow-up actions (launched in single-turn mode).");
     }
     this.resetIdleTimer();
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
     this.messageStream.push(this.harness.buildThreadActionMessage(action));
@@ -1170,7 +1167,7 @@ export class Session extends EventEmitter {
     const handle = this.harnessHandle;
     const signature = this.planActionSignature();
     if (!handle?.resolvePlanDecision) return false;
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     this.assertPlanActionCurrent(handle, signature);
     let resolved: boolean;
     try {
@@ -1179,7 +1176,7 @@ export class Session extends EventEmitter {
       log.warn(`[Session ${this.id}] native plan decision (${decision.kind}) failed: ${errorMessage(err)}`);
       resolved = false;
     }
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     this.assertPlanActionCurrent(handle, signature);
     return resolved;
   }
@@ -1249,11 +1246,11 @@ export class Session extends EventEmitter {
     const questionCount = pending.questions?.length;
     const requestId = pending.requestId;
     const goalWork = this.beginAction();
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     if (this._status !== "running" || this.harnessHandle !== handle
       || this.pendingInputState !== pending || JSON.stringify(pending) !== pendingSignature) return false;
     const submitted = await handle.submitPendingInputOption!(optionIndex, context);
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     if (submitted && (!this.pendingInputState || (this.pendingInputState === pending && JSON.stringify(pending) === pendingSignature))) {
       this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     }
@@ -1286,11 +1283,11 @@ export class Session extends EventEmitter {
     const questionCount = pending.questions?.length;
     const requestId = pending.requestId;
     const goalWork = this.beginAction();
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     if (this._status !== "running" || this.harnessHandle !== handle
       || this.pendingInputState !== pending || JSON.stringify(pending) !== pendingSignature) return false;
     const submitted = await handle.submitPendingInputText!(text);
-    await this.assertModelAllowedUntilCurrent(goalWork);
+    while (!(await this.assertCurrentModelAllowed(goalWork)).isCurrent()) { /* retry changed admission */ }
     if (submitted && (!this.pendingInputState || (this.pendingInputState === pending && JSON.stringify(pending) === pendingSignature))) {
       this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     }

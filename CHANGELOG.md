@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The hook-change check that keeps `auto-merge` / `auto-pr` from merging or opening a PR without asking now also covers pre-commit (`.pre-commit-config.yaml`, `.pre-commit-config.yml`) and lefthook (every config name lefthook reads, such as `lefthook.yml`, `.lefthook.yaml`, `.config/lefthook.toml` and `lefthook-local.yml`, and its `.lefthook/` and `.lefthook-local/` script directories), next to husky's `.husky/`. Paths match exactly from the repository root, so a `docs/lefthook.yml` does not ask.
+
 ### Fixed
 
+- Goal and session authorization checks are again one step with the action they guard: a goal stop or policy change that lands right after the check can no longer be overwritten by the goal's success or by `running`, and a session killed right after its last check no longer gets the thread action's message.
 - Keep the rows (and output files) of running and crash-recovered sessions when the persisted-session cap evicts old rows; rows without a completion time were evicted first.
 - A failed `agent_respond approve=true` no longer leaves the permission switch queued, so a later plain message cannot silently approve the plan in `bypassPermissions` mode.
 - A throwing bookkeeping hook after a successful delivery no longer retries (and re-delivers) the message; the hook failure is logged.
