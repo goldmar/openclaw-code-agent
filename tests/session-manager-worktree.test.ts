@@ -1117,8 +1117,16 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreePath, worktreeBranch: branchName, worktreeState: "pending_decision",
       });
 
+      (sm as any).store.idIndex.set("s-old", "h-old");
+      (sm as any).store.idIndex.set("s-new", "h-new");
+      // The newer session is live (its decision still open); the old runtime is gone.
+      const newerLive = { id: "s-new", name: "foo", harnessSessionId: "h-new", status: "completed", worktreePath, worktreeState: "pending_decision", pendingWorktreeDecisionSince: "2026-01-01T00:00:00.000Z" };
+      (sm as any).sessions.set("s-new", newerLive);
+
       await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-old"), Date.now());
 
+      assert.equal(newerLive.worktreeState, "pending_decision", "the old row's patch never reaches the newer live session");
+      assert.equal(newerLive.pendingWorktreeDecisionSince, "2026-01-01T00:00:00.000Z");
       assert.equal(existsSync(worktreePath), true, "the newer session's worktree is kept");
       assert.equal((sm as any).store.persisted.get("h-old").worktreePath, undefined, "the stale row forgets the path");
       const newer = (sm as any).store.listPersistedSessions().find((row: { sessionId?: string; harnessSessionId?: string; worktreePath?: string }) => row.sessionId === "s-new");

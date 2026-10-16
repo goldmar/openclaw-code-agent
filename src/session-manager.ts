@@ -506,7 +506,7 @@ export class SessionManager {
         manager.lastTerminalWakeMarkers.delete(sessionId);
       },
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
-      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      updateSessionGeneration: (generation, patch) => manager.updateSessionGeneration(generation, patch, { persisted: true }),
       getMaxPersistedSessions: () => manager.maxPersistedSessions,
     });
     store.onActionTokensChanged(() => {

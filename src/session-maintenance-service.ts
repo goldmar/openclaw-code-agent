@@ -3,7 +3,8 @@ import { resolve } from "path";
 
 import { pluginConfig } from "./config";
 import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
-import { getPersistedMutationRefs, getBackendConversationId } from "./session-backend-ref";
+import { getBackendConversationId } from "./session-backend-ref";
+import { persistedGeneration, type SessionGeneration } from "./session-generation";
 import type { Session } from "./session";
 import type { SessionReminderService } from "./session-reminder-service";
 import type { SessionStore } from "./session-store";
@@ -30,7 +31,8 @@ interface SessionMaintenanceDeps {
   persistSession: (session: Session, options?: { scheduleRuntimeGc?: boolean }) => void;
   clearRuntimeSessionState: (sessionId: string) => void;
   resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined | Promise<string | undefined>;
-  updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
+  /** Patch exactly this row's generation (and its own live session), never a name alias. */
+  updateSessionGeneration: (generation: SessionGeneration, patch: Partial<PersistedSessionInfo>) => boolean;
   getMaxPersistedSessions: () => number;
 }
 
@@ -208,24 +210,24 @@ export class SessionMaintenanceService {
         if (repoDir && repoDir !== session.worktreePath) await removeWorktree(repoDir, session.worktreePath);
         log.info(`[SessionManager] Worktree ${session.worktreePath} is already gone; clearing its metadata`);
       }
-      for (const mutationRef of getPersistedMutationRefs(session)) {
-        this.deps.updatePersistedSession(mutationRef, {
-          worktreePath: undefined,
-          worktreeBranch: undefined,
-          worktreeState: "none",
-          pendingWorktreeDecisionSince: undefined,
-          lastWorktreeReminderAt: undefined,
-          worktreeDecisionSnoozedUntil: undefined,
-          worktreeLifecycle: {
-            ...(session.worktreeLifecycle ?? resolved.lifecycle),
-            state: resolved.derivedState,
-            updatedAt: new Date(now).toISOString(),
-            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? resolvedAtIso,
-            resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
-            notes: resolved.reasons,
-          },
-        });
-      }
+      // Only this row: a name-based lookup could reach a newer same-name
+      // session that owns the worktree now.
+      this.deps.updateSessionGeneration(persistedGeneration(session), {
+        worktreePath: undefined,
+        worktreeBranch: undefined,
+        worktreeState: "none",
+        pendingWorktreeDecisionSince: undefined,
+        lastWorktreeReminderAt: undefined,
+        worktreeDecisionSnoozedUntil: undefined,
+        worktreeLifecycle: {
+          ...(session.worktreeLifecycle ?? resolved.lifecycle),
+          state: resolved.derivedState,
+          updatedAt: new Date(now).toISOString(),
+          resolvedAt: session.worktreeLifecycle?.resolvedAt ?? resolvedAtIso,
+          resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
+          notes: resolved.reasons,
+        },
+      });
     } catch (err) {
       log.warn(`[SessionManager] Failed maintenance cleanup for worktree ${session.worktreePath}: ${errorMessage(err)}`);
     }
