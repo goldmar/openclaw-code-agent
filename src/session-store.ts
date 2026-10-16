@@ -1052,13 +1052,17 @@ export class SessionStore {
   evictOldestPersisted(maxPersistedSessions: number): PersistedSessionInfo[] {
     if (this.persisted.size <= maxPersistedSessions) return [];
 
-    // Rows without completedAt (running, or recovered from a crash) are the
-    // newest, not the oldest: evicting them would drop live sessions and their
-    // output files first.
+    // A running session's row is never evicted, even when running rows alone
+    // exceed the cap: its output file would be deleted under it. Other rows
+    // without completedAt (recovered from a crash) rank as the newest.
+    const live = (row: PersistedSessionInfo): boolean => row.status === "running" || row.status === "starting";
     const completedAt = (row: PersistedSessionInfo): number => row.completedAt ?? Number.POSITIVE_INFINITY;
-    const toEvict = [...this.persisted.values()]
+    const rows = [...this.persisted.values()];
+    const liveCount = rows.filter(live).length;
+    const toEvict = rows
+      .filter((row) => !live(row))
       .sort((a, b) => completedAt(b) - completedAt(a))
-      .slice(maxPersistedSessions);
+      .slice(Math.max(0, maxPersistedSessions - liveCount));
     for (const info of toEvict) {
       this.removePersistedIndexes(info);
     }
