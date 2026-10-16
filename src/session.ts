@@ -1307,6 +1307,11 @@ export class Session extends EventEmitter {
     this.pendingModeSwitch = mode;
   }
 
+  /** Withdraw a queued switch that no message consumed (the action that queued it failed). */
+  cancelPendingModeSwitch(mode: PermissionMode): void {
+    if (this.pendingModeSwitch === mode) this.pendingModeSwitch = undefined;
+  }
+
   private get isActive(): boolean {
     return this._status === "starting" || this._status === "running";
   }
