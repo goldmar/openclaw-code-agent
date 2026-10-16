@@ -101,12 +101,19 @@ it("keeps the reconnected event stream when one session's gap reconcile fails", 
   // Only the client's raw stream is used by the hub.
   const hub = new EventHub({ client: { raw } } as unknown as EndpointLease, 1);
   const received: string[] = [];
-  let failingGaps = 0;
-  await hub.subscribe("ses_a", () => {}, async () => { failingGaps += 1; throw new Error("reconcile failed"); });
+  let gapCalls = 0;
+  let recovered = false;
+  // ses_a's reconcile fails twice (before and after the reconnect), then works.
+  await hub.subscribe("ses_a", () => {}, async () => {
+    gapCalls += 1;
+    if (gapCalls <= 2) throw new Error("reconcile failed");
+    recovered = true;
+  });
   await hub.subscribe("ses_b", (e) => received.push(e.type), async () => {});
   await waitFor(() => received.length > 0);
   assert.deepEqual(received, ["session.status"]);
-  assert.ok(failingGaps >= 1);
+  // The failed session retries its own recovery instead of waiting for another reconnect.
+  await waitFor(() => recovered);
   hub.close();
 });
 

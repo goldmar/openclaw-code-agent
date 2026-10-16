@@ -9,6 +9,7 @@ type Listener = {
 /** One public stream per endpoint generation; child requests retain their session ID. */
 export class EventHub {
   private listeners = new Set<Listener>();
+  private retrying = new Set<Listener>();
   private parents = new Map<string, string>();
   private controller = new AbortController();
   private started = false;
@@ -101,10 +102,11 @@ export class EventHub {
             failures = 0;
             this.readyResolve();
             // One session's failed reconcile must not tear down the stream
-            // of every other session on this server.
+            // of every other session on this server; that session retries its
+            // own recovery instead (events it missed are durable on the server).
             if (reconnect)
               for (const l of this.listeners)
-                await l.gap().catch((): undefined => undefined);
+                await l.gap().catch(() => this.retryGap(l));
             continue;
           }
           if (event.type === "session.created" && event.data.parentID)
@@ -129,29 +131,50 @@ export class EventHub {
         }
       }
       if (this.controller.signal.aborted) break;
-      const backoff = Math.min(
-        30000,
-        this.delay * 2 ** Math.min(failures++, 5),
-      );
-      await new Promise<void>((resolve) => {
-        const onAbort = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          this.controller.signal.removeEventListener("abort", onAbort);
-          resolve();
-        }, backoff);
-        this.controller.signal.addEventListener("abort", onAbort, {
-          once: true,
-        });
-      });
+      await this.sleep(Math.min(30000, this.delay * 2 ** Math.min(failures++, 5)));
       // Reconcile before reconnecting too, and again after connected below: changes
       // in the reconnect window are durable, asks are fetched from their endpoints.
       if (this.controller.signal.aborted) break;
       for (const l of this.listeners)
         await l.gap().catch((): undefined => undefined);
     }
+  }
+  /** Retry one listener's reconcile with backoff until it succeeds, it unsubscribes, or the hub closes. */
+  private retryGap(listener: Listener): void {
+    if (this.retrying.has(listener)) return;
+    this.retrying.add(listener);
+    void (async () => {
+      try {
+        for (let attempt = 0; ; attempt++) {
+          if (!(await this.sleep(Math.min(30000, this.delay * 2 ** Math.min(attempt, 5))))) return;
+          if (!this.listeners.has(listener)) return;
+          try {
+            await listener.gap();
+            return;
+          } catch {
+            // Try again after the next backoff.
+          }
+        }
+      } finally {
+        this.retrying.delete(listener);
+      }
+    })();
+  }
+  /** Wait `ms`; false when the hub closed meanwhile. */
+  private async sleep(ms: number): Promise<boolean> {
+    if (this.controller.signal.aborted) return false;
+    await new Promise<void>((resolve) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.controller.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      this.controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    return !this.controller.signal.aborted;
   }
   close(): void {
     this.controller.abort();
