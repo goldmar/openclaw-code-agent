@@ -100,7 +100,11 @@ export class EventHub {
             this.connected = true;
             failures = 0;
             this.readyResolve();
-            if (reconnect) for (const l of this.listeners) await l.gap();
+            // One session's failed reconcile must not tear down the stream
+            // of every other session on this server.
+            if (reconnect)
+              for (const l of this.listeners)
+                await l.gap().catch((): undefined => undefined);
             continue;
           }
           if (event.type === "session.created" && event.data.parentID)

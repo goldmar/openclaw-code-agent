@@ -14,6 +14,8 @@ import type { S_Model_Info, S_Session_Message_Assistant } from "../src/harness/o
 import { checkServerVersion } from "../src/harness/opencode/endpoint";
 import { OpenCodeClient } from "../src/harness/opencode/client";
 import { UsageAccumulator } from "../src/harness/opencode/usage";
+import { EventHub } from "../src/harness/opencode/event-hub";
+import type { EndpointLease } from "../src/harness/opencode/endpoint";
 import { assessResumeCandidate } from "../src/session-resume";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import { resolveOpenCodeCommand } from "../src/harness/opencode/command";
@@ -85,6 +87,40 @@ for (const stop of ["close", "abort"] as const) {
     assert.equal(fake.streams.size, 0);
   });
 }
+
+it("keeps the reconnected event stream when one session's gap reconcile fails", async () => {
+  const sse = (...events: unknown[]) => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""));
+  const connected = { type: "server.connected", data: {} };
+  let connections = 0;
+  const raw = async (_method: string, _path: string, _body: unknown, signal: AbortSignal) => {
+    connections += 1;
+    if (connections === 1) return sse(connected);
+    if (connections === 2) return sse(connected, { type: "session.status", data: { sessionID: "ses_b" } });
+    return await new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(new Error("closed"))));
+  };
+  // Only the client's raw stream is used by the hub.
+  const hub = new EventHub({ client: { raw } } as unknown as EndpointLease, 1);
+  const received: string[] = [];
+  let failingGaps = 0;
+  await hub.subscribe("ses_a", () => {}, async () => { failingGaps += 1; throw new Error("reconcile failed"); });
+  await hub.subscribe("ses_b", (e) => received.push(e.type), async () => {});
+  await waitFor(() => received.length > 0);
+  assert.deepEqual(received, ["session.status"]);
+  assert.ok(failingGaps >= 1);
+  hub.close();
+});
+
+it("clears queued requests without showing each one as it goes", () => {
+  const events: HarnessMessage[] = [];
+  const inputs = new PendingInputCoordinator((e) => events.push(e), async () => {});
+  for (const id of ["per_1", "per_2", "per_3"]) {
+    inputs.add({ kind: "permission", value: { id, sessionID: "ses_1", action: "bash", resources: ["ls"] } });
+  }
+  events.length = 0;
+  inputs.clear();
+  assert.deepEqual(events, [{ type: "pending_input_resolved", requestId: "per_1" }]);
+  assert.equal(inputs.pending, false);
+});
 
 it("lets a rejected multi-field form correct its first answer and conditional fields", async () => {
   const events: HarnessMessage[] = [];
