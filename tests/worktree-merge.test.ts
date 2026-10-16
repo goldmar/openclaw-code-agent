@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { describeMergeType, mergeBranch } from "../src/worktree-merge";
+import { describeMergeType, getDiffSummary, mergeBranch } from "../src/worktree-merge";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -113,9 +113,54 @@ describe("mergeBranch", () => {
       assert.equal(result.success, false);
       assert.equal(result.rebaseConflict, true);
       assert.equal(git(repoDir, "branch", "--show-current"), "main");
+      assert.equal(result.warnings, undefined);
       assert.equal(git(worktreePath, "status", "--porcelain"), "", "the aborted rebase leaves the worktree clean");
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("rebase warnings and diff summaries", () => {
+  it("warns that a pushed branch was rewritten only when the rebase happened", async () => {
+    const repoDir = createRepo();
+    const worktreePath = join(mkdtempSync(join(tmpdir(), "openclaw-merge-published-wt-")), "wt");
+    try {
+      git(repoDir, "worktree", "add", "-b", "feature", worktreePath);
+      writeFileSync(join(worktreePath, "file.txt"), "feature\n", "utf-8");
+      git(worktreePath, "commit", "-am", "feature change");
+      // A remote-tracking copy marks the branch as pushed.
+      git(repoDir, "update-ref", "refs/remotes/origin/feature", "feature");
+      writeFileSync(join(repoDir, "file.txt"), "main\n", "utf-8");
+      git(repoDir, "commit", "-am", "conflicting main change");
+
+      const conflict = await mergeBranch(repoDir, "feature", "main", "merge", worktreePath);
+      assert.equal(conflict.rebaseConflict, true);
+      assert.ok(!conflict.warnings?.some((warning) => warning.includes("rewrote its commits")));
+
+      git(repoDir, "reset", "--hard", "HEAD~1");
+      writeFileSync(join(repoDir, "local.txt"), "main\n", "utf-8");
+      git(repoDir, "commit", "-am", "independent main change");
+      const merged = await mergeBranch(repoDir, "feature", "main", "merge", worktreePath);
+      assert.equal(merged.success, true);
+      assert.ok(merged.warnings?.some((warning) => warning.includes("rewrote its commits")));
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a commit subject that contains a pipe intact", async () => {
+    const repoDir = createRepo();
+    try {
+      git(repoDir, "checkout", "-b", "feature");
+      writeFileSync(join(repoDir, "file.txt"), "feature\n", "utf-8");
+      git(repoDir, "commit", "-am", "parse a | b");
+      const summary = await getDiffSummary(repoDir, "feature", "main");
+      assert.equal(summary?.commitMessages[0]?.message, "parse a | b");
+      assert.equal(summary?.commitMessages[0]?.author, "Test User");
+    } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });

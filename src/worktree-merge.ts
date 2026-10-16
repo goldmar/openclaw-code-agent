@@ -100,14 +100,15 @@ export async function getDiffSummary(
       .map((line) => line.trim())
       .filter(Boolean);
 
-    const logResult = await runGit(["-C", repoDir, "log", `${baseRef}..${branchRef}`, "--format=%h|%s|%an", "-n", "5"], { timeout: 10_000 });
+    const logResult = await runGit(["-C", repoDir, "log", `${baseRef}..${branchRef}`, "--format=%h%x1f%s%x1f%an", "-n", "5"], { timeout: 10_000 });
 
     const commitMessages = logResult
       .trim()
       .split("\n")
       .filter(Boolean)
       .map((line) => {
-        const [hash, message, author] = line.split("|");
+        // A unit separator: a commit subject may contain "|".
+        const [hash, message, author] = line.split("\x1f");
         return { hash: hash || "", message: message || "", author: author || "" };
       });
 
@@ -244,11 +245,7 @@ async function mergeBranchLocked(
   try {
     // 1. `merge`: make the branch contain base, rebasing only when needed.
     if (strategy === "merge" && !(await isAncestor(repoDir, baseRef, branchRef))) {
-      if (await isBranchPublished(repoDir, branch)) {
-        warnings.push(
-          `${branch} was already pushed; rebasing it onto ${base} rewrote its commits, so the remote copy of ${branch} still has the old ones.`,
-        );
-      }
+      const published = await isBranchPublished(repoDir, branch);
       // Rebase only where the branch itself is checked out: the session
       // worktree may have been switched to another branch meanwhile.
       const sessionWorktree = worktreePath && existsSync(worktreePath) && await getBranchName(worktreePath) === branch
@@ -293,6 +290,12 @@ async function mergeBranchLocked(
         });
       } finally {
         if (temporaryWorktree) await removeTemporaryWorktree(repoDir, temporaryWorktree);
+      }
+      // Only a rebase that happened rewrote the commits.
+      if (published) {
+        warnings.push(
+          `${branch} was already pushed; rebasing it onto ${base} rewrote its commits, so the remote copy of ${branch} still has the old ones.`,
+        );
       }
     }
 
