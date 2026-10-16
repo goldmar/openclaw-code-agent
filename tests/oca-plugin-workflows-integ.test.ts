@@ -12,7 +12,6 @@ import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
 import { executeRespond } from "../src/actions/respond";
 import { createStubSession } from "./helpers";
-import type { PersistedSessionInfo } from "../src/types";
 
 type DispatchCall = [session: Record<string, unknown>, request: Record<string, any>];
 

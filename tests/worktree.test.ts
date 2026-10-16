@@ -6,9 +6,6 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { basename, join } from "path";
 import { tmpdir } from "os";
 
-// Mock execFileSync for testing
-const originalExecFileSync = execFileSync;
-
 describe("worktree utilities", () => {
   it("should export required functions", async () => {
     const worktree = await import("../src/worktree.js");

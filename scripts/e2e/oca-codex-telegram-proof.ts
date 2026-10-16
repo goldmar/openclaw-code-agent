@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   accessSync,
   chmodSync,

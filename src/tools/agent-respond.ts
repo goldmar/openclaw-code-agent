@@ -1,6 +1,6 @@
 import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
-import { sessionToolError, unknownSessionError } from "./session-tool-error";
+import { sessionToolError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";

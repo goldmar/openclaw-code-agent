@@ -25,7 +25,6 @@ import type {
 import { OpenCodeHarness } from "../src/harness/opencode";
 import { OpenCodeFakeServer } from "./opencode-fake-server";
 import type { AgentHarness } from "../src/harness/types";
-import { checkProtocol, openCodeEventErrors, openCodeRequestErrors, openCodeResponseErrors } from "./protocol-schema";
 import {
   CODEX_FIXTURE_CWD,
   CodexProtocolChecker,
