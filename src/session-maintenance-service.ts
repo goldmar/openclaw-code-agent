@@ -1,4 +1,5 @@
 import { existsSync, unlinkSync } from "fs";
+import { resolve } from "path";
 
 import { pluginConfig } from "./config";
 import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
@@ -187,13 +188,20 @@ export class SessionMaintenanceService {
 
     try {
       if (!session.worktreePath) return;
-      // A worktree that is already gone only needs its metadata cleared; without
-      // this, every maintenance tick retried (and warned about) the removal.
-      if (existsSync(session.worktreePath)) {
+      const owner = this.otherWorktreeOwner(session);
+      // The session was resumed and works in this worktree again.
+      if (owner === "self-active") return;
+      if (owner === "other") {
+        // A newer session reuses this path (and usually the same agent/<name>
+        // branch): it is not this row's worktree any more. Forget it, keep it.
+        log.info(`[SessionManager] Worktree ${session.worktreePath} now belongs to another session; clearing only the stale metadata`);
+      } else if (existsSync(session.worktreePath)) {
         const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
         if (!repoDir || this.disposed) return;
         if (!(await removeWorktree(repoDir, session.worktreePath))) return;
       } else {
+        // A worktree that is already gone only needs its metadata cleared; without
+        // this, every maintenance tick retried (and warned about) the removal.
         const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
         if (this.disposed) return;
         // Best effort: drop git's stale registration when the repository is known.
@@ -221,6 +229,27 @@ export class SessionMaintenanceService {
     } catch (err) {
       log.warn(`[SessionManager] Failed maintenance cleanup for worktree ${session.worktreePath}: ${errorMessage(err)}`);
     }
+  }
+
+  /**
+   * Who else uses this row's worktree path: the same session running again, or
+   * another session (live or persisted) that was given the same path.
+   */
+  private otherWorktreeOwner(session: PersistedSessionInfo): "self-active" | "other" | undefined {
+    const path = session.worktreePath && resolve(session.worktreePath);
+    if (!path) return undefined;
+    const isSelf = (candidate: { sessionId?: string; harnessSessionId?: string }): boolean => (
+      session.sessionId ? candidate.sessionId === session.sessionId : candidate.harnessSessionId === session.harnessSessionId
+    );
+    for (const active of this.deps.sessions.values()) {
+      if (!active.worktreePath || resolve(active.worktreePath) !== path) continue;
+      if (!isSelf({ sessionId: active.id, harnessSessionId: active.harnessSessionId })) return "other";
+      if (active.status === "starting" || active.status === "running") return "self-active";
+    }
+    for (const row of this.deps.store.listPersistedSessions()) {
+      if (row.worktreePath && resolve(row.worktreePath) === path && !isSelf(row)) return "other";
+    }
+    return undefined;
   }
 
   syncActionTokenExpiryDeadline(): void {
