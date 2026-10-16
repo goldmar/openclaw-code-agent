@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the rows (and output files) of running and crash-recovered sessions when the persisted-session cap evicts old rows; rows without a completion time were evicted first.
+- A failed `agent_respond approve=true` no longer leaves the permission switch queued, so a later plain message cannot silently approve the plan in `bypassPermissions` mode.
+- A throwing bookkeeping hook after a successful delivery no longer retries (and re-delivers) the message; the hook failure is logged.
+- Discarding an already merged or released session no longer removes the worktree and branch that a newer session with the same name may now use.
+- `agent_worktree_cleanup` reports a worktree it could not remove instead of clearing its metadata; discarding a locked worktree also removes its git registration, so its branch is deleted.
+- Remote URLs with credentials (`https://x-access-token:…@github.com/…`) and `ssh://` remotes: the token no longer reaches the stored repo policy or the `Remote:` line, and such GitHub remotes keep PR support. A policy stored under a credential-bearing key is asked for once more.
+- Goal repository-identity checks allow 10 s instead of 1 s for `git rev-parse`, so a slow Git call on a busy host no longer fails the goal.
+- OpenCode: clearing several queued permission/form requests no longer re-shows each one, and one session's failed reconcile after a reconnect no longer drops the event stream of the other sessions on that server.
+- The merge's "rebasing rewrote its commits" warning appears only after a rebase ran; commit subjects containing `|` show correctly in worktree summaries; session names ending in `.lock` get a valid branch name.
+- No unhandled rejections from a failed lifecycle-abort stop, a failed goal plan-decision recheck, or maintenance syncs started during shutdown.
+- `getHarnessConfig` no longer restores the built-in model allowlist that a custom `defaultModel` cleared (it only affected the Codex unknown-model warning).
+
+### Changed
+
+- Branch names that `git check-ref-format` accepted are remembered, which removes most validation processes from merge, PR and status checks (the git-heavy test files run about 30% faster).
+
 ## [6.0.0] - 2026-10-14
 
 ### Breaking
