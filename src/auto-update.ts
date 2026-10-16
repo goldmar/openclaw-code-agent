@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import { pluginConfig } from "./config";
-import { routeFromOriginMetadata, type SessionRouteSource } from "./session-route";
+import { isInternalChatProvider, routeFromOriginMetadata, type SessionRouteSource } from "./session-route";
 import type { SessionActionKind, SessionActionToken, SessionRoute } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
@@ -469,8 +469,12 @@ export class AutoUpdateService {
     if (!isNewerStableVersion(latestVersion, this.options.currentVersion)) return;
     if (!this.shouldPromptForVersion(state, latestVersion)) return;
 
-    const route = routeToNotificationRoute(context.route ?? fallbackRoute());
-    if (!route) return;
+    let route = routeToNotificationRoute(context.route ?? fallbackRoute());
+    // WebChat cannot show the prompt's buttons, so every send there fails and
+    // nothing records the attempt: each later call would retry (and mint new
+    // action tokens). Ask in the fallback channel instead, or not at all.
+    if (route && isInternalChatProvider(route.channel)) route = routeToNotificationRoute(fallbackRoute());
+    if (!route || isInternalChatProvider(route.channel)) return;
 
     // The due "Remind later" this prompt answers (if any); captured before the send
     // so a new Remind later pressed while the prompt is in flight is kept.
