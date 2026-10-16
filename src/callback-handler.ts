@@ -396,10 +396,6 @@ function validatePlanDecisionToken(
     return "This plan is no longer awaiting approval.";
   }
 
-  if (token.kind === "plan-approve" && session.approvalState === "changes_requested" && !session.pendingPlanApproval) {
-    return "Changes were already requested for this plan. Wait for the revised plan before approving.";
-  }
-
   if (token.kind === "plan-request-changes" && session.approvalState === "changes_requested") {
     return "Changes were already requested for this plan. Send your feedback to the agent instead.";
   }

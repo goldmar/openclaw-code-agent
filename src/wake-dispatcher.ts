@@ -175,10 +175,6 @@ export class WakeDispatcher {
     this.systemEvents = options.systemEvents ?? new RuntimeSystemEventTransport();
   }
 
-  clearPendingRetries(): void {
-    this.executor.clearPendingRetries();
-  }
-
   clearRetryTimersForSession(sessionId: string): void {
     this.executor.clearRetryTimersForSession(sessionId);
   }

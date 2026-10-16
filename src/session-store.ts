@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import { existsSync, statSync, writeFileSync } from "fs";
 import type {
   PersistedSessionInfo,
-  RepoIntegrationPolicy,
   RepoPolicyRecord,
   SessionStatus,
   SessionActionToken,
@@ -1007,12 +1006,6 @@ export class SessionStore {
     this.repoPolicies.set(next.key, next);
     this.saveIndex();
     return next;
-  }
-
-  updateRepoPolicy(key: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
-    const existing = this.repoPolicies.get(key);
-    if (!existing) return undefined;
-    return this.setRepoPolicy({ ...existing, policy });
   }
 
   resetRepoPolicy(key: string): boolean {

@@ -16,10 +16,7 @@ export type { OpenCodeServerStartOptions } from "./endpoint-private";
 export type { OpenCodeServerHandle } from "./endpoint";
 export { isConnectionResetError } from "./errors";
 export { candidateSearchPaths, resolveCommandPath } from "./command";
-export {
-  rulesForMode as permissionRulesForMode,
-  agentForMode as openCodeAgentForMode,
-} from "./permissions";
+export { rulesForMode as permissionRulesForMode } from "./permissions";
 export type OpenCodeHarnessDeps = ConstructorParameters<
   typeof PrivateEndpoint
 >[0] & {
