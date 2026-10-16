@@ -258,9 +258,7 @@ export class WakeDeliveryExecutor {
             maxAttempts: WAKE_MAX_ATTEMPTS,
             elapsedMs,
           });
-          if (opts.shouldContinue?.() !== false) {
-            opts.onSuccess?.();
-          }
+          this.runSuccessHook(opts);
           onSettled?.();
           return;
         }
@@ -442,9 +440,7 @@ export class WakeDeliveryExecutor {
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
         });
-        if (opts.shouldContinue?.() !== false) {
-          opts.onSuccess?.();
-        }
+        this.runSuccessHook(opts);
         onSettled?.();
       })
       .catch((err) => {
@@ -533,6 +529,22 @@ export class WakeDeliveryExecutor {
         }
         this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
       });
+  }
+
+  /**
+   * The delivery succeeded; a throwing bookkeeping hook must not turn that
+   * into a delivery failure, which would retry and deliver the message again.
+   */
+  private runSuccessHook(opts: ExecuteOptions): void {
+    if (opts.shouldContinue?.() === false) return;
+    try {
+      opts.onSuccess?.();
+    } catch (err) {
+      this.log("error", "dispatch_success_hook_failed", {
+        label: opts.label, sessionId: opts.sessionId, target: opts.target,
+        phase: opts.phase, error: errorMessage(err),
+      });
+    }
   }
 
   /** Unknown delivery stays terminal even if caller bookkeeping fails. */

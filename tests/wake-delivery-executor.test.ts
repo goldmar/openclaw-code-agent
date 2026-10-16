@@ -42,6 +42,42 @@ describe("WakeDeliveryExecutor", () => {
     console.error = originalConsoleError;
   });
 
+  it("delivers once when the success hook throws, and logs the hook failure", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    const errors: string[] = [];
+    t.mock.method(console, "error", (message?: unknown, ...rest: unknown[]) => {
+      errors.push([message, ...rest].map((value) => String(value)).join(" "));
+    });
+    let deliveries = 0;
+    let finalFailures = 0;
+    let settled!: () => void;
+    const done = new Promise<void>((resolve) => { settled = resolve; });
+
+    executor.executePromise(
+      async () => { deliveries += 1; },
+      {
+        label: "interactive-notify",
+        sessionId: "session-hook-throws",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "telegram|12345",
+        messageKind: "notify",
+        onSuccess: () => {
+          setImmediate(settled);
+          throw new Error("bookkeeping failed");
+        },
+        onFinalFailure: () => { finalFailures += 1; },
+      },
+    );
+    await done;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(deliveries, 1);
+    assert.equal(finalFailures, 0);
+    assert.ok(errors.some((line) => line.includes("dispatch_success_hook_failed")));
+    executor.dispose();
+  });
+
   it("times out hung promise dispatches and exhausts retries", async () => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];
