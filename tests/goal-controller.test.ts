@@ -69,6 +69,29 @@ async function buildTask(overrides: Partial<GoalTaskState> = {}): Promise<GoalTa
 }
 
 describe("GoalController", () => {
+  it("logs a failed plan-decision recheck instead of leaving an unhandled rejection", async (t) => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: (): undefined => undefined } as any);
+    (controller as any).store = createStore();
+    (controller as any).restoreRecoverableTasks = async () => {};
+    controller.start();
+    (controller as any).planDecisionRecheckMs = 1;
+    (controller as any).store.get = () => { throw new Error("goal store unreadable"); };
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); });
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => { rejections.push(reason); };
+    process.on("unhandledRejection", onRejection);
+    try {
+      (controller as any).schedulePlanDecisionRecheck("goal-1", createStubSession());
+      await waitUntil(() => warnings.some((line) => line.includes("goal store unreadable")));
+      await tick(5);
+      assert.deepEqual(rejections, []);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      controller.stop();
+    }
+  });
+
   it("waits for recoverable-task restoration before finishing startup", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: (): undefined => undefined } as any);
     const store = createStore();

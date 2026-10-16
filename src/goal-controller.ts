@@ -1289,27 +1289,34 @@ export class GoalController {
   private schedulePlanDecisionRecheck(taskId: string, suspended: Session): void {
     const generation = this.generation;
     if (!this.started || !this.isCurrent(generation)) return;
-    const timer = setTimeout(async () => {
-      if (!this.isCurrent(generation)) return;
-      const task = this.store.get(taskId);
-      if (!task || task.status !== "waiting_for_plan_approval" || !task.sessionId) return;
-      { let authorization; do { authorization = await this.checkTaskAuthorized(task); } while (authorization && !authorization.isCurrent()); if (!authorization) return; }
-      const current = this.sessionManager.resolve(task.sessionId);
-      if (current && current !== suspended && (current.status === "starting" || current.status === "running")) {
-        this.attachSessionObservers(task, current);
-        const assigned = await this.setTaskRunningWithSession(task, current);
-        if (!assigned?.isCurrent()) return;
-        this.scheduleTaskEvaluation(task.id, "plan-decision-resumed", current.id);
-        return;
-      }
-      const persisted = this.sessionManager.getPersistedSession(task.sessionId);
-      if (persisted?.approvalState === "rejected") {
-        this.markTaskStopped(task, "The plan was rejected.");
-        return;
-      }
-      this.schedulePlanDecisionRecheck(taskId, suspended);
+    const timer = setTimeout(() => {
+      // A timer callback has no caller to report to: log a failed check.
+      this.recheckPlanDecision(taskId, suspended, generation).catch((err: unknown) => {
+        log.warn(`Plan-decision recheck for goal ${taskId} failed: ${errorMessage(err)}`);
+      });
     }, this.planDecisionRecheckMs);
     timer.unref?.();
+  }
+
+  private async recheckPlanDecision(taskId: string, suspended: Session, generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) return;
+    const task = this.store.get(taskId);
+    if (!task || task.status !== "waiting_for_plan_approval" || !task.sessionId) return;
+    { let authorization; do { authorization = await this.checkTaskAuthorized(task); } while (authorization && !authorization.isCurrent()); if (!authorization) return; }
+    const current = this.sessionManager.resolve(task.sessionId);
+    if (current && current !== suspended && (current.status === "starting" || current.status === "running")) {
+      this.attachSessionObservers(task, current);
+      const assigned = await this.setTaskRunningWithSession(task, current);
+      if (!assigned?.isCurrent()) return;
+      this.scheduleTaskEvaluation(task.id, "plan-decision-resumed", current.id);
+      return;
+    }
+    const persisted = this.sessionManager.getPersistedSession(task.sessionId);
+    if (persisted?.approvalState === "rejected") {
+      this.markTaskStopped(task, "The plan was rejected.");
+      return;
+    }
+    this.schedulePlanDecisionRecheck(taskId, suspended);
   }
 
   private async handleTerminalSession(task: GoalTaskState, session: Session, generation = this.generation): Promise<void> {
