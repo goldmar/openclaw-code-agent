@@ -12,9 +12,40 @@ export function repoHookGitArgs(): string[] {
   return pluginConfig.worktreeGitHooks === "skip" ? ["-c", "core.hooksPath=/dev/null"] : [];
 }
 
-/** Hook and worktree-provisioning locations a branch must not change without the user's consent. */
-const HOOK_DIRECTORY_PREFIXES = [".husky/", ".githooks/"];
-const HOOK_FILES = [".openclaw/worktree-setup.sh", ".worktreeinclude"];
+/**
+ * Hook and worktree-provisioning locations a branch must not change without
+ * the user's consent. Repo-relative paths, matched exactly (files) or as a
+ * leading directory (prefixes); a same-named file anywhere else is not a hook
+ * configuration.
+ *
+ * - husky: `.husky/`; plain git hook directories: `.githooks/`.
+ * - lefthook: its scripts directories `.lefthook/` and `.lefthook-local/`,
+ *   and every config name it looks up (lefthook docs, "Config file name"):
+ *   `lefthook`, `.lefthook` and `.config/lefthook` with the extensions
+ *   yml, yaml, toml, json and jsonc, and the same names for `lefthook-local`.
+ * - pre-commit: `.pre-commit-config.yaml` and `.pre-commit-config.yml`.
+ * - OCA worktree provisioning: `.openclaw/worktree-setup.sh`, `.worktreeinclude`.
+ */
+const HOOK_DIRECTORY_PREFIXES = [".husky/", ".githooks/", ".lefthook/", ".lefthook-local/"];
+const LEFTHOOK_CONFIG_FILES = ["lefthook", "lefthook-local"].flatMap((name) =>
+  ["yml", "yaml", "toml", "json", "jsonc"].flatMap((extension) => [
+    `${name}.${extension}`,
+    `.${name}.${extension}`,
+    `.config/${name}.${extension}`,
+  ]),
+);
+const HOOK_FILES = new Set([
+  ".openclaw/worktree-setup.sh",
+  ".worktreeinclude",
+  ".pre-commit-config.yaml",
+  ".pre-commit-config.yml",
+  ...LEFTHOOK_CONFIG_FILES,
+]);
+
+/** Whether a repo-relative path (git's `/` separators) is a hook or worktree-provisioning location. */
+export function isHookPath(path: string, extraPrefixes: readonly string[] = []): boolean {
+  return HOOK_FILES.has(path) || [...HOOK_DIRECTORY_PREFIXES, ...extraPrefixes].some((prefix) => path.startsWith(prefix));
+}
 
 /** Repo-relative, slash-terminated directory of `core.hooksPath` when it lies inside the repository. */
 async function configuredHooksPrefix(repoDir: string): Promise<string | undefined> {
@@ -35,9 +66,9 @@ async function configuredHooksPrefix(repoDir: string): Promise<string | undefine
 }
 
 /**
- * Files changed on `branch` since it left `base` that are git hooks or OCA
- * worktree provisioning inputs: `.husky/`, `.githooks/`, the in-repo
- * `core.hooksPath` directory, `.openclaw/worktree-setup.sh`, `.worktreeinclude`.
+ * Files changed on `branch` since it left `base` that are git hooks, hook
+ * manager configuration or OCA worktree provisioning inputs (see
+ * `isHookPath`), plus the in-repo `core.hooksPath` directory.
  * A merge or PR carrying such a change runs code on the next git operation or
  * worktree creation, so it is never automatic.
  */
@@ -48,13 +79,12 @@ export async function listHookPathChanges(repoDir: string, branch: string, base:
     ["-C", repoDir, "diff", "--name-only", "--no-renames", "-z", `${baseRef}...${branchRef}`],
     { timeout: 15_000 },
   );
-  const prefixes = [...HOOK_DIRECTORY_PREFIXES];
   const configured = await configuredHooksPrefix(repoDir);
-  if (configured && !prefixes.includes(configured)) prefixes.push(configured);
+  const extraPrefixes = configured ? [configured] : [];
   return output
     .split("\0")
     .filter((path) => path.length > 0)
-    .filter((path) => HOOK_FILES.includes(path) || prefixes.some((prefix) => path.startsWith(prefix)))
+    .filter((path) => isHookPath(path, extraPrefixes))
     .sort();
 }
 

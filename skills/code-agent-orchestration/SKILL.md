@@ -59,7 +59,7 @@ You may approve, but only after you verify the plan: read it with `agent_output(
 - `delegate`: when the session finishes you get the diff. Merge in-scope, low-risk work with `agent_merge(ocaSessionId, summary='<one or two lines on what changed>')`; the summary is shown with the merge notice and replaces your follow-up. For a PR, a risky change or unclear scope use `agent_escalate(ocaSessionId, kind='worktree', summary)`. Never call `agent_pr` yourself in delegate mode.
 - `ask`: the user gets Merge / Open PR / Later / Discard buttons. Merge or open a PR only when the user asks.
 - `manual`: the branch is kept; act only on the user's request. `auto-merge` / `auto-pr`: the plugin lands the branch. `off`: no worktree.
-- A branch that changes git hooks or worktree setup files (`.husky/`, `.githooks/`, `.openclaw/worktree-setup.sh`, `.worktreeinclude`) is never merged or turned into a PR automatically; the user decides.
+- A branch that changes git hooks, hook manager config or worktree setup files (`.husky/`, `.githooks/`, `.pre-commit-config.yaml`, lefthook config such as `lefthook.yml`, `.openclaw/worktree-setup.sh`, `.worktreeinclude`) is never merged or turned into a PR automatically; the user decides.
 - The repository policy (`pr-required`, `pr-allowed`, `never-pr`, `manual`) limits what is allowed. The first worktree launch in a repository asks the user; set it with `agent_repo_policy(workdir, policy)` only when they answer in chat.
 - `agent_worktree_status` shows each worktree's state (`released` means the content already landed). `agent_worktree_cleanup()` removes only safe worktrees; `agent_worktree_cleanup(ocaSessionId, dismiss_session=true)` discards one for good. Never use raw git merges or PR commands instead.
 
