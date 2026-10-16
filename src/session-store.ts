@@ -1057,10 +1057,15 @@ export class SessionStore {
 
   /** Enforce max persisted session retention by evicting oldest records and indexes. */
   evictOldestPersisted(maxPersistedSessions: number): PersistedSessionInfo[] {
-    const all = this.listPersistedSessions();
-    if (all.length <= maxPersistedSessions) return [];
+    if (this.persisted.size <= maxPersistedSessions) return [];
 
-    const toEvict = all.slice(maxPersistedSessions);
+    // Rows without completedAt (running, or recovered from a crash) are the
+    // newest, not the oldest: evicting them would drop live sessions and their
+    // output files first.
+    const completedAt = (row: PersistedSessionInfo): number => row.completedAt ?? Number.POSITIVE_INFINITY;
+    const toEvict = [...this.persisted.values()]
+      .sort((a, b) => completedAt(b) - completedAt(a))
+      .slice(maxPersistedSessions);
     for (const info of toEvict) {
       this.removePersistedIndexes(info);
     }
@@ -1104,10 +1109,7 @@ export class SessionStore {
   }
 
   hasOutputPathReference(outputPath: string): boolean {
-    for (const session of this.persisted.values()) {
-      if (session.outputPath === outputPath) return true;
-    }
-    return false;
+    return this.getReferencedOutputPaths().includes(outputPath);
   }
 
   /**
