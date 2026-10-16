@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenCode: clearing several queued permission/form requests no longer re-shows each one, and one session's failed reconcile after a reconnect no longer drops the event stream of the other sessions on that server.
 - The merge's "rebasing rewrote its commits" warning appears only after a rebase ran; commit subjects containing `|` show correctly in worktree summaries; session names ending in `.lock` get a valid branch name.
 - No unhandled rejections from a failed lifecycle-abort stop, a failed goal plan-decision recheck, or maintenance syncs started during shutdown.
+- Repository locks and the merge queue are per repository, however its directory is spelled (`/repo`, `/repo/`, a subdirectory, a symlink or a linked worktree), so two merges can no longer interleave in one checkout.
+- Retention cleanup of an old session no longer removes a worktree that a newer same-name session reuses, or one its own session was resumed in.
+- The update prompt is never sent to WebChat (which cannot show its buttons and made every call retry it); it goes to the fallback channel instead.
+- A button action that throws after its button was used now answers, and an open worktree decision is offered again with fresh buttons.
+- Wakes handed over during a Gateway stop record their delivery, so they are not delivered again after the restart.
+- A launch that fails after its worktree was created removes the worktree and branch again.
+- Only real rebase conflicts start a conflict resolver; other rebase failures (hooks, locks, timeouts) report their git error.
 - `getHarnessConfig` no longer restores the built-in model allowlist that a custom `defaultModel` cleared (it only affected the Codex unknown-model warning).
 
 ### Changed
