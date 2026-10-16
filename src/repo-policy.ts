@@ -114,12 +114,19 @@ async function readGit(cwd: string, args: string[]): Promise<string | undefined>
   }
 }
 
+/**
+ * A stable, credential-free form of a remote URL. User info (a token in
+ * `https://x-access-token:TOKEN@github.com/...`) is dropped: the result is
+ * persisted as part of the policy key and shown to the user.
+ */
 export function normalizeRemoteUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
   const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
-  const ssh = trimmed.match(/^git@([^:]+):(.+)$/);
+  const scp = trimmed.match(/^[^@/:]+@([^:/]+):(?!\/)(.+)$/);
+  if (scp) return `https://${scp[1].toLowerCase()}/${scp[2].toLowerCase()}`;
+  const ssh = trimmed.match(/^ssh:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i);
   if (ssh) return `https://${ssh[1].toLowerCase()}/${ssh[2].toLowerCase()}`;
-  const https = trimmed.match(/^https?:\/\/([^/]+)\/(.+)$/i);
+  const https = trimmed.match(/^https?:\/\/(?:[^@/]*@)?([^/]+)\/(.+)$/i);
   if (https) return `https://${https[1].toLowerCase()}/${https[2].toLowerCase()}`;
   return trimmed.toLowerCase();
 }

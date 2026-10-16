@@ -55,6 +55,12 @@ describe("repo policy resolution", () => {
     assert.equal(normalizeRemoteUrl("https://github.com/Goldmar/OpenClaw-Code-Agent.git/"), "https://github.com/goldmar/openclaw-code-agent");
     assert.equal(normalizeRemoteUrl("https://github.com/Goldmar/OpenClaw-Code-Agent/"), "https://github.com/goldmar/openclaw-code-agent");
     assert.equal(detectRepoProvider("https://github.com/goldmar/openclaw-code-agent"), "github");
+    // Credentials in a remote URL never reach the persisted policy key, and the remote stays a GitHub one.
+    assert.equal(normalizeRemoteUrl("https://x-access-token:SECRET@github.com/Goldmar/OpenClaw-Code-Agent.git"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("https://user@github.com/goldmar/openclaw-code-agent"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("ssh://git@github.com/goldmar/openclaw-code-agent.git"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("ssh://git@github.com:22/goldmar/openclaw-code-agent.git"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(detectRepoProvider("https://x-access-token:SECRET@github.com/goldmar/openclaw-code-agent"), "github");
     assert.equal(detectRepoProvider("https://gitlab.com/example/repo"), "unsupported");
   });
 
