@@ -21,6 +21,7 @@ import { createFakeHarness, tick } from "./helpers";
 import { executeRespond } from "../src/actions/respond";
 import type { SessionStore } from "../src/session-store";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+import { createWorktree } from "../src/worktree";
 import type { PersistedSessionInfo } from "../src/types";
 import type { NotificationButton } from "../src/session-interactions";
 
@@ -2472,6 +2473,40 @@ describe("SessionManager resumed launch routing", () => {
     await shutdown;
     assert.equal(launches, 0);
     assert.deepEqual(sm.list("all"), []);
+  });
+
+  it("removes the worktree it created when the launch fails before the session is registered", async () => {
+    const harness = createFakeHarness("failed-launch-worktree-harness");
+    registerHarness(harness);
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-failed-launch-"));
+    const sm = new SessionManager(5, 5);
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      const worktreePath = await createWorktree(repoDir, "failed-launch");
+      const realPrepare = (sm as any).restore.prepareSpawn.bind((sm as any).restore);
+      (sm as any).restore.prepareSpawn = async (...args: unknown[]) => ({
+        ...(await realPrepare(...args)),
+        actualWorkdir: worktreePath,
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranchName: "agent/failed-launch",
+      });
+
+      // No route: the launch fails after its worktree was prepared.
+      await assert.rejects(sm.launchSession({
+        prompt: "work",
+        workdir: repoDir,
+        harness: harness.name,
+        worktreeStrategy: "off",
+      } as any, { notifyLaunch: false }), /missing explicit route metadata/);
+
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(execFileSync("git", ["branch", "--list", "agent/failed-launch"], { cwd: repoDir, encoding: "utf-8" }).trim(), "");
+    } finally {
+      await sm.shutdown();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("waits for a terminal Codex owner to release its writer before starting a replacement resume", async () => {
