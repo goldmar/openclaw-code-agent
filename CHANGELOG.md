@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-10-16
+
 ### Changed
 
 - The hook-change check that keeps `auto-merge` / `auto-pr` from merging or opening a PR without asking now also covers pre-commit (`.pre-commit-config.yaml`, `.pre-commit-config.yml`) and lefthook (every config name lefthook reads, such as `lefthook.yml`, `.lefthook.yaml`, `.config/lefthook.toml` and `lefthook-local.yml`, and its `.lefthook/` and `.lefthook-local/` script directories), next to husky's `.husky/`. Paths match exactly from the repository root, so a `docs/lefthook.yml` does not ask.
+- Branch names that `git check-ref-format` accepted are remembered, which removes most validation processes from merge, PR and status checks (the git-heavy test files run about 30% faster).
 
 ### Fixed
 
@@ -33,9 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Only real rebase conflicts start a conflict resolver; other rebase failures (hooks, locks, timeouts) report their git error.
 - `getHarnessConfig` no longer restores the built-in model allowlist that a custom `defaultModel` cleared (it only affected the Codex unknown-model warning).
 
-### Changed
+### Verification and compatibility
 
-- Branch names that `git check-ref-format` accepted are remembered, which removes most validation processes from merge, PR and status checks (the git-heavy test files run about 30% faster).
+- No breaking changes and no config migration. Keep the OpenClaw 2026.10.1 build/SDK target and installation minimum, the 2026.9.7 public API/Gateway/npm peer floor, the OpenCode `>= 2.0.25` (2.x) requirement, and the supported Node floors 24.16.0 and 26.1.0 (#554, #555).
 
 ## [6.0.0] - 2026-10-14
 
