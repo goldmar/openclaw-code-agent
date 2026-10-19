@@ -84,8 +84,6 @@ describe("packed-plugin environment isolation", () => {
 
   it("explicitly acknowledges OpenClaw local-archive provenance without changing the source", () => {
     assert.deepEqual(buildPackedPluginInstallArgs("/tmp/reviewed-plugin.tgz"), [
-      "exec",
-      "openclaw",
       "plugins",
       "install",
       "/tmp/reviewed-plugin.tgz",

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateOpenClawSdkPins } from "../scripts/lib/openclaw-sdk.mjs";
 import { validateNpmShrinkwrap } from "../scripts/check-npm-shrinkwrap.mjs";
 import {
   compareReleases,
@@ -85,15 +86,11 @@ describe("dependency artifact policy", () => {
     assert.throws(() => validateNpmShrinkwrap(fixtureDir), /override "hono@<4\.13\.5: 4\.13\.7" must be/u);
   });
 
-  it("keeps the exact OpenClaw build target resolution in the generated pnpm lockfile", () => {
-    const lockfile = read("pnpm-lock.yaml");
-    const packageJson = JSON.parse(read("package.json")) as { openclaw?: { build?: { openclawVersion?: string } } };
-    const target = packageJson.openclaw?.build?.openclawVersion ?? "";
-    const version = target.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-
-    assert.match(target, /^\d{4}\.\d+\.\d+$/u);
-    assert.match(lockfile, new RegExp(`openclaw:\\n\\s+specifier: ${version}\\n\\s+version: ${version}`));
-    assert.match(lockfile, new RegExp(`'@openclaw/ai@${version}':`));
+  it("keeps independent exact OpenClaw baseline and dev resolutions in the generated lockfile", () => {
+    const pkg = JSON.parse(read("package.json"));
+    const versions = validateOpenClawSdkPins(pkg, read("pnpm-lock.yaml"));
+    assert.equal(versions.baseline, pkg.openclaw.build.openclawVersion);
+    assert.equal(versions.dev, pkg.devDependencies.openclaw);
   });
 
   it("rejects generated shrinkwrap engine metadata that drifts from package.json", (t) => {

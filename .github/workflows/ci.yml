@@ -66,9 +66,21 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
-      - name: Verify target OpenClaw runtime compatibility
+      - name: Verify development OpenClaw SDK types and exports
+        run: pnpm typecheck:dev
+
+      - name: Verify baseline OpenClaw runtime compatibility
         timeout-minutes: 10
-        run: pnpm verify:openclaw-compat -- --gateway
+        run: pnpm verify:openclaw-compat -- --sdk=baseline --gateway
+
+      - name: Verify development OpenClaw runtime compatibility
+        timeout-minutes: 10
+        run: pnpm verify:openclaw-compat -- --sdk=dev --gateway
+
+      - name: Verify packed plugin on the baseline host
+        if: matrix.node-version == env.REPORT_NODE_VERSION
+        timeout-minutes: 10
+        run: pnpm check-plugin-security -- --sdk=baseline
 
       - name: Measure bundle size
         if: matrix.node-version == env.REPORT_NODE_VERSION

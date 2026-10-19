@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createIsolatedOpenClawEnv, validatePackedPluginRuntime } from "./check-plugin-security.mjs";
 import { createCronCompatibilityProvider } from "./lib/openclaw-compatibility-cron.mjs";
+import { openClawSdkRole, selectOpenClawSdk, validateOpenClawSdkPins } from "./lib/openclaw-sdk.mjs";
 import { redactProofValue } from "./lib/proof-redaction.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -65,8 +66,10 @@ export async function withCompatibilityProvider(config, configPath, runGateway,
 }
 
 /** Explicit negative runs may use any older released host, but cannot certify a target. */
-export function validateCompatibilityHost(pkg, hostVersion, expectHostMinimumRejection = false) {
-  const target = pkg.openclaw.build.openclawVersion;
+export function validateCompatibilityHost(pkg, hostVersion, expectHostMinimumRejection = false, sdkRole = "baseline") {
+  const versions = validateOpenClawSdkPins(pkg);
+  assert.ok(sdkRole === "baseline" || sdkRole === "dev", "unknown SDK role");
+  const target = pkg.openclaw.install.minHostVersion.slice(2);
   if (expectHostMinimumRejection) {
     const parse = (value) => {
       assert.match(value, /^\d{4}\.\d+\.\d+$/u, "negative host checks require exact stable versions");
@@ -77,8 +80,7 @@ export function validateCompatibilityHost(pkg, hostVersion, expectHostMinimumRej
     const difference = older.map((part, index) => part - newer[index]).find((part) => part !== 0);
     assert.ok(difference < 0, "host minimum rejection requires a host older than the target");
   } else {
-    assert.ok([target, pkg.openclaw.compat.minGatewayVersion].includes(hostVersion),
-      "host must match the exact target or declared compatibility floor");
+    assert.equal(hostVersion, versions[sdkRole], "host must match the explicitly selected SDK version");
   }
 }
 
@@ -120,19 +122,21 @@ async function freePort() {
 async function main() {
   const args = process.argv.slice(process.argv[2] === "--" ? 3 : 2);
   assert.ok(args.every((arg, index) => arg === "--gateway" || arg === "--host-root"
-    || arg === "--expect-host-minimum-rejection"
+    || arg === "--expect-host-minimum-rejection" || arg.startsWith("--sdk=")
     || (index > 0 && args[index - 1] === "--host-root")),
-  "usage: [--gateway] [--host-root PATH] [--expect-host-minimum-rejection]");
+  "usage: [--sdk=baseline|dev] [--gateway] [--host-root PATH] [--expect-host-minimum-rejection]");
   const hostArg = args.indexOf("--host-root");
   if (hostArg >= 0) assert.ok(args[hostArg + 1] && !args[hostArg + 1].startsWith("--"));
-  const hostRoot = resolve(hostArg >= 0 ? args[hostArg + 1] : join(root, "node_modules/openclaw"));
+  const sdkRole = openClawSdkRole(args);
+  const hostRoot = resolve(hostArg >= 0 ? args[hostArg + 1] : selectOpenClawSdk(sdkRole).root);
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const manifest = JSON.parse(await readFile(join(root, "openclaw.plugin.json"), "utf8"));
   const host = JSON.parse(await readFile(join(hostRoot, "package.json"), "utf8"));
   const expectHostMinimumRejection = args.includes("--expect-host-minimum-rejection");
   assert.ok(!expectHostMinimumRejection || hostArg >= 0, "negative host checks require --host-root");
   assert.ok(!expectHostMinimumRejection || !args.includes("--gateway"), "negative host checks do not start a Gateway");
-  validateCompatibilityHost(pkg, host.version, expectHostMinimumRejection);
+  assert.equal(host.name, "openclaw", "compatibility host must be the real OpenClaw package");
+  validateCompatibilityHost(pkg, host.version, expectHostMinimumRejection, sdkRole);
   const cli = join(hostRoot, "openclaw.mjs");
   const temp = await mkdtemp(join(tmpdir(), "oca-host-compat-"));
   const results = [];
@@ -143,9 +147,8 @@ async function main() {
     const packed = JSON.parse(pack.stdout)[0];
     const tarball = join(temp, packed.filename);
     const digest = createHash("sha256").update(await readFile(tarball)).digest("hex");
-    const scenarios = host.version === pkg.openclaw.build.openclawVersion
-      ? ["default", "offer-enabled", "invalid-api", "incompatible-api"]
-      : ["host-minimum"];
+    const scenarios = expectHostMinimumRejection ? ["host-minimum"]
+      : ["default", "offer-enabled", "invalid-api", "incompatible-api"];
     for (const scenario of scenarios) {
       stage = scenario;
       const directory = join(temp, scenario);
@@ -261,8 +264,9 @@ async function main() {
       }
       results.push({ scenario, status: "passed" });
     }
-    console.log(JSON.stringify({ hostVersion: host.version, packageVersion: pkg.version, tarballSha256: digest,
-      gatewayChecked: args.includes("--gateway") && host.version === pkg.openclaw.build.openclawVersion, results }, null, 2));
+    console.log(JSON.stringify({ sdkRole, buildBaseline: pkg.openclaw.build.openclawVersion,
+      hostVersion: host.version, packageVersion: pkg.version, tarballSha256: digest,
+      gatewayChecked: args.includes("--gateway") && !expectHostMinimumRejection, results }, null, 2));
   } catch (error) {
     // Opt-in private diagnostics for isolated fixture failures; never forward
     // raw subprocess output to CI or chat (it may include profile/auth data).
