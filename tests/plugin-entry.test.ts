@@ -8,6 +8,7 @@ import {
   normalizeOpenClawTargetVersion,
   validateReleaseMetadata,
 } from "../scripts/validate-release-metadata.mjs";
+import { selectOpenClawSdk, validateOpenClawSdkPins } from "../scripts/lib/openclaw-sdk.mjs";
 import { PINNED_RUNTIME_DEPENDENCIES, pinnedRuntimeVersions } from "../scripts/lib/runtime-dependency-pins.mjs";
 import { register, routeFromInteractiveContext } from "../index";
 import { autoUpdateService, goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
@@ -194,7 +195,8 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.build?.openclawVersion, openclawTarget);
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, openclawTarget);
     assert.equal(packageJson.peerDependencies?.openclaw, `>=${openclawFloor}`);
-    assert.equal(packageJson.devDependencies?.openclaw, openclawTarget);
+    assert.equal(packageJson.devDependencies?.["openclaw-baseline"], `npm:openclaw@${openclawTarget}`);
+    assert.equal(validateOpenClawSdkPins(packageJson).baseline, openclawTarget);
     assert.equal(packageJson.engines?.node, ">=24.16.0 <25 || >=26.1.0");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
@@ -637,7 +639,7 @@ describe("plugin entry source", () => {
     assert.deepEqual(externals, [...runtimeImports].sort());
 
     // Every externalized subpath must be a public export of the minimum supported host.
-    const hostPackage = JSON.parse(readFileSync(join(rootDir, "node_modules", "openclaw", "package.json"), "utf8")) as {
+    const hostPackage = JSON.parse(readFileSync(join(selectOpenClawSdk("baseline").root, "package.json"), "utf8")) as {
       exports?: Record<string, unknown>;
     };
     for (const subpath of externals) {

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { openClawSdkRole, selectOpenClawSdk } from "./lib/openclaw-sdk.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
@@ -89,8 +90,6 @@ export function createIsolatedOpenClawEnv(profileDir, sourceEnv = process.env) {
 
 export function buildPackedPluginInstallArgs(tarballPath) {
   return [
-    "exec",
-    "openclaw",
     "plugins",
     "install",
     tarballPath,
@@ -139,6 +138,10 @@ function runCommand(command, args, options = {}) {
 }
 
 async function main() {
+  const args = process.argv.slice(2).filter((arg) => arg !== "--");
+  if (args.some((arg) => !arg.startsWith("--sdk="))) throw new Error("usage: [--sdk=baseline|dev]");
+  const sdk = selectOpenClawSdk(openClawSdkRole(args));
+  const hostCommand = (args, options = {}) => runCommand(process.execPath, [sdk.cli, ...args], options);
   const workspaceDir = resolve(rootDir);
   const packDir = await mkdtemp(join(tmpdir(), "openclaw-plugin-pack-"));
   const profileDir = await mkdtemp(join(tmpdir(), "openclaw-plugin-security-"));
@@ -171,7 +174,7 @@ async function main() {
     console.error(`Packed plugin tarball: ${tarballPath}`);
     console.error(`Checking packed plugin security via ${tarballPath}`);
 
-    const install = await runCommand("pnpm", buildPackedPluginInstallArgs(tarballPath), {
+    const install = await hostCommand(buildPackedPluginInstallArgs(tarballPath), {
       cwd: workspaceDir,
       env: isolatedEnv,
     });
@@ -183,11 +186,11 @@ async function main() {
 
     // Load the installed tarball through the actual published host, independently
     // of the dependency-graph consumer check (which intentionally uses a stub).
-    const enable = await runCommand("pnpm", ["exec", "openclaw", "plugins", "enable", pluginName], {
+    const enable = await hostCommand(["plugins", "enable", pluginName], {
       cwd: workspaceDir, env: isolatedEnv,
     });
     if (enable.code !== 0) throw new Error("Packed plugin activation failed");
-    const inspection = await runCommand("pnpm", ["exec", "openclaw", "plugins", "inspect", pluginName, "--runtime", "--json"], {
+    const inspection = await hostCommand(["plugins", "inspect", pluginName, "--runtime", "--json"], {
       cwd: workspaceDir, env: isolatedEnv, forwardStdout: false,
     });
     if (inspection.code !== 0) throw new Error("Packed plugin runtime inspection failed");
@@ -196,15 +199,9 @@ async function main() {
     const expectedTools = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8"))
       .contracts.tools.filter((name) => name !== "agent_send_plan_offer");
     validatePackedPluginRuntime(report, expected.version, expectedTools);
-    const actualHost = JSON.parse(readFileSync(join(rootDir, "node_modules", "openclaw", "package.json"), "utf8"));
-    if (actualHost.version !== expected.openclaw.build.openclawVersion) {
-      throw new Error("Packed plugin proof used an unexpected OpenClaw package version");
-    }
-    console.error(`Packed ${pluginName}@${expected.version} loaded through OpenClaw ${expected.openclaw.build.openclawVersion}`);
+    console.error(`Packed ${pluginName}@${expected.version} loaded through OpenClaw ${sdk.role} SDK ${sdk.version}`);
 
-    const audit = await runCommand("pnpm", [
-      "exec",
-      "openclaw",
+    const audit = await hostCommand([
       "security",
       "audit",
       "--deep",

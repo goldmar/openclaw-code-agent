@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { validateOpenClawSdkPins } from "./lib/openclaw-sdk.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,8 +41,8 @@ export function loadReleaseMetadata(baseDir = rootDir) {
 /**
  * Without explicit options, the OpenClaw target is the package's own build
  * metadata and the compatibility floor is its declared minimum Gateway version.
- * Every other pinned field must then agree with those two values, so a
- * compatibility bump only edits package.json (and regenerates the lockfile).
+ * The separately pinned baseline SDK agrees with the build target; the dev SDK
+ * may advance independently. Both pins must match their lockfile resolutions.
  * Release CI can still pass an explicit `--openclaw-target=` to pin the target.
  */
 function resolveDefaultOpenClawVersions(baseDir) {
@@ -168,15 +169,7 @@ export function validateReleaseMetadata(options = {}) {
     throw new Error(`CHANGELOG.md has no ${packageVersion} section`);
   }
 
-  if (!lockfile.includes(`openclaw:\n        specifier: ${openclawVersion}`)) {
-    throw new Error(`pnpm-lock.yaml is not pinned to OpenClaw ${openclawVersion}`);
-  }
-
-  if (packageJson.devDependencies?.openclaw !== normalizedOpenClawTargetVersion) {
-    throw new Error(
-      `OpenClaw dev dependency mismatch: expected ${normalizedOpenClawTargetVersion}, got ${packageJson.devDependencies?.openclaw}`,
-    );
-  }
+  validateOpenClawSdkPins(packageJson, lockfile);
 
   if (packageJson.packageManager !== "pnpm@11.15.1") {
     throw new Error(`Unexpected package manager: ${packageJson.packageManager}`);

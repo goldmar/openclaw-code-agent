@@ -103,7 +103,9 @@ describe("compatibility fixture cleanup and diagnostics", () => {
 describe("compatibility discovery acceptance", () => {
   it("requires explicit negative intent for a previous host and refuses target/newer hosts", () => {
     validateCompatibilityHost(packageMetadata, packageMetadata.openclaw.build.openclawVersion);
-    validateCompatibilityHost(packageMetadata, "2026.9.7");
+    validateCompatibilityHost(packageMetadata, packageMetadata.devDependencies.openclaw, false, "dev");
+    assert.throws(() => validateCompatibilityHost(packageMetadata, packageMetadata.devDependencies.openclaw));
+    assert.throws(() => validateCompatibilityHost(packageMetadata, "2026.9.7"));
     validateCompatibilityHost(packageMetadata, "2026.9.8", true);
     validateCompatibilityHost(packageMetadata, "2026.9.7", true);
     validateCompatibilityHost(packageMetadata, "2026.9.9", true);

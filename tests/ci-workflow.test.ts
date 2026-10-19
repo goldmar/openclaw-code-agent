@@ -34,6 +34,15 @@ describe("CI workflow", () => {
     assert.match(verify, /- name: Upload CI report\n\s+if: always\(\) && matrix\.node-version == env\.REPORT_NODE_VERSION/u);
   });
 
+  it("requires both SDK roles without duplicating the full suite", () => {
+    const verify = job("verify");
+    assert.match(verify, /run: pnpm typecheck:dev/u);
+    assert.match(verify, /run: pnpm verify:openclaw-compat -- --sdk=baseline --gateway/u);
+    assert.match(verify, /run: pnpm verify:openclaw-compat -- --sdk=dev --gateway/u);
+    assert.match(verify, /name: Verify packed plugin on the baseline host\n\s+if: matrix\.node-version == env\.REPORT_NODE_VERSION\n\s+timeout-minutes: 10\n\s+run: pnpm check-plugin-security -- --sdk=baseline/u);
+    assert.equal((verify.match(/pnpm run verify/gu) ?? []).length, 1);
+  });
+
   it("keeps the required check names as jobs that fail, not skip, when Verify fails", () => {
     for (const [key, name] of [["size-check", "Bundle Size Check"], ["lockfile-check", "Lockfile Integrity Check"]] as const) {
       const text = job(key);
