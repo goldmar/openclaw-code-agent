@@ -29,10 +29,10 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.296
-        version: 0.3.296(@anthropic-ai/sdk@0.133.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.32.1(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.296(@anthropic-ai/sdk@0.135.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.32.1(zod@4.6.5))(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: 0.133.0
-        version: 0.133.0(zod@4.6.5)
+        specifier: 0.135.0
+        version: 0.135.0(zod@4.6.5)
       '@hono/node-server':
         specifier: 2.1.4
         version: 2.1.4(hono@4.13.11)
@@ -69,7 +69,7 @@ importers:
         version: 4.10.2
       openclaw:
         specifier: 2026.10.1
-        version: 2026.10.1
+        version: 2026.10.1(@opentelemetry/api@1.9.1)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -148,8 +148,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/sdk@0.133.0':
-    resolution: {integrity: sha512-jlqUN8p8ESTJj+GJnA4KjzbEfF1waEoGzRT8jwytlYGFFgv+/DUQOxlYGvYw10UzhD1kwLqYzxvA3FrTB2YWuQ==}
+  '@anthropic-ai/sdk@0.135.0':
+    resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -182,8 +182,8 @@ packages:
     engines: {node: ^22.18.0 || >=24.11.0}
     hasBin: true
 
-  '@babel/runtime@7.29.7':
-    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
+  '@babel/runtime@7.29.10':
+    resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
     engines: {node: '>=6.9.0'}
 
   '@babel/template@8.0.0':
@@ -641,6 +641,10 @@ packages:
   '@openclaw/fs-safe@0.24.2':
     resolution: {integrity: sha512-MEq9TssvajMJTZxXlURwrOP7Or8CSS6c9F02rdG04BEe0LLRmfQqzTtRyrDi3uaj+yxr9tw2Tpy5yrLPuO+oZg==}
     engines: {node: '>=22'}
+
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
 
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
@@ -2150,9 +2154,9 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.296':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.296(@anthropic-ai/sdk@0.133.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.32.1(zod@4.6.5))(zod@4.6.5)':
+  '@anthropic-ai/claude-agent-sdk@0.3.296(@anthropic-ai/sdk@0.135.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.32.1(zod@4.6.5))(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.133.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.135.0(zod@4.6.5)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.5)
       zod: 4.6.5
     optionalDependencies:
@@ -2172,8 +2176,9 @@ snapshots:
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/sdk@0.133.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.135.0(zod@4.6.5)':
     dependencies:
+      '@opentelemetry/api': 1.9.1
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -2203,7 +2208,7 @@ snapshots:
     dependencies:
       '@babel/types': 8.0.6
 
-  '@babel/runtime@7.29.7': {}
+  '@babel/runtime@7.29.10': {}
 
   '@babel/template@8.0.0':
     dependencies:
@@ -2461,12 +2466,14 @@ snapshots:
       '@lydell/node-pty-win32-arm64': 1.2.0-beta.15
       '@lydell/node-pty-win32-x64': 1.2.0-beta.15
 
-  '@mistralai/mistralai@2.7.0':
+  '@mistralai/mistralai@2.7.0(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.21.3
       zod: 4.6.5
       zod-to-json-schema: 3.25.2(zod@4.6.5)
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -2517,11 +2524,11 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
+  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))
-      '@mistralai/mistralai': 2.7.0
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       openai: 7.23.0(ws@8.21.3)(zod@4.6.5)
       partial-json: 0.1.7
       typebox: 1.3.34
@@ -2572,6 +2579,8 @@ snapshots:
       '@openclaw/fs-safe-linux-x64-musl': 0.24.2
       '@openclaw/fs-safe-win32-x64-msvc': 0.24.2
       jszip: 3.10.2
+
+  '@opentelemetry/api@1.9.1': {}
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
@@ -3301,7 +3310,7 @@ snapshots:
 
   json-schema-to-ts@3.1.1:
     dependencies:
-      '@babel/runtime': 7.29.7
+      '@babel/runtime': 7.29.10
       ts-algebra: 2.0.0
 
   json-schema-traverse@1.0.0: {}
@@ -3459,7 +3468,7 @@ snapshots:
       ws: 8.21.3
       zod: 4.6.5
 
-  openclaw@2026.10.1:
+  openclaw@2026.10.1(@opentelemetry/api@1.9.1):
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.5)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.5)
@@ -3473,10 +3482,10 @@ snapshots:
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.46.0)
       '@homebridge/ciao': 1.3.12
       '@lydell/node-pty': 1.2.0-beta.15
-      '@mistralai/mistralai': 2.7.0
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk': 1.31.0(zod@4.6.5)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
+      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.5)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2
