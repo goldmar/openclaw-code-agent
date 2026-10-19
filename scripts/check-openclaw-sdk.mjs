@@ -33,7 +33,7 @@ export function checkOpenClawSdk(args = [], baseDir = sdkRoot) {
         throw new Error(`Typecheck leaked from ${sdk.role} into the other OpenClaw SDK`);
       }
     }
-    console.log(`OpenClaw ${sdk.role} SDK ${sdk.version}: public exports and ${sourceOnly ? "source" : "source/test"} types passed`);
+    console.error(`OpenClaw ${sdk.role} SDK ${sdk.version}: public exports and ${sourceOnly ? "source" : "source/test"} types passed`);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

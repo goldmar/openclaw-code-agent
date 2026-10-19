@@ -1,5 +1,6 @@
 import "./test-env";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,6 +100,23 @@ describe("independently pinned OpenClaw SDKs", () => {
       sdk.packageJson.exports["./plugin-sdk/example"] = entry;
       assert.throws(() => publicSdkTypePaths(sdk, root), /no public types/);
     }
+  });
+
+  it("keeps npm pack JSON readable when prepack validates the baseline", (t) => {
+    const root = fixture(t);
+    symlinkSync(join(import.meta.dirname, "../node_modules/.bin"), join(root, "node_modules/.bin"), "dir");
+    symlinkSync(join(import.meta.dirname, "../node_modules/typescript"), join(root, "node_modules/typescript"), "dir");
+    writeFileSync(join(root, "tsconfig.typecheck.json"), JSON.stringify({
+      compilerOptions: { module: "ESNext", moduleResolution: "Bundler", target: "ES2022", types: [] },
+      include: ["api.ts", "index.ts"],
+    }));
+    const metadata = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ ...metadata, name: "oca-sdk-pack-fixture", version: "1.0.0",
+      scripts: { prepack: "node prepack.mjs" } }));
+    const checker = new URL("../scripts/check-openclaw-sdk.mjs", import.meta.url).href;
+    writeFileSync(join(root, "prepack.mjs"), `import { checkOpenClawSdk } from ${JSON.stringify(checker)}; checkOpenClawSdk(["--source-only"], process.cwd());`);
+    const output = execFileSync("npm", ["pack", "--json", "--pack-destination", root], { cwd: root, encoding: "utf8" });
+    assert.equal(JSON.parse(output)[0].name, "oca-sdk-pack-fixture");
   });
 
   it("actually compiles against the chosen baseline rather than the incompatible dev types", (t) => {
