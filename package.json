@@ -84,7 +84,7 @@
     "openclaw": "2026.10.4",
     "openclaw-baseline": "npm:openclaw@2026.10.1",
     "tsx": "^4.23.15",
-    "typebox": "1.3.34",
+    "typebox": "1.4.3",
     "typescript": "^7.0.2"
   },
   "keywords": [
