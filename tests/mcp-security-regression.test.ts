@@ -9,6 +9,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTaskStore } from "@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 const runtime = { fetchToken, ClientCredentialsProvider, StreamableHTTPClientTransport, InMemoryTaskStore, requireBearerAuth };
 
@@ -138,7 +139,7 @@ for (const [role, sdk] of [
         [undefined, true, false],
         [new URL("https://other.example.test/mcp"), false, true],
       ] as const) {
-        const authInfo = {
+        const authInfo: AuthInfo = {
           token: "fixture-token",
           clientId: "fixture-client",
           scopes: [],
