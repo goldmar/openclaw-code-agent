@@ -97,6 +97,13 @@ jobs:
         if: matrix.node-version == env.REPORT_NODE_VERSION
         run: pnpm verify:npm-consumer
 
+      - name: Verify release-tools security boundaries
+        if: matrix.node-version == env.REPORT_NODE_VERSION
+        timeout-minutes: 5
+        run: |
+          npm ci --prefix .github/release-tools --ignore-scripts --no-audit --no-fund
+          npm run test:security --prefix .github/release-tools
+
       # The report jobs below read this. Written even when earlier steps failed,
       # so a lockfile failure is reported as one.
       - name: Record CI report
