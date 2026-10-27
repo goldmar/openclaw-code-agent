@@ -3,12 +3,15 @@
   "private": true,
   "description": "Pinned ClawHub CLI for the release workflow, installed with `npm ci --ignore-scripts`. Bump clawhub deliberately, then regenerate package-lock.json with `npm install --package-lock-only --ignore-scripts --before=<a date 3 days ago>`.",
   "license": "MIT",
+  "scripts": {
+    "test:security": "node --test --test-concurrency=1 security-regression.test.mjs"
+  },
   "dependencies": {
     "clawhub": "0.23.3"
   },
   "overrides": {
     "clawhub@0.23.3": {
-      "undici": "7.29.1"
+      "undici": "7.30.1"
     }
   }
 }
