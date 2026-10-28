@@ -58,6 +58,8 @@ describe("owning PR discovery through a differently named upstream", () => {
     f.s.sm.updatePersistedSession(f.session.id, { worktreeState: "pending_decision", pendingWorktreeDecisionSince: new Date().toISOString() });
     const reply = await f.s.runTool("agent_escalate", { ocaSessionId: f.session.id, kind: "worktree", summary: "Retain for later review." });
     assert.match(reply, /PR is up to date/);
+    assert.equal(f.s.sm.getPersistedSession(f.session.id)?.worktreeState, "pr_open");
+    assert.equal(f.s.sm.getPersistedSession(f.session.id)?.pendingWorktreeDecisionSince, undefined);
     assert.equal(f.s.messages().some((message) => message.buttons.some((button) => button.label === "Open PR")), false);
     const retained = await resolveWorktreeLifecycle({ ...row, worktreeLifecycle: { state: "released", updatedAt: new Date(0).toISOString() } }, { includePrSync: true });
     assert.equal(retained.preserve, true);

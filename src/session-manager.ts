@@ -89,7 +89,7 @@ import {
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { matchesGeneration, persistedForActiveGeneration, persistedGeneration, type SessionGeneration } from "./session-generation";
 import { SessionMaintenanceService } from "./session-maintenance-service";
-import { buildPendingDecisionPatch } from "./worktree-session-patches";
+import { buildPendingDecisionPatch, buildPrOpenPatch } from "./worktree-session-patches";
 import {
   createRepoPolicyRecord,
   formatUnknownRepoPolicyMessage,
@@ -1796,6 +1796,9 @@ export class SessionManager {
       if (!this.updatePersistedSession(sessionId, owningPrLinkPatch(owner))) return "Error: Could not persist the owning PR association.";
       if (owner.status.state === "open" && (await getCommitsNotInPr(repoDir, branchName, owner.status, owner.pushRemote))?.count === 0
         && (await listDirtyWorktreeEntries(worktreePath)).length === 0) {
+        if (!this.updatePersistedSession(sessionId, buildPrOpenPatch(persistedSession ?? activeSession!, {
+          prUrl: owner.status.url!, prNumber: owner.status.number, baseBranch: owner.status.baseRefName,
+        }))) return "Error: Could not settle the owning PR association.";
         return `PR is up to date: ${owner.status.url}. The worktree is retained; no landing decision is needed.`;
       }
     }
