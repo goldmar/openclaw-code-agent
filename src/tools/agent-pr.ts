@@ -789,7 +789,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // here, read-only, so that it is checked before any branch is moved.
       const recordedOpenPr = openPrToUpdate && !targetFoundByBranch ? openPrToUpdate : undefined;
       const sourceBranch = recordedOpenPr
-        ? await resolveExistingTargetPrUpdateSourceBranch({ repoDir: originalWorkdir, fallbackBranch: branchName, targetPrStatus: recordedOpenPr })
+        ? (owner.kind === "existing" ? owner.sourceBranch : await resolveExistingTargetPrUpdateSourceBranch({ repoDir: originalWorkdir, fallbackBranch: branchName, targetPrStatus: recordedOpenPr }))
         : branchName;
       const sourceRefusal = await refuseHookChanges(sourceBranch);
       if (sourceRefusal) return sourceRefusal;

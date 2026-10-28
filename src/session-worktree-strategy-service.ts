@@ -305,7 +305,7 @@ export class SessionWorktreeStrategyService {
         return { notificationSent: true, worktreeRemoved: false };
       }
       if (owner?.kind === "existing" && owner.status.state === "open"
-        && (!session.worktreePrUrl || owner.status.headRefName !== session.worktreeBranch)) {
+        && (owner.discovered || owner.status.headRefName !== session.worktreeBranch)) {
         this.updatePersistedSessionFor(session, owningPrLinkPatch(owner));
         owningSourceBranch = owner.sourceBranch;
         const compared = await getCommitsNotInPr(repoDir!, owner.sourceBranch, owner.status, owner.pushRemote);

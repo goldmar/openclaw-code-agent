@@ -135,6 +135,40 @@ describe("owning PR discovery through a differently named upstream", () => {
     });
   }
 
+  for (const mode of ["tool", "auto-pr"] as const) {
+    it(`${mode}: keeps helper commits when the PR parent is checked out but unchanged`, async () => {
+      const f = await fixture(mode === "auto-pr" ? "auto-pr" : "ask");
+      git(github.repoDir, "switch", "-c", f.head, `origin/${f.head}`);
+      try {
+        const helperCommit = commit(f.session.worktreePath!, "helper-followup.txt");
+        const owner = await f.resolve();
+        assert.equal(owner.kind, "existing");
+        if (owner.kind !== "existing") throw new Error("Expected the existing owner");
+        assert.equal(owner.sourceBranch, f.branch);
+        if (mode === "tool") assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /PR updated/);
+        else {
+          await f.s.backend.endTurn("Committed review fixes in the helper.");
+          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+        }
+        assert.equal(github.remoteHead(f.head), helperCommit);
+        assert.equal(github.ghCalls("create").length, 0);
+      } finally { git(github.repoDir, "switch", "main"); }
+    });
+  }
+
+  it("blocks divergent helper and PR parent commits without pushing or creating", async () => {
+    const f = await fixture();
+    git(github.repoDir, "switch", "-c", f.head, `origin/${f.head}`);
+    try {
+      commit(github.repoDir, "parent-only.txt");
+      commit(f.session.worktreePath!, "helper-only.txt");
+      assert.equal((await f.resolve()).kind, "blocked");
+      assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /Refusing to create a sibling PR/);
+      assert.equal(github.remoteHead(f.head), f.first);
+      assert.equal(github.ghCalls("create").length, 0);
+    } finally { git(github.repoDir, "switch", "main"); }
+  });
+
   it("force_new cannot bypass an unrecorded owning PR", async () => {
     const f = await fixture();
     assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id, force_new: true }), /Cannot create new PR/);
