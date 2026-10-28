@@ -15,11 +15,29 @@ concurrency:
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 jobs:
   no-tabs:
     runs-on: ubuntu-latest
     steps:
+      # Fetch only the immutable base policy; never run PR code with this token.
+      - name: Check dependency preparation
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && vars.OCA_DEPENDENCY_BATCHING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OCA_DEPENDENCY_BATCHING_ENABLED: ${{ vars.OCA_DEPENDENCY_BATCHING_ENABLED }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          policy_path="$(mktemp "$RUNNER_TEMP/oca-dependency-policy.XXXXXX.mjs")"
+          trap 'rm -f "$policy_path"' EXIT
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/dependency-maintenance.mjs?ref=${BASE_SHA}" --jq .content | base64 --decode > "$policy_path"
+          node "$policy_path" --preparation
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -50,6 +68,22 @@ jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
+      # Fetch only the immutable base policy; never run PR code with this token.
+      - name: Check dependency preparation
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && vars.OCA_DEPENDENCY_BATCHING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OCA_DEPENDENCY_BATCHING_ENABLED: ${{ vars.OCA_DEPENDENCY_BATCHING_ENABLED }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          policy_path="$(mktemp "$RUNNER_TEMP/oca-dependency-policy.XXXXXX.mjs")"
+          trap 'rm -f "$policy_path"' EXIT
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/dependency-maintenance.mjs?ref=${BASE_SHA}" --jq .content | base64 --decode > "$policy_path"
+          node "$policy_path" --preparation
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
