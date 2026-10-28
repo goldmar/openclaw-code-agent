@@ -73,17 +73,51 @@ export function pnpmVersions(text) {
   const section = text.split("\npackages:\n")[1]?.split("\nsnapshots:\n")[0];
   if (!section) throw new Error("missing pnpm packages");
   const result = {};
+  let current;
   for (const line of section.split("\n")) {
+    if (line.startsWith("    resolution: ")) {
+      if (!current) throw new Error("resolution without package");
+      const resolution = /^    resolution: \{integrity: (sha(?:1|256|384|512)-[A-Za-z0-9+/=]+)\}$/u.exec(line);
+      if (!resolution) throw new Error("noncanonical pnpm resolution requires manual review");
+      current.integrity = resolution[1];
+      continue;
+    }
     if (!/^  \S/u.test(line)) continue;
     const match = /^  ['"]?(.+)@(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)['"]?:$/u.exec(line);
     if (!match) throw new Error("unsupported pnpm package key");
-    result[`node_modules/${match[1]}/${match[2]}/node_modules/${match[1]}`] = { version: match[2] };
+    current = { version: match[2], integrity: undefined, resolved: undefined };
+    result[`node_modules/${match[1]}/${match[2]}/node_modules/${match[1]}`] = current;
   }
   if (!Object.keys(result).length) throw new Error("empty pnpm packages");
   return result;
 }
 
+function safeSources(before, after) {
+  const previous = new Map();
+  const identity = (path, item) => `${path.split("node_modules/").at(-1)}@${item.version}`;
+  const source = item => JSON.stringify([item.integrity ?? null, item.resolved ?? null]);
+  for (const [path, item] of Object.entries(before)) {
+    if (!path) continue;
+    const key = identity(path, item);
+    const sources = previous.get(key) ?? new Set();
+    sources.add(source(item));
+    previous.set(key, sources);
+  }
+  for (const [path, item] of Object.entries(after)) {
+    if (!path) continue;
+    const sources = previous.get(identity(path, item));
+    if (sources) {
+      if (!sources.has(source(item))) return false;
+    } else {
+      if (!/^sha(?:1|256|384|512)-[A-Za-z0-9+/=]+$/u.test(item.integrity ?? "")) return false;
+      if (item.resolved && new URL(item.resolved).origin !== "https://registry.npmjs.org") return false;
+    }
+  }
+  return true;
+}
+
 function safeGraph(before, after, patchOnly) {
+  if (!safeSources(before, after)) return false;
   const old = graphVersions(before);
   const next = graphVersions(after);
   if (!old.size || !next.size) return false;

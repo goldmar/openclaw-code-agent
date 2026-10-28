@@ -34,7 +34,9 @@ Routine standing merge authority, **after activation only**, covers patch/minor
 patch/minor action SHA changes. Every dependency in a mixed group must qualify.
 CodeQL version annotations must resolve to their pinned commit through the
 official upstream tag, including annotated tags.
-No new dependency, major, prerelease, 0.x update, provider/host/toolchain drift,
+Unchanged locked versions retain their source URL and checksum; new resolutions
+must use registry tarballs and integrity metadata. No new dependency, major,
+prerelease, 0.x update, provider/host/toolchain drift,
 security-floor change, source change, live-acceptance requirement, or changed
 workflow behavior is routine. Unknown parsing/evidence is a hold, never consent.
 
@@ -78,8 +80,13 @@ and then refresh every remaining PR after the first merge.
    `dependency-preparing` while CI runs; it suppresses review, not CI admission.
    The normal synchronize event now runs full CI on the prepared head. Do not
    add a labeled trigger to CI: that would duplicate suites on other labels.
-   If the bot head needed no commit, create its receipt and rerun its existing
-   held workflow runs once using the existing owner authorization. Do not rerun
+   If the bot head needed no commit, rerun its existing held workflow runs once
+   only when their original event head **and base** still equal the live PR.
+   A rerun retains its original event: a fresh receipt cannot repair a stale
+   event base after another group merges. In that case integrate current main
+   into the owned branch and publish the complete refreshed commit through a
+   fresh synchronize event first; if this cannot be done safely, hold the PR.
+   Never loop reruns against an obsolete event. Do not rerun
    already successful exact-head evidence. Never manufacture check conclusions.
 5. Once all required CI is green, remove `dependency-preparing`. Inspect current
    Greptile checks/comments first. Request `@greptileai` only if this head has

@@ -34,6 +34,8 @@ updates:
       default-days: 3
     rebase-strategy: disabled
     # allow.update-types restricts version updates, not urgent security fixes.
+    # https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#update-types-allow
+    # A blanket ignore-major rule would also suppress major security proposals.
     # OpenClaw compatibility pins have a separate owner and never move here.
     allow:
       - dependency-name: "@anthropic-ai/claude-agent-sdk"

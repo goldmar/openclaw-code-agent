@@ -22,7 +22,9 @@ function fixture(): any {
   const before = { name: "example", dependencies: { qs: "6.16.1" }, devDependencies: { "fast-check": "^4.10.2" } };
   const after = structuredClone(before);
   after.dependencies.qs = "6.16.2";
-  const shrinkwrap = (version: string) => JSON.stringify({ packages: { "": {}, "node_modules/qs": { version } } });
+  const shrinkwrap = (version: string) => JSON.stringify({ packages: { "": {}, "node_modules/qs": {
+    version, integrity: "sha512-example", resolved: `https://registry.npmjs.org/qs/-/qs-${version}.tgz`,
+  } } });
   return {
     enabled: true,
     pr: { number: 700, state: "open", draft: false, user: { login: "dependabot[bot]" },
@@ -117,6 +119,19 @@ describe("weekly dependency admission", () => {
     }
   });
 
+  it("requires a fresh synchronize event after another group advances main", () => {
+    const s = fixture();
+    const original = { pull_request: { head: { sha: head }, base: { sha: base } } };
+    s.pr.base.sha = other;
+    s.comments[0].body = `<!-- oca-dependencies-ready:v1 ${head} ${other} -->`;
+    assert.equal(preparation(s).status, "prepared");
+    assert.deepEqual(preparationForEvent(s, original), { status: "held", reason: "event-head-or-base-changed" });
+    const refreshed = "d".repeat(40);
+    s.pr.head.sha = refreshed;
+    s.comments[0].body = `<!-- oca-dependencies-ready:v1 ${refreshed} ${other} -->`;
+    assert.equal(preparationForEvent(s, { pull_request: { head: { sha: refreshed }, base: { sha: other } } }).status, "prepared");
+  });
+
   it("holds draft, foreign, inactive and inherited auto-merge PRs and never touches #568", () => {
     for (const change of [
       (s: any) => { s.pr.number = 568; }, (s: any) => { s.pr.draft = true; },
@@ -182,6 +197,31 @@ describe("actual dependency diff eligibility", () => {
       s.contents["package.json"][side] = JSON.stringify(m);
     }
     assert.equal(dependencyScope(s), "dependency-outside-routine-allowlist");
+  });
+
+  it("rejects checksum or URL substitutions for existing versions and non-registry new tarballs", () => {
+    for (const field of ["integrity", "resolved"]) {
+      const s = fixture();
+      for (const side of ["before", "after"]) {
+        const graph = JSON.parse(s.contents["npm-shrinkwrap.json"][side]);
+        graph.packages["node_modules/unchanged"] = { version: "1.0.0", integrity: "sha512-example",
+          resolved: "https://registry.npmjs.org/unchanged/-/unchanged-1.0.0.tgz" };
+        if (side === "after") graph.packages["node_modules/unchanged"][field] += "changed";
+        s.contents["npm-shrinkwrap.json"][side] = JSON.stringify(graph);
+      }
+      assert.equal(dependencyScope(s), "unapproved-transitive-change");
+    }
+    const s = fixture();
+    const graph = JSON.parse(s.contents["npm-shrinkwrap.json"].after);
+    graph.packages["node_modules/qs"].resolved = "https://example.invalid/qs.tgz";
+    s.contents["npm-shrinkwrap.json"].after = JSON.stringify(graph);
+    assert.equal(dependencyScope(s), "unapproved-transitive-change");
+    const p = fixture();
+    for (const side of ["before", "after"]) {
+      p.contents["pnpm-lock.yaml"][side] = p.contents["pnpm-lock.yaml"][side].replace("\nsnapshots:",
+        `\n  unchanged@1.0.0:\n    resolution: {integrity: sha512-${side === "before" ? "example" : "changed"}}\n\nsnapshots:`);
+    }
+    assert.equal(dependencyScope(p), "unapproved-transitive-change");
   });
 
   it("reads the real pinned graph, allowing unchanged prereleases but holding unknown syntax", () => {
