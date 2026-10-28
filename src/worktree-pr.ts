@@ -423,7 +423,7 @@ export async function syncWorktreePR(
 
 export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?: string, pushRemote = "origin"): Promise<PRStatus> {
   if (!(await isGitHubCLIAvailable())) {
-    return { exists: false, state: "none" };
+    return { exists: false, state: "none", lookupFailed: "GitHub CLI is not available" };
   }
 
   try {
@@ -466,7 +466,7 @@ export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, target
     return status;
   } catch (err) {
     log.warn(`[worktree] Failed to sync PR status for ${prUrl}: ${err instanceof Error ? err.message : String(err)}`);
-    return { exists: false, state: "none" };
+    return { exists: false, state: "none", lookupFailed: "Could not resolve the recorded PR" };
   }
 }
 

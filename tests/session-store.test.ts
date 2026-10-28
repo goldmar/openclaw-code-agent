@@ -513,6 +513,28 @@ describe("SessionStore persisted compatibility", () => {
 });
 
 describe("SessionStore path resolution", () => {
+  it("keeps restored owning PR linkage in running and terminal snapshots across reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-owning-pr-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      const store = new SessionStore({ indexPath, env: {} });
+      const session = new Session({ prompt: "Continue the PR", workdir: dir, harness: "codex", route: DEFAULT_ROUTE }, "owning-pr");
+      session.harnessSessionId = "owning-pr-thread";
+      Object.assign(session, { worktreePath: dir, worktreeBranch: "agent/helper", worktreePrUrl: "https://github.com/acme/widget/pull/101",
+        worktreePrNumber: 101, worktreePrBaseBranch: "main", worktreePrHeadBranch: "dependency/update", worktreePushRemote: "fork" });
+      session.transition("running");
+      store.markRunning(session);
+      session.transition("completed");
+      store.persistTerminal(session);
+      const restored = new SessionStore({ indexPath, env: {} }).getPersistedSession(session.id)!;
+      assert.equal(restored.worktreePrUrl, session.worktreePrUrl);
+      assert.equal(restored.worktreePrHeadBranch, "dependency/update");
+      assert.equal(restored.worktreePrBaseBranch, "main");
+      assert.equal(restored.worktreePushRemote, "fork");
+      assert.equal(restored.worktreePrNumber, 101);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("persists the current running Session's goal owner through repeated writes and reload", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-running-goal-owner-"));
     try {

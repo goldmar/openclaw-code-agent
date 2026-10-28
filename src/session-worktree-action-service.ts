@@ -79,7 +79,7 @@ export type PlannedWorktreeAction =
     };
 
 /** Commits made after a worktree was resolved. `sinceRef`: the PR's pushed head, when known. */
-type NewWorkSinceResolution = { state: "pr_open" | "merged" | "released"; count?: number; sinceRef?: string };
+type NewWorkSinceResolution = { state: "pr_open" | "merged" | "released"; count?: number; sinceRef?: string; sourceBranch?: string };
 
 /**
  * Pure worktree-strategy planner.
@@ -112,10 +112,11 @@ export class SessionWorktreeActionService {
   private async newWorkSinceResolution(
     session: Session,
     state: string,
+    sourceBranch?: string,
   ): Promise<NewWorkSinceResolution | undefined> {
     if (state !== "pr_open" && state !== "merged" && state !== "released") return undefined;
     const worktreePath = session.worktreePath;
-    const branchName = session.worktreeBranch;
+    const branchName = sourceBranch ?? session.worktreeBranch;
     if (!worktreePath || !branchName || !existsSync(worktreePath)) return undefined;
     const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
     if (!repoDir) return undefined;
@@ -126,7 +127,7 @@ export class SessionWorktreeActionService {
       const compared = await getCommitsNotInPr(repoDir, branchName, status, session.worktreePushRemote ?? "origin");
       if (compared?.count === 0) return undefined;
       return { state: status.state === "merged" ? "merged" : state,
-        count: compared?.count, sinceRef: compared?.headRef };
+        count: compared?.count, sinceRef: compared?.headRef, sourceBranch };
     }
     if (state === "pr_open") {
       // What the last push has: local evidence, nothing is fetched. Unknown
@@ -149,7 +150,7 @@ export class SessionWorktreeActionService {
     return completionState === "has-commits" || completionState === "dirty-uncommitted" ? { state, count: ahead } : undefined;
   }
 
-  async plan(session: Session): Promise<PlannedWorktreeAction> {
+  async plan(session: Session, options: { sourceBranch?: string } = {}): Promise<PlannedWorktreeAction> {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     const skip: PlannedWorktreeAction = { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     const recordedState =
@@ -168,7 +169,7 @@ export class SessionWorktreeActionService {
 
     let newWork: NewWorkSinceResolution | undefined;
     if (resolvedState) {
-      newWork = runsNow ? await this.newWorkSinceResolution(session, resolvedState) : undefined;
+      newWork = runsNow ? await this.newWorkSinceResolution(session, resolvedState, options.sourceBranch) : undefined;
       if (!newWork) {
         log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${resolvedState} — skipping strategy handling`);
         return skip;
@@ -194,7 +195,7 @@ export class SessionWorktreeActionService {
             worktreeRemoved: false,
             completionNote: newWork.count === undefined
               ? `⚠️ Could not determine which commits on \`${session.worktreeBranch}\` are in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`
-              : `⚠️ ${formatCount(newWork.count, "commit")} on \`${session.worktreeBranch}\` ${newWork.count === 1 ? "is" : "are"} not in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`,
+              : `⚠️ ${formatCount(newWork.count, "commit")} on \`${newWork.sourceBranch ?? session.worktreeBranch}\` ${newWork.count === 1 ? "is" : "are"} not in the PR${session.worktreePrUrl ? `: ${session.worktreePrUrl}` : ""}`,
           },
         };
       }
@@ -274,7 +275,7 @@ export class SessionWorktreeActionService {
 
     // With an open PR the prompt counts what the PR does not have yet.
     const diffSummary = (newWork?.sinceRef
-      ? await getDiffSummary(repoDir, branchName, baseBranch, { sinceRef: newWork.sinceRef })
+      ? await getDiffSummary(repoDir, newWork.sourceBranch ?? branchName, baseBranch, { sinceRef: newWork.sinceRef })
       : undefined) ?? await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);

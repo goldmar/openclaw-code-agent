@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, discoverExistingTargetPr, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle, normalizeForceNewReplacementPrStatus, refreshOpenPrMetadata, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 import { setPluginRuntime } from "../src/runtime-store";
 import { getPRBody } from "../src/worktree";
+import { resolveOwningPr } from "../src/worktree-owning-pr";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -158,6 +159,16 @@ describe("agent_pr outcome detail lines", () => {
 });
 
 describe("agent_pr existing target PR branch resolution", () => {
+  it("keeps ordinary local parent branches outside PR discovery", async () => {
+    const { repoDir } = initRepoWithOrigin("openclaw-agent-pr-local-parent-");
+    try {
+      git(repoDir, "switch", "-c", "local-feature");
+      git(repoDir, "branch", "agent/helper");
+      const owner = await resolveOwningPr({ repoDir, worktreeBranch: "agent/helper", baseBranch: "main", expectedParentBranch: "local-feature" });
+      assert.deepEqual(owner, { kind: "none" });
+    } finally { rmSync(join(repoDir, ".."), { recursive: true, force: true }); }
+  });
+
   it("discovers a fork PR from the parent checkout and treats its remotely updated head as authoritative", async () => {
     const { repoDir } = initRepoWithOrigin("openclaw-agent-pr-fork-worktree-");
     const rootDir = join(repoDir, "..");
@@ -185,14 +196,24 @@ describe("agent_pr existing target PR branch resolution", () => {
       git(worktreePath, "rebase", "main");
       git(worktreePath, "push", "--force-with-lease", "origin", "HEAD:agent/fix-durable-goal-owner");
 
+      // Keep GitHub identity real-shaped while all Git traffic stays on the local bare fixture.
+      const sshPath = join(rootDir, "fork-ssh");
+      writeFileSync(sshPath, `#!/usr/bin/env sh\nexec git-upload-pack '${forkRemoteDir}'\n`);
+      chmodSync(sshPath, 0o755);
+      git(repoDir, "remote", "set-url", "origin", "git@github.com:fork-owner/openclaw.git");
+      git(repoDir, "config", "core.sshCommand", sshPath);
+      git(repoDir, "config", "ssh.variant", "simple");
       await withFakeGh([
-        "#!/usr/bin/env sh",
-        "if [ \"$1\" = \"--version\" ]; then echo 'gh version 2.0.0'; exit 0; fi",
-        "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
-        "  printf '%s\\n' '[{\"url\":\"https://github.com/openclaw/openclaw/pull/104265\",\"number\":104265,\"title\":\"Fix durable goal owner\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"fork-owner\"},\"headRefName\":\"agent/fix-durable-goal-owner\",\"baseRefName\":\"main\"}]'",
-        "  exit 0",
-        "fi",
-        "exit 1",
+        "#!/usr/bin/env node",
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--version') { console.log('gh version 2.0.0'); process.exit(0); }",
+        "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ nameWithOwner: args[2] })); process.exit(0); }",
+        "if (args[0] === 'pr' && args[1] === 'list') {",
+        "  const head = args[args.indexOf('--head') + 1];",
+        "  console.log(JSON.stringify(head === 'agent/fix-durable-goal-owner' ? [{url:'https://github.com/openclaw/openclaw/pull/104265',number:104265,title:'Fix durable goal owner',state:'OPEN',headRepository:{nameWithOwner:'fork-owner/openclaw'},headRefName:head,baseRefName:'main'}] : []));",
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
         "",
       ].join("\n"), async () => {
         const status = await discoverExistingTargetPr({

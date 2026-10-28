@@ -21,9 +21,9 @@ export class SessionRestoreService {
   }
 
   hydrateSpawnedSession(
-    session: Pick<Session, "worktreePath" | "originalWorkdir" | "worktreeBranch" | "worktreeParentBranch" | "worktreeState" | "worktreePrTargetRepo">,
+    session: Pick<Session, "worktreePath" | "originalWorkdir" | "worktreeBranch" | "worktreeParentBranch" | "worktreeState" | "worktreePrTargetRepo" | "worktreePrUrl" | "worktreePrNumber" | "worktreePrBaseBranch" | "worktreePrHeadBranch" | "worktreePushRemote">,
     prepared: PreparedSessionLaunch,
-    config: Pick<SessionConfig, "worktreePrTargetRepo" | "worktreeStrategy">,
+    config: Pick<SessionConfig, "worktreePrTargetRepo" | "worktreeStrategy" | "resumeSessionId" | "resumeWorktreeFrom">,
   ): void {
     if (config.worktreeStrategy && config.worktreeStrategy !== "off") {
       session.originalWorkdir = prepared.originalWorkdir;
@@ -33,6 +33,16 @@ export class SessionRestoreService {
       session.worktreePath = prepared.worktreePath;
       session.worktreeBranch = prepared.worktreeBranchName;
       session.worktreeState = "provisioned";
+      const ref = config.resumeWorktreeFrom ?? config.resumeSessionId;
+      const previous = ref ? this.getPersistedSession(ref) : undefined;
+      if (previous?.worktreePath === prepared.worktreePath && previous.worktreeBranch === prepared.worktreeBranchName) {
+        session.worktreePrUrl = previous.worktreePrUrl;
+        session.worktreePrNumber = previous.worktreePrNumber;
+        session.worktreePrBaseBranch = previous.worktreePrBaseBranch;
+        session.worktreePrHeadBranch = previous.worktreePrHeadBranch;
+        session.worktreePushRemote = previous.worktreePushRemote;
+        session.worktreePrTargetRepo = previous.worktreePrTargetRepo;
+      }
     }
     if (config.worktreePrTargetRepo) {
       session.worktreePrTargetRepo = config.worktreePrTargetRepo;

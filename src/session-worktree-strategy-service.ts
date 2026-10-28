@@ -8,11 +8,13 @@ import type { PRStatus } from "./worktree-pr";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { NO_CHANGES_AFTER_RESOLUTION, SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
+import { owningPrLinkPatch, type OwningPrResolution } from "./worktree-owning-pr";
 import { SessionWorktreeActionService } from "./session-worktree-action-service";
 import {
   buildMergeConflictResolvingPatch,
   buildMergedPatch,
   buildPendingDecisionPatch,
+  buildPrOpenPatch,
 } from "./worktree-session-patches";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import {
@@ -22,6 +24,9 @@ import {
 import {
   removeWorktree,
   getDiffSummary,
+  getCommitsNotInPr,
+  getCommitsAheadCount,
+  resolveLandingBaseBranch,
   getBranchName,
   isBranchAncestorOfBase,
   listDirtyWorktreeEntries,
@@ -102,6 +107,7 @@ export class SessionWorktreeStrategyService {
       ) => WorktreeCompletionState | Promise<WorktreeCompletionState>;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
+      resolveOwningPr?: (session: Session, repoDir: string) => Promise<OwningPrResolution>;
       dispatchSessionNotification: (session: Session, request: SessionNotificationRequest) => void;
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
@@ -287,7 +293,54 @@ export class SessionWorktreeStrategyService {
     options: { retryAfterConflict?: boolean } = {},
   ): Promise<WorktreeStrategyResult> {
     const retry = options.retryAfterConflict === true;
-    const action = await this.actions.plan(session);
+    let owningSourceBranch: string | undefined;
+    if (session.status === "completed" && this.deps.shouldRunWorktreeStrategy(session) && session.worktreeBranch && session.worktreePath && this.deps.resolveOwningPr) {
+      const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+      const owner = repoDir ? await this.deps.resolveOwningPr(session, repoDir) : undefined;
+      if (owner?.kind === "blocked") {
+        this.deps.dispatchSessionNotification(session, {
+          label: "worktree-owning-pr-blocked",
+          userMessage: completedAttention(session, "owning PR could not be verified", retry, [owner.reason, "The worktree is retained for inspection."]),
+        });
+        return { notificationSent: true, worktreeRemoved: false };
+      }
+      if (owner?.kind === "existing" && owner.status.state === "open"
+        && (owner.discovered || owner.status.headRefName !== session.worktreeBranch)) {
+        this.updatePersistedSessionFor(session, owningPrLinkPatch(owner));
+        owningSourceBranch = owner.sourceBranch;
+        const compared = await getCommitsNotInPr(repoDir!, owner.sourceBranch, owner.status, owner.pushRemote);
+        const dirty = (await listDirtyWorktreeEntries(session.worktreePath)).length > 0;
+        if (dirty) {
+          if (!session.worktreeStrategy || session.worktreeStrategy === "manual" || session.worktreeStrategy === "off") {
+            return { notificationSent: false, worktreeRemoved: false, completionNote: "⚠️ Uncommitted changes remain in the retained PR worktree." };
+          }
+          const base = await resolveLandingBaseBranch(session, repoDir!);
+          return this.handleDirtyUncommittedCompletion(session, session.worktreePath, session.worktreeBranch, base,
+            (await getCommitsAheadCount(repoDir!, session.worktreeBranch, base)) === 0, retry);
+        }
+        if (compared?.count === 0 && !dirty) {
+          this.updatePersistedSessionFor(session, { ...buildPrOpenPatch(session, {
+            prUrl: owner.status.url!, prNumber: owner.status.number, baseBranch: owner.status.baseRefName,
+          }), deferredCompletionCycle: undefined });
+          this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
+            session, cleanupSucceeded: true, worktreePath: session.worktreePath, worktreeBranch: session.worktreeBranch,
+            preview: this.deps.getOutputPreview(session), originThreadLine: this.deps.originThreadLine(session),
+            preservedSummary: "existing PR worktree preserved until merge", prUrl: owner.status.url, retry,
+          }));
+          return { notificationSent: true, worktreeRemoved: false };
+        }
+        if (!compared) {
+          this.deps.dispatchSessionNotification(session, {
+            label: "worktree-owning-pr-head-unknown",
+            userMessage: completedAttention(session, "owning PR head could not be compared", retry, ["The worktree is retained; no landing action was offered."]),
+          });
+          return { notificationSent: true, worktreeRemoved: false };
+        }
+        // Let the existing planner count unpushed work and apply ask/delegate/manual/auto-pr policy.
+        this.updatePersistedSessionFor(session, { worktreeState: "pr_open" });
+      }
+    }
+    const action = await this.actions.plan(session, { sourceBranch: owningSourceBranch });
 
     if (action.kind === "skip") {
       return action.result;
@@ -557,6 +610,10 @@ export class SessionWorktreeStrategyService {
   }
 
   private async resolveExistingTargetPr(session: Session, repoDir: string, branchName: string, baseBranch: string): Promise<PRStatus | undefined> {
+    if (this.deps.resolveOwningPr) {
+      const owner = await this.deps.resolveOwningPr(session, repoDir);
+      return owner.kind === "existing" ? owner.status : undefined;
+    }
     const targetRepo = await resolveTargetRepo(repoDir, session.worktreePrTargetRepo);
     if (session.worktreePrUrl) {
       const recorded = await this.getPrStatusForUrl(repoDir, session.worktreePrUrl, targetRepo, session.worktreePushRemote);
@@ -1092,6 +1149,10 @@ export class SessionWorktreeStrategyService {
     if ((await listDirtyWorktreeEntries(worktreePath)).length > 0) return undefined;
 
     const targetPrStatus = await this.resolveExistingTargetPr(session, repoDir, branchName, baseBranch);
+    // Validated open owners retain their managed worktree. In particular, the
+    // helper can already be represented while its checked-out PR parent still
+    // has commits to push; releasing the helper here would skip that sync.
+    if (this.deps.resolveOwningPr && targetPrStatus?.state === "open") return undefined;
     const targetBranch = targetPrStatus?.headRefName;
     if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
     const authoritativeTargetRef = this.deps.fetchRemoteBranch
