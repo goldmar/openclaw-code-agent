@@ -246,6 +246,15 @@ describe("actual dependency diff eligibility", () => {
 });
 
 describe("exact-head CI and review gates", () => {
+  it("accepts the current Greptile no-blocker verdict without relying on its capitalization", () => {
+    const s = fixture();
+    s.comments[1].body = s.comments[1].body.replace(
+      "The PR appears safe to merge; no blocking issue remains in the reviewed changes.",
+      "**[Medium impact]** No blocking code issue remains in the reviewed changes; the stated merge and activation holds still apply.",
+    );
+    assert.equal(evaluate(s).status, "eligible");
+  });
+
   it("rejects every missing, skipped, stale, foreign-app and failing required context", () => {
     for (const name of REQUIRED_CHECKS) {
       for (const change of [

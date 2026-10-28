@@ -243,7 +243,7 @@ export function evaluate(snapshot) {
   const verdict = greptile?.body.split(/<h3>|### /u)[0] ?? "";
   const reviewed = greptile?.body.match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1];
   if (reviewed !== pr.head.sha || !/Confidence Score: 5\/5\b/u.test(verdict) ||
-      !/No blocking issues found|no blocking issue remains/u.test(verdict)) {
+      !/No blocking issues found|no blocking (?:code )?issues? remains?/iu.test(verdict)) {
     return { status: "held", reason: "final-head-greptile-required" };
   }
   if (threads.some(thread => thread.isResolved !== true)) return { status: "held", reason: "unresolved-review-threads" };
