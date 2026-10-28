@@ -28,6 +28,8 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: ">=8.4.0"
   "@anthropic-ai/sdk@<0.93.0": 0.93.0
   "@modelcontextprotocol/sdk@<1.32.1": 1.32.1
+  # Patch the exact Zod 4.6.5 dependency in both pinned OpenClaw dev hosts.
+  zod@>=4.0.0 <4.6.7: 4.6.7
   ip-address@<10.7.4: 10.7.4
   fast-uri@<3.1.9: 3.1.9
   qs@<6.16.1: 6.16.1
