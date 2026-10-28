@@ -15,6 +15,7 @@ import { SessionRestoreService } from "./session-restore-service";
 import { SessionStateSyncService } from "./session-state-sync-service";
 import { SessionReferenceService } from "./session-reference-service";
 import { SessionWorktreeStrategyService, type WorktreeStrategyResult } from "./session-worktree-strategy-service";
+import { resolveOwningPr, owningPrLinkPatch, type OwningPrResolution } from "./worktree-owning-pr";
 import type {
   GoalAuthorizationTicket,
   SessionConfig,
@@ -74,6 +75,9 @@ import {
 import {
   resolveLandingBaseBranch,
   getDiffSummary,
+  getCommitsNotInPr,
+  listDirtyWorktreeEntries,
+  resolveTargetRepo,
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
   mergeBranch,
@@ -432,6 +436,7 @@ export class SessionManager {
       },
       getPrStatusForBranch: (repoDir, branchName, targetRepo, baseBranch, pushRemote) => syncWorktreePR(repoDir, branchName, targetRepo, baseBranch, { pushRemote }),
       getPrStatusForUrl: (repoDir, prUrl, targetRepo, pushRemote) => syncWorktreePRByUrl(repoDir, prUrl, targetRepo, pushRemote),
+      resolveOwningPr: (session, repoDir) => manager.resolveSessionOwningPr(session, repoDir),
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,
@@ -1514,6 +1519,25 @@ export class SessionManager {
     });
   }
 
+  private async resolveSessionOwningPr(session: Session | PersistedSessionInfo, repoDir: string): Promise<OwningPrResolution> {
+    const ref = getPrimarySessionLookupRef(session);
+    const persisted = session instanceof Session ? this.getPersistedForActiveGeneration(session) : session;
+    const generation = persisted ? persistedGeneration(persisted) : undefined;
+    if (!session.worktreeBranch) return { kind: "none" };
+    const owner = await resolveOwningPr({
+      repoDir, worktreeBranch: session.worktreeBranch,
+      baseBranch: await resolveLandingBaseBranch(persisted ?? session, repoDir),
+      expectedParentBranch: session.worktreeParentBranch,
+      recordedPrUrl: persisted?.worktreePrUrl ?? session.worktreePrUrl,
+      recordedPrBaseBranch: persisted?.worktreePrBaseBranch ?? session.worktreePrBaseBranch,
+      pushRemote: persisted?.worktreePushRemote ?? session.worktreePushRemote,
+      targetRepo: await resolveTargetRepo(repoDir, persisted?.worktreePrTargetRepo ?? session.worktreePrTargetRepo),
+    });
+    const current = ref ? this.getPersistedSession(ref) : undefined;
+    if (generation && (!current || !matchesGeneration(current, generation))) return { kind: "blocked", reason: "The selected session changed during owning PR lookup" };
+    return owner;
+  }
+
   private async getWorktreeDecisionButtons(
     sessionId: string,
     options: { allowDelegate?: boolean; newPr?: boolean } = {},
@@ -1521,6 +1545,12 @@ export class SessionManager {
   ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
+    const repoDir = await this.resolveWorktreeRepoDir("originalWorkdir" in session ? session.originalWorkdir : session.workdir, session.worktreePath);
+    if (repoDir) {
+      const owner = await this.resolveSessionOwningPr(session, repoDir);
+      if (owner.kind === "blocked") return undefined;
+      if (owner.kind === "existing" && !this.updatePersistedSession(sessionId, owningPrLinkPatch(owner))) return undefined;
+    }
     // A PR found closed without merging is recorded on the row, so the 🔀
     // prompt, the reminders and the re-offer all show New PR.
     const newPr = options.newPr === true || this.getPersistedSession(sessionId)?.worktreePrClosed === true;
@@ -1760,6 +1790,15 @@ export class SessionManager {
     if (!repoDir) return `Error: Session "${ref}" has no resolvable repository root for worktree ${worktreePath}.`;
 
     const baseBranch = await resolveLandingBaseBranch(persistedSession ?? activeSession, repoDir);
+    const owner = await this.resolveSessionOwningPr(session, repoDir);
+    if (owner.kind === "blocked") return `Error: ${owner.reason}. The worktree is retained; no landing prompt was sent.`;
+    if (owner.kind === "existing") {
+      if (!this.updatePersistedSession(sessionId, owningPrLinkPatch(owner))) return "Error: Could not persist the owning PR association.";
+      if (owner.status.state === "open" && (await getCommitsNotInPr(repoDir, branchName, owner.status, owner.pushRemote))?.count === 0
+        && (await listDirtyWorktreeEntries(worktreePath)).length === 0) {
+        return `PR is up to date: ${owner.status.url}. The worktree is retained; no landing decision is needed.`;
+      }
+    }
     const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;

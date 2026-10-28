@@ -21,6 +21,27 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe("SessionRestoreService", () => {
+  it("restores persisted owning PR linkage only into the same managed worktree", () => {
+    const row: PersistedSessionInfo = {
+      harnessSessionId: "backend-owner", sessionId: "owner", name: "owner", prompt: "continue", status: "completed", costUsd: 0,
+      workdir: "/nonexistent/repo", worktreePath: "/nonexistent/repo-helper", worktreeBranch: "agent/helper", worktreeStrategy: "ask",
+      worktreePrUrl: "https://github.com/acme/widget/pull/101", worktreePrNumber: 101,
+      worktreePrBaseBranch: "main", worktreePrHeadBranch: "dependency/update", worktreePushRemote: "fork",
+    };
+    const service = new SessionRestoreService((ref) => ref === "owner" ? row : undefined);
+    const live: Parameters<SessionRestoreService["hydrateSpawnedSession"]>[0] = { worktreeState: "none" };
+    const prepared = { actualWorkdir: row.worktreePath!, originalWorkdir: row.workdir!, worktreePath: row.worktreePath, worktreeBranchName: row.worktreeBranch };
+    const config: Parameters<SessionRestoreService["hydrateSpawnedSession"]>[2] = { resumeWorktreeFrom: "owner", worktreeStrategy: "ask" };
+    service.hydrateSpawnedSession(live, prepared, config);
+    assert.equal(live.worktreePrUrl, row.worktreePrUrl);
+    assert.equal(live.worktreePrHeadBranch, row.worktreePrHeadBranch);
+    assert.equal(live.worktreePrBaseBranch, "main");
+    assert.equal(live.worktreePushRemote, "fork");
+    assert.equal(config.worktreeStrategy, "ask");
+    const sibling: Parameters<SessionRestoreService["hydrateSpawnedSession"]>[0] = { worktreeState: "none" };
+    service.hydrateSpawnedSession(sibling, { ...prepared, worktreeBranchName: "agent/sibling" }, config);
+    assert.equal(sibling.worktreePrUrl, undefined);
+  });
   it("prepares and hydrates resumed worktree sessions from persisted metadata", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-restore-"));
     const worktreePath = join(repoDir, ".worktrees", "openclaw-worktree-resume");
