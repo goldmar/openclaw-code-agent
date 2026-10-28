@@ -293,6 +293,7 @@ export class SessionWorktreeStrategyService {
     options: { retryAfterConflict?: boolean } = {},
   ): Promise<WorktreeStrategyResult> {
     const retry = options.retryAfterConflict === true;
+    let owningSourceBranch: string | undefined;
     if (session.status === "completed" && this.deps.shouldRunWorktreeStrategy(session) && session.worktreeBranch && session.worktreePath && this.deps.resolveOwningPr) {
       const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const owner = repoDir ? await this.deps.resolveOwningPr(session, repoDir) : undefined;
@@ -306,7 +307,8 @@ export class SessionWorktreeStrategyService {
       if (owner?.kind === "existing" && owner.status.state === "open"
         && (!session.worktreePrUrl || owner.status.headRefName !== session.worktreeBranch)) {
         this.updatePersistedSessionFor(session, owningPrLinkPatch(owner));
-        const compared = await getCommitsNotInPr(repoDir!, session.worktreeBranch, owner.status, owner.pushRemote);
+        owningSourceBranch = owner.sourceBranch;
+        const compared = await getCommitsNotInPr(repoDir!, owner.sourceBranch, owner.status, owner.pushRemote);
         const dirty = (await listDirtyWorktreeEntries(session.worktreePath)).length > 0;
         if (dirty) {
           if (!session.worktreeStrategy || session.worktreeStrategy === "manual" || session.worktreeStrategy === "off") {
@@ -338,7 +340,7 @@ export class SessionWorktreeStrategyService {
         this.updatePersistedSessionFor(session, { worktreeState: "pr_open" });
       }
     }
-    const action = await this.actions.plan(session);
+    const action = await this.actions.plan(session, { sourceBranch: owningSourceBranch });
 
     if (action.kind === "skip") {
       return action.result;
@@ -1147,6 +1149,10 @@ export class SessionWorktreeStrategyService {
     if ((await listDirtyWorktreeEntries(worktreePath)).length > 0) return undefined;
 
     const targetPrStatus = await this.resolveExistingTargetPr(session, repoDir, branchName, baseBranch);
+    // Validated open owners retain their managed worktree. In particular, the
+    // helper can already be represented while its checked-out PR parent still
+    // has commits to push; releasing the helper here would skip that sync.
+    if (this.deps.resolveOwningPr && targetPrStatus?.state === "open") return undefined;
     const targetBranch = targetPrStatus?.headRefName;
     if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
     const authoritativeTargetRef = this.deps.fetchRemoteBranch

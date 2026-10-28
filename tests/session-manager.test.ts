@@ -103,6 +103,20 @@ function hasButton(rows: string[][], label: string): boolean {
   return rows.some((row) => row.includes(label));
 }
 
+// Button fixtures use real local refs so ownership discovery can verify absence
+// without probing a provider or treating a nonexistent repository as safe.
+function initButtonRepo(repoDir: string, branches: string[]): void {
+  execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init"], { stdio: "ignore" });
+  for (const branch of branches) {
+    execFileSync("git", ["-C", repoDir, "switch", "-c", branch], { stdio: "ignore" });
+    writeFileSync(join(repoDir, "feature.txt"), `${branch}\n`);
+    execFileSync("git", ["-C", repoDir, "add", "feature.txt"], { stdio: "ignore" });
+    execFileSync("git", ["-C", repoDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "pending feature"], { stdio: "ignore" });
+    execFileSync("git", ["-C", repoDir, "switch", "main"], { stdio: "ignore" });
+  }
+}
+
 // =========================================================================
 // uniqueName
 // =========================================================================
@@ -1499,6 +1513,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
   ] as const) {
     it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, async () => {
       const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-store-"));
+      initButtonRepo(storeDir, [`agent/pending-${testCase.policy}`]);
       const sm = new SessionManager(5, 5, {
         store: {
           env: {},
@@ -1512,8 +1527,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         backendRef: { kind: "claude-code", conversationId: `pending-${testCase.policy}-thread` },
         name: `pending-${testCase.policy}`,
         prompt: "test",
-        workdir: "/tmp/repo",
-        worktreePath: `/tmp/repo/.worktrees/pending-${testCase.policy}`,
+        workdir: storeDir,
+        worktreePath: join(storeDir, ".worktrees", `pending-${testCase.policy}`),
         worktreeBranch: `agent/pending-${testCase.policy}`,
         worktreeStrategy: "ask",
         createdAt: now,
@@ -3875,43 +3890,47 @@ describe("SessionManager restored button parity", () => {
   }
 
   it("renders the same restored worktree action set for Telegram and Discord sessions", async () => {
-    const telegramId = "h-telegram-worktree";
-    const discordId = "h-discord-worktree";
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-button-parity-"));
+    initButtonRepo(repoDir, ["agent/telegram-worktree", "agent/discord-worktree"]);
+    try {
+      const telegramId = "h-telegram-worktree";
+      const discordId = "h-discord-worktree";
 
-    (sm as any).store.persisted.set(telegramId, {
-      harnessSessionId: telegramId,
-      name: "telegram-worktree",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      costUsd: 0,
-      route: { provider: "telegram", target: "12345", threadId: "42" },
-      worktreeState: "pending_decision",
-      lifecycle: "awaiting_worktree_decision",
-      worktreeStrategy: "ask",
-      worktreePath: "/tmp/repo/.worktrees/telegram-worktree",
-      worktreeBranch: "agent/telegram-worktree",
-    } as any);
-    (sm as any).store.persisted.set(discordId, {
-      harnessSessionId: discordId,
-      name: "discord-worktree",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      costUsd: 0,
-      route: { provider: "discord", target: "channel:999" },
-      worktreeState: "pending_decision",
-      lifecycle: "awaiting_worktree_decision",
-      worktreeStrategy: "ask",
-      worktreePath: "/tmp/repo/.worktrees/discord-worktree",
-      worktreeBranch: "agent/discord-worktree",
-    } as any);
+      (sm as any).store.persisted.set(telegramId, {
+        harnessSessionId: telegramId,
+        name: "telegram-worktree",
+        prompt: "p",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        route: { provider: "telegram", target: "12345", threadId: "42" },
+        worktreeState: "pending_decision",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeStrategy: "ask",
+        worktreePath: join(repoDir, ".worktrees", "telegram-worktree"),
+        worktreeBranch: "agent/telegram-worktree",
+      } as any);
+      (sm as any).store.persisted.set(discordId, {
+        harnessSessionId: discordId,
+        name: "discord-worktree",
+        prompt: "p",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        route: { provider: "discord", target: "channel:999" },
+        worktreeState: "pending_decision",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeStrategy: "ask",
+        worktreePath: join(repoDir, ".worktrees", "discord-worktree"),
+        worktreeBranch: "agent/discord-worktree",
+      } as any);
 
-    const telegramButtons = await (sm as any).getWorktreeDecisionButtons(telegramId);
-    const discordButtons = await (sm as any).getWorktreeDecisionButtons(discordId);
+      const telegramButtons = await (sm as any).getWorktreeDecisionButtons(telegramId);
+      const discordButtons = await (sm as any).getWorktreeDecisionButtons(discordId);
 
-    assert.deepEqual(buttonLabels(telegramButtons), buttonLabels(discordButtons));
-    assert.deepEqual(buttonLabels(telegramButtons), [["Merge", "Open PR"], ["Later", "Discard"]]);
+      assert.deepEqual(buttonLabels(telegramButtons), buttonLabels(discordButtons));
+      assert.deepEqual(buttonLabels(telegramButtons), [["Merge", "Open PR"], ["Later", "Discard"]]);
+    } finally { rmSync(repoDir, { recursive: true, force: true }); }
   });
 
   it("uses the same plan approval button set for restored plan decisions", () => {

@@ -1521,7 +1521,7 @@ export class SessionManager {
 
   private async resolveSessionOwningPr(session: Session | PersistedSessionInfo, repoDir: string): Promise<OwningPrResolution> {
     const ref = getPrimarySessionLookupRef(session);
-    const persisted = session instanceof Session ? this.getPersistedForActiveGeneration(session) : session;
+    const persisted = "id" in session ? this.getPersistedForActiveGeneration(session as Session) : session;
     const generation = persisted ? persistedGeneration(persisted) : undefined;
     if (!session.worktreeBranch) return { kind: "none" };
     const owner = await resolveOwningPr({
@@ -1533,6 +1533,7 @@ export class SessionManager {
       pushRemote: persisted?.worktreePushRemote ?? session.worktreePushRemote,
       targetRepo: await resolveTargetRepo(repoDir, persisted?.worktreePrTargetRepo ?? session.worktreePrTargetRepo),
     });
+    if (owner.kind === "none") return owner;
     const current = ref ? this.getPersistedSession(ref) : undefined;
     if (generation && (!current || !matchesGeneration(current, generation))) return { kind: "blocked", reason: "The selected session changed during owning PR lookup" };
     return owner;
@@ -1794,7 +1795,7 @@ export class SessionManager {
     if (owner.kind === "blocked") return `Error: ${owner.reason}. The worktree is retained; no landing prompt was sent.`;
     if (owner.kind === "existing") {
       if (!this.updatePersistedSession(sessionId, owningPrLinkPatch(owner))) return "Error: Could not persist the owning PR association.";
-      if (owner.status.state === "open" && (await getCommitsNotInPr(repoDir, branchName, owner.status, owner.pushRemote))?.count === 0
+      if (owner.status.state === "open" && (await getCommitsNotInPr(repoDir, owner.sourceBranch, owner.status, owner.pushRemote))?.count === 0
         && (await listDirtyWorktreeEntries(worktreePath)).length === 0) {
         if (!this.updatePersistedSession(sessionId, buildPrOpenPatch(persistedSession ?? activeSession!, {
           prUrl: owner.status.url!, prNumber: owner.status.number, baseBranch: owner.status.baseRefName,
@@ -1802,7 +1803,7 @@ export class SessionManager {
         return `PR is up to date: ${owner.status.url}. The worktree is retained; no landing decision is needed.`;
       }
     }
-    const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
+    const diffSummary = await getDiffSummary(repoDir, owner.kind === "existing" ? owner.sourceBranch : branchName, baseBranch);
     if (!diffSummary) {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;
     }

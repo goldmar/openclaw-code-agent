@@ -1,8 +1,8 @@
 import "./test-env";
 import { before, after, afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createFakeGitHub, git, type FakeGitHub } from "./fake-github";
 import { startFullStack, type FullStack } from "./fullstack-fixture";
 import { resolveOwningPr } from "../src/worktree-owning-pr";
@@ -110,10 +110,64 @@ describe("owning PR discovery through a differently named upstream", () => {
     assert.equal(existsSync(f.session.worktreePath!), true);
   });
 
+  for (const mode of ["tool", "auto-pr", "ask"] as const) {
+    it(`${mode}: includes unpushed commits on the checked-out owning PR parent`, async () => {
+      const f = await fixture(mode === "auto-pr" ? "auto-pr" : "ask");
+      git(github.repoDir, "switch", "-c", f.head, `origin/${f.head}`);
+      try {
+        const parentCommit = commit(github.repoDir, "parent-followup.txt");
+        if (mode === "tool") {
+          assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /PR updated/);
+        } else {
+          await f.s.backend.endTurn("Review fixes were committed on the PR parent.");
+          if (mode === "ask") {
+            const prompt = await f.s.waitForMessage(new RegExp(`^🔀 \\[${f.session.name}\\]`));
+            assert.match(prompt.text, /1 commit/);
+            assert.notEqual(github.remoteHead(f.head), parentCommit);
+            await f.s.click(prompt.buttons.find((button) => button.label === "Sync PR")!);
+          }
+          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+        }
+        assert.equal(github.remoteHead(f.head), parentCommit);
+        assert.equal(github.ghCalls("create").length, 0);
+        assert.equal(git(f.session.worktreePath!, "rev-parse", "HEAD"), f.first, "helper branch is retained unchanged");
+      } finally { git(github.repoDir, "switch", "main"); }
+    });
+  }
+
   it("force_new cannot bypass an unrecorded owning PR", async () => {
     const f = await fixture();
     assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id, force_new: true }), /Cannot create new PR/);
     assert.equal(github.ghCalls("create").length, 0);
+  });
+
+  it("persists an inferred fork target and allows retention cleanup after that PR lands", async () => {
+    const f = await fixture();
+    const upstreamDir = join(dirname(dirname(github.remoteDir)), "upstream", "widget.git");
+    mkdirSync(upstreamDir, { recursive: true });
+    git(upstreamDir, "init", "--bare", "--initial-branch=main");
+    git(github.repoDir, "remote", "add", "upstream", "git@github.com:upstream/widget.git");
+    try {
+      github.updateState((state) => {
+        const pr = state.prs.find((candidate) => candidate.number === f.pr.number)!;
+        pr.repo = "upstream/widget";
+        pr.url = `https://github.com/upstream/widget/pull/${pr.number}`;
+      });
+      await f.s.backend.endTurn("Updated the existing fork PR.");
+      await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR is up to date`));
+      const row = f.s.sm.getPersistedSession(f.session.id)!;
+      assert.equal(row.worktreePrTargetRepo, "upstream/widget");
+      github.updateState((state) => { state.prs.find((candidate) => candidate.number === f.pr.number)!.state = "MERGED"; });
+      git(github.repoDir, "merge", "--ff-only", f.branch);
+      const resolved = await resolveWorktreeLifecycle(row, { includePrSync: true });
+      assert.equal(resolved.reasons.includes("owning_pr_lookup_blocked"), false);
+      assert.equal(resolved.cleanupSafe, true);
+    } finally {
+      git(github.repoDir, "remote", "remove", "upstream");
+      // Keep the shared fixture's base independent of this merged feature.
+      git(github.repoDir, "update-ref", "refs/heads/main", git(github.repoDir, "rev-parse", "origin/main"));
+      git(github.repoDir, "restore", "--source=HEAD", "--staged", "--worktree", ".");
+    }
   });
 
   it("ambiguity blocks completion and creation", async () => {

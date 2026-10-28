@@ -724,7 +724,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
       if (openPrToUpdate && owner.kind === "existing" && openPrToUpdate.headRefName !== branchName
         && !params.title && !params.body && params.update_metadata !== true) {
-        const represented = await getCommitsNotInPr(originalWorkdir, branchName, openPrToUpdate, pushRemote);
+        const represented = await getCommitsNotInPr(originalWorkdir, owner.sourceBranch, openPrToUpdate, pushRemote);
         if (represented?.count === 0 && (await listDirtyWorktreeEntries(worktreePath)).length === 0) {
           const owedCycle = owedCompletionCycle(sm, target.generation);
           branchName = openPrToUpdate.headRefName!;

@@ -1,13 +1,13 @@
 import { runGh, runGit } from "./git-exec";
 import { localBranchRef } from "./worktree-ref-validation";
-import { getBranchName } from "./worktree-repo";
+import { getBranchName, isGitHubCLIAvailable, resolveTargetRepo } from "./worktree-repo";
 import { getCommitsNotInPr, repoNameForGh, type PRStatus } from "./worktree-pr";
 import type { PersistedSessionInfo } from "./types";
 
 export type OwningPrResolution =
   | { kind: "none" }
   | { kind: "blocked"; reason: string }
-  | { kind: "existing"; status: PRStatus; pushRemote: string };
+  | { kind: "existing"; status: PRStatus; pushRemote: string; sourceBranch: string; targetRepo?: string };
 
 type PrCandidate = {
   url: string; number: number; state: string; title?: string;
@@ -44,10 +44,24 @@ export async function resolveOwningPr(args: {
     const parent = currentParent === args.expectedParentBranch && currentParent !== args.worktreeBranch && currentParent !== args.baseBranch ? currentParent : undefined;
     if (!args.recordedPrUrl && !differentUpstream && !parent) return { kind: "none" };
     const pushRemote = args.pushRemote ?? "origin";
-    const remoteName = async (remote: string) => repoNameForGh({ originUrl: (await runGit(["-C", args.repoDir, "remote", "get-url", remote], { timeout: 5_000 })).trim() });
+    const remoteName = async (remote: string) => {
+      try { return repoNameForGh({ originUrl: (await runGit(["-C", args.repoDir, "remote", "get-url", remote], { timeout: 5_000 })).trim() }); }
+      catch { return undefined; }
+    };
     const pushRepo = await remoteName(pushRemote);
-    const target = args.targetRepo ? repoNameForGh({ targetRepo: args.targetRepo }) : await remoteName("origin");
-    if (!pushRepo || !target) return { kind: "blocked", reason: "Could not identify the PR target and push repositories" };
+    const targetRepo = await resolveTargetRepo(args.repoDir, args.targetRepo);
+    const target = targetRepo ? repoNameForGh({ targetRepo }) : await remoteName("origin");
+    if (!pushRepo || !target) {
+      // A local parent branch is not itself a PR association. Local merge policy
+      // must keep working for repositories without GitHub remotes.
+      if (!args.recordedPrUrl && !differentUpstream && !args.targetRepo) return { kind: "none" };
+      return { kind: "blocked", reason: "Could not identify the PR target and push repositories" };
+    }
+    if (!args.recordedPrUrl && !differentUpstream && !await isGitHubCLIAvailable()) return { kind: "none" };
+    const existing = async (status: PRStatus): Promise<OwningPrResolution> => ({
+      kind: "existing", status, pushRemote, targetRepo,
+      sourceBranch: (await getBranchName(args.repoDir)) === status.headRefName ? status.headRefName! : args.worktreeBranch,
+    });
     // Resolve renames using explicitly named repositories, never gh's implicit remote preference.
     const canonical = async (name: string) => {
       const value = JSON.parse(await runGh(["repo", "view", name, "--json", "nameWithOwner"], { cwd: args.repoDir, timeout: 10_000 })) as { nameWithOwner?: string };
@@ -90,7 +104,7 @@ export async function resolveOwningPr(args: {
       }
     }
     // Already-linked sessions keep the existing closed/merged lifecycle semantics.
-    if (recorded && !differentUpstream) return { kind: "existing", status: recorded, pushRemote };
+    if (recorded && !differentUpstream) return existing(recorded);
     const owners = new Map<string, PRStatus>();
     if (recorded?.state === "open") owners.set(recorded.url!, recorded);
     for (const head of new Set([...(differentUpstream ? [upstreamBranch!] : []), ...(parent ? [parent] : []), args.worktreeBranch])) {
@@ -106,7 +120,7 @@ export async function resolveOwningPr(args: {
     if (owners.size > 1) return { kind: "blocked", reason: "Multiple existing PRs could own this worktree" };
     const owner = owners.values().next().value as PRStatus | undefined;
     if (recorded && owner && recorded.url !== owner.url) return { kind: "blocked", reason: "Recorded PR conflicts with the owning upstream" };
-    if (owner || recorded) return { kind: "existing", status: (owner ?? recorded)!, pushRemote };
+    if (owner || recorded) return existing((owner ?? recorded)!);
     // A differently named feature upstream is an association, not permission to open a sibling.
     return differentUpstream ? { kind: "blocked", reason: "No verified open PR found for the owning upstream" } : { kind: "none" };
   } catch {
@@ -117,5 +131,6 @@ export async function resolveOwningPr(args: {
 
 export function owningPrLinkPatch(owner: Extract<OwningPrResolution, { kind: "existing" }>): Partial<PersistedSessionInfo> {
   return { worktreePrUrl: owner.status.url, worktreePrNumber: owner.status.number,
-    worktreePrBaseBranch: owner.status.baseRefName, worktreePrHeadBranch: owner.status.headRefName, worktreePushRemote: owner.pushRemote };
+    worktreePrBaseBranch: owner.status.baseRefName, worktreePrHeadBranch: owner.status.headRefName, worktreePushRemote: owner.pushRemote,
+    worktreePrTargetRepo: owner.targetRepo };
 }
