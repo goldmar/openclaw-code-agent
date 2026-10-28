@@ -7,15 +7,18 @@ updates:
       day: monday
       time: "09:00"
       timezone: America/Los_Angeles
-    # Propose only releases that have been public for 3 days.
     cooldown:
       default-days: 3
-    # CodeQL init/analyze must move together or the analysis workflow fails.
+    rebase-strategy: disabled
+    allow:
+      - dependency-name: "*"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+    # Keep CodeQL init/analyze atomic inside one Actions PR.
     groups:
-      codeql:
-        patterns:
-          - github/codeql-action/*
-    open-pull-requests-limit: 3
+      weekly-actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 1
+    labels: [dependencies, dependency-preparing]
     commit-message:
       prefix: chore
       include: scope
@@ -27,32 +30,61 @@ updates:
       day: monday
       time: "09:15"
       timezone: America/Los_Angeles
-    # Propose only releases that have been public for 3 days (the same window
-    # as pnpm's minimumReleaseAge in pnpm-workspace.yaml).
     cooldown:
       default-days: 3
-    # Reduce noise only for development updates; runtime dependencies stay
-    # isolated for npm-shrinkwrap and compatibility review. The build toolchain
-    # that produces or is bundled into dist/ gets its own PRs, which are never
-    # auto-merged (see dependabot-automerge.yml).
+    rebase-strategy: disabled
+    # allow.update-types restricts version updates, not urgent security fixes.
+    # OpenClaw compatibility pins have a separate owner and never move here.
+    allow:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "@anthropic-ai/sdk"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "@hono/node-server"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "@modelcontextprotocol/sdk"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "express-rate-limit"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "fast-uri"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "hono"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "ip-address"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "qs"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "zod"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: fast-check
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: esbuild
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: typescript
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: tsx
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: typebox
+        update-types: [version-update:semver-minor, version-update:semver-patch]
     groups:
       low-risk-development:
-        dependency-type: development
-        update-types:
-          - minor
-          - patch
-        exclude-patterns:
-          - esbuild
-          - typescript
-          - tsx
-          - typebox
-          - openclaw
-    open-pull-requests-limit: 5
+        patterns: ["@types/node", fast-check]
+        update-types: [minor, patch]
+      stable-runtime-patches:
+        patterns: ["@hono/node-server", express-rate-limit, fast-uri, hono, ip-address, qs, zod]
+        update-types: [patch]
+      reviewed-sdk-toolchain:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    # Three groups plus the separately held migration. Cutover must not alter #568.
+    open-pull-requests-limit: 4
+    labels: [dependencies, dependency-preparing]
     commit-message:
       prefix: chore
       include: scope
 
-  # The pinned ClawHub CLI the release workflow installs with `npm ci`.
   - package-ecosystem: npm
     directory: /.github/release-tools
     schedule:
@@ -62,7 +94,15 @@ updates:
       timezone: America/Los_Angeles
     cooldown:
       default-days: 3
+    rebase-strategy: disabled
+    allow:
+      - dependency-name: "*"
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+    groups:
+      reviewed-release-tools:
+        patterns: ["*"]
     open-pull-requests-limit: 1
+    labels: [dependencies, dependency-preparing]
     commit-message:
       prefix: chore
       include: scope
