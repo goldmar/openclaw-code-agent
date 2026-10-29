@@ -18,12 +18,20 @@ const mockGhDir = mkdtempSync(join(tmpdir(), "sm-worktree-gh-"));
 const mockGhBinDir = join(mockGhDir, "bin");
 mkdirSync(mockGhBinDir);
 writeFileSync(join(mockGhBinDir, "gh"), [
-  "#!/bin/sh",
-  "if [ \"$1\" = \"--version\" ]; then",
-  "  echo 'gh version 2.0.0'",
-  "  exit 0",
-  "fi",
-  "exit 1",
+  "#!/usr/bin/env node",
+  "const { execFileSync } = require('node:child_process');",
+  "const args = process.argv.slice(2);",
+  "if (args[0] === '--version') { console.log('gh version 2.0.0'); process.exit(0); }",
+  "if (args[0] === 'repo' && args[1] === 'view') { console.log(JSON.stringify({ nameWithOwner: args[2] })); process.exit(0); }",
+  "if (args[0] === 'pr' && args[1] === 'list') { console.log('[]'); process.exit(0); }",
+  "if (args[0] === 'pr' && args[1] === 'view') {",
+  "  try {",
+  "    const head = execFileSync('git', ['config', 'oca.closedPrHead'], { encoding: 'utf8' }).trim();",
+  "    console.log(JSON.stringify({url:'https://github.com/example/repo/pull/7',number:7,state:'CLOSED',headRefName:head,baseRefName:'main',headRepository:{nameWithOwner:'example/repo'}}));",
+  "    process.exit(0);",
+  "  } catch {}",
+  "}",
+  "process.exit(1);",
   "",
 ].join("\n"));
 chmodSync(join(mockGhBinDir, "gh"), 0o755);
@@ -221,6 +229,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const worktreePath = await createWorktree(repoDir, "pr-updated-clean");
       const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
+      git(repoDir, "config", "oca.closedPrHead", branchName);
 
       const created = createTestSessionManager(5);
       const sm = created.sm;
@@ -327,6 +337,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const worktreePath = await createWorktree(repoDir, "pr-open-no-change");
       const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
+      git(repoDir, "config", "oca.closedPrHead", branchName);
 
       const created = createTestSessionManager(5);
       const sm = created.sm;

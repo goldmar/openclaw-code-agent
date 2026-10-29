@@ -1,138 +1,43 @@
-name: Dependabot Auto-merge
+name: Dependabot Policy
 
 on:
   pull_request_target:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - ready_for_review
-      - synchronize
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
   issue_comment:
-    types:
-      - created
+    types: [created, edited]
 
 concurrency:
-  group: dependabot-automerge-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: dependabot-policy-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: true
 
+# Read-only observer. The weekly OCA owner is the only merge executor.
 permissions:
   contents: read
   issues: read
-  pull-requests: write
+  pull-requests: read
+  checks: read
+  statuses: read
 
 jobs:
-  enable-auto-merge:
+  policy:
     if: >-
-      (github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == 'main') ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+      (github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'dependency-ready')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       github.event.comment.user.login == 'greptile-apps[bot]')
     runs-on: ubuntu-latest
     steps:
-      # Do not check out or execute Dependabot's branch in this privileged workflow.
-      - name: Identify Dependabot PR
-        id: pr
+      - name: Checkout immutable trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Evaluate dependency policy (read only)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          if [[ "$(jq -r '.user.login' <<<"$pr_json")" != "dependabot[bot]" ]]; then
-            echo "dependabot=false" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "dependabot=true" >>"$GITHUB_OUTPUT"
-          echo "url=$(jq -r '.html_url' <<<"$pr_json")" >>"$GITHUB_OUTPUT"
-
-      - name: Read Dependabot metadata
-        if: steps.pr.outputs.dependabot == 'true'
-        id: metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        with:
-          pr-url: ${{ steps.pr.outputs.url }}
-
-      - name: Enforce low-risk policy and Greptile review
-        if: steps.pr.outputs.dependabot == 'true'
-        id: policy
-        env:
-          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
-          DEPENDENCY_TYPE: ${{ steps.metadata.outputs.dependency-type }}
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pr_json="$(gh pr view "$PR_URL" --json author,autoMergeRequest,baseRefName,files,headRefOid,headRepositoryOwner,isDraft,number)"
-          test "$(jq -r '.author.login' <<<"$pr_json")" = "app/dependabot"
-          test "$(jq -r '.baseRefName' <<<"$pr_json")" = "main"
-          test "$(jq -r '.headRepositoryOwner.login' <<<"$pr_json")" = "goldmar"
-          test "$(jq -r '.isDraft' <<<"$pr_json")" = "false"
-
-          # A synchronized Dependabot head inherits an existing auto-merge
-          # request. Revoke it before evaluating the replacement head, then
-          # re-enable only after that exact SHA has its own Greptile review.
-          if [[ "$(jq -r '.autoMergeRequest != null' <<<"$pr_json")" == "true" ]]; then
-            gh pr merge --disable-auto "$PR_URL"
-          fi
-
-          case "$UPDATE_TYPE" in
-            version-update:semver-patch|version-update:semver-minor) ;;
-            *) echo "Manual review required for update type: $UPDATE_TYPE"; exit 0 ;;
-          esac
-
-          names="${DEPENDENCY_NAMES,,}"
-          case "$names" in
-            *anthropic*|*claude*|*openclaw*|*modelcontextprotocol*|*fast-uri*|*express-rate-limit*|*hono*|*ip-address*|*zod*)
-              echo "Manual review required for protected dependency: $DEPENDENCY_NAMES"
-              exit 0
-              ;;
-          esac
-
-          # The build toolchain produces the shipped bundle (esbuild, with
-          # TypeScript/tsx for type checks and scripts) or is bundled into it
-          # (typebox), so its updates always get a manual review.
-          case "$names" in
-            *esbuild*|*typescript*|*tsx*|*typebox*)
-              echo "Manual review required for build toolchain dependency: $DEPENDENCY_NAMES"
-              exit 0
-              ;;
-          esac
-
-          if [[ "$DEPENDENCY_TYPE" == "direct:development" ]]; then
-            jq -e 'all(.files[].path; . == "package.json" or . == "pnpm-lock.yaml")' <<<"$pr_json" >/dev/null
-          elif [[ "$names" == *"github/codeql-action/"* ]]; then
-            jq -e 'all(.files[].path; startswith(".github/workflows/"))' <<<"$pr_json" >/dev/null
-          else
-            echo "Manual review required for dependency type: $DEPENDENCY_TYPE"
-            exit 0
-          fi
-
-          pr_number="$(jq -r '.number' <<<"$pr_json")"
-          head_sha="$(jq -r '.headRefOid' <<<"$pr_json")"
-          comments="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" --paginate)"
-          if ! jq -e --arg sha "$head_sha" '
-            any(.[ ];
-              .user.login == "greptile-apps[bot]" and
-              (.body | contains("Confidence Score: 5/5")) and
-              (.body | contains("No blocking issues found")) and
-              (.body | contains($sha))
-            )
-          ' <<<"$comments" >/dev/null; then
-            echo "Waiting for a 5/5 Greptile review of exact head $head_sha"
-            exit 0
-          fi
-
-          echo "eligible=true" >>"$GITHUB_OUTPUT"
-
-      - name: Enable protected squash auto-merge
-        if: steps.policy.outputs.eligible == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          OCA_DEPENDENCY_BATCHING_ENABLED: ${{ vars.OCA_DEPENDENCY_BATCHING_ENABLED }}
+        run: node scripts/dependency-maintenance.mjs --pr "$PR_NUMBER"

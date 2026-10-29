@@ -34,6 +34,7 @@ export type FakePullRequest = {
   headRefOid?: string;
   mergedAt?: string;
   headOwner: string;
+  headRepo?: string;
   /** Defaults to "the head owner is not the repository's owner". */
   isCrossRepository?: boolean;
   repo: string;
@@ -116,6 +117,7 @@ const pick = (pr, fields) => {
   const all = {
     url: pr.url, number: pr.number, title: pr.title, body: pr.body, state: pr.state, isDraft: pr.isDraft,
     headRefName: pr.headRefName, baseRefName: pr.baseRefName, headRefOid: pr.headRefOid, mergedAt: pr.mergedAt, headRepositoryOwner: { login: pr.headOwner },
+    headRepository: { nameWithOwner: pr.headRepo || pr.headOwner + "/" + pr.repo.split("/")[1] },
     isCrossRepository: pr.isCrossRepository ?? pr.headOwner !== pr.repo.split("/")[0],
   };
   const out = {};
@@ -139,9 +141,12 @@ if (group !== "pr") fail("fake gh: unsupported command " + args.join(" "), 2);
 if (command === "list") {
   if (state.failures.list) fail(state.failures.list);
   const head = flag("--head");
+  const base = flag("--base");
+  const wantedState = flag("--state");
   const repo = repoOf();
   // Like GitHub, newest first.
-  const prs = state.prs.filter((pr) => pr.repo === repo && (!head || pr.headRefName === head)).sort((a, b) => b.number - a.number);
+  const prs = state.prs.filter((pr) => pr.repo === repo && (!head || pr.headRefName === head) && (!base || pr.baseRefName === base)
+    && (!wantedState || wantedState === "all" || pr.state.toLowerCase() === wantedState)).sort((a, b) => b.number - a.number);
   process.stdout.write(JSON.stringify(prs.map((pr) => pick(pr, flag("--json") || "url,number"))) + "\n");
   process.exit(0);
 }
@@ -322,6 +327,7 @@ export function createFakeGitHub(options: { owner?: string; repo?: string } = {}
         headRefName: pr.headRefName,
         baseRefName: pr.baseRefName ?? "main",
         headOwner: pr.headOwner ?? owner,
+        ...(pr.headRepo ? { headRepo: pr.headRepo } : {}),
         headRefOid: pr.headRefOid ?? (() => { try { return git(repoDir, "rev-parse", `refs/heads/${pr.headRefName}`); } catch { return git(repoDir, "rev-parse", "main"); } })(),
         ...(pr.state === "MERGED" ? { mergedAt: pr.mergedAt ?? new Date().toISOString() } : {}),
         ...(pr.isCrossRepository === undefined ? {} : { isCrossRepository: pr.isCrossRepository }),

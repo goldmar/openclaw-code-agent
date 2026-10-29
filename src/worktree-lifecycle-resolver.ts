@@ -16,6 +16,7 @@ import {
 } from "./worktree-repo";
 import { syncWorktreePR, syncWorktreePRByUrl, type PRStatus } from "./worktree-pr";
 import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
+import { resolveOwningPr } from "./worktree-owning-pr";
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -219,6 +220,22 @@ export async function resolveWorktreeLifecycle(
   }
 
   if (prState === "open") reasons.add("pr_open");
+  let owningPrBlocked = false;
+  if (repoExists && workdir && branchPresent && branchName && baseBranch) {
+    const owner = await resolveOwningPr({ repoDir: workdir, worktreeBranch: branchName, baseBranch,
+      recordedPrUrl: session.worktreePrUrl, targetRepo: session.worktreePrTargetRepo ?? lifecycle.targetRepo,
+      pushRemote: session.worktreePushRemote ?? lifecycle.pushRemote, upstreamOnly: true });
+    if (owner.kind === "blocked") {
+      owningPrBlocked = true;
+      reasons.add("owning_pr_lookup_blocked");
+    } else if (owner.kind === "existing" && owner.status.state === "open") {
+      prState = "open";
+      prUrl = owner.status.url;
+      prNumber = owner.status.number;
+      representedByTargetPrBranch = false;
+      reasons.add("pr_open");
+    }
+  }
   if (prState === "merged" && !topologyMerged && !releaseNoopMerge) reasons.add("pr_merged_not_reflected_locally");
   const stalePrOpenLifecycle = options.includePrSync && lifecycle.state === "pr_open" && prState !== "open";
   if (stalePrOpenLifecycle) reasons.add("stale_pr_open");
@@ -241,7 +258,7 @@ export async function resolveWorktreeLifecycle(
   }
 
   const resolvedByRepositoryEvidence = derivedState === "merged" || derivedState === "released";
-  const preserve = options.activeSession
+  const preserve = owningPrBlocked || options.activeSession
     || dirtyWorktreeEntries
     || (!resolvedByRepositoryEvidence && lifecycle.state === "pending_decision")
     || lifecycle.state === "merge_conflict_resolving"

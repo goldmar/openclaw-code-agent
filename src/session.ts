@@ -200,6 +200,7 @@ export class Session extends EventEmitter {
   worktreeDisposition?: string;
   worktreePrUrl?: string;
   worktreePrNumber?: number;
+  worktreePrBaseBranch?: string;
   worktreePrHeadBranch?: string;
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
@@ -649,6 +650,11 @@ export class Session extends EventEmitter {
     | "worktreeBaseBranch"
     | "worktreeParentBranch"
     | "worktreePrTargetRepo"
+    | "worktreePrUrl"
+    | "worktreePrNumber"
+    | "worktreePrBaseBranch"
+    | "worktreePrHeadBranch"
+    | "worktreePushRemote"
     | "autoMergeParentSessionId"
     | "autoMergeConflictResolutionAttemptCount"
     | "autoMergeResolverSessionId"
@@ -664,6 +670,11 @@ export class Session extends EventEmitter {
       worktreeBaseBranch: this.worktreeBaseBranch,
       worktreeParentBranch: this.worktreeParentBranch,
       worktreePrTargetRepo: this.worktreePrTargetRepo,
+      worktreePrUrl: this.worktreePrUrl,
+      worktreePrNumber: this.worktreePrNumber,
+      worktreePrBaseBranch: this.worktreePrBaseBranch,
+      worktreePrHeadBranch: this.worktreePrHeadBranch,
+      worktreePushRemote: this.worktreePushRemote,
       autoMergeParentSessionId: this.autoMergeParentSessionId,
       autoMergeConflictResolutionAttemptCount: this.autoMergeConflictResolutionAttemptCount,
       autoMergeResolverSessionId: this.autoMergeResolverSessionId,
