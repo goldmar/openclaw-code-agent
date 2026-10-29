@@ -213,7 +213,8 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     const second = commit(session.worktreePath!, "pr-again-two.txt", "two\n", "add two");
     await s.backend.endTurn("Added both files.");
 
-    const done = await s.waitForMessage(/^✅ \[pr-again\] Completed — PR opened: /);
+    // Automatic completion runs the full Git/PR pipeline before notifying.
+    const done = await s.waitForMessage(/^✅ \[pr-again\] Completed — PR opened: /, 0, 10_000);
     const latest = github.readState().prs.at(-1)!;
     assert.notEqual(latest.number, first.number, "a new PR, not the merged one");
     assert.equal(latest.state, "OPEN");
