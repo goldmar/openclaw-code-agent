@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.2] - 2026-10-29
+
+### Fixed
+
+- Discover and retain an existing owning PR through managed-branch upstreams and checked-out parent branches. Follow-up work updates that PR; ambiguous or mismatched ownership blocks sibling PR creation and cleanup (#573).
+- Refresh runtime security dependencies and patch MCP SDK and Zod in both pinned OpenClaw development graphs. Update the release tools' undici security override (#566, #570, #571).
+
+### Changed
+
+- Update Claude Agent SDK to 0.3.311, MCP SDK to 1.32.2, and the direct Anthropic SDK to 1.2.0, with synchronized development and published-consumer lockfiles (#568, #570, #576).
+- Include node-server 2.1.5, Hono 4.13.14, and ip-address 10.7.5 runtime patches with their matching overrides (#575).
+- Verify against independent OpenClaw baseline 2026.10.1 and development 2026.10.4 SDK pins; builds use the baseline (#562).
+- Stage weekly grouped dependency maintenance with authenticated preparation receipts and a read-only policy observer. Activation remains a separate owner operation (#574).
+
+### Verification and compatibility
+
+- No configuration migration. Retain the OpenClaw 2026.10.1 installation/build minimum, 2026.9.7 API/Gateway/npm peer floor, supported Node floors 24.16.0 and 26.1.0, and OpenCode 2.x requirement.
+- Retain the existing override-induced development MCP peer warning. The published Agent SDK peer range accepts MCP 1.32.2; no peer-ignore rule or security-floor change hides the warning (#576).
+
 ## [6.0.1] - 2026-10-16
 
 ### Changed
