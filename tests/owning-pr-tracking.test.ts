@@ -12,6 +12,9 @@ import type { WorktreeStrategy } from "../src/types";
 let github: FakeGitHub;
 let stack: FullStack | undefined;
 let sequence = 0;
+// Automatic completion includes real Git/gh work before its notification;
+// capped runners can exceed the fixture's short interaction wait.
+const AUTO_PR_COMPLETION_TIMEOUT_MS = 10_000;
 before(() => { github = createFakeGitHub(); });
 after(() => { github.dispose(); });
 afterEach(async () => { await stack?.dispose(); stack = undefined; github.resetState(); });
@@ -86,7 +89,7 @@ describe("owning PR discovery through a differently named upstream", () => {
     const f = await fixture("auto-pr");
     const second = commit(f.session.worktreePath!, "second.txt");
     await f.s.backend.endTurn("Ready to sync.");
-    await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+    await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
     assert.equal(github.remoteHead(f.head), second);
     assert.equal(github.ghCalls("create").length, 0);
   });
@@ -126,7 +129,8 @@ describe("owning PR discovery through a differently named upstream", () => {
             assert.notEqual(github.remoteHead(f.head), parentCommit);
             await f.s.click(prompt.buttons.find((button) => button.label === "Sync PR")!);
           }
-          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0,
+            mode === "auto-pr" ? AUTO_PR_COMPLETION_TIMEOUT_MS : undefined);
         }
         assert.equal(github.remoteHead(f.head), parentCommit);
         assert.equal(github.ghCalls("create").length, 0);
@@ -148,7 +152,7 @@ describe("owning PR discovery through a differently named upstream", () => {
         if (mode === "tool") assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /PR updated/);
         else {
           await f.s.backend.endTurn("Committed review fixes in the helper.");
-          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
         }
         assert.equal(github.remoteHead(f.head), helperCommit);
         assert.equal(github.ghCalls("create").length, 0);

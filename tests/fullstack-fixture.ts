@@ -112,7 +112,7 @@ export type FullStack = {
   /** Every durable send, newest last, with its buttons decoded. */
   messages(): SentMessage[];
   /** Wait for a message after `after` sends whose text matches. */
-  waitForMessage(pattern: RegExp, after?: number): Promise<SentMessage>;
+  waitForMessage(pattern: RegExp, after?: number, timeoutMs?: number): Promise<SentMessage>;
   /** Wait for a message carrying a button with this label. */
   waitForButton(label: string, after?: number): Promise<SentButton>;
   launch(options?: LaunchOptions): Promise<Session>;
@@ -272,8 +272,8 @@ export async function startFullStack(options: FullStackOptions): Promise<FullSta
     },
     wakes,
     messages,
-    async waitForMessage(pattern, after = 0) {
-      await waitUntil(() => messages().some((message) => message.index >= after && pattern.test(message.text)), `a message matching ${pattern}`);
+    async waitForMessage(pattern, after = 0, timeoutMs) {
+      await waitUntil(() => messages().some((message) => message.index >= after && pattern.test(message.text)), `a message matching ${pattern}`, timeoutMs);
       return messages().find((message) => message.index >= after && pattern.test(message.text))!;
     },
     async waitForButton(label, after = 0) {
