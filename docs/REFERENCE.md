@@ -33,7 +33,7 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 ## Compatibility And Upgrades
 
-OCA 6.0.1 targets the OpenClaw `2026.10.1` package and public SDK. Its installation minimum is `2026.10.1`, while the plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7` (raised from `2026.9.6` in 5.0.1). Node `>=24.16.0 <25 || >=26.1.0` is required. OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
+OCA 6.0.2 targets the OpenClaw `2026.10.1` package and public SDK. Its installation minimum is `2026.10.1`, while the plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7` (raised from `2026.9.6` in 5.0.1). Node `>=24.16.0 <25 || >=26.1.0` is required. OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
 
 ### OpenClaw 2026.10.1 compatibility (OCA 5.2.1)
 
