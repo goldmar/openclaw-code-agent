@@ -71,10 +71,10 @@ importers:
         version: 4.10.2
       openclaw:
         specifier: 2026.10.4
-        version: 2026.10.4(@opentelemetry/api@1.10.0)
+        version: 2026.10.4(@opentelemetry/api@1.9.1)
       openclaw-baseline:
         specifier: npm:openclaw@2026.10.1
-        version: openclaw@2026.10.1(@opentelemetry/api@1.10.0)
+        version: openclaw@2026.10.1(@opentelemetry/api@1.9.1)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -656,8 +656,8 @@ packages:
     resolution: {integrity: sha512-MEq9TssvajMJTZxXlURwrOP7Or8CSS6c9F02rdG04BEe0LLRmfQqzTtRyrDi3uaj+yxr9tw2Tpy5yrLPuO+oZg==}
     engines: {node: '>=22'}
 
-  '@opentelemetry/api@1.10.0':
-    resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
     engines: {node: '>=8.0.0'}
 
   '@opentelemetry/semantic-conventions@1.43.0':
@@ -1049,10 +1049,6 @@ packages:
     resolution: {integrity: sha512-5jRCH9Z/+DRP7rkvY83B+yGIGX96OYdJmzngqnw2SBSxqCFPd0w2km3s5iawpGX8krnwSGmF0FW5Nhr0Hfai3g==}
     engines: {node: '>=18'}
 
-  content-disposition@2.0.1:
-    resolution: {integrity: sha512-e+H0ZXHSWYrENhQzw1LPuP4oF5MzVKmDU6d3hxlvaPEYLLg62MxtQNPRx4SYSuYJSBUgnQIG4HIN2tEtNv7Dog==}
-    engines: {node: '>=18'}
-
   content-type@1.0.5:
     resolution: {integrity: sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==}
     engines: {node: '>= 0.6'}
@@ -1238,10 +1234,6 @@ packages:
 
   express@5.2.1:
     resolution: {integrity: sha512-hIS4idWWai69NezIdRt2xFVofaF4j+6INOpJlVOLDO8zXGpUVEVzIYk12UUi2JzjEzWL3IOAxcTubgz9Po0yXw==}
-    engines: {node: '>= 18'}
-
-  express@5.3.0:
-    resolution: {integrity: sha512-qCqy1xSoaugxOD4IVHb1ZWdkvCF2W3aE2okKouWj8VwJ+ztskSiXoBnCSJqfKT+cVPJhuJqe9YLbY425+Zh00g==}
     engines: {node: '>= 18'}
 
   extend@3.0.2:
@@ -1456,8 +1448,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  jose@6.2.13:
-    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+  jose@6.2.12:
+    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -2228,7 +2220,7 @@ snapshots:
 
   '@anthropic-ai/sdk@0.137.0(zod@4.6.7)':
     dependencies:
-      '@opentelemetry/api': 1.10.0
+      '@opentelemetry/api': 1.9.1
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -2520,14 +2512,14 @@ snapshots:
       '@lydell/node-pty-win32-arm64': 1.2.0-beta.15
       '@lydell/node-pty-win32-x64': 1.2.0-beta.15
 
-  '@mistralai/mistralai@2.7.0(@opentelemetry/api@1.10.0)':
+  '@mistralai/mistralai@2.7.0(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.22.0
       zod: 4.6.7
       zod-to-json-schema: 3.25.2(zod@4.6.7)
     optionalDependencies:
-      '@opentelemetry/api': 1.10.0
+      '@opentelemetry/api': 1.9.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -2542,10 +2534,10 @@ snapshots:
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
-      express: 5.3.0
-      express-rate-limit: 8.7.1(express@5.3.0)
+      express: 5.2.1
+      express-rate-limit: 8.7.1(express@5.2.1)
       hono: 4.13.11
-      jose: 6.2.13
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -2564,10 +2556,10 @@ snapshots:
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
-      express: 5.3.0
-      express-rate-limit: 8.7.1(express@5.3.0)
+      express: 5.2.1
+      express-rate-limit: 8.7.1(express@5.2.1)
       hono: 4.13.11
-      jose: 6.2.13
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -2578,11 +2570,11 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)':
+  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       openai: 7.23.0(ws@8.21.3)(zod@4.6.7)
       partial-json: 0.1.7
       typebox: 1.3.34
@@ -2602,11 +2594,11 @@ snapshots:
       - ws
       - zod
 
-  '@openclaw/ai@2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)':
+  '@openclaw/ai@2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       openai: 7.23.0(ws@8.21.3)(zod@4.6.7)
       partial-json: 0.1.7
       typebox: 1.3.34
@@ -2658,7 +2650,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.24.2
       jszip: 3.10.2
 
-  '@opentelemetry/api@1.10.0': {}
+  '@opentelemetry/api@1.9.1': {}
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
@@ -2947,8 +2939,6 @@ snapshots:
 
   content-disposition@1.1.0: {}
 
-  content-disposition@2.0.1: {}
-
   content-type@1.0.5: {}
 
   content-type@2.1.0: {}
@@ -3132,53 +3122,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  express-rate-limit@8.7.1(express@5.3.0):
-    dependencies:
-      debug: 4.4.3
-      express: 5.3.0
-      ip-address: 10.7.4
-    transitivePeerDependencies:
-      - supports-color
-
   express@5.2.1:
     dependencies:
       accepts: 2.0.0
       body-parser: 2.4.0
       content-disposition: 1.1.0
       content-type: 1.0.5
-      cookie: 0.7.2
-      cookie-signature: 1.2.2
-      debug: 4.4.3
-      depd: 2.0.0
-      encodeurl: 2.0.0
-      escape-html: 1.0.3
-      etag: 1.8.1
-      finalhandler: 2.1.1
-      fresh: 2.0.0
-      http-errors: 2.0.1
-      merge-descriptors: 2.0.0
-      mime-types: 3.0.2
-      on-finished: 2.4.1
-      once: 1.4.0
-      parseurl: 1.3.3
-      proxy-addr: 2.0.8
-      qs: 6.16.1
-      range-parser: 1.3.0
-      router: 2.2.0
-      send: 1.2.1
-      serve-static: 2.2.1
-      statuses: 2.0.2
-      type-is: 2.1.0
-      vary: 1.1.2
-    transitivePeerDependencies:
-      - supports-color
-
-  express@5.3.0:
-    dependencies:
-      accepts: 2.0.0
-      body-parser: 2.4.0
-      content-disposition: 2.0.1
-      content-type: 2.1.0
       cookie: 0.7.2
       cookie-signature: 1.2.2
       debug: 4.4.3
@@ -3421,7 +3370,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  jose@6.2.13: {}
+  jose@6.2.12: {}
 
   js-tokens@10.0.0: {}
 
@@ -3591,7 +3540,7 @@ snapshots:
       ws: 8.21.3
       zod: 4.6.7
 
-  openclaw@2026.10.1(@opentelemetry/api@1.10.0):
+  openclaw@2026.10.1(@opentelemetry/api@1.9.1):
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.7)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
@@ -3605,10 +3554,10 @@ snapshots:
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.46.0)
       '@homebridge/ciao': 1.3.12
       '@lydell/node-pty': 1.2.0-beta.15
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)
+      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2
@@ -3751,7 +3700,7 @@ snapshots:
       - undici
       - utf-8-validate
 
-  openclaw@2026.10.4(@opentelemetry/api@1.10.0):
+  openclaw@2026.10.4(@opentelemetry/api@1.9.1):
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.7)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
@@ -3765,10 +3714,10 @@ snapshots:
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.46.0)
       '@homebridge/ciao': 1.3.12
       '@lydell/node-pty': 1.2.0-beta.15
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)
+      '@openclaw/ai': 2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2
