@@ -62,6 +62,41 @@ describe("RuntimeDirectNotificationTransport", () => {
     });
   });
 
+  it("binds status edits to the delivered card without another send", async () => {
+    setPluginRuntime({}, { channels: { telegram: { enabled: true } } });
+    const result = { status: "sent", results: [{ messageId: "card-1" }], receipt: {} } as unknown as DurableMessageBatchSendResult;
+    const { calls, transport } = recordingTransport(result);
+    let edit: ((text: string) => Promise<void>) | undefined;
+    let identity: any;
+    await transport.send(TOPIC_ROUTE, "approval", undefined, { onStatusCard: (fn, meta) => { edit = fn; identity = meta; } });
+    const original = directNotificationTransportInternals.execFile;
+    const edits: string[][] = [];
+    directNotificationTransportInternals.execFile = ((_command: string, args: string[], _opts: unknown, cb: (err: null, out: string, stderr: string) => void) => {
+      edits.push(args); cb(null, "{}", "");
+    }) as any;
+    try {
+      assert.ok(edit);
+      assert.equal(identity.messageId, "card-1");
+      assert.ok(identity.sentAt instanceof Date);
+      await edit("approved");
+      assert.equal(calls.length, 1);
+      assert.deepEqual(edits[0].slice(0, 2), ["message", "edit"]);
+      assert.equal(edits[0][edits[0].indexOf("--message-id") + 1], "card-1");
+      assert.equal(edits[0][edits[0].indexOf("--target") + 1], TOPIC_ROUTE.target);
+    } finally { directNotificationTransportInternals.execFile = original; }
+  });
+
+  for (const results of [[{ messageId: "part-1" }, { messageId: "part-2" }], [{}]]) {
+    it(`leaves ${results.length > 1 ? "split" : "unidentified"} plan delivery without an editable card`, async () => {
+      setPluginRuntime({}, { channels: { telegram: { enabled: true } } });
+      const result = { status: "sent", results, receipt: {} } as unknown as DurableMessageBatchSendResult;
+      const { transport } = recordingTransport(result);
+      let registered = false;
+      await transport.send(TOPIC_ROUTE, "reviewed plan", undefined, { onStatusCard: () => { registered = true; } });
+      assert.equal(registered, false, "approval must use the standalone fallback");
+    });
+  }
+
   it("uses runtime.config.current when no service config snapshot is stored", async () => {
     const cfg = { channels: { telegram: { enabled: true } }, source: "runtime-current" };
     setPluginRuntime({ config: { current: () => cfg } });

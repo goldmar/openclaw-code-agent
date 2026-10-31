@@ -1,4 +1,6 @@
 import "./test-env";
+import { setPluginRuntime } from "../src/runtime-store";
+import { StatusCards } from "../src/status-card";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
@@ -130,11 +132,13 @@ function createToolResult(text: string, success: boolean, outcomeNotified = succ
 
 describe("createCallbackHandler()", () => {
   beforeEach(() => {
+    setPluginRuntime({}, { agents: { defaults: { userTimezone: "America/Los_Angeles" } } });
     setSessionManager(null);
     setAutoUpdateService(null);
   });
 
   afterEach(() => {
+    setPluginRuntime(undefined);
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     setAutoUpdateService(null);
   });
@@ -643,8 +647,33 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.callbacksAcknowledged, 1);
     assert.deepEqual(state.events.slice(0, 3), ["acknowledge", "editButtons", "clearButtons"]);
     assert.equal(switchedTo, "bypassPermissions");
-    assert.deepEqual(state.replies, []);
+    assert.deepEqual(state.replies, ["👍 [test-session] Plan approved"]);
   });
+
+  for (const failed of [false, true]) {
+    it(`preserves the plan and ${failed ? "falls back when its edit fails" : "appends an approval footer"}`, async () => {
+      const session = createStubSession({ pendingPlanApproval: true, actionablePlanDecisionVersion: 1,
+        sendMessage: async () => {}, switchPermissionMode: () => {} });
+      const cards = new StatusCards(() => new Date("2026-10-31T16:40:00Z"));
+      const token = { sessionId: "test-id", kind: "plan-approve", planDecisionVersion: 1 };
+      setSessionManager({ getActionToken: () => token, consumeActionToken: () => token,
+        resolve: () => session, getPersistedSession: (): undefined => undefined,
+        registerStatusCard: (ref: string, edit: (text: string) => Promise<void>, text: string, identity: any) => { cards.register(ref, edit, text, identity); },
+        updateStatusCard: (ref: string, version: number) => cards.approve(ref, version),
+        notifySession: () => assert.fail("callback owns its confirmation"), clearPlanDecisionTokens: () => {} } as any);
+      const plan = "📋 [test] Plan v1 ready for approval\n\nKeep this reviewed plan.";
+      const state = createCtx("token-approve", "telegram", { telegramCallback: { messageText: plan },
+        ...(failed ? { editMessageError: new Error("deleted message") } : {}) });
+      await createCallbackHandler().handler(state.ctx as any);
+      if (failed) {
+        assert.equal(state.replies.length, 1);
+        assert.match(state.replies[0], /👍 .*Plan approved/);
+      } else {
+        assert.deepEqual(state.editedMessages, [plan + "\n\n👍 Approved 2026-10-31 09:40 PDT"]);
+        assert.deepEqual(state.replies, []);
+      }
+    });
+  }
 
   it("acknowledges and clears Telegram plan approval buttons before agent work", async () => {
     const events: string[] = [];
@@ -690,7 +719,7 @@ describe("createCallbackHandler()", () => {
     assert.ok(events.indexOf("clearButtons") < events.indexOf("switchPermissionMode"));
     assert.ok(events.indexOf("clearButtons") < events.indexOf("sendMessage"));
     assert.ok(events.indexOf("sendMessage") < events.indexOf("consumeActionToken"));
-    assert.deepEqual(replies, []);
+    assert.deepEqual(replies, ["👍 [test-session] Plan approved"]);
   });
 
   it("markup-clears Telegram plan approval buttons before blocking approval work finishes", async () => {
@@ -803,7 +832,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(replies, []);
+    assert.deepEqual(replies, ["👍 [test-session] Plan approved"]);
     assert.ok(events.indexOf("editButtons") < events.indexOf("switchPermissionMode"));
     assert.ok(events.indexOf("clearButtons") < events.indexOf("switchPermissionMode"));
     assert.ok(events.indexOf("switchPermissionMode") < events.indexOf("sendMessage"));
@@ -878,7 +907,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(replies, []);
+    assert.deepEqual(replies, ["👍 [test-session] Plan approved"]);
     assert.ok(events.indexOf("editButtons") < events.indexOf("switchPermissionMode"));
     assert.ok(events.indexOf("clearButtons") < events.indexOf("switchPermissionMode"));
     assert.ok(events.indexOf("switchPermissionMode") < events.indexOf("sendMessage"));
@@ -1001,7 +1030,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumed, 1);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
+    assert.deepEqual(state.replies, ["👍 [test-session] Plan approved"]);
   });
 
   it("consumes and clears plan approval tokens when an approval error follows applied state", async () => {
@@ -1100,7 +1129,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(second.buttonsCleared, 1);
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
-    assert.deepEqual(first.replies, []);
+    assert.deepEqual(first.replies, ["👍 [test-session] Plan approved"]);
     assert.equal(second.replies[0], "👍 [test-session] Plan v1 was already approved; the session is resuming or running.");
   });
 
@@ -1282,12 +1311,12 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(sendCount, 1);
     assert.equal(switchCount, 1);
-    assert.equal(notifyCount, 1);
+    assert.equal(notifyCount, 0);
     assert.equal(first.buttonsCleared, 1);
     assert.equal(second.buttonsCleared, 1);
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
-    assert.deepEqual(first.replies, []);
+    assert.deepEqual(first.replies, ["👍 [test-session] Plan approved"]);
     assert.equal(second.replies[0], "⚠️ [test-session] This plan decision is already being processed.");
   });
 
@@ -1369,7 +1398,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(approveConsumed, 1);
     assert.equal(rejectConsumed, 0);
     assert.equal(killCount, 0);
-    assert.deepEqual(approve.replies, []);
+    assert.deepEqual(approve.replies, ["👍 [test-session] Plan approved"]);
     assert.equal(reject.replies[0], "⚠️ [test-session] This plan is no longer awaiting approval.");
   });
 
@@ -1567,7 +1596,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(switchedTo, "bypassPermissions");
     assert.equal(buttonsCleared, 1);
-    assert.deepEqual(replies, []);
+    assert.deepEqual(replies, ["👍 [test-session] Plan approved"]);
   });
 
   it("rejects plans even when Discord clearComponents falls back to acknowledge", async () => {

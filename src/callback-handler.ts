@@ -1055,6 +1055,13 @@ export function createCallbackHandler(
 
       if (token.kind === "plan-approve") {
         const planToken = token;
+        sessionManager.registerStatusCard?.(sessionId, async (text: string) => {
+          const responder = ctx.respond as InteractiveResponder;
+          if (!responder.editMessage) throw new Error("Decision card editor unavailable");
+          try { await responder.editMessage({ text, buttons: [] }); }
+          catch (err) { if (!isMessageNotModifiedError(err)) throw err; }
+        }, ctx.channel === "telegram" ? (ctx as PluginInteractiveTelegramHandlerContext).callback.messageText : undefined,
+          ctx.channel === "telegram" ? { messageId: String((ctx as PluginInteractiveTelegramHandlerContext).callback.messageId) } : undefined);
         let promptCleared = false;
         const clearApprovalPrompt = async (force = false) => {
           if (promptCleared) return;
@@ -1070,6 +1077,7 @@ export function createCallbackHandler(
             approve: true,
             userInitiated: true,
             userApproval: "button",
+            replyIsNotice: true,
           });
         });
         if (result.isError) {
@@ -1115,6 +1123,10 @@ export function createCallbackHandler(
         }
 
         await clearApprovalPrompt(true);
+        const status = result.userText ?? `👍 [${actionSessionName}] Plan approved`;
+        if (!(await sessionManager.updateStatusCard?.(sessionId, planToken.planDecisionVersion, status))) {
+          await replyText(ctx, status);
+        }
         queueDecisionPressedNote(sessionManager, "plan-approve", sessionId, actionSessionName, tokenId);
         return { handled: true };
       }

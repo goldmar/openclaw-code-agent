@@ -1,4 +1,5 @@
 import "./test-env";
+import { StatusCards } from "../src/status-card";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +26,7 @@ function createWorkflowManager(): { sm: SessionManager; calls: DispatchCall[]; c
   });
   const calls: DispatchCall[] = [];
   (sm as any).notifications = {
+    statusCards: new StatusCards(),
     dispatch: (...args: DispatchCall) => { calls.push(args); },
     notifyWorktreeOutcome: (...args: DispatchCall) => { calls.push(args); },
     dispose: () => {},
@@ -175,7 +177,8 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.equal(session.approvalState, "approved");
       assert.equal(session.approvalExecutionState, "approved_then_implemented");
       assert.equal(session.planModeApproved, true);
-      assert.match(notifications[0], /Plan approved/u);
+      assert.match(approval.replies[0], /Plan approved/u);
+      assert.equal(notifications.length, 0, "the callback fallback is the sole approval acknowledgement");
       assert.equal(typeof sm.getActionToken(approveToken)?.consumedAt, "number");
 
       const staleReject = makeTelegramCallback(rejectToken);

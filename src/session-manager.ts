@@ -1,3 +1,4 @@
+import type { StatusCardIdentity } from "./status-card";
 import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } from "./config";
@@ -499,6 +500,13 @@ export class SessionManager {
         undefined,
         persistedSession,
       ),
+      async (ref, key) => {
+        // Intent writes must be durable before queue admission, without
+        // invalidating the maintenance generation currently doing the send.
+        const updated = stateSync.applySessionPatch(ref, { worktreeDigestKey: key });
+        if (updated) await store.whenPersisted();
+        return updated;
+      },
     );
     const maintenance = new SessionMaintenanceService({
       store,
@@ -2250,6 +2258,20 @@ export class SessionManager {
   }
 
   // -- Wake / notification delivery --
+
+  registerStatusCard(ref: string, edit: (text: string) => Promise<void>, text?: string, identity?: StatusCardIdentity): void {
+    const session = this.resolve(ref);
+    this.notifications.statusCards.register(session?.id ?? ref, edit, text, identity);
+  }
+
+  updateStatusCard(ref: string, resolvedVersion: number | undefined, acknowledgement?: string): Promise<boolean> {
+    const session = this.resolve(ref);
+    return this.notifications.statusCards.approve(session?.id ?? ref, resolvedVersion, undefined, acknowledgement);
+  }
+
+  inheritStatusCard(source: string, target: string): void {
+    this.notifications.statusCards?.inherit(source, target);
+  }
 
   notifySession(session: Session, text: string, label: string = "notification", idempotencyKey?: string): void {
     this.dispatchSessionNotification(session, {

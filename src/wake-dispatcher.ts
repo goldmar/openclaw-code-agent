@@ -18,6 +18,7 @@ import {
   type WakeTransportOptions,
 } from "./wake-transport";
 import { createLogger } from "./logger";
+import { StatusCards } from "./status-card";
 
 const log = createLogger("wake-dispatcher");
 
@@ -156,6 +157,7 @@ export interface WakeDispatcherOptions {
 }
 
 export class WakeDispatcher {
+  readonly statusCards = new StatusCards();
   private readonly routes = new WakeRouteResolver();
   private readonly transport: WakeTransport;
   private readonly directNotifications: DirectNotificationTransport;
@@ -628,7 +630,11 @@ export class WakeDispatcher {
           if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
         try {
+          if (hasInteractiveButtons) this.statusCards.forget(session.id);
           await this.directNotifications.send(route, text, buttons, {
+            ...(hasInteractiveButtons ? { onStatusCard: (edit, identity) => {
+              this.statusCards.register(session.id, edit, text, identity);
+            } } : {}),
             beforeInternalChatSend: internalHooks?.beforeNotifyInternalChatSend,
             onInternalChatSendNotSubmitted: internalHooks?.onNotifyInternalChatNotSubmitted,
             onInternalChatSendConfirmed: internalHooks?.onNotifyInternalChatConfirmed,

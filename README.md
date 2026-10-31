@@ -146,7 +146,7 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-OCA 6.0.2 targets the OpenClaw `2026.10.1` package and public SDK and requires `2026.10.1` for installation and loading. Published OCA 5.2.0 targets OpenClaw `2026.9.8`. Telegram buttons now require their saved bot account, chat and topic; use the original message to approve or start a plan. The plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7`; Node `>=24.16.0 <25 || >=26.1.0` is required. OCA imports only public plugin-SDK subpaths that untrusted external plugins may use, and its session store, wake routing, callbacks, worktree flows, and Codex/Claude model restrictions remain plugin-owned. OpenClaw's host-side model catalog does not widen Code Agent's harness-scoped allowlists. Disabled bundled plugins are not implicitly enabled, and installing this package changes no OpenClaw host configuration. Upgrading from 4.x is not migration-free, though: on first start 5.0 rewrites OCA's own session store in place (backing up any rows it drops) and moves its output transcripts and update state; it does not migrate plugin config, so move any flat `defaultModel` / `model` / `reasoningEffort` / `allowedModels` keys under `harnesses.<name>` first, because the 5.0 config schema rejects them. Restrictive tool allowlists must add the new `agent_session_action` tool. See [Compatibility and upgrades](docs/REFERENCE.md#compatibility-and-upgrades).
+OCA 6.0.3 targets the OpenClaw `2026.10.1` package and public SDK and requires `2026.10.1` for installation and loading. Published OCA 5.2.0 targets OpenClaw `2026.9.8`. Telegram buttons now require their saved bot account, chat and topic; use the original message to approve or start a plan. The plugin API, Gateway, and npm peer compatibility floor remains `2026.9.7`; Node `>=24.16.0 <25 || >=26.1.0` is required. OCA imports only public plugin-SDK subpaths that untrusted external plugins may use, and its session store, wake routing, callbacks, worktree flows, and Codex/Claude model restrictions remain plugin-owned. OpenClaw's host-side model catalog does not widen Code Agent's harness-scoped allowlists. Disabled bundled plugins are not implicitly enabled, and installing this package changes no OpenClaw host configuration. Upgrading from 4.x is not migration-free, though: on first start 5.0 rewrites OCA's own session store in place (backing up any rows it drops) and moves its output transcripts and update state; it does not migrate plugin config, so move any flat `defaultModel` / `model` / `reasoningEffort` / `allowedModels` keys under `harnesses.<name>` first, because the 5.0 config schema rejects them. Restrictive tool allowlists must add the new `agent_session_action` tool. See [Compatibility and upgrades](docs/REFERENCE.md#compatibility-and-upgrades).
 
 ### Codex
 
@@ -314,3 +314,18 @@ Chat commands mirror the common workflows when you want explicit commands instea
 MIT. See [LICENSE](LICENSE).
 
 OpenCode requires `@opencode/cli >= 2.0.25` (prefer `opencode2`). OCA uses a private database/server; 1.x sessions remain visible but cannot resume. OpenCode supports steer, compact and in-place conversation rewind. See [the reference](docs/REFERENCE.md) for private-database authentication and configuration.
+
+Routine decision acknowledgements update the existing approval/status card when
+its authenticated editor is available. Plan approvals and delegated worktree
+transitions do not create extra acknowledgement messages. Approval requests,
+failures and terminal outcomes remain separate. Card edits are serialized; an
+uncertain edit is held without a standalone resend. Resumed sessions inherit the
+same editor. After a runtime restart, pressing a decision button rebinds its
+existing card; no missing-card identity is guessed.
+
+On hosts exposing the canonical `~/.openclaw/workspace/bin/ops-digest` or `ops-digest` on PATH, still-held work enters its weekly owner
+summary in the daily operations digest. Resolved decisions remove their pending
+entry. An absent integration preserves the ordinary reminder path; a failed or
+unknown queue acknowledgement stays held. Queue admission is not a Telegram
+delivery receipt. Source changes require the normal release/install process
+before they change an already installed plugin.

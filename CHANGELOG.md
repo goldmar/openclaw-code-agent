@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.3] - 2026-10-31
+
+### Fixed
+
+- Keep the reviewed plan on approval cards, remove obsolete button instructions, and append the approval time in OpenClaw's configured user timezone (host timezone when unset), with the timezone abbreviation. Include the date for approvals on a different day, or when the original send date is unavailable (#578).
+- Preserve the standalone approval acknowledgement when the matching card is unavailable or its edit fails. Only resolved matching plan cards are edited; delegate handoffs leave the card unchanged (#578).
+- Keep the first two held-work reminders as messages on their existing 3-hour and subsequent 24-hour deadlines. Optional weekly digest items name the session, branch and observed age, with durable removal after resolution (#578).
+
+### Verification and compatibility
+
+- No configuration migration or compatibility-floor change. Restart the Gateway after upgrading the plugin. Missing host digest integration preserves the existing reminder path.
+
 ## [6.0.2] - 2026-10-29
 
 ### Fixed

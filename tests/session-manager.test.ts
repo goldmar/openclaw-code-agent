@@ -1,4 +1,5 @@
 import "./test-env";
+import { opsDigestInternals } from "../src/ops-digest";
 import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -5045,3 +5046,8 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     });
   });
 });
+
+// Host digest transport is sealed in session-manager unit tests.
+const originalDigestExec = opsDigestInternals.execFile;
+beforeEach(() => { opsDigestInternals.execFile = ((_file: unknown, _args: unknown, _options: unknown, callback: (err: Error) => void) => { callback(Object.assign(new Error("digest unavailable in this fixture"), { code: "ENOENT" })); }) as any; });
+afterEach(() => { opsDigestInternals.execFile = originalDigestExec; });

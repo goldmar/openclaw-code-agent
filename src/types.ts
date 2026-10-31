@@ -694,6 +694,8 @@ export interface PersistedSessionInfo {
    * only while `lastWorktreeReminderAt` is set; a row without it has sent none.
    */
   worktreeReminderCount?: number;
+  /** Hash-only digest intent, retained independently until removal is confirmed. */
+  worktreeDigestKey?: string;
   /** Base branch used for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
   /** Branch checked out in the parent repository when this worktree was created. */
