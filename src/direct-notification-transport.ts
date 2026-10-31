@@ -14,6 +14,7 @@ export type DurableMessageBatchSendResult = Awaited<ReturnType<SendDurableMessag
 export type MessagePresentation = NonNullable<DurableSendParams["payloads"][number]["presentation"]>;
 
 export interface DirectNotificationSendOptions {
+  onStatusCard?: (edit: (text: string) => Promise<void>) => void;
   onDeliveryIntent?: () => void;
   /** Required disk-confirmed quarantine before a non-idempotent internal append. */
   beforeInternalChatSend?: () => Promise<void>;
@@ -201,6 +202,23 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
         `OpenClaw durable delivery to ${route.channel} failed: ${outcome.reason ?? result.status}`,
         { cause: result.status === "failed" ? result.error : undefined },
       );
+    }
+    if (result.status === "sent" && result.results.length === 1 && options?.onStatusCard) {
+      const identity = result.results[0] as { messageId?: string | number };
+      if (identity.messageId != null) {
+        const messageId = String(identity.messageId);
+        options.onStatusCard(async (nextText) => {
+          const args = ["message", "edit", "--channel", route.channel, "--target", route.target,
+            "--message-id", messageId, "--message", nextText, "--json",
+            ...(route.accountId ? ["--account", route.accountId] : []),
+            ...(route.threadId ? ["--thread-id", String(route.threadId)] : [])];
+          await new Promise<void>((resolve, reject) => directNotificationTransportInternals.execFile(
+            "openclaw", args, { timeout: 20_000 }, (err, stdout, stderr) => {
+              if (!err || /message is not modified/i.test(String(stderr) + String(stdout) + String(err.message))) resolve();
+              else reject(new DirectNotificationDeliveryUnknownError("Status card edit is unconfirmed"));
+            }));
+        });
+      }
     }
   }
 }

@@ -2251,6 +2251,15 @@ export class SessionManager {
 
   // -- Wake / notification delivery --
 
+  registerStatusCard(ref: string, edit: (text: string) => Promise<void>): void {
+    const session = this.resolve(ref);
+    this.notifications.statusCards.register(session?.id ?? ref, edit);
+  }
+
+  inheritStatusCard(source: string, target: string): void {
+    this.notifications.statusCards.inherit(source, target);
+  }
+
   notifySession(session: Session, text: string, label: string = "notification", idempotencyKey?: string): void {
     this.dispatchSessionNotification(session, {
       label,

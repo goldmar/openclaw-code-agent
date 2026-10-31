@@ -1,4 +1,5 @@
 import "./test-env";
+import { StatusCards } from "../src/status-card";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SessionNotificationService } from "../src/session-notifications";
@@ -20,7 +21,8 @@ describe("admitted completion wake recovery", () => {
       route: { provider: "telegram", target: "chat", sessionKey: "agent:main:telegram:group:chat" },
     };
     const requests: SessionNotificationRequest[] = [];
-    const dispatcher: Pick<WakeDispatcher, "dispatchSessionNotification" | "dispose"> = {
+    const dispatcher: Pick<WakeDispatcher, "dispatchSessionNotification" | "dispose" | "statusCards"> = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session, request) => { requests.push(request); },
       dispose: () => {},
     };
@@ -179,6 +181,7 @@ describe("SessionNotificationService", () => {
   it("appends session stats to PR opened and updated worktree notifications while preserving raw URLs", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown>) => {
         requests.push(request);
       },
@@ -221,6 +224,7 @@ describe("SessionNotificationService", () => {
   it("persists PR remote outcome semantics independently of hashed notification dedupe keys", () => {
     const persisted = { notificationDedupe: undefined, worktreeRemoteOutcome: undefined } as any;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -254,6 +258,7 @@ describe("SessionNotificationService", () => {
   it("appends session stats to merge worktree notifications", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown>) => {
         requests.push(request);
       },
@@ -284,6 +289,7 @@ describe("SessionNotificationService", () => {
   it("marks notify-only deliveries as notifying then idle on success", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -312,6 +318,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -362,6 +369,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<{ hooks?: Record<string, (reason?: string) => void> }> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request);
         request.hooks?.onNotifyStarted?.();
@@ -400,6 +408,7 @@ describe("SessionNotificationService", () => {
     const persisted = { notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -441,6 +450,7 @@ describe("SessionNotificationService", () => {
     const persisted = { notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -538,6 +548,7 @@ describe("SessionNotificationService", () => {
     const wakeStarted: string[] = [];
     const wakeSucceeded: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { label: string; hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -669,6 +680,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const wakeStarted: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { label: string; hooks?: Record<string, () => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -735,6 +747,7 @@ describe("SessionNotificationService", () => {
     const persistedByRef = new Map<string, any>();
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -791,6 +804,7 @@ describe("SessionNotificationService", () => {
       notifyUser: "always" as const,
     };
     const firstDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, dispatched: { hooks?: Record<string, () => void> }) => {
         dispatched.hooks?.onNotifyStarted?.();
         dispatched.hooks?.onNotifySucceeded?.();
@@ -808,7 +822,8 @@ describe("SessionNotificationService", () => {
     let restartedDispatches = 0;
     const restartedService = new SessionNotificationService(
       {
-        dispatchSessionNotification: () => { restartedDispatches += 1; },
+        statusCards: new StatusCards(),
+      dispatchSessionNotification: () => { restartedDispatches += 1; },
         dispose: () => {},
       } as any,
       (_ref, patch) => Object.assign(persisted, patch),
@@ -825,6 +840,7 @@ describe("SessionNotificationService", () => {
     const persisted = { notificationDedupe: undefined } as any;
     let attempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         attempts += 1;
         request.hooks?.onNotifyStarted?.();
@@ -862,6 +878,7 @@ describe("SessionNotificationService", () => {
     let attempts = 0;
     let shouldDispatch = false;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { shouldDispatch?: () => boolean; hooks?: Record<string, () => void> }) => {
         attempts += 1;
         if (request.shouldDispatch?.() === false) return;
@@ -898,6 +915,7 @@ describe("SessionNotificationService", () => {
     let attempts = 0;
     let shouldDispatch = true;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (
         _session: unknown,
         request: { shouldDispatch?: () => boolean; hooks?: Record<string, (reason?: string) => void> },
@@ -943,6 +961,7 @@ describe("SessionNotificationService", () => {
     let attempts = 0;
     let settleFailureWake: (() => void) | undefined;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (
         _session: unknown,
         request: { hooks?: Record<string, () => void> },
@@ -996,6 +1015,7 @@ describe("SessionNotificationService", () => {
   it("marks failed notify paths as failed when no wake fallback exists", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifyFailed?.();
@@ -1022,6 +1042,7 @@ describe("SessionNotificationService", () => {
   it("keeps delivery in wake_pending when notify failure hands off to a wake fallback", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifyFailed?.();
@@ -1057,6 +1078,7 @@ describe("SessionNotificationService", () => {
   it("marks wake retry exhaustion as failed", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onWakeStarted?.();
         request.hooks?.onWakeFailed?.();
@@ -1104,6 +1126,7 @@ describe("SessionNotificationService", () => {
   it("records completion wake diagnostics for terminal completion paths", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -1178,6 +1201,7 @@ describe("SessionNotificationService", () => {
   it("persists completion repair state after notify success before a deferred wake starts", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -1228,6 +1252,7 @@ describe("SessionNotificationService", () => {
   it("records explicit completion follow-up skips and clears retry state", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -1269,6 +1294,7 @@ describe("SessionNotificationService", () => {
     let wakeSucceeded = 0;
     let duplicateSkippedReason = "";
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1313,6 +1339,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1382,6 +1409,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1454,6 +1482,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1510,6 +1539,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1580,6 +1610,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1648,6 +1679,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1702,6 +1734,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -1773,6 +1806,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -1884,6 +1918,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -1977,6 +2012,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -2080,6 +2116,7 @@ describe("SessionNotificationService", () => {
   it("uses the same completion outcome key for routed worktree follow-through prompts", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -2132,6 +2169,7 @@ describe("SessionNotificationService", () => {
     const userMessages: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -2197,6 +2235,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -2267,6 +2306,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const userMessages: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
         requests.push(request);
         if (typeof request.userMessage === "string") userMessages.push(request.userMessage);
@@ -2338,6 +2378,7 @@ describe("SessionNotificationService", () => {
     const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
         requests.push(request);
         request.hooks?.onNotifyStarted?.();
@@ -2404,6 +2445,7 @@ describe("SessionNotificationService", () => {
     const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
         requests.push(request);
         request.hooks?.onNotifyStarted?.();
@@ -2457,6 +2499,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -2531,6 +2574,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -2615,6 +2659,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -2720,6 +2765,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         if (typeof request.userMessage === "string" && request.userMessage.trim()) {
@@ -2821,6 +2867,7 @@ describe("SessionNotificationService", () => {
     const skippedReasons: string[] = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -2916,7 +2963,8 @@ describe("SessionNotificationService", () => {
     }) as typeof process.stderr.write;
     try {
       const fakeDispatcher = {
-        dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        statusCards: new StatusCards(),
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
           requests.push(request as Record<string, unknown>);
           request.hooks?.onNotifyStarted?.();
           request.hooks?.onNotifySucceeded?.();
@@ -3016,6 +3064,7 @@ describe("SessionNotificationService", () => {
   it("keeps material PR update statuses visible with their own follow-up summaries", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -3070,6 +3119,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -3122,6 +3172,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -3159,6 +3210,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -3197,6 +3249,7 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     let duplicateSkippedReason = "";
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
@@ -3235,6 +3288,7 @@ describe("SessionNotificationService", () => {
   it("does not persist completion follow-up state when the terminal session opts out", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -3274,6 +3328,7 @@ describe("SessionNotificationService", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     let capturedRequest: any;
     const fakeDispatcher = {
+      statusCards: new StatusCards(),
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
         capturedRequest = request;
         request.hooks?.onNotifyStarted?.();

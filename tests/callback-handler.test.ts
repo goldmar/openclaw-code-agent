@@ -646,6 +646,21 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.replies, []);
   });
 
+  it("edits the approval card instead of sending a plan-approved message", async () => {
+    const session = createStubSession({ pendingPlanApproval: true, actionablePlanDecisionVersion: 1,
+      sendMessage: async () => {}, switchPermissionMode: () => {} });
+    let standalone = 0;
+    setSessionManager({ getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
+      resolve: () => session, getPersistedSession: (): undefined => undefined,
+      notifySession: () => { standalone++; }, clearPlanDecisionTokens: () => {} } as any);
+    const state = createCtx("token-approve");
+    await createCallbackHandler().handler(state.ctx as any);
+    assert.equal(standalone, 0);
+    assert.ok(state.editedMessages.some((text) => /approved/i.test(text)));
+    assert.deepEqual(state.replies, []);
+  });
+
   it("acknowledges and clears Telegram plan approval buttons before agent work", async () => {
     const events: string[] = [];
     const session = createStubSession({
@@ -1282,7 +1297,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(sendCount, 1);
     assert.equal(switchCount, 1);
-    assert.equal(notifyCount, 1);
+    assert.equal(notifyCount, 0);
     assert.equal(first.buttonsCleared, 1);
     assert.equal(second.buttonsCleared, 1);
     assert.equal(first.buttonMarkupEdits, 1);

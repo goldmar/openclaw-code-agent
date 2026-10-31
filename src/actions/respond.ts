@@ -525,6 +525,7 @@ async function tryAutoResume(
       goalOwnership: options.goalOwnership,
     };
     const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
+    sm.inheritStatusCard?.(getPrimarySessionLookupRef(session) ?? session.name, resumed.id);
     if (isPlanApproval) {
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,

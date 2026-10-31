@@ -6,6 +6,7 @@ import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { createLogger } from "./logger";
+import { enqueueHeldWork } from "./ops-digest";
 
 const log = createLogger("session-reminder-service");
 // The dispatcher classifies a hung direct send after 30s. Wait past that
@@ -111,6 +112,22 @@ export class SessionReminderService {
     if (nextReminderAt == null || nextReminderAt > now) return false;
     // The resolution checks above await git; drop the send if the schedule moved meanwhile.
     if (!stillCurrent()) return false;
+
+    // Queue one weekly owner reminder in the shared daily operations digest.
+    // Queue admission is distinct from a Telegram receipt. On a missing host
+    // integration retain the existing reminder path on other installations.
+    const digestAdmission = await enqueueHeldWork(session.route?.sessionKey ?? session.originSessionKey ?? "owner",
+                              session.sessionId ?? session.name);
+    if (digestAdmission === "held") return false;
+    if (digestAdmission === "queued") {
+      if (stillCurrent()) {
+        for (const ref of getPersistedMutationRefs(session)) {
+          this.updatePersistedSession(ref, { lastWorktreeReminderAt: new Date(now).toISOString(),
+            worktreeReminderCount: 2 }); // the existing weekly backoff, still rechecked for resolution
+        }
+      }
+      return true;
+    }
 
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
@@ -228,6 +245,9 @@ export class SessionReminderService {
       return false;
     }
     if (!(await this.isResolvedWorktreeDecision(session))) return false;
+
+    await enqueueHeldWork(session.route?.sessionKey ?? session.originSessionKey ?? "owner",
+                          session.sessionId ?? session.name, true);
 
     let updated = false;
     for (const mutationRef of getPersistedMutationRefs(session)) {

@@ -314,3 +314,18 @@ Chat commands mirror the common workflows when you want explicit commands instea
 MIT. See [LICENSE](LICENSE).
 
 OpenCode requires `@opencode/cli >= 2.0.25` (prefer `opencode2`). OCA uses a private database/server; 1.x sessions remain visible but cannot resume. OpenCode supports steer, compact and in-place conversation rewind. See [the reference](docs/REFERENCE.md) for private-database authentication and configuration.
+
+Routine decision acknowledgements update the existing approval/status card when
+its authenticated editor is available. Plan approvals and delegated worktree
+transitions do not create extra acknowledgement messages. Approval requests,
+failures and terminal outcomes remain separate. Card edits are serialized; an
+uncertain edit is held without a standalone resend. Resumed sessions inherit the
+same editor. After a runtime restart, pressing a decision button rebinds its
+existing card; no missing-card identity is guessed.
+
+On hosts exposing the canonical `~/.openclaw/workspace/bin/ops-digest` or `ops-digest` on PATH, still-held work enters its weekly owner
+summary in the daily operations digest. Resolved decisions remove their pending
+entry. An absent integration preserves the ordinary reminder path; a failed or
+unknown queue acknowledgement stays held. Queue admission is not a Telegram
+delivery receipt. Source changes require the normal release/install process
+before they change an already installed plugin.

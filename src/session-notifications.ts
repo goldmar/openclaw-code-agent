@@ -102,6 +102,7 @@ function getWorktreeRemoteOutcome(outcomeKey: string | undefined): PersistedSess
 }
 
 export class SessionNotificationService {
+  get statusCards() { return this.wakeDispatcher.statusCards; }
   private readonly completionSummaries: CompletionSummaryCoordinator;
   private readonly notificationDedupe: NotificationDedupeCoordinator;
   private readonly getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
@@ -130,6 +131,17 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
+    if (["decision-button-pressed", "plan-approved", "worktree-delegate"].includes(request.label)) {
+      const status = request.userMessage ?? (request.label === "worktree-delegate"
+        ? `[${session.name ?? "Code Agent"}] Worktree ready; delegated follow-through in progress.`
+        : `[${session.name ?? "Code Agent"}] Decision accepted; work in progress.`);
+      this.statusCards?.update(deliveryRef, status);
+      // These are acknowledgements, not new approval requests or outcomes.
+      // Preserve delegation/context wakes, while explicitly excluding an echo.
+      request = { ...request, userMessage: undefined, userMessages: undefined, notifyUser: "never",
+        ...(request.wakeMessage ? { wakeMessage: request.wakeMessage +
+          "\nRoutine status is coalesced into the existing decision card. Do not send an acknowledgement of this transition. Preserve approval requests, failures and terminal outcomes." } : {}) };
+    }
     const persistedSession = this.getPersistedSession?.(deliveryRef);
     const originalCompletionSummaryFact = this.buildCompletionSummaryFact(request);
     const completionOutcomeKey = this.getCompletionWakeOutcomeKey(request);
