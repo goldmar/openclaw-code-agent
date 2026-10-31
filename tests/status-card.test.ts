@@ -101,7 +101,7 @@ describe("approved plan cards", () => {
         cards.register("a", async (text) => { edits.push(text); throw new Error("edit unconfirmed"); }, plan, { sentAt: approvalNow });
         if (scenario === "held edit") assert.equal(await cards.approve("a", 1), false);
       } else if (scenario === "split plan") {
-        cards.register("a", async () => assert.fail("split plan cannot be edited"), "📋 [A] Plan v1 ready for approval (2/2):\nplan");
+        cards.register("a", async () => assert.fail("split plan cannot be edited"), "📋 [A] Plan v1 ready for approval (2/2): | codex | gpt-6.1-sol | reasoning: high\nplan");
       } else if (scenario === "newer live plan") {
         cards.register("a", async () => assert.fail("newer plan must keep its buttons"), plan.replace("v1", "v2"));
       } else if (scenario === "unrelated decision") {
@@ -118,6 +118,36 @@ describe("approved plan cards", () => {
       assert.equal(edits.length, ["failed edit", "held edit"].includes(scenario) ? 1 : 0);
     });
   }
+
+  it("edits a production plan card after lifecycle model/reasoning metadata is added", async () => {
+    const { WakeDispatcher } = await import("../src/wake-dispatcher");
+    const { buildPlanApprovalPromptContent } = await import("../src/plan-review-summary");
+    const sent: string[] = [], edited: string[] = [];
+    const dispatcher = new WakeDispatcher({ directNotifications: { send: async (_route, text, _buttons, options) => {
+      sent.push(text);
+      options?.onStatusCard?.(async (next) => { edited.push(next); }, { messageId: "delivered-plan", sentAt: new Date() });
+    } } });
+    const service = new SessionNotificationService(dispatcher, () => {});
+    const session = { ...approvedSession, approvalState: "pending", pendingPlanApproval: true, planDecisionVersion: 1,
+      harnessName: "codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      route: { provider: "telegram", target: "synthetic", sessionKey: "synthetic-owner" } } as any;
+    const prompt = buildPlanApprovalPromptContent({ sessionName: "A", actionableVersion: 1, hasButtons: true,
+      preview: "Objective: Preserve the reviewed plan.\nVerification: Test the production notification path." });
+    await new Promise<void>((resolve) => service.dispatch(session, { label: "plan-approval",
+      userMessage: prompt.userMessages[0], notifyUser: "always", buttons: [[{ label: "Approve", callbackData: "synthetic-approval" }]],
+      hooks: { onNotifySucceeded: () => resolve() },
+    }));
+    assert.match(sent[0]!, /^📋 \[A\] Plan v1 ready for approval \| codex \| gpt-6\.1-sol \| reasoning: high\n/);
+    Object.assign(session, { approvalState: "approved", pendingPlanApproval: false, planDecisionVersion: 2 });
+    service.dispatch(session, { label: "plan-approved", userMessage: "👍 [A] Plan approved", notifyUser: "always" });
+    await flush();
+    assert.equal(sent.length, 1, "a recognized plan card suppresses the separate acknowledgement");
+    assert.equal(edited.length, 1);
+    assert.ok(edited[0]!.startsWith(sent[0]!.split("\n")[0]!));
+    assert.match(edited[0]!, /Preserve the reviewed plan/);
+    assert.doesNotMatch(edited[0]!, /Choose Approve, Revise, or Reject below/);
+    assert.match(edited[0]!, /👍 Approved (?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2} (?:PDT|PST)$/);
+  });
 
   it("invalidates an old card when a replacement send has no usable identity", async () => {
     const { WakeDispatcher } = await import("../src/wake-dispatcher");

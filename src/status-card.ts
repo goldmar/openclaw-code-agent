@@ -11,7 +11,7 @@ export class StatusCards {
   forget(ref: string): void { this.cards.delete(ref); }
 
   register(ref: string, edit: (text: string) => Promise<void>, text = "", identity: StatusCardIdentity = {}): void {
-    const heading = /^📋 \[[^\n]+\] Plan v(\d+) (?:ready for approval|needs your decision)\n/.exec(text);
+    const heading = /^📋 \[[^\n]+\] Plan v(\d+) (?:ready for approval|needs your decision)(?: \| [^\n]*)?\n/.exec(text);
     // Chunked plans and unrelated live decision cards require a standalone ack.
     if (!heading) { this.cards.delete(ref); return; }
     const previous = this.cards.get(ref);
