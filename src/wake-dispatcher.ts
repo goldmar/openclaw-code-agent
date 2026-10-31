@@ -632,8 +632,8 @@ export class WakeDispatcher {
         try {
           if (hasInteractiveButtons) this.statusCards.forget(session.id);
           await this.directNotifications.send(route, text, buttons, {
-            ...(hasInteractiveButtons ? { onStatusCard: (edit: (text: string) => Promise<void>) => {
-              this.statusCards.register(session.id, edit, text);
+            ...(hasInteractiveButtons ? { onStatusCard: (edit, identity) => {
+              this.statusCards.register(session.id, edit, text, identity);
             } } : {}),
             beforeInternalChatSend: internalHooks?.beforeNotifyInternalChatSend,
             onInternalChatSendNotSubmitted: internalHooks?.onNotifyInternalChatNotSubmitted,

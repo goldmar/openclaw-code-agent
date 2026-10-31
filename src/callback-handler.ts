@@ -1060,7 +1060,8 @@ export function createCallbackHandler(
           if (!responder.editMessage) throw new Error("Decision card editor unavailable");
           try { await responder.editMessage({ text, buttons: [] }); }
           catch (err) { if (!isMessageNotModifiedError(err)) throw err; }
-        }, ctx.channel === "telegram" ? (ctx as PluginInteractiveTelegramHandlerContext).callback.messageText : undefined);
+        }, ctx.channel === "telegram" ? (ctx as PluginInteractiveTelegramHandlerContext).callback.messageText : undefined,
+          ctx.channel === "telegram" ? { messageId: String((ctx as PluginInteractiveTelegramHandlerContext).callback.messageId) } : undefined);
         let promptCleared = false;
         const clearApprovalPrompt = async (force = false) => {
           if (promptCleared) return;

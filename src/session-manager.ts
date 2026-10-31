@@ -1,3 +1,4 @@
+import type { StatusCardIdentity } from "./status-card";
 import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } from "./config";
@@ -2258,9 +2259,9 @@ export class SessionManager {
 
   // -- Wake / notification delivery --
 
-  registerStatusCard(ref: string, edit: (text: string) => Promise<void>, text?: string): void {
+  registerStatusCard(ref: string, edit: (text: string) => Promise<void>, text?: string, identity?: StatusCardIdentity): void {
     const session = this.resolve(ref);
-    this.notifications.statusCards.register(session?.id ?? ref, edit, text);
+    this.notifications.statusCards.register(session?.id ?? ref, edit, text, identity);
   }
 
   updateStatusCard(ref: string, resolvedVersion: number | undefined, acknowledgement?: string): Promise<boolean> {

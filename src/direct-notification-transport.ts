@@ -1,3 +1,4 @@
+import type { StatusCardIdentity } from "./status-card";
 import * as childProcess from "child_process";
 import { logButtonDiagnostic, summarizeButtons, summarizePresentation } from "./button-diagnostics";
 import { isInternalChatProvider } from "./session-route";
@@ -14,7 +15,7 @@ export type DurableMessageBatchSendResult = Awaited<ReturnType<SendDurableMessag
 export type MessagePresentation = NonNullable<DurableSendParams["payloads"][number]["presentation"]>;
 
 export interface DirectNotificationSendOptions {
-  onStatusCard?: (edit: (text: string) => Promise<void>) => void;
+  onStatusCard?: (edit: (text: string) => Promise<void>, identity: StatusCardIdentity) => void;
   onDeliveryIntent?: () => void;
   /** Required disk-confirmed quarantine before a non-idempotent internal append. */
   beforeInternalChatSend?: () => Promise<void>;
@@ -217,7 +218,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
               if (!err || /message is not modified/i.test(String(stderr) + String(stdout) + String(err.message))) resolve();
               else reject(new DirectNotificationDeliveryUnknownError("Status card edit is unconfirmed"));
             }));
-        });
+        }, { messageId, sentAt: new Date() });
       }
     }
   }

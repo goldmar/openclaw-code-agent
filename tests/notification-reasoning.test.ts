@@ -160,12 +160,13 @@ describe("notification reasoning visibility", () => {
     });
   }
 
-  it("covers every shared lifecycle notification variant without changing bodies or buttons", () => {
+  it("covers every shared lifecycle notification variant without changing bodies or buttons", async () => {
     const session = makeSession("high");
     const { service, requests } = recorder();
     const buttons = [[{ label: "Approve", callbackData: "unchanged-token" }]];
     for (const label of LIFECYCLE_NOTIFICATION_VARIANTS) {
       service.dispatch(session, { label, userMessage: `📋 [reasoning-test] ${label}\n\n**Keep markup** https://example.com/pr/1`, buttons });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       const request = requests.at(-1)!;
       assert.equal(request.userMessage, `📋 [reasoning-test] ${label} | codex | gpt-6.1-sol | reasoning: high\n\n**Keep markup** https://example.com/pr/1`);
       assert.equal(request.buttons, buttons);

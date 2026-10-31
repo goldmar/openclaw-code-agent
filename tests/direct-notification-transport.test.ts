@@ -67,7 +67,8 @@ describe("RuntimeDirectNotificationTransport", () => {
     const result = { status: "sent", results: [{ messageId: "card-1" }], receipt: {} } as unknown as DurableMessageBatchSendResult;
     const { calls, transport } = recordingTransport(result);
     let edit: ((text: string) => Promise<void>) | undefined;
-    await transport.send(TOPIC_ROUTE, "approval", undefined, { onStatusCard: (fn) => { edit = fn; } });
+    let identity: any;
+    await transport.send(TOPIC_ROUTE, "approval", undefined, { onStatusCard: (fn, meta) => { edit = fn; identity = meta; } });
     const original = directNotificationTransportInternals.execFile;
     const edits: string[][] = [];
     directNotificationTransportInternals.execFile = ((_command: string, args: string[], _opts: unknown, cb: (err: null, out: string, stderr: string) => void) => {
@@ -75,6 +76,8 @@ describe("RuntimeDirectNotificationTransport", () => {
     }) as any;
     try {
       assert.ok(edit);
+      assert.equal(identity.messageId, "card-1");
+      assert.ok(identity.sentAt instanceof Date);
       await edit("approved");
       assert.equal(calls.length, 1);
       assert.deepEqual(edits[0].slice(0, 2), ["message", "edit"]);

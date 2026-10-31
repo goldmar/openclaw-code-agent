@@ -4,6 +4,7 @@
  * (see ./harness-backends.ts), captured notifications, and Telegram/Discord
  * button callback contexts for the real callback handler.
  */
+import { StatusCards } from "../src/status-card";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +74,7 @@ export async function startInteractionFixture(
   const createManager = (): SessionManager => {
     const manager = new SessionManager(5, 50);
     (manager as unknown as { notifications: unknown }).notifications = {
+      statusCards: new StatusCards(),
       dispatch: (session: { id: string }, request: SessionNotificationRequest) => {
         notifications.push({ sessionId: session.id, request });
         if (request.shouldDispatch && !request.shouldDispatch()) return;

@@ -1,4 +1,5 @@
 import "./test-env";
+import { setPluginRuntime } from "../src/runtime-store";
 import { StatusCards } from "../src/status-card";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -131,11 +132,13 @@ function createToolResult(text: string, success: boolean, outcomeNotified = succ
 
 describe("createCallbackHandler()", () => {
   beforeEach(() => {
+    setPluginRuntime({}, { agents: { defaults: { userTimezone: "America/Los_Angeles" } } });
     setSessionManager(null);
     setAutoUpdateService(null);
   });
 
   afterEach(() => {
+    setPluginRuntime(undefined);
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     setAutoUpdateService(null);
   });
@@ -655,7 +658,7 @@ describe("createCallbackHandler()", () => {
       const token = { sessionId: "test-id", kind: "plan-approve", planDecisionVersion: 1 };
       setSessionManager({ getActionToken: () => token, consumeActionToken: () => token,
         resolve: () => session, getPersistedSession: (): undefined => undefined,
-        registerStatusCard: (ref: string, edit: (text: string) => Promise<void>, text: string) => { cards.register(ref, edit, text); },
+        registerStatusCard: (ref: string, edit: (text: string) => Promise<void>, text: string, identity: any) => { cards.register(ref, edit, text, identity); },
         updateStatusCard: (ref: string, version: number) => cards.approve(ref, version),
         notifySession: () => assert.fail("callback owns its confirmation"), clearPlanDecisionTokens: () => {} } as any);
       const plan = "📋 [test] Plan v1 ready for approval\n\nKeep this reviewed plan.";
@@ -666,7 +669,7 @@ describe("createCallbackHandler()", () => {
         assert.equal(state.replies.length, 1);
         assert.match(state.replies[0], /👍 .*Plan approved/);
       } else {
-        assert.deepEqual(state.editedMessages, [plan + "\n\n👍 Approved 09:40 PT"]);
+        assert.deepEqual(state.editedMessages, [plan + "\n\n👍 Approved 2026-10-31 09:40 PDT"]);
         assert.deepEqual(state.replies, []);
       }
     });

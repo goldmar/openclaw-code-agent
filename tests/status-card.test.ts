@@ -1,9 +1,13 @@
 import "./test-env";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { setPluginRuntime } from "../src/runtime-store";
 import { StatusCards, approvedPlanCard } from "../src/status-card";
 import { SessionNotificationService } from "../src/session-notifications";
 import { opsDigestInternals, enqueueHeldWork } from "../src/ops-digest";
+
+beforeEach(() => setPluginRuntime({}, { agents: { defaults: { userTimezone: "America/Los_Angeles" } } }));
+afterEach(() => setPluginRuntime(undefined));
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -15,26 +19,77 @@ describe("approved plan cards", () => {
   it("keeps the original plan and approval time, including Pacific winter time", async () => {
     const cards = new StatusCards(() => approvalNow);
     const edits: string[] = [];
-    cards.register("a", async (text) => { edits.push(text); }, plan);
+    cards.register("a", async (text) => { edits.push(text); }, plan, { sentAt: approvalNow });
     assert.deepEqual(await Promise.all([cards.approve("a", 1), cards.approve("a", 1)]), [true, true]);
-    assert.deepEqual(edits, [plan + "\n\n👍 Approved 09:40 PT"]);
-    assert.match(approvedPlanCard(plan, new Date("2026-12-01T17:40:00Z")), /Approved 09:40 PT$/);
+    assert.deepEqual(edits, [plan + "\n\n👍 Approved 09:40 PDT"]);
+    assert.match(approvedPlanCard(plan, new Date("2026-12-01T17:40:00Z"), undefined, new Date("2026-12-01T17:00:00Z")), /Approved 09:40 PST$/);
+  });
+
+  it("uses the live OpenClaw timezone for the clock, abbreviation and later-day date", () => {
+    let userTimezone = "Europe/Paris";
+    setPluginRuntime({ config: { current: () => ({ agents: { defaults: { userTimezone } } }) } });
+    const approvedAt = new Date("2026-11-01T23:40:00Z");
+    const card = approvedPlanCard(plan, approvedAt, undefined, new Date("2026-11-01T21:00:00Z"));
+    assert.match(card, /Approved 2026-11-02 00:40 GMT\+1$/);
+    userTimezone = "America/Los_Angeles";
+    assert.match(approvedPlanCard(plan, approvedAt, undefined, new Date("2026-11-01T21:00:00Z")), /Approved 15:40 PST$/);
+  });
+
+  it("derives distinct daylight and standard labels across the DST fallback", () => {
+    const sentAt = new Date("2026-11-01T07:00:00Z");
+    assert.match(approvedPlanCard(plan, new Date("2026-11-01T08:30:00Z"), undefined, sentAt), /Approved 01:30 PDT$/);
+    assert.match(approvedPlanCard(plan, new Date("2026-11-01T09:30:00Z"), undefined, sentAt), /Approved 01:30 PST$/);
+  });
+
+  it("falls back to the host timezone when userTimezone is absent or invalid", () => {
+    for (const userTimezone of [undefined, "not/a-zone"]) {
+      setPluginRuntime({}, { agents: { defaults: { userTimezone } } });
+      const expected = new Intl.DateTimeFormat("en-US", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short" }).format(approvalNow);
+      assert.ok(approvedPlanCard(plan, approvalNow, undefined, approvalNow).endsWith("👍 Approved " + expected));
+    }
+  });
+
+  it("includes the date for next-day approval, comparing Pacific calendar days", () => {
+    const sentAt = new Date("2026-11-01T06:30:00Z"); // Oct 31, 23:30 PT
+    const approvedAt = new Date("2026-11-01T17:40:00Z"); // Nov 1, 09:40 PDT
+    assert.match(approvedPlanCard(plan, approvedAt, undefined, sentAt), /Approved 2026-11-01 09:40 PST$/);
+    // Different UTC dates can still be the same Pacific day.
+    assert.match(approvedPlanCard(plan, new Date("2026-11-01T05:40:00Z"), undefined,
+      new Date("2026-10-31T16:00:00Z")), /Approved 22:40 PDT$/);
+    assert.match(approvedPlanCard(plan, approvedAt), /Approved 2026-11-01 09:40 PST$/, "unknown send dates must stay unambiguous");
+  });
+
+  it("retains the known send date when the authenticated callback rebinds the same card", async () => {
+    const cards = new StatusCards(() => new Date("2026-11-01T17:40:00Z"));
+    cards.register("a", async () => assert.fail("the callback editor should replace this"), plan,
+      { messageId: "same-card", sentAt: new Date("2026-10-31T16:00:00Z") });
+    const edits: string[] = [];
+    cards.register("a", async (text) => { edits.push(text); }, plan, { messageId: "same-card" });
+    assert.equal(await cards.approve("a", 1), true);
+    assert.match(edits[0]!, /Approved 2026-11-01 09:40 PST$/);
+  });
+
+  it("removes only the obsolete final choice instruction while preserving the plan", () => {
+    const original = plan + "\n\nQuoted instruction: Choose Approve, Revise, or Reject below.\n\nChoose Approve, Revise, or Reject below.";
+    const card = approvedPlanCard(original, approvalNow, undefined, approvalNow);
+    assert.equal(card, plan + "\n\nQuoted instruction: Choose Approve, Revise, or Reject below.\n\n👍 Approved 09:40 PDT");
   });
 
   it("keeps an orchestrator's approval rationale beneath the timestamp", async () => {
     const cards = new StatusCards(() => approvalNow);
     const edits: string[] = [];
-    cards.register("a", async (text) => { edits.push(text); }, plan);
+    cards.register("a", async (text) => { edits.push(text); }, plan, { sentAt: approvalNow });
     assert.equal(await cards.approve("a", 1, undefined, "👍 [A] Plan approved\nWhy: The checks cover this change."), true);
-    assert.equal(edits[0], plan + "\n\n👍 Approved 09:40 PT\nWhy: The checks cover this change.");
+    assert.equal(edits[0], plan + "\n\n👍 Approved 09:40 PDT\nWhy: The checks cover this change.");
   });
 
   it("trims a long plan body and preserves its header and complete footer", () => {
     const longPlan = plan + "😀".repeat(2500);
-    const card = approvedPlanCard(longPlan, approvalNow);
+    const card = approvedPlanCard(longPlan, approvalNow, undefined, approvalNow);
     assert.ok(card.length <= 4096);
     assert.ok(card.startsWith(plan));
-    assert.match(card, /…\n\n👍 Approved 09:40 PT$/);
+    assert.match(card, /…\n\n👍 Approved 09:40 PDT$/);
     assert.equal(card.isWellFormed(), true);
   });
 
@@ -43,7 +98,7 @@ describe("approved plan cards", () => {
       const cards = new StatusCards();
       const edits: string[] = [];
       if (["failed edit", "held edit"].includes(scenario)) {
-        cards.register("a", async (text) => { edits.push(text); throw new Error("edit unconfirmed"); }, plan);
+        cards.register("a", async (text) => { edits.push(text); throw new Error("edit unconfirmed"); }, plan, { sentAt: approvalNow });
         if (scenario === "held edit") assert.equal(await cards.approve("a", 1), false);
       } else if (scenario === "split plan") {
         cards.register("a", async () => assert.fail("split plan cannot be edited"), "📋 [A] Plan v1 ready for approval (2/2):\nplan");
@@ -80,7 +135,7 @@ describe("approved plan cards", () => {
   it("leaves the approved card untouched on delegate handoff and preserves outcomes", async () => {
     const cards = new StatusCards(() => approvalNow);
     const edits: string[] = [];
-    cards.register("a", async (text) => { edits.push(text); }, plan);
+    cards.register("a", async (text) => { edits.push(text); }, plan, { sentAt: approvalNow });
     const requests: any[] = [];
     const service = new SessionNotificationService({ statusCards: cards,
       dispatchSessionNotification: (_s: unknown, r: unknown) => requests.push(r) } as any, () => {});
@@ -90,7 +145,7 @@ describe("approved plan cards", () => {
     service.dispatch(approvedSession, { label: "failed", userMessage: "failure", notifyUser: "always" });
     service.dispatch(approvedSession, { label: "completed", userMessage: "terminal", notifyUser: "always" });
     await flush();
-    assert.deepEqual(edits, [plan + "\n\n👍 Approved 09:40 PT"]);
+    assert.deepEqual(edits, [plan + "\n\n👍 Approved 09:40 PDT"]);
     assert.equal(requests[0].notifyUser, "never");
     assert.match(requests[1].wakeMessage, /merge policy handoff/);
     assert.equal(requests[2].userMessage, "failure");
@@ -227,7 +282,7 @@ it("renders the synthetic Telegram UX review examples from production formatters
   const approval = formatPlanApprovedLine(name);
   const cards = new StatusCards(() => approvalNow);
   const edits: string[] = [];
-  cards.register("ux-demo", async (text) => { edits.push(text); }, original.userMessages[0]);
+  cards.register("ux-demo", async (text) => { edits.push(text); }, original.userMessages[0], { sentAt: approvalNow });
   const requests: any[] = [];
   const service = new SessionNotificationService({ statusCards: cards,
     dispatchSessionNotification: (_s: unknown, r: unknown) => requests.push(r) } as any, () => {});
@@ -236,7 +291,7 @@ it("renders the synthetic Telegram UX review examples from production formatters
   service.dispatch(session, { label: "decision-button-pressed", wakeMessage: "The user approved the plan.", notifyUser: "never" });
   service.dispatch(session, { label: "worktree-delegate", wakeMessage: "Continue delegated follow-through.", notifyUser: "never" });
   await flush();
-  assert.deepEqual(edits, [original.userMessages[0] + "\n\n👍 Approved 09:40 PT"]);
+  assert.deepEqual(edits, [original.userMessages[0]!.replace("\n\nChoose Approve, Revise, or Reject below.", "") + "\n\n👍 Approved 09:40 PDT"]);
   assert.ok(requests.every((r) => r.notifyUser === "never"));
   console.log("OCA_UX_FIXTURE_JSON=" + JSON.stringify({ fixture: name, originalCards: original.userMessages,
     buttons: ["Approve", "Revise", "Reject"], beforeSeparateApprovalMessage: approval,
