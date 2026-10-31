@@ -11,14 +11,14 @@ export function heldWorkDigestKey(owner: string, ref: string): string {
   return createHash("sha256").update(`${owner}:${ref}`).digest("hex");
 }
 
-export function enqueueHeldWork(owner: string, ref: string, resolved = false, savedKey?: string): Promise<"queued" | "unavailable" | "held"> {
+export function enqueueHeldWork(owner: string, ref: string, resolved = false, savedKey?: string, details?: { name: string; branch: string; age: string }): Promise<"queued" | "unavailable" | "held"> {
   const key = savedKey ?? heldWorkDigestKey(owner, ref);
-  if (!/^[a-f0-9]{64}$/.test(key)) return Promise.resolve("held");
+  if (!/^[a-f0-9]{64}$/.test(key) || (!resolved && !details)) return Promise.resolve("held");
   return new Promise((resolve) => {
     const canonical = join(homedir(), ".openclaw", "workspace", "bin", "ops-digest");
     opsDigestInternals.execFile(existsSync(canonical) ? canonical : "ops-digest", ["--producer", "oca-held-work", "--key", key,
       ...(resolved ? ["--resolve"] : ["--weekly", "--summary",
-        `Code Agent work remains held for its owner (${key.slice(0, 12)}). Review /agent_status; no ownership or approval has changed.`])],
+        `⏰ [${details!.name}] Branch \`${details!.branch}\` still waits for your decision (${details!.age} at queue time). Review /agent_status ${details!.name}.`])],
     { timeout: 20_000 }, (err, stdout) => resolve(!err && stdout.trim() === `ops-digest: ${resolved ? "resolved" : "queued"}`
       ? "queued" : (err as NodeJS.ErrnoException | null)?.code === "ENOENT" ? "unavailable" : "held"));
   });

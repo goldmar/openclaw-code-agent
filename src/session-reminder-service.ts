@@ -117,36 +117,34 @@ export class SessionReminderService {
     // The resolution checks above await git; drop the send if the schedule moved meanwhile.
     if (!stillCurrent()) return false;
 
-    // Queue one weekly owner reminder in the shared daily operations digest.
-    // Queue admission is distinct from a Telegram receipt. On a missing host
-    // integration retain the existing reminder path on other installations.
-    const existingDigestKey = session.worktreeDigestKey;
-    const owner = session.route?.sessionKey ?? session.originSessionKey ?? "owner";
-    const digestKey = session.worktreeDigestKey ?? heldWorkDigestKey(owner, session.sessionId ?? session.name);
-    if (!session.worktreeDigestKey) {
-      // Persist intent before the helper: a lost queue acknowledgement still
-      // needs eventual removal when the owner resolves this work.
-      let recorded = false;
-      for (const ref of getPersistedMutationRefs(session)) recorded = await this.recordDigestIntent(ref, digestKey) || recorded;
-      if (!recorded) return false;
-    }
-    const digestAdmission = await enqueueHeldWork(owner, session.sessionId ?? session.name, false, digestKey);
-    if (digestAdmission === "held") return false;
-    if (digestAdmission === "queued") {
-      if (stillCurrent()) {
-        for (const ref of getPersistedMutationRefs(session)) {
-          this.updatePersistedSession(ref, { lastWorktreeReminderAt: new Date(now).toISOString(),
-            worktreeReminderCount: 2 }); // the existing weekly backoff, still rechecked for resolution
-        }
-      }
-      return true;
-    }
-
-    if (existingDigestKey) return false; // unavailable helper cannot abandon an existing queue intent
-    for (const ref of getPersistedMutationRefs(session)) await this.recordDigestIntent(ref, undefined);
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
     const sent = SessionReminderService.remindersSent(session);
+    // Keep the first two reminders as messages on the existing 3h/24h schedule.
+    // Only weekly repeats may move to the optional shared digest.
+    if (sent >= 2) {
+      const existingDigestKey = session.worktreeDigestKey;
+      const owner = session.route?.sessionKey ?? session.originSessionKey ?? "owner";
+      const digestKey = existingDigestKey ?? heldWorkDigestKey(owner, session.sessionId ?? session.name);
+      if (!existingDigestKey) {
+        let recorded = false;
+        for (const ref of getPersistedMutationRefs(session)) recorded = await this.recordDigestIntent(ref, digestKey) || recorded;
+        if (!recorded) return false;
+      }
+      const digestAdmission = await enqueueHeldWork(owner, session.sessionId ?? session.name, false, digestKey, {
+        name: session.name, branch: session.worktreeBranch ?? "unknown", age: formatPendingAge(pendingHours),
+      });
+      if (digestAdmission === "held") return false;
+      if (digestAdmission === "queued") {
+        if (stillCurrent()) for (const ref of getPersistedMutationRefs(session)) {
+          this.updatePersistedSession(ref, { lastWorktreeReminderAt: new Date(now).toISOString(),
+            worktreeReminderCount: SessionReminderService.MAX_REMINDERS });
+        }
+        return true;
+      }
+      if (existingDigestKey) return false;
+      for (const ref of getPersistedMutationRefs(session)) await this.recordDigestIntent(ref, undefined);
+    }
     const isLast = sent + 1 >= SessionReminderService.MAX_REMINDERS;
     let recorded = false;
     const recordAttempt = (): void => {

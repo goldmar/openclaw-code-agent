@@ -83,6 +83,17 @@ describe("RuntimeDirectNotificationTransport", () => {
     } finally { directNotificationTransportInternals.execFile = original; }
   });
 
+  for (const results of [[{ messageId: "part-1" }, { messageId: "part-2" }], [{}]]) {
+    it(`leaves ${results.length > 1 ? "split" : "unidentified"} plan delivery without an editable card`, async () => {
+      setPluginRuntime({}, { channels: { telegram: { enabled: true } } });
+      const result = { status: "sent", results, receipt: {} } as unknown as DurableMessageBatchSendResult;
+      const { transport } = recordingTransport(result);
+      let registered = false;
+      await transport.send(TOPIC_ROUTE, "reviewed plan", undefined, { onStatusCard: () => { registered = true; } });
+      assert.equal(registered, false, "approval must use the standalone fallback");
+    });
+  }
+
   it("uses runtime.config.current when no service config snapshot is stored", async () => {
     const cfg = { channels: { telegram: { enabled: true } }, source: "runtime-current" };
     setPluginRuntime({ config: { current: () => cfg } });

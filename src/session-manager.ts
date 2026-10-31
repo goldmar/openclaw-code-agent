@@ -2258,18 +2258,18 @@ export class SessionManager {
 
   // -- Wake / notification delivery --
 
-  registerStatusCard(ref: string, edit: (text: string) => Promise<void>): void {
+  registerStatusCard(ref: string, edit: (text: string) => Promise<void>, text?: string): void {
     const session = this.resolve(ref);
-    this.notifications.statusCards.register(session?.id ?? ref, edit);
+    this.notifications.statusCards.register(session?.id ?? ref, edit, text);
   }
 
-  updateStatusCard(ref: string, text: string): void {
+  updateStatusCard(ref: string, resolvedVersion: number | undefined, acknowledgement?: string): Promise<boolean> {
     const session = this.resolve(ref);
-    this.notifications.statusCards.update(session?.id ?? ref, text);
+    return this.notifications.statusCards.approve(session?.id ?? ref, resolvedVersion, undefined, acknowledgement);
   }
 
   inheritStatusCard(source: string, target: string): void {
-    this.notifications.statusCards.inherit(source, target);
+    this.notifications.statusCards?.inherit(source, target);
   }
 
   notifySession(session: Session, text: string, label: string = "notification", idempotencyKey?: string): void {

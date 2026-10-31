@@ -630,9 +630,10 @@ export class WakeDispatcher {
           if (this.disposed || shouldDispatch?.() === false) return "skipped" as const;
         }
         try {
+          if (hasInteractiveButtons) this.statusCards.forget(session.id);
           await this.directNotifications.send(route, text, buttons, {
             ...(hasInteractiveButtons ? { onStatusCard: (edit: (text: string) => Promise<void>) => {
-              this.statusCards.register(session.id, edit);
+              this.statusCards.register(session.id, edit, text);
             } } : {}),
             beforeInternalChatSend: internalHooks?.beforeNotifyInternalChatSend,
             onInternalChatSendNotSubmitted: internalHooks?.onNotifyInternalChatNotSubmitted,

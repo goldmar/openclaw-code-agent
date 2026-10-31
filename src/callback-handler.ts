@@ -1060,7 +1060,7 @@ export function createCallbackHandler(
           if (!responder.editMessage) throw new Error("Decision card editor unavailable");
           try { await responder.editMessage({ text, buttons: [] }); }
           catch (err) { if (!isMessageNotModifiedError(err)) throw err; }
-        });
+        }, ctx.channel === "telegram" ? (ctx as PluginInteractiveTelegramHandlerContext).callback.messageText : undefined);
         let promptCleared = false;
         const clearApprovalPrompt = async (force = false) => {
           if (promptCleared) return;
@@ -1122,8 +1122,10 @@ export function createCallbackHandler(
         }
 
         await clearApprovalPrompt(true);
-        const status = result.userText ?? `👍 [${actionSessionName}] Plan approved; work in progress.`;
-        sessionManager.updateStatusCard?.(sessionId, status);
+        const status = result.userText ?? `👍 [${actionSessionName}] Plan approved`;
+        if (!(await sessionManager.updateStatusCard?.(sessionId, planToken.planDecisionVersion, status))) {
+          await replyText(ctx, status);
+        }
         queueDecisionPressedNote(sessionManager, "plan-approve", sessionId, actionSessionName, tokenId);
         return { handled: true };
       }

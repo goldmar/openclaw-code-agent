@@ -31,6 +31,9 @@ type RoutableSession = Pick<
   | "reasoningEffort"
 > & {
   name?: string;
+  approvalState?: string;
+  planDecisionVersion?: number;
+  pendingPlanApproval?: boolean;
   goalTaskId?: string;
 };
 
@@ -52,6 +55,9 @@ type PersistedRoutingSession = Pick<
   | "reasoningEffort"
 > & {
   id?: string;
+  approvalState?: string;
+  planDecisionVersion?: number;
+  pendingPlanApproval?: boolean;
   harnessName?: string;
   harness?: string;
 };
@@ -129,18 +135,23 @@ export class SessionNotificationService {
   dispatch(
     session: RoutableSession | PersistedRoutingSession,
     request: SessionNotificationRequest,
+    approvalCardHandled = false,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
-    if (["decision-button-pressed", "plan-approved", "worktree-delegate"].includes(request.label)) {
-      const status = request.userMessage ?? (request.label === "worktree-delegate"
-        ? `[${session.name ?? "Code Agent"}] Worktree ready; delegated follow-through in progress.`
-        : `[${session.name ?? "Code Agent"}] Decision accepted; work in progress.`);
-      if (request.label !== "decision-button-pressed") this.statusCards?.update(deliveryRef, status);
-      // These are acknowledgements, not new approval requests or outcomes.
-      // Preserve delegation/context wakes, while explicitly excluding an echo.
+    if (request.label === "plan-approved" && !approvalCardHandled) {
+      // Approval advances the control-state version once. A newer pending plan
+      // or an unrelated live decision card must retain its buttons.
+      const resolvedVersion = session.approvalState === "approved" && !session.pendingPlanApproval
+        && session.planDecisionVersion != null ? session.planDecisionVersion - 1 : undefined;
+      void (this.statusCards?.approve(deliveryRef, resolvedVersion, undefined, request.userMessage) ?? Promise.resolve(false)).then((edited) => {
+        this.dispatch(session, edited ? { ...request, userMessage: undefined, userMessages: undefined, notifyUser: "never" } : request, true);
+      });
+      return;
+    }
+    if (["decision-button-pressed", "worktree-delegate"].includes(request.label)) {
       request = { ...request, userMessage: undefined, userMessages: undefined, notifyUser: "never",
         ...(request.wakeMessage ? { wakeMessage: request.wakeMessage +
-          "\nRoutine status is coalesced into the existing decision card. Do not send an acknowledgement of this transition. Preserve approval requests, failures and terminal outcomes." } : {}) };
+          "\nDo not send an acknowledgement of this transition. Preserve approval requests, failures and terminal outcomes." } : {}) };
     }
     const persistedSession = this.getPersistedSession?.(deliveryRef);
     const originalCompletionSummaryFact = this.buildCompletionSummaryFact(request);
