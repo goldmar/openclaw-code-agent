@@ -499,6 +499,13 @@ export class SessionManager {
         undefined,
         persistedSession,
       ),
+      async (ref, key) => {
+        // Intent writes must be durable before queue admission, without
+        // invalidating the maintenance generation currently doing the send.
+        const updated = stateSync.applySessionPatch(ref, { worktreeDigestKey: key });
+        if (updated) await store.whenPersisted();
+        return updated;
+      },
     );
     const maintenance = new SessionMaintenanceService({
       store,
@@ -2254,6 +2261,11 @@ export class SessionManager {
   registerStatusCard(ref: string, edit: (text: string) => Promise<void>): void {
     const session = this.resolve(ref);
     this.notifications.statusCards.register(session?.id ?? ref, edit);
+  }
+
+  updateStatusCard(ref: string, text: string): void {
+    const session = this.resolve(ref);
+    this.notifications.statusCards.update(session?.id ?? ref, text);
   }
 
   inheritStatusCard(source: string, target: string): void {

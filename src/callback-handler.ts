@@ -1123,13 +1123,7 @@ export function createCallbackHandler(
 
         await clearApprovalPrompt(true);
         const status = result.userText ?? `👍 [${actionSessionName}] Plan approved; work in progress.`;
-        const responder = ctx.respond as InteractiveResponder;
-        if (responder.editMessage) {
-          try { await responder.editMessage({ text: status, buttons: [] }); }
-          catch (err) {
-            if (!isMessageNotModifiedError(err)) log.warn("[callback-handler] Approval status card edit is unconfirmed; no acknowledgement resent.");
-          }
-        }
+        sessionManager.updateStatusCard?.(sessionId, status);
         queueDecisionPressedNote(sessionManager, "plan-approve", sessionId, actionSessionName, tokenId);
         return { handled: true };
       }

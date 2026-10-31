@@ -1,4 +1,5 @@
 import "./test-env";
+import { StatusCards } from "../src/status-card";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
@@ -650,12 +651,16 @@ describe("createCallbackHandler()", () => {
     const session = createStubSession({ pendingPlanApproval: true, actionablePlanDecisionVersion: 1,
       sendMessage: async () => {}, switchPermissionMode: () => {} });
     let standalone = 0;
+    const cards = new StatusCards();
     setSessionManager({ getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       resolve: () => session, getPersistedSession: (): undefined => undefined,
+      registerStatusCard: (ref: string, edit: (text: string) => Promise<void>) => { cards.register(ref, edit); },
+      updateStatusCard: (ref: string, text: string) => { cards.update(ref, text); },
       notifySession: () => { standalone++; }, clearPlanDecisionTokens: () => {} } as any);
     const state = createCtx("token-approve");
     await createCallbackHandler().handler(state.ctx as any);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(standalone, 0);
     assert.ok(state.editedMessages.some((text) => /approved/i.test(text)));
     assert.deepEqual(state.replies, []);

@@ -6,7 +6,7 @@ import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { createLogger } from "./logger";
-import { enqueueHeldWork } from "./ops-digest";
+import { enqueueHeldWork, heldWorkDigestKey } from "./ops-digest";
 
 const log = createLogger("session-reminder-service");
 // The dispatcher classifies a hung direct send after 30s. Wait past that
@@ -55,6 +55,8 @@ export class SessionReminderService {
       sessionId: string,
       session: PersistedSessionInfo,
     ) => NotificationButton[][] | undefined | Promise<NotificationButton[][] | undefined>,
+    private readonly recordDigestIntent: (ref: string, key: string | undefined) => Promise<boolean> =
+      async (ref, key) => this.updatePersistedSession(ref, { worktreeDigestKey: key }),
   ) {}
 
   static readonly REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
@@ -75,7 +77,8 @@ export class SessionReminderService {
 
   async getNextReminderAt(session: PersistedSessionInfo): Promise<number | undefined> {
     const pendingSince = new Date(session.pendingWorktreeDecisionSince).getTime();
-    if ((await this.getWorktreeDecisionReminderStatus(session, pendingSince)) !== "pending") return undefined;
+    const decision = await this.getWorktreeDecisionReminderStatus(session, pendingSince);
+    if (decision !== "pending") return decision === "resolved" && session.worktreeDigestKey ? 0 : undefined;
     const sent = SessionReminderService.remindersSent(session);
     if (sent >= SessionReminderService.MAX_REMINDERS) return undefined;
 
@@ -107,7 +110,8 @@ export class SessionReminderService {
     now: number = Date.now(),
     stillCurrent: () => boolean = () => true,
   ): Promise<boolean> {
-    await this.clearResolvedReminderState(session);
+    const cleared = await this.clearResolvedReminderState(session);
+    if (session.worktreeDigestKey && await this.isResolvedWorktreeDecision(session)) return cleared;
     const nextReminderAt = await this.getNextReminderAt(session);
     if (nextReminderAt == null || nextReminderAt > now) return false;
     // The resolution checks above await git; drop the send if the schedule moved meanwhile.
@@ -116,8 +120,17 @@ export class SessionReminderService {
     // Queue one weekly owner reminder in the shared daily operations digest.
     // Queue admission is distinct from a Telegram receipt. On a missing host
     // integration retain the existing reminder path on other installations.
-    const digestAdmission = await enqueueHeldWork(session.route?.sessionKey ?? session.originSessionKey ?? "owner",
-                              session.sessionId ?? session.name);
+    const existingDigestKey = session.worktreeDigestKey;
+    const owner = session.route?.sessionKey ?? session.originSessionKey ?? "owner";
+    const digestKey = session.worktreeDigestKey ?? heldWorkDigestKey(owner, session.sessionId ?? session.name);
+    if (!session.worktreeDigestKey) {
+      // Persist intent before the helper: a lost queue acknowledgement still
+      // needs eventual removal when the owner resolves this work.
+      let recorded = false;
+      for (const ref of getPersistedMutationRefs(session)) recorded = await this.recordDigestIntent(ref, digestKey) || recorded;
+      if (!recorded) return false;
+    }
+    const digestAdmission = await enqueueHeldWork(owner, session.sessionId ?? session.name, false, digestKey);
     if (digestAdmission === "held") return false;
     if (digestAdmission === "queued") {
       if (stillCurrent()) {
@@ -129,6 +142,8 @@ export class SessionReminderService {
       return true;
     }
 
+    if (existingDigestKey) return false; // unavailable helper cannot abandon an existing queue intent
+    for (const ref of getPersistedMutationRefs(session)) await this.recordDigestIntent(ref, undefined);
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
     const sent = SessionReminderService.remindersSent(session);
@@ -241,17 +256,21 @@ export class SessionReminderService {
   }
 
   async clearResolvedReminderState(session: PersistedSessionInfo): Promise<boolean> {
-    if (!session.pendingWorktreeDecisionSince && !session.lastWorktreeReminderAt && !session.worktreeDecisionSnoozedUntil) {
+    if (!session.worktreeDigestKey && !session.pendingWorktreeDecisionSince && !session.lastWorktreeReminderAt && !session.worktreeDecisionSnoozedUntil) {
       return false;
     }
     if (!(await this.isResolvedWorktreeDecision(session))) return false;
 
-    await enqueueHeldWork(session.route?.sessionKey ?? session.originSessionKey ?? "owner",
-                          session.sessionId ?? session.name, true);
+    if (session.worktreeDigestKey) {
+      const admission = await enqueueHeldWork(session.route?.sessionKey ?? session.originSessionKey ?? "owner",
+                            session.sessionId ?? session.name, true, session.worktreeDigestKey);
+      if (admission !== "queued") return false;
+    }
 
     let updated = false;
     for (const mutationRef of getPersistedMutationRefs(session)) {
       updated = this.updatePersistedSession(mutationRef, {
+        worktreeDigestKey: undefined,
         pendingWorktreeDecisionSince: undefined,
         lastWorktreeReminderAt: undefined,
         worktreeDecisionSnoozedUntil: undefined,

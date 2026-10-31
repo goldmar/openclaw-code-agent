@@ -135,7 +135,7 @@ export class SessionNotificationService {
       const status = request.userMessage ?? (request.label === "worktree-delegate"
         ? `[${session.name ?? "Code Agent"}] Worktree ready; delegated follow-through in progress.`
         : `[${session.name ?? "Code Agent"}] Decision accepted; work in progress.`);
-      this.statusCards?.update(deliveryRef, status);
+      if (request.label !== "decision-button-pressed") this.statusCards?.update(deliveryRef, status);
       // These are acknowledgements, not new approval requests or outcomes.
       // Preserve delegation/context wakes, while explicitly excluding an echo.
       request = { ...request, userMessage: undefined, userMessages: undefined, notifyUser: "never",

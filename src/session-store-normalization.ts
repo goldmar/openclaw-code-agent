@@ -683,6 +683,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     deferredCompletionCycle: toOptionalNumber(raw.deferredCompletionCycle),
     lastWorktreeReminderAt: toOptionalString(raw.lastWorktreeReminderAt),
     worktreeReminderCount: toOptionalNumber(raw.worktreeReminderCount),
+    worktreeDigestKey: typeof raw.worktreeDigestKey === "string" && /^[a-f0-9]{64}$/.test(raw.worktreeDigestKey) ? raw.worktreeDigestKey : undefined,
     worktreeBaseBranch: toOptionalString(raw.worktreeBaseBranch),
     worktreeParentBranch: toOptionalString(raw.worktreeParentBranch),
     worktreePrTargetRepo: toOptionalString(raw.worktreePrTargetRepo),

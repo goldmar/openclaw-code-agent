@@ -1074,7 +1074,7 @@ export class SessionStore {
     // A running session's row is never evicted, even when running rows alone
     // exceed the cap: its output file would be deleted under it. Other rows
     // without completedAt (recovered from a crash) rank as the newest.
-    const live = (row: PersistedSessionInfo): boolean => row.status === "running" || row.status === "starting";
+    const live = (row: PersistedSessionInfo): boolean => row.status === "running" || row.status === "starting" || Boolean(row.worktreeDigestKey);
     const completedAt = (row: PersistedSessionInfo): number => row.completedAt ?? Number.POSITIVE_INFINITY;
     const rows = [...this.persisted.values()];
     const liveCount = rows.filter(live).length;

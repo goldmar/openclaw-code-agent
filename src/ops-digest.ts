@@ -7,8 +7,13 @@ import { createHash } from "node:crypto";
 /** Host integration is optional outside installations that expose ops-digest on PATH. */
 export const opsDigestInternals = { execFile };
 
-export function enqueueHeldWork(owner: string, ref: string, resolved = false): Promise<"queued" | "unavailable" | "held"> {
-  const key = createHash("sha256").update(`${owner}:${ref}`).digest("hex");
+export function heldWorkDigestKey(owner: string, ref: string): string {
+  return createHash("sha256").update(`${owner}:${ref}`).digest("hex");
+}
+
+export function enqueueHeldWork(owner: string, ref: string, resolved = false, savedKey?: string): Promise<"queued" | "unavailable" | "held"> {
+  const key = savedKey ?? heldWorkDigestKey(owner, ref);
+  if (!/^[a-f0-9]{64}$/.test(key)) return Promise.resolve("held");
   return new Promise((resolve) => {
     const canonical = join(homedir(), ".openclaw", "workspace", "bin", "ops-digest");
     opsDigestInternals.execFile(existsSync(canonical) ? canonical : "ops-digest", ["--producer", "oca-held-work", "--key", key,
