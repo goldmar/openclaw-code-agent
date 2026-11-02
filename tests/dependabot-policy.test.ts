@@ -6,8 +6,8 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  REPOSITORY, REQUIRED_CHECKS, RUNTIME_PATCHES, DEVELOPMENT_UPDATES,
-  preparation, preparationForEvent, dependencyScope, evaluate, collectSnapshot, releaseChange, pnpmVersions,
+  COMBINED_LABEL, REPOSITORY, REQUIRED_CHECKS, RUNTIME_PATCHES, DEVELOPMENT_UPDATES,
+  isCombined, preparation, preparationForEvent, dependencyScope, evaluate, collectSnapshot, releaseChange, pnpmVersions,
 } from "../scripts/dependency-maintenance.mjs";
 
 const repoRoot = join(import.meta.dirname, "..");
@@ -132,9 +132,9 @@ describe("weekly dependency admission", () => {
     assert.equal(preparationForEvent(s, { pull_request: { head: { sha: refreshed }, base: { sha: other } } }).status, "prepared");
   });
 
-  it("holds draft, foreign, inactive and inherited auto-merge PRs and never touches #568", () => {
+  it("holds draft, foreign, inactive and inherited auto-merge PRs", () => {
     for (const change of [
-      (s: any) => { s.pr.number = 568; }, (s: any) => { s.pr.draft = true; },
+      (s: any) => { s.pr.draft = true; },
       (s: any) => { s.pr.state = "closed"; }, (s: any) => { s.pr.base.ref = "release"; },
       (s: any) => { s.pr.head.repo.full_name = "outsider/fork"; },
       (s: any) => { s.pr.base.repo.full_name = "outsider/fork"; },
@@ -142,12 +142,85 @@ describe("weekly dependency admission", () => {
     ]) {
       const s = fixture(); change(s); assert.equal(preparation(s).status, "held");
     }
-    const s = fixture(); s.pr.number = 568;
-    const f = apiFixture(s);
-    assert.equal(collectSnapshot(568, { api: f.api }).pr.number, 568);
-    assert.equal(f.calls.length, 1);
-    s.pr.user.login = "contributor";
+    const s = fixture(); s.pr.user.login = "contributor";
     assert.equal(preparation(s).status, "ordinary");
+    const f = apiFixture(s);
+    assert.equal(collectSnapshot(700, { api: f.api }).pr.number, 700);
+    assert.equal(f.calls.length, 1);
+  });
+});
+
+describe("weekly combined PR", () => {
+  const combined = () => {
+    const s = fixture();
+    s.pr.user = { login: "maintainer", type: "User" };
+    s.pr.head.ref = "dependencies/combined-2026-11-09";
+    s.pr.labels = [{ name: COMBINED_LABEL }];
+    s.comments = s.comments.filter((comment: any) => comment.user.type === "Bot");
+    return s;
+  };
+
+  it("is eligible through every ordinary gate, without a preparation receipt", () => {
+    assert.equal(isCombined(combined().pr), true);
+    assert.deepEqual(evaluate(combined()), { status: "eligible", head, base, number: 700 });
+  });
+
+  it("needs the exact branch, the label, a human author and a writer", () => {
+    for (const change of [
+      (s: any) => { s.pr.head.ref = "dependencies/combined-next"; },
+      (s: any) => { s.pr.labels = []; },
+      (s: any) => { s.pr.user.type = "Bot"; },
+    ]) {
+      const s = combined(); change(s); assert.equal(preparation(s).status, "ordinary");
+    }
+    const s = combined(); s.writers = [];
+    assert.deepEqual(preparation(s), { status: "held", reason: "combined-author-not-a-writer" });
+  });
+
+  it("keeps draft, closed, foreign and auto-merge holds", () => {
+    for (const change of [
+      (s: any) => { s.pr.draft = true; }, (s: any) => { s.pr.state = "closed"; },
+      (s: any) => { s.pr.head.repo.full_name = "outsider/fork"; }, (s: any) => { s.pr.auto_merge = {}; },
+    ]) {
+      const s = combined(); change(s); assert.equal(preparation(s).status, "held");
+    }
+  });
+
+  it("still sends a non-routine update to manual review and needs its final-head review", () => {
+    const minor = combined();
+    editManifest(minor, manifest => { manifest.dependencies.qs = "6.17.0"; });
+    assert.deepEqual(evaluate(minor), { status: "manual-review", reason: "dependency-outside-routine-allowlist" });
+    const unreviewed = combined();
+    unreviewed.comments = [];
+    assert.deepEqual(evaluate(unreviewed), { status: "held", reason: "final-head-greptile-required" });
+  });
+
+  it("allows a development minor update beside a runtime patch, but no other transitive minor", () => {
+    const pair = (qs: string, name: string, version: string) => `lockfileVersion: '9.0'\n\npackages:\n\n  'qs@${qs}':\n    resolution: {integrity: sha512-example}\n\n  '${name}@${version}':\n    resolution: {integrity: sha512-other}\n\nsnapshots:\n`;
+    const s = combined();
+    editManifest(s, manifest => { manifest.devDependencies["fast-check"] = "^4.11.0"; });
+    s.contents["pnpm-lock.yaml"] = { before: pair("6.16.1", "fast-check", "4.10.2"), after: pair("6.16.2", "fast-check", "4.11.0") };
+    assert.equal(dependencyScope(s), null);
+    s.contents["pnpm-lock.yaml"] = { before: pair("6.16.1", "picocolors", "1.1.0"), after: pair("6.16.2", "picocolors", "1.2.0") };
+    assert.equal(dependencyScope(s), "unapproved-transitive-change");
+  });
+
+  it("accepts Greptile's no-actionable-issues verdict, but not one with issues", () => {
+    const verdict = (text: string) => {
+      const s = combined();
+      s.comments[0].body = s.comments[0].body.replace(/<h2>Confidence Score: 5\/5<\/h2>[\s\S]*?(?=Last reviewed commit)/u,
+        `<h2>Confidence Score: 5/5</h2>\n${text}\n`);
+      return evaluate(s).status;
+    };
+    assert.equal(verdict("The dependency updates appear safe to merge; no actionable issues were found."), "eligible");
+    assert.equal(verdict("One actionable issue was found."), "held");
+  });
+
+  it("reads the author's write permission without a receipt comment", () => {
+    const s = combined();
+    s.comments = fixture().comments;
+    const f = apiFixture(s);
+    assert.deepEqual(collectSnapshot(700, { api: f.api }).writers, ["maintainer"]);
   });
 });
 
