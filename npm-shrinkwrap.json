@@ -13,11 +13,11 @@
         "@anthropic-ai/sdk": "1.2.0",
         "@hono/node-server": "2.1.5",
         "@modelcontextprotocol/sdk": "1.32.2",
-        "express-rate-limit": "8.7.1",
+        "express-rate-limit": "8.7.2",
         "fast-uri": "3.1.9",
         "hono": "4.13.14",
         "ip-address": "10.7.5",
-        "qs": "6.16.1",
+        "qs": "6.17.1",
         "zod": "4.6.7"
       },
       "engines": {
@@ -622,9 +622,9 @@
       }
     },
     "node_modules/express-rate-limit": {
-      "version": "8.7.1",
-      "resolved": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.7.1.tgz",
-      "integrity": "sha512-2FXbqkygil3mZiXzEtM0IjE/UBmBNot0J1GEVrJT4JbrvwOSoEtqtO+wHbiMQELWe1eNvHoYRg2dkjOid+6JkA==",
+      "version": "8.7.2",
+      "resolved": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.7.2.tgz",
+      "integrity": "sha512-U1ScocxDD9WI09LaBVypvNkOtNR5yWAmZLkuKJdAzIchA4YKFYF6GT5IKER7epG58oXtjvGlV0/6ii0F83EyZg==",
       "license": "MIT",
       "dependencies": {
         "debug": "^4.4.3",
@@ -1095,9 +1095,9 @@
       }
     },
     "node_modules/qs": {
-      "version": "6.16.1",
-      "resolved": "https://registry.npmjs.org/qs/-/qs-6.16.1.tgz",
-      "integrity": "sha512-5Px6J7rfHBAGUhNQ3es4YzcOdBBw0SDcVtThJml4RdnKw4tKs2epA0kPZ+K8X+WiHktT93RHVcQ/3ym5aTCgtg==",
+      "version": "6.17.1",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.17.1.tgz",
+      "integrity": "sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==",
       "license": "BSD-3-Clause",
       "dependencies": {
         "es-define-property": "^1.0.1",
