@@ -220,7 +220,7 @@ describe("weekly combined PR", () => {
     const s = combined();
     s.comments = fixture().comments;
     const f = apiFixture(s);
-    assert.deepEqual(collectSnapshot(700, { api: f.api }).writers, ["maintainer"]);
+    assert.deepEqual((collectSnapshot(700, { api: f.api }) as any).writers, ["maintainer"]);
   });
 });
 
