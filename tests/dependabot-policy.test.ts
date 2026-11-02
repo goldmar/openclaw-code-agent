@@ -218,9 +218,11 @@ describe("weekly combined PR", () => {
 
   it("reads the author's write permission without a receipt comment", () => {
     const s = combined();
-    s.comments = fixture().comments;
+    s.pr.user.login = "author";
+    s.comments = [{ id: 3, user: { login: "someone", type: "User" }, body: "note" }, ...s.comments];
     const f = apiFixture(s);
-    assert.deepEqual((collectSnapshot(700, { api: f.api }) as any).writers, ["maintainer"]);
+    assert.deepEqual((collectSnapshot(700, { api: f.api }) as any).writers, ["author"]);
+    assert.ok(f.calls.some(call => call[1].endsWith("/collaborators/author/permission")));
   });
 });
 
