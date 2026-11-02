@@ -42,8 +42,8 @@ importers:
         specifier: 1.32.2
         version: 1.32.2(zod@4.6.7)
       express-rate-limit:
-        specifier: 8.7.1
-        version: 8.7.1(express@5.2.1)
+        specifier: 8.7.2
+        version: 8.7.2(express@5.2.1)
       fast-uri:
         specifier: 3.1.9
         version: 3.1.9
@@ -1226,8 +1226,8 @@ packages:
     resolution: {integrity: sha512-ge98qjkRK4IB7tL7Ju/6qmm5LHoH1eEMt5FNZrz3f4UIYhF28lggX20z3FaX1sgc67msLEn0N0BscOs29iuwyw==}
     engines: {node: '>=22'}
 
-  express-rate-limit@8.7.1:
-    resolution: {integrity: sha512-2FXbqkygil3mZiXzEtM0IjE/UBmBNot0J1GEVrJT4JbrvwOSoEtqtO+wHbiMQELWe1eNvHoYRg2dkjOid+6JkA==}
+  express-rate-limit@8.7.2:
+    resolution: {integrity: sha512-U1ScocxDD9WI09LaBVypvNkOtNR5yWAmZLkuKJdAzIchA4YKFYF6GT5IKER7epG58oXtjvGlV0/6ii0F83EyZg==}
     engines: {node: '>= 16'}
     peerDependencies:
       express: '>= 4.11'
@@ -2535,7 +2535,7 @@ snapshots:
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
       express: 5.2.1
-      express-rate-limit: 8.7.1(express@5.2.1)
+      express-rate-limit: 8.7.2(express@5.2.1)
       hono: 4.13.14
       jose: 6.2.12
       json-schema-typed: 8.0.2
@@ -2557,7 +2557,7 @@ snapshots:
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
       express: 5.2.1
-      express-rate-limit: 8.7.1(express@5.2.1)
+      express-rate-limit: 8.7.2(express@5.2.1)
       hono: 4.13.14
       jose: 6.2.12
       json-schema-typed: 8.0.2
@@ -3114,7 +3114,7 @@ snapshots:
       which-command: 0.1.0
       yoctocolors: 2.2.0
 
-  express-rate-limit@8.7.1(express@5.2.1):
+  express-rate-limit@8.7.2(express@5.2.1):
     dependencies:
       debug: 4.4.3
       express: 5.2.1
