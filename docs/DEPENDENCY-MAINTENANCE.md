@@ -73,7 +73,8 @@ Each week's routine proposals become one PR, so they share one Greptile review.
    Only `status: eligible` permits the weekly owner to proceed. It requires a
    repository writer as author, the actual allowed dependency diff, all ten required
    GitHub Actions checks successful (not skipped), other current checks green,
-   latest Greptile summary at 5/5 with no blocking issues on the full head SHA,
+   Greptile's own check run successful on the full head SHA, with its latest summary
+   carrying a confidence score of 5 for that SHA,
    and no unresolved review threads or outstanding change requests. The JSON
    result is evidence, not a merge command or a durable grant.
 6. Immediately recheck the live head/base, required branch protections and review

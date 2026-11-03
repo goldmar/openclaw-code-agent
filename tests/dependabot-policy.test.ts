@@ -35,7 +35,7 @@ function fixture(): any {
     },
     comments: [
       { id: 1, user: { login: "maintainer", type: "User" }, body: ready, created_at: "now", updated_at: "now" },
-      { id: 2, user: { login: "greptile-apps[bot]", type: "Bot" }, body: `<!-- greptile_summary -->\n<h2>Confidence Score: 5/5</h2>\nThe PR appears safe to merge; no blocking issue remains in the reviewed changes.\n<h3>Summary</h3>\nLast reviewed commit: [fix](https://github.com/goldmar/openclaw-code-agent/commit/${head})` },
+      { id: 2, user: { login: "greptile-apps[bot]", type: "Bot" }, body: `<!-- greptile_summary -->\n<h2>Summary</h2>\nAny review prose.\n<!-- greptile_confidence_score:5 -->\n<h3>Summary</h3>\nLast reviewed commit: [fix](https://github.com/goldmar/openclaw-code-agent/commit/${head})` },
     ],
     writers: ["maintainer"],
     files: ["package.json", "pnpm-lock.yaml", "npm-shrinkwrap.json", "pnpm-workspace.yaml"].map(filename => ({ filename, status: "modified" })),
@@ -45,7 +45,8 @@ function fixture(): any {
       "npm-shrinkwrap.json": { before: shrinkwrap("6.16.1"), after: shrinkwrap("6.16.2") },
       "pnpm-workspace.yaml": { before: "overrides:\n  qs@<6.16.1: 6.16.1\n", after: "overrides:\n  qs@<6.16.2: 6.16.2\n" },
     },
-    checks: REQUIRED_CHECKS.map((name: string, index: number) => ({ id: index + 1, name, app: { id: 15368 }, head_sha: head, status: "completed", conclusion: "success" })),
+    checks: [...REQUIRED_CHECKS.map((name: string, index: number) => ({ id: index + 1, name, app: { id: 15368 }, head_sha: head, status: "completed", conclusion: "success" })),
+      { id: 100, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "success" }],
     statuses: [], threads: [], reviews: [],
   };
 }
@@ -205,17 +206,6 @@ describe("weekly combined PR", () => {
     assert.equal(dependencyScope(s), "unapproved-transitive-change");
   });
 
-  it("accepts Greptile's no-actionable-issues verdict, but not one with issues", () => {
-    const verdict = (text: string) => {
-      const s = combined();
-      s.comments[0].body = s.comments[0].body.replace(/<h2>Confidence Score: 5\/5<\/h2>[\s\S]*?(?=Last reviewed commit)/u,
-        `<h2>Confidence Score: 5/5</h2>\n${text}\n`);
-      return evaluate(s).status;
-    };
-    assert.equal(verdict("The dependency updates appear safe to merge; no actionable issues were found."), "eligible");
-    assert.equal(verdict("One actionable issue was found."), "held");
-  });
-
   it("reads the author's write permission without a receipt comment", () => {
     const s = combined();
     s.pr.user.login = "author";
@@ -321,13 +311,49 @@ describe("actual dependency diff eligibility", () => {
 });
 
 describe("exact-head CI and review gates", () => {
-  it("accepts the current Greptile no-blocker verdict without relying on its capitalization", () => {
-    const s = fixture();
-    s.comments[1].body = s.comments[1].body.replace(
-      "The PR appears safe to merge; no blocking issue remains in the reviewed changes.",
-      "**[Medium impact]** No blocking code issue remains in the reviewed changes; the stated merge and activation holds still apply.",
-    );
-    assert.equal(evaluate(s).status, "eligible");
+  it("decides from Greptile's structured results, whatever its prose says", () => {
+    for (const prose of ["no outstanding findings", "appears safe", "One actionable issue was found.", "Confidence Score: 1/5"]) {
+      const s = fixture();
+      s.comments[1].body = s.comments[1].body.replace("Any review prose.", prose);
+      assert.equal(evaluate(s).status, "eligible", prose);
+    }
+    for (const change of [
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace("score:5 ", "score:4 "); },
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace("<!-- greptile_confidence_score:5 -->\n", "Confidence Score: 5/5\n"); },
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace("<!-- greptile_confidence_score:5 -->", "quoted <!-- greptile_confidence_score:5 --> marker"); },
+    ]) {
+      const s = fixture(); change(s);
+      assert.deepEqual(evaluate(s), { status: "held", reason: "final-head-greptile-required" });
+    }
+  });
+
+  it("needs Greptile's own successful check on the exact head", () => {
+    const check = (s: any) => s.checks.find((c: any) => c.name === "Greptile Review");
+    for (const change of [
+      (s: any) => { s.checks = s.checks.filter((c: any) => c !== check(s)); },
+      (s: any) => { check(s).head_sha = other; },
+      (s: any) => { check(s).app.id = 15368; },
+      (s: any) => { check(s).status = "in_progress"; check(s).conclusion = null; },
+      (s: any) => { check(s).conclusion = "failure"; },
+      (s: any) => { s.checks.push({ ...check(s), id: check(s).id + 1, conclusion: "failure" }); },
+    ]) {
+      const s = fixture(); change(s); assert.equal(evaluate(s).status, "held");
+    }
+  });
+
+  it("rejects stale, downgraded, spoofed Greptile, open threads and review objections", () => {
+    for (const change of [
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace(head, other); },
+      (s: any) => { s.comments[1].user.login = "outsider"; },
+      (s: any) => { s.comments[1].user.type = "User"; },
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace(`/commit/${head}`, `/commit/${other}`) + `\nA quoted SHA: ${head}`; },
+      (s: any) => { s.comments.push({ ...s.comments[1], id: 5, body: s.comments[1].body.replace("score:5 ", "score:3 ") }); },
+      (s: any) => { s.threads = [{ isResolved: false }]; },
+      (s: any) => { s.reviews = [{ id: 1, user: { login: "reviewer" }, state: "CHANGES_REQUESTED" }]; },
+      (s: any) => { s.pr.mergeable = null; },
+    ]) {
+      const s = fixture(); change(s); assert.equal(evaluate(s).status, "held");
+    }
   });
 
   it("rejects every missing, skipped, stale, foreign-app and failing required context", () => {
@@ -380,7 +406,7 @@ describe("read-only live evidence transport", () => {
     assert.equal(evaluate({ ...result, enabled: true }).status, "eligible");
     assert.ok("comments" in result && "checks" in result);
     assert.equal(result.comments.length, 2);
-    assert.equal(result.checks?.length, 10);
+    assert.equal(result.checks?.length, REQUIRED_CHECKS.length + 1);
     assert.ok(f.calls.some(args => args[1].includes("collaborators/maintainer/permission")));
     assert.ok(f.calls.find(args => args[1] === "graphql")?.join(" ").includes("$endCursor"));
     assert.ok(f.calls.every(args => !args.includes("--method") && !args.includes("-X")));
