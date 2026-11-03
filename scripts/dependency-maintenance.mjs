@@ -12,6 +12,9 @@ export const REQUIRED_CHECKS = [
   "Verify (Node 24.16.0)", "Verify (Node 26.1.0)", "Bundle Size Check", "Lockfile Integrity Check",
   "pnpm audit --prod", "Dependency Review", "actionlint", "no-tabs", "Analyze (javascript-typescript)", "Analyze (actions)",
 ];
+const GREPTILE_APP_ID = 867647;
+const GREPTILE_CHECK = "Greptile Review";
+const GREPTILE_SCORE = /^<!-- greptile_confidence_score:(\d+) -->$/mu;
 const SHA = /^[a-f0-9]{40}$/u;
 const VERSION = /^(\^|~)?(\d+)\.(\d+)\.(\d+)$/u;
 const READY = /^<!-- oca-dependencies-ready:v1 ([a-f0-9]{40}) ([a-f0-9]{40}) -->$/u;
@@ -256,10 +259,12 @@ export function evaluate(snapshot) {
   const greptile = comments.filter(comment => comment.user?.login === "greptile-apps[bot]" && comment.user?.type === "Bot" &&
     (comment.body ?? "").startsWith("<!-- greptile_summary -->"))
     .sort((a, b) => Date.parse(b.updated_at ?? "") - Date.parse(a.updated_at ?? "") || b.id - a.id)[0];
-  const verdict = greptile?.body.split(/<h3>|### /u)[0] ?? "";
   const reviewed = greptile?.body.match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1];
-  if (reviewed !== pr.head.sha || !/Confidence Score: 5\/5\b/u.test(verdict) ||
-      !/No (?:blocking|actionable) issues (?:were )?found|no blocking (?:code )?issues? remains?/iu.test(verdict)) {
+  // Greptile's machine-readable results decide this; its prose never does.
+  const reviewCheck = checks.filter(check => check.name === GREPTILE_CHECK && check.head_sha === pr.head.sha &&
+    check.app?.id === GREPTILE_APP_ID).sort((a, b) => b.id - a.id)[0];
+  if (reviewed !== pr.head.sha || GREPTILE_SCORE.exec(greptile?.body ?? "")?.[1] !== "5" ||
+      reviewCheck?.status !== "completed" || reviewCheck.conclusion !== "success") {
     return { status: "held", reason: "final-head-greptile-required" };
   }
   if (threads.some(thread => thread.isResolved !== true)) return { status: "held", reason: "unresolved-review-threads" };
