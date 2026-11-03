@@ -15,6 +15,8 @@ export const REQUIRED_CHECKS = [
 const SHA = /^[a-f0-9]{40}$/u;
 const VERSION = /^(\^|~)?(\d+)\.(\d+)\.(\d+)$/u;
 const READY = /^<!-- oca-dependencies-ready:v1 ([a-f0-9]{40}) ([a-f0-9]{40}) -->$/u;
+export const COMBINED_LABEL = "dependency-combined";
+const COMBINED_BRANCH = /^dependencies\/combined-\d{4}-\d{2}-\d{2}$/u;
 
 export function releaseChange(before, after, patchOnly = false) {
   const a = VERSION.exec(before ?? "");
@@ -25,15 +27,27 @@ export function releaseChange(before, after, patchOnly = false) {
   return patchOnly ? minor === 0 && patch > 0 : minor > 0 || (minor === 0 && patch > 0);
 }
 
+// The weekly owner's one combined PR. Branch and label only select the lane;
+// preparation still requires a repository writer, and evaluate() applies every
+// dependency, check and review gate to the actual head.
+export function isCombined(pr) {
+  return pr.user?.type === "User" && COMBINED_BRANCH.test(pr.head?.ref ?? "") &&
+    (pr.labels ?? []).some(label => label.name === COMBINED_LABEL);
+}
+
 export function preparation(snapshot) {
   const { pr, comments = [], writers = [] } = snapshot;
-  if (pr.user?.login !== "dependabot[bot]") return { status: "ordinary" };
-  if (pr.number === 568) return { status: "held", reason: "held-sdk-migration" };
+  const combined = isCombined(pr);
+  if (pr.user?.login !== "dependabot[bot]" && !combined) return { status: "ordinary" };
   if (pr.state !== "open" || pr.draft || pr.base?.ref !== "main" || pr.base?.repo?.full_name !== REPOSITORY ||
       pr.head?.repo?.full_name !== REPOSITORY || !SHA.test(pr.head?.sha ?? "") || !SHA.test(pr.base?.sha ?? "")) {
     return { status: "held", reason: "untrusted-or-inactive-pr" };
   }
   if (pr.auto_merge) return { status: "held", reason: "disable-inherited-auto-merge-first" };
+  if (combined) {
+    return writers.includes(pr.user.login) ? { status: "prepared", head: pr.head.sha, base: pr.base.sha } :
+      { status: "held", reason: "combined-author-not-a-writer" };
+  }
   if (!(pr.labels ?? []).some(label => label.name === "dependency-ready")) {
     return { status: "held", reason: "preparation-required" };
   }
@@ -129,7 +143,9 @@ function safeGraph(before, after, patchOnly) {
     for (const version of versions) {
       if (previous.has(version)) continue;
       if (/anthropic|claude|openclaw|modelcontextprotocol|esbuild|typescript|tsx|typebox/iu.test(name)) return false;
-      if (![...previous].some(oldVersion => releaseChange(oldVersion, version, patchOnly || RUNTIME_PATCHES.includes(name)))) return false;
+      // A combined PR may pair runtime patches with a development minor update.
+      const patch = RUNTIME_PATCHES.includes(name) || (patchOnly && !DEVELOPMENT_UPDATES.includes(name));
+      if (![...previous].some(oldVersion => releaseChange(oldVersion, version, patch))) return false;
     }
   }
   return true;
@@ -243,7 +259,7 @@ export function evaluate(snapshot) {
   const verdict = greptile?.body.split(/<h3>|### /u)[0] ?? "";
   const reviewed = greptile?.body.match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1];
   if (reviewed !== pr.head.sha || !/Confidence Score: 5\/5\b/u.test(verdict) ||
-      !/No blocking issues found|no blocking (?:code )?issues? remains?/iu.test(verdict)) {
+      !/No (?:blocking|actionable) issues (?:were )?found|no blocking (?:code )?issues? remains?/iu.test(verdict)) {
     return { status: "held", reason: "final-head-greptile-required" };
   }
   if (threads.some(thread => thread.isResolved !== true)) return { status: "held", reason: "unresolved-review-threads" };
@@ -266,10 +282,12 @@ export function collectSnapshot(number, { api = githubRead, preparedOnly = false
   const read = path => api(["api", `${root}/${path}`]);
   const pages = path => api(["api", `${root}/${path}`, "--paginate", "--slurp"]).flat();
   const pr = read(`pulls/${number}`);
-  if (pr.user?.login !== "dependabot[bot]" || pr.number === 568) return { pr };
+  const combined = isCombined(pr);
+  if (pr.user?.login !== "dependabot[bot]" && !combined) return { pr };
   const comments = pages(`issues/${number}/comments?per_page=100`);
   const writers = [];
-  for (const login of new Set(comments.filter(comment => READY.test(comment.body ?? "")).map(comment => comment.user?.login))) {
+  const receiptAuthors = comments.filter(comment => READY.test(comment.body ?? "")).map(comment => comment.user?.login);
+  for (const login of new Set(combined ? [pr.user.login] : receiptAuthors)) {
     if (!/^[a-z\d](?:[a-z\d-]*[a-z\d])?$/iu.test(login ?? "")) continue;
     const permission = read(`collaborators/${login}/permission`);
     if (["admin", "maintain", "write"].includes(permission.permission)) writers.push(login);

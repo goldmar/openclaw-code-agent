@@ -80,7 +80,7 @@ updates:
       reviewed-sdk-toolchain:
         patterns: ["*"]
         update-types: [minor, patch]
-    # Three groups plus the separately held migration. Cutover must not alter #568.
+    # Three groups plus one ungrouped proposal, such as a minor runtime update.
     open-pull-requests-limit: 4
     labels: [dependencies, dependency-preparing]
     commit-message:

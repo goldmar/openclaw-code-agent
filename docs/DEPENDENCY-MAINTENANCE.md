@@ -1,9 +1,10 @@
 # Weekly dependency maintenance
 
 Dependabot owns discovery and grouping. The existing workspace dependency watch
-owns admission of one weekly OCA session. That session prepares the owning PRs,
-coordinates their existing checks/reviews, and performs only eligible protected
-merges. Actions is a read-only observer, never a second merge executor.
+owns admission of one weekly OCA session. That session combines the routine
+proposals into one PR, gets one review of it, performs only an eligible protected
+merge, and closes the originals. Actions is a read-only observer, never a second
+merge executor.
 
 This repository supplies the policy and CI preparation gate. The parent
 workspace integration below is required separately. Merging this implementation
@@ -20,18 +21,13 @@ verified. Disable the variable to restore ordinary CI admission; pause the
 existing parent admission job to stop automated preparation/merges. Never cancel
 an admitted owner without reconciling its state.
 
-Before merging the implementation, inspect Dependabot's pending proposals and
-prove regrouping cannot close, replace, or update the held SDK migration #568.
-If that cannot be established, hold the implementation merge until #568's owner
-resolves it. Configuration changes can affect existing bot PRs even while the
-activation variable is false. The three-day cooldown remains; pnpm's
-`minimumReleaseAge` stays zero. Dependabot automatic rebasing is disabled for
-new PRs; previously open PRs can continue rebasing for 30 days after creation.
+The three-day cooldown remains; pnpm's `minimumReleaseAge` stays zero. Dependabot
+automatic rebasing is disabled for new PRs.
 
 Routine standing merge authority, **after activation only**, covers patch/minor
 `@types/node` and `fast-check`, stable patch updates of `@hono/node-server`,
 `express-rate-limit`, `fast-uri`, `hono`, `ip-address`, `qs`, and `zod`, and CodeQL-only
-patch/minor action SHA changes. Every dependency in a mixed group must qualify.
+patch/minor action SHA changes. Every dependency in a combined PR must qualify.
 CodeQL version annotations must resolve to their pinned commit through the
 official upstream tag, including annotated tags.
 Unchanged locked versions retain their source URL and checksum; new resolutions
@@ -43,68 +39,44 @@ workflow behavior is routine. Unknown parsing/evidence is a hold, never consent.
 Exact OpenClaw baseline/dev pins, host/API/peer floors and security floors remain
 owner-controlled. SDK/toolchain and release-tool groups require explicit review.
 Claude Agent SDK 0.3.312 changes permission/settings behavior and is in this lane;
-this policy does not authorize that bump. #568 stays draft/unmerged with no
-auto-merge request. No Claude calls or quota probes. Releases remain held until
-#568 merges; no publication, tag, install, runtime reload or Gateway restart is
-authorized by dependency maintenance.
+this policy does not authorize that bump. No Claude calls or quota probes. No
+publication, tag, install, runtime reload or Gateway restart is authorized by
+dependency maintenance.
 
-## Prepare once, verify once per final head
+## One combined PR, one review
 
-Process groups sequentially against settled main: eligible development, runtime
-and CodeQL candidates first, then reviewed groups. Finish a group's merge or
-record its hold before preparing the next. Do not start all suites on old bases
-and then refresh every remaining PR after the first merge.
+Each week's routine proposals become one PR, so they share one Greptile review.
 
-1. The weekly owner inventories all open dependency PRs before writing. Reuse
-   existing owning PRs and branches. Ambiguous duplicate ownership blocks writes.
-   Exclude #568 before any branch, label, review or merge operation. Disable any
-   inherited auto-merge request on other owned PRs before modifying their heads.
-2. Keep `dependency-preparing` set to suppress Greptile. Refresh each owned branch
-   from current main only when necessary, after verifying its expected remote
-   head. Do not force-push over another writer. Collect all compatible changes
-   before validation; use focused checks during repair, not a suite per package.
-3. Preserve manifest pin/range styles. Update matching runtime overrides, generate
-   `pnpm-lock.yaml` with pinned pnpm, and run `pnpm generate:npm-shrinkwrap` when
-   the production graph changes. Never hand-edit generated artifacts. Inspect
-   unexpected resolutions. Run repository-required local verification once on
-   the complete candidate through approved host/remote wrappers.
-4. With the complete local commit SHA and freshly observed PR base SHA, create
-   an **unedited**, standalone issue comment as an authenticated repository
-   writer, exactly:
-
-   ```text
-   <!-- oca-dependencies-ready:v1 <40-character-head-sha> <40-character-base-sha> -->
-   ```
-
-   Add `dependency-ready` before the one final push. Retain
-   `dependency-preparing` while CI runs; it suppresses review, not CI admission.
-   The normal synchronize event now runs full CI on the prepared head. Do not
-   add a labeled trigger to CI: that would duplicate suites on other labels.
-   If the bot head needed no commit, rerun its existing held workflow runs once
-   only when their original event head **and base** still equal the live PR.
-   A rerun retains its original event: a fresh receipt cannot repair a stale
-   event base after another group merges. In that case integrate current main
-   into the owned branch and publish the complete refreshed commit through a
-   fresh synchronize event first; if this cannot be done safely, hold the PR.
-   Never loop reruns against an obsolete event. Do not rerun
-   already successful exact-head evidence. Never manufacture check conclusions.
-5. Once all required CI is green, remove `dependency-preparing`. Inspect current
-   Greptile checks/comments first. Request `@greptileai` only if this head has
-   neither a pending nor completed review. A later repair first restores the
-   preparation label and coalesces its changes, then obtains fresh head evidence.
-6. From the trusted, reviewed default-branch policy source, run:
+1. The weekly owner inventories all open dependency PRs before writing. Ambiguous
+   duplicate ownership blocks writes. Sort them: a proposal is routine only if all
+   of its updates qualify above. Any other proposal stays open and untouched, and
+   is reported as held for an owner decision.
+2. From current main, create `dependencies/combined-YYYY-MM-DD`, using the batch's
+   Monday date. Apply every routine update there, once: preserve manifest pin/range
+   styles, update matching runtime overrides, generate `pnpm-lock.yaml` with pinned
+   pnpm, and run `pnpm generate:npm-shrinkwrap` when the production graph changes.
+   Never hand-edit generated artifacts. Inspect unexpected resolutions.
+3. Open one PR only when the branch is complete, labelled `dependency-combined`,
+   with the superseded PR numbers in its body. Greptile reviews a repository
+   writer's PR when it opens, and CI runs normally. No readiness receipt applies.
+4. Inspect current Greptile checks/comments first. Request `@greptileai` only if
+   this head has neither a pending nor completed review, which normally means only
+   after a repair push. Coalesce any repair before pushing it, so each PR spends at
+   most one review per final head. If no compatible routine update remains after a
+   repair, hold the batch and leave the originals open.
+5. From the trusted, reviewed default-branch policy source, run:
 
    ```sh
    OCA_DEPENDENCY_BATCHING_ENABLED=true node scripts/dependency-maintenance.mjs --pr NUMBER
    ```
 
-   Only `status: eligible` permits the weekly owner to proceed. It requires the
-   actual allowed dependency diff, current head/base receipt, all ten required
+   Only `status: eligible` permits the weekly owner to proceed. It requires a
+   repository writer as author, the actual allowed dependency diff, all ten required
    GitHub Actions checks successful (not skipped), other current checks green,
    latest Greptile summary at 5/5 with no blocking issues on the full head SHA,
    and no unresolved review threads or outstanding change requests. The JSON
    result is evidence, not a merge command or a durable grant.
-7. Immediately recheck the live head/base, required branch protections and review
+6. Immediately recheck the live head/base, required branch protections and review
    state. Changed protection requirements are a hold until the policy is updated.
    Merge with the existing owner's GitHub authorization only:
 
@@ -114,26 +86,42 @@ and then refresh every remaining PR after the first merge.
 
    No `--admin`, force, fake approval or persistent `--auto` request. GitHub must
    enforce all protections. Verify `MERGED` and the resulting main commit. A
-   replaced head is a hold, not permission to retry against its new SHA. Refresh
-   remaining groups' base evidence after each merge; retain valid unchanged-head
-   CI/review only when it remains applicable, and never reuse a stale receipt.
+   replaced head is a hold, not permission to retry against its new SHA.
+7. Only after that merge, close each superseded PR with a short comment linking the
+   combined PR. Use a plain close, never an `@dependabot ignore` command, which would
+   block later updates. Main now holds those versions, so Dependabot has nothing to
+   propose until a newer release, which arrives as a normal new proposal.
+
+### Proposals outside the combined PR
+
+Actions and other non-npm proposals that qualify keep their own PR. While activation
+is on, CI holds a Dependabot PR until it has a receipt. An owner who takes such a PR
+runs its generators, then posts an **unedited**, standalone comment as an
+authenticated repository writer, exactly:
+
+```text
+<!-- oca-dependencies-ready:v1 <40-character-head-sha> <40-character-base-sha> -->
+```
+
+Add `dependency-ready` before the one final push, keep `dependency-preparing` until CI
+is green, then remove it and apply steps 4 to 6. If the head needed no commit, rerun
+its held workflow runs once, only when their original event head **and base** still
+equal the live PR. Never loop reruns against an obsolete event or manufacture check
+conclusions.
 
 The policy command performs only GETs and a GraphQL query, never PR checkout,
 installation, review writes, readiness writes or merging. Its workflow checks
 out the immutable trusted workflow SHA, with credentials persistence disabled.
 PR contents are data. No secrets or write token are passed to PR code.
 
-## Greptile activation handoff
+## Greptile behaviour
 
-No repository Greptile configuration existed at inspection. Its dashboard
-settings were not accessible in this implementation session. Before activation,
-read the effective dashboard/repository settings and preserve all existing rules,
-filters and exclusions. Add `dependency-preparing` to disabled labels, and prove
-it suppresses automatic reviews of new bot proposals and preparation pushes.
-Prove the final-head manual review path works after removing the label. Do not
-add author-wide exclusions, auto-approvals, review bypasses or overwrite the
-whole dashboard configuration. If the platform cannot provide this behavior,
-keep activation blocked and report that concrete limitation.
+The review budget depends on two behaviours, which the parent proves from GitHub
+evidence at each weekly admission: Dependabot proposals labelled
+`dependency-preparing` get no review unless someone requests one, and a combined PR
+gets a final-head review. An unrequested review on a Dependabot proposal is a hold.
+Do not add author-wide exclusions, auto-approvals or review bypasses, or overwrite
+dashboard configuration.
 
 ## Parent workspace handoff (separate owner, no edits here)
 
