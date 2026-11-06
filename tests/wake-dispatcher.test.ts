@@ -11,6 +11,10 @@ import { buildWaitingForInputPayload } from "../src/session-notification-builder
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { ROUTED_REPLY_RULE } from "../src/session-route";
 import { SessionNotificationService } from "../src/session-notifications";
+import { SessionLifecycleService } from "../src/session-lifecycle-service";
+import { createStubSession } from "./helpers";
+import { formatOriginRouteWakeBlock } from "../src/session-route";
+import type { SessionNotificationRequest } from "../src/wake-dispatcher";
 import type { PersistedSessionInfo } from "../src/types";
 import { SessionStore } from "../src/session-store";
 import { sessionStoreStorageInternals } from "../src/session-store-storage";
@@ -310,6 +314,99 @@ describe("WakeDispatcher", () => {
     assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ ...visible, yielded: true }), false, "r1").outcome, "ambiguous");
     assert.equal(validateCompletionFollowupWakeSuccess(JSON.stringify({ ...visible, status: "timeout" }), false, "r1").outcome, "ambiguous");
   });
+
+  for (const scenario of [
+    { name: "human-approved cron offer", cron: true, approved: true, external: true, summary: true },
+    { name: "silent system cron", cron: true, approved: false, external: false, summary: false },
+    { name: "approved cron without an external route", cron: true, approved: true, external: false, summary: false },
+    { name: "unapproved cron with an external route", cron: true, approved: false, external: true, summary: false },
+    { name: "ordinary interactive completion", cron: false, approved: false, external: true, summary: true },
+  ]) {
+    it(`preserves completion delivery and deduplication for ${scenario.name}`, async () => {
+      const dispatcher = createDispatcher();
+      const persisted: Partial<PersistedSessionInfo> = {};
+      const makeNotifications = () => new SessionNotificationService(dispatcher, (_ref, patch) => {
+        Object.assign(persisted, patch);
+      }, { getPersistedSession: () => persisted as PersistedSessionInfo });
+      let notifications = makeNotifications();
+      const requests: SessionNotificationRequest[] = [];
+      let statusSettled = 0;
+      let summaryDelivered = 0;
+      const lifecycle = new SessionLifecycleService({
+        persistSession: () => {},
+        clearWaitingTimestamp: () => {},
+        handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+        resolveWorktreeRepoDir: () => undefined,
+        updatePersistedSession: () => false,
+        dispatchSessionNotification: (session, request) => {
+          requests.push(request);
+          const hooks = request.hooks;
+          notifications.dispatch(session, { ...request, hooks: {
+            ...hooks,
+            onNotifySucceeded: () => { statusSettled++; hooks?.onNotifySucceeded?.(); },
+            onNotifyFailed: () => { statusSettled++; hooks?.onNotifyFailed?.(); },
+            onWakeSucceeded: () => { summaryDelivered++; hooks?.onWakeSucceeded?.(); },
+          } });
+        },
+        notifySession: () => {},
+        clearRetryTimersForSession: () => {},
+        shouldEmitTerminalWake: () => true,
+        resolvePlanApprovalMode: () => "ask",
+        getPlanApprovalButtons: () => [],
+        getResumeButtons: () => [],
+        getQuestionButtons: () => undefined,
+        extractLastOutputLine: () => undefined,
+        getOutputPreview: () => "Investigation found the cause; no changes made.",
+        originThreadLine: formatOriginRouteWakeBlock,
+        debounceWaitingEvent: () => true,
+        isAlreadyMerged: () => false,
+      });
+      const originSessionKey = scenario.cron ? "agent:main:cron:investigation-offer" : ORIGIN_SESSION_KEY;
+      const session = createStubSession({
+        id: "investigation-complete",
+        harnessSessionId: "investigation-backend",
+        status: "completed",
+        startedAt: Date.now() - 60_000,
+        originSessionKey,
+        launchProvenance: scenario.approved ? "human-approved-plan-offer" : undefined,
+        route: scenario.external ? buildRoute({ sessionKey: originSessionKey })
+          : { provider: "system", target: "system", sessionKey: originSessionKey },
+      });
+      try {
+        lifecycle.emitCompleted(session);
+        if (scenario.external) lifecycle.emitCompleted(session); // Retry while delivery is in flight.
+        await waitFor(() => statusSettled === 1, "completion status delivery settled");
+        if (scenario.summary) await waitFor(() => summaryDelivered === 1, "completion summary delivered");
+        assert.equal(requests[0]?.completionSummary?.required, scenario.summary);
+        assert.equal(requests[0]?.completionWakeSummaryRequired, scenario.summary);
+        const sends = calls.filter((call) => call.kind === "durable-send");
+        assert.equal(sends.length, scenario.external ? 1 : 0);
+        if (scenario.external) {
+          const status = asDurableSend(sends[0]);
+          assert.equal(status.channel, "telegram");
+          assert.equal(status.accountId, "bot");
+          assert.equal(status.to, "-1001234567890");
+          assert.equal(status.threadId, "11239");
+          assert.match(status.text, /Completed/);
+        }
+        const wakes = calls.filter((call) => call.kind === "chat-send");
+        assert.equal(wakes.length, scenario.summary ? 1 : 0);
+        if (scenario.summary) {
+          assert.equal(wakes[0]!.params.sessionKey, originSessionKey);
+          const message = String(wakes[0]!.params.message);
+          assert.match(message, /Tell the user in one or two sentences what was done/);
+          assert.ok(message.includes(formatOriginRouteWakeBlock(session)));
+          assert.ok(persisted.completionWakeSucceededAt);
+        } else {
+          assert.equal(findCall("system-event"), undefined);
+        }
+        const deliveredCalls = calls.length;
+        notifications = makeNotifications(); // Replay after reloading durable dedupe state.
+        lifecycle.emitCompleted(session);
+        assert.equal(calls.length, deliveredCalls, "replay must not send another status or summary");
+      } finally { dispatcher.dispose(); }
+    });
+  }
 
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = createDispatcher();

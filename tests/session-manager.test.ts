@@ -2833,7 +2833,7 @@ describe("SessionManager.launchPlanOffer()", () => {
     stubDispatch(sm);
   });
 
-  it("starts a plan-gated auto-pr session with preserved topic routing", async () => {
+  it("starts a human-approved cron offer with preserved topic routing", async () => {
     const spawnCalls: Array<Record<string, unknown>> = [];
     (sm as any).launchSession = (config: Record<string, unknown>) => {
       spawnCalls.push(config);
@@ -2845,10 +2845,11 @@ describe("SessionManager.launchPlanOffer()", () => {
       accountId: "bot1",
       target: "-1001234567890",
       threadId: "13832",
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
+      sessionKey: "agent:main:cron:investigation-offer",
     } as const;
 
     const session = await sm.launchPlanOffer({
+      launchProvenance: "human-approved-plan-offer",
       route,
       prompt: "Plan the OpenClaw v2026.5.18 plugin-readiness follow-up.",
       workdir: "/home/alice/workspace/openclaw-code-agent",
@@ -2858,13 +2859,25 @@ describe("SessionManager.launchPlanOffer()", () => {
 
     assert.equal(session.id, "sess-plan");
     assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0]?.launchProvenance, "human-approved-plan-offer");
     assert.equal(spawnCalls[0]?.permissionMode, "plan");
     assert.equal(spawnCalls[0]?.planApproval, "ask");
     assert.equal(spawnCalls[0]?.worktreeStrategy, "auto-pr");
     assert.equal(spawnCalls[0]?.route, route);
     assert.equal(spawnCalls[0]?.originChannel, "telegram|bot1|-1001234567890");
     assert.equal(spawnCalls[0]?.originThreadId, "13832");
-    assert.equal(spawnCalls[0]?.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
+    assert.equal(spawnCalls[0]?.originSessionKey, "agent:main:cron:investigation-offer");
+  });
+
+  it("does not infer human approval for a programmatic plan offer launch", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+    (sm as any).launchSession = (config: Record<string, unknown>) => {
+      launchConfig = config;
+      return { id: "system-plan", name: "system-plan" };
+    };
+    await sm.launchPlanOffer({ prompt: "Investigate", workdir: "/tmp" });
+    assert.equal(launchConfig?.launchProvenance, undefined);
+    assert.deepEqual(launchConfig?.route, { provider: "system", target: "system" });
   });
 });
 

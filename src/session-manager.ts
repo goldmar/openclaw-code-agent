@@ -2479,6 +2479,7 @@ export class SessionManager {
   }
 
   launchPlanOffer(args: {
+    launchProvenance?: SessionConfig["launchProvenance"];
     route?: SessionRoute;
     prompt: string;
     workdir: string;
@@ -2487,6 +2488,7 @@ export class SessionManager {
   }): Promise<Session> {
     const route = args.route ?? { provider: "system", target: "system" };
     return this.launchSession({
+      launchProvenance: args.launchProvenance,
       prompt: args.prompt,
       workdir: args.workdir,
       name: args.name,

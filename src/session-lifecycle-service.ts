@@ -275,10 +275,13 @@ export class SessionLifecycleService {
   }
 
   private shouldRequestCompletionFollowup(
-    session: Pick<Session, "originChannel" | "originThreadId" | "originSessionKey" | "route">,
+    session: Pick<Session, "originChannel" | "originThreadId" | "originSessionKey" | "route" | "launchProvenance">,
   ): boolean {
     const originSessionKey = session.originSessionKey?.trim();
-    if (originSessionKey?.startsWith("agent:main:cron:")) {
+    // A cron may offer an investigation to a human. Only explicit approval
+    // plus a direct user route permits a summary; unattended cron stays silent.
+    if (originSessionKey?.startsWith("agent:main:cron:")
+      && session.launchProvenance !== "human-approved-plan-offer") {
       return false;
     }
 

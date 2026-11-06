@@ -268,6 +268,7 @@ export class Session extends EventEmitter {
   originThreadId?: string | number;
   readonly originAgentId?: string;
   readonly originSessionKey?: string;
+  readonly launchProvenance?: SessionConfig["launchProvenance"];
   route?: SessionRoute;
   pendingInputState?: PendingInputState;
   private lastPendingInputSubmissionRequiresMore = false;
@@ -344,6 +345,7 @@ export class Session extends EventEmitter {
     this.originThreadId = config.originThreadId;
     this.originAgentId = config.originAgentId;
     this.originSessionKey = config.originSessionKey;
+    this.launchProvenance = config.launchProvenance;
     this.route = config.route ? { ...config.route } : undefined;
     this.backendRef = config.backendRef ? { ...config.backendRef } : undefined;
     this.resumeSessionId = config.resumeSessionId;
@@ -698,7 +700,7 @@ export class Session extends EventEmitter {
 
   routingSnapshot(): Pick<
     Session,
-    "route" | "originAgentId" | "originChannel" | "originThreadId" | "originSessionKey"
+    "route" | "originAgentId" | "originChannel" | "originThreadId" | "originSessionKey" | "launchProvenance"
   > {
     return {
       route: this.route,
@@ -706,6 +708,7 @@ export class Session extends EventEmitter {
       originChannel: this.originChannel,
       originThreadId: this.originThreadId,
       originSessionKey: this.originSessionKey,
+      launchProvenance: this.launchProvenance,
     };
   }
 

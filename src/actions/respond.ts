@@ -181,6 +181,7 @@ async function spawnFreshRelaunch(
       originThreadId: session.originThreadId,
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
+      launchProvenance: session.launchProvenance,
       route: session.route,
       permissionMode: session.currentPermissionMode,
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
@@ -489,6 +490,7 @@ async function tryAutoResume(
       originThreadId: session.originThreadId,
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
+      launchProvenance: session.launchProvenance,
       route: session.route,
       // For a plan approval, start the resumed session in bypassPermissions so
       // the harness launches without plan-mode constraints and the turn-end

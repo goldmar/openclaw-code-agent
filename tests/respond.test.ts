@@ -105,7 +105,8 @@ describe("executeRespond", () => {
       originChannel: "telegram|bot|123",
       originThreadId: 42,
       originAgentId: "agent-main",
-      originSessionKey: "agent:main:telegram:group:123:topic:42",
+      originSessionKey: "agent:main:cron:investigation-offer",
+      launchProvenance: "human-approved-plan-offer",
       requestedPermissionMode: "default",
       currentPermissionMode: "default",
     });
@@ -120,7 +121,8 @@ describe("executeRespond", () => {
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.harness, "codex");
-    assert.equal(capturedConfig.originSessionKey, "agent:main:telegram:group:123:topic:42");
+    assert.equal(capturedConfig.originSessionKey, "agent:main:cron:investigation-offer");
+    assert.equal(capturedConfig.launchProvenance, "human-approved-plan-offer");
     assert.equal(capturedConfig.originChannel, "telegram|bot|123");
     assert.equal(capturedConfig.originThreadId, 42);
     assert.equal(capturedConfig.originAgentId, "agent-main");

@@ -3191,6 +3191,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
     assert.equal(launches[0]?.workdir, "/home/alice/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
+    assert.equal(launches[0]?.launchProvenance, "human-approved-plan-offer");
     // The 🚀 Launched notice in the offer's chat is the one answer.
     assert.deepEqual(state.replies, []);
   });
@@ -3209,7 +3210,7 @@ describe("createCallbackHandler()", () => {
             accountId: "default",
             target: TELEGRAM_FORUM_TARGET,
             threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+            sessionKey: "agent:main:cron:investigation-offer",
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
@@ -3227,7 +3228,7 @@ describe("createCallbackHandler()", () => {
             accountId: "default",
             target: TELEGRAM_FORUM_TARGET,
             threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+            sessionKey: "agent:main:cron:investigation-offer",
           },
           launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
@@ -3255,8 +3256,9 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonsCleared, 1);
     assert.equal((launches[0]?.route as { target?: string })?.target, TELEGRAM_FORUM_TARGET);
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
-    assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
+    assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, "agent:main:cron:investigation-offer");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
+    assert.equal(launches[0]?.launchProvenance, "human-approved-plan-offer");
     assert.deepEqual(state.replies, []);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
   });
