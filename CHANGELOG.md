@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Verification and compatibility
 
-- Correlate cron compatibility probes with their marked user request when newer hosts append user-role context, retaining tool-cap, result and duplicate-request checks.
+- Correlate cron compatibility probes with their marked user request when newer hosts append user-role context, and call the advertised `dispatch_action` or legacy `tool_call` dispatcher. Retain tool-cap, result and duplicate-request checks.
 - No configuration migration or compatibility-floor change. Retain the OpenClaw 2026.10.1 build/installation target and 2026.9.7 API/Gateway/npm peer floor. Restart the Gateway after upgrading the plugin.
 
 ## [6.0.3] - 2026-10-31

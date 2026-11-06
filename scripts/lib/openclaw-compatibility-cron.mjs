@@ -37,7 +37,8 @@ export async function createCronCompatibilityProvider() {
       const names = (body.tools ?? []).map((tool) => tool.function?.name);
       const result = body.messages.slice(lastUser + 1).find((message) => message.role === "tool");
       const advertised = names.includes(expectedTool);
-      const dispatcher = names.includes("tool_call");
+      const dispatcher = names.includes("dispatch_action") ? "dispatch_action"
+        : names.includes("tool_call") ? "tool_call" : undefined;
       assert.ok(dispatcher || advertised === permittedTools.includes(expectedTool), "require a usable host tool interface");
       assert.ok(names.every((name) => !name?.startsWith("agent_") || permittedTools.includes(name)));
       if (!dispatcher) {
@@ -47,14 +48,14 @@ export async function createCronCompatibilityProvider() {
       let finish = "stop";
       if (!result) {
         delta = { role: "assistant", tool_calls: [{ index: 0, id: `call_${randomUUID()}`,
-          type: "function", function: { name: dispatcher ? "tool_call" : expectedTool,
+          type: "function", function: { name: dispatcher ?? expectedTool,
             arguments: JSON.stringify(dispatcher ? { id: expectedTool, args: toolArgs } : toolArgs) } }] };
         finish = "tool_calls";
         observations.push({ kind: "tool-request", names, callId: delta.tool_calls[0].id });
       } else {
         const call = body.messages.slice(lastUser + 1).flatMap((message) => message.tool_calls ?? [])
           .find((entry) => entry.id === result.tool_call_id);
-        assert.equal(call?.function?.name, dispatcher ? "tool_call" : expectedTool, "tool result must match its actual advertised call");
+        assert.equal(call?.function?.name, dispatcher ?? expectedTool, "tool result must match its actual advertised call");
         if (permittedTools.includes(expectedTool)) {
           let output = result.content;
           if (dispatcher) {

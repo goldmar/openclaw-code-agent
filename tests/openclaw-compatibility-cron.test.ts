@@ -7,7 +7,7 @@ import { setSessionManager } from "../src/singletons";
 import type { SessionManager } from "../src/session-manager";
 import { createCronCompatibilityProvider } from "../scripts/lib/openclaw-compatibility-cron.mjs";
 
-async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "background" | "utility" | "previous" | "duplicate" | "trailing-context", stream = false) {
+async function runProbe(dispatcher: boolean | "dispatch_action", offerResult?: string, noise?: "background" | "utility" | "previous" | "duplicate" | "trailing-context", stream = false) {
   setPluginConfig({});
   setSessionManager({ sendPlanOffer() { throw new Error("The probe must not queue a notification"); } } as unknown as SessionManager);
   const provider = await createCronCompatibilityProvider();
@@ -32,7 +32,7 @@ async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "back
   };
   try {
     await provider.check(async () => {
-      const names = dispatcher ? ["tool_call"] : job.payload.toolsAllow;
+      const names = dispatcher ? [dispatcher === true ? "tool_call" : dispatcher] : job.payload.toolsAllow;
       const body = { model: "oca-compatibility", tools: names.map((name: string) => ({ function: { name } })),
         messages: [{ role: "user", content: stream ? [{ type: "text", text: job.payload.message }] : job.payload.message }] };
       if (noise === "trailing-context") body.messages.push({ role: "user", content: "Additional current host context." });
@@ -75,7 +75,7 @@ async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "back
 }
 
 it("invokes Start Plan under allowed and denied caps through either host tool interface", async () => {
-  for (const dispatcher of [false, true]) {
+  for (const dispatcher of [false, true, "dispatch_action"] as const) {
     const calls = await runProbe(dispatcher);
     assert.deepEqual(calls.map(({ tool, allowed }) => ({ tool, allowed })), [
       { tool: "agent_stats", allowed: true }, { tool: "agent_stats", allowed: false },
@@ -94,19 +94,19 @@ it("rejects a generic Start Plan execution error even when the scheduler succeed
 
 for (const noise of ["background", "utility", "previous"] as const) {
   it(`isolates cron observations from ${noise} requests`, async () => {
-    for (const dispatcher of [false, true]) await runProbe(dispatcher, undefined, noise);
+    for (const dispatcher of [false, true, "dispatch_action"] as const) await runProbe(dispatcher, undefined, noise);
   });
 }
 
 it("still rejects duplicate tool requests for the same cron probe", async () => {
-  for (const dispatcher of [false, true]) {
+  for (const dispatcher of [false, true, "dispatch_action"] as const) {
     await assert.rejects(runProbe(dispatcher, undefined, "duplicate"),
       (error: unknown) => error instanceof assert.AssertionError && error.actual === 2 && error.expected === 1);
   }
 });
 
 it("correlates cron calls and results when hosts append user-role context", async () => {
-  for (const dispatcher of [false, true]) {
+  for (const dispatcher of [false, true, "dispatch_action"] as const) {
     for (const stream of [false, true]) {
       const calls = await runProbe(dispatcher, undefined, "trailing-context", stream);
       assert.equal(calls.length, 4);
@@ -115,7 +115,7 @@ it("correlates cron calls and results when hosts append user-role context", asyn
 });
 
 it("returns valid SSE frames for probe and unrelated traffic", async () => {
-  for (const dispatcher of [false, true]) {
+  for (const dispatcher of [false, true, "dispatch_action"] as const) {
     await runProbe(dispatcher, undefined, "background", true);
   }
 });
