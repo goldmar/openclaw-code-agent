@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.4] - 2026-11-06
+
+### Fixed
+
+- Restore factual completion summaries for cron-origin investigations explicitly started through a human-approved plan offer when a valid user route is available. Preserve approval provenance through storage, restart, resume and relaunch; unapproved cron sessions and system routes retain their existing suppression (#586).
+
+### Changed
+
+- Update express-rate-limit, qs and Node development types through the combined dependency maintenance batch (#583). Combine weekly dependency proposals into one PR and judge Greptile reviews by structured results (#584, #585).
+
+### Verification and compatibility
+
+- No configuration migration or compatibility-floor change. Retain the OpenClaw 2026.10.1 build/installation target and 2026.9.7 API/Gateway/npm peer floor. Restart the Gateway after upgrading the plugin.
+
 ## [6.0.3] - 2026-10-31
 
 ### Fixed
