@@ -20,10 +20,13 @@ export async function createCronCompatibilityProvider() {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      const lastUser = body.messages.findLastIndex((message) => message.role === "user");
-      const userContent = body.messages[lastUser]?.content;
-      const userText = typeof userContent === "string" ? userContent
-        : (Array.isArray(userContent) ? userContent.map((part) => part.text ?? "").join("\n") : "");
+      const messageText = (message) => typeof message?.content === "string" ? message.content
+        : (Array.isArray(message?.content) ? message.content.map((part) => part.text ?? "").join("\n") : "");
+      // New hosts may append user-role context after the actual cron request.
+      // Keep correlation bound to the most recent marked user request.
+      const lastUser = body.messages.findLastIndex((message) => message.role === "user"
+        && /\[OCA_CRON_PROBE:[0-9a-f-]+\]/u.test(messageText(message)));
+      const userText = messageText(body.messages[lastUser]);
       const marker = userText.match(/\[OCA_CRON_PROBE:[0-9a-f-]+\]/u)?.[0];
       probe = body.model === "oca-compatibility" ? probesByMarker.get(marker) : undefined;
       if (!probe) {

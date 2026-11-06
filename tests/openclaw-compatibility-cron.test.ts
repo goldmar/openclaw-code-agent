@@ -7,7 +7,7 @@ import { setSessionManager } from "../src/singletons";
 import type { SessionManager } from "../src/session-manager";
 import { createCronCompatibilityProvider } from "../scripts/lib/openclaw-compatibility-cron.mjs";
 
-async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "background" | "utility" | "previous" | "duplicate", stream = false) {
+async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "background" | "utility" | "previous" | "duplicate" | "trailing-context", stream = false) {
   setPluginConfig({});
   setSessionManager({ sendPlanOffer() { throw new Error("The probe must not queue a notification"); } } as unknown as SessionManager);
   const provider = await createCronCompatibilityProvider();
@@ -35,6 +35,7 @@ async function runProbe(dispatcher: boolean, offerResult?: string, noise?: "back
       const names = dispatcher ? ["tool_call"] : job.payload.toolsAllow;
       const body = { model: "oca-compatibility", tools: names.map((name: string) => ({ function: { name } })),
         messages: [{ role: "user", content: stream ? [{ type: "text", text: job.payload.message }] : job.payload.message }] };
+      if (noise === "trailing-context") body.messages.push({ role: "user", content: "Additional current host context." });
       if (noise === "background") unrelatedReplies.push(await request({ ...body, messages: [{ role: "user", content: "Unrelated background turn" }] }));
       if (noise === "previous" && previousBody) unrelatedReplies.push(await request(previousBody));
       const assistant = await request(body);
@@ -101,6 +102,15 @@ it("still rejects duplicate tool requests for the same cron probe", async () => 
   for (const dispatcher of [false, true]) {
     await assert.rejects(runProbe(dispatcher, undefined, "duplicate"),
       (error: unknown) => error instanceof assert.AssertionError && error.actual === 2 && error.expected === 1);
+  }
+});
+
+it("correlates cron calls and results when hosts append user-role context", async () => {
+  for (const dispatcher of [false, true]) {
+    for (const stream of [false, true]) {
+      const calls = await runProbe(dispatcher, undefined, "trailing-context", stream);
+      assert.equal(calls.length, 4);
+    }
   }
 });
 
