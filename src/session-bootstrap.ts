@@ -67,6 +67,7 @@ function preserveResumeRoutingContext(
     config.originChannel = persisted.originChannel ?? originChannelFromRoute(route);
     config.originThreadId = persisted.originThreadId ?? route.threadId;
     config.originSessionKey = persisted.originSessionKey ?? route.sessionKey;
+    config.launchProvenance ??= persisted.launchProvenance;
     config.originAgentId ??= persisted.originAgentId;
     return;
   }

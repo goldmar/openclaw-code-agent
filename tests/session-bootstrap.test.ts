@@ -71,6 +71,28 @@ describe("prepareSessionBootstrap()", () => {
     assert.equal(config.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:26");
   });
 
+  for (const resumeField of ["resumeSessionId", "resumeWorktreeFrom"] as const) {
+    it(`recovers approval provenance alongside the cron route through ${resumeField}`, async () => {
+      const route = {
+        provider: "telegram", target: "-1001234567890", threadId: "26",
+        sessionKey: "agent:main:cron:approved-offer",
+      };
+      const config: SessionConfig = {
+        prompt: "Continue investigation", workdir: "/tmp", worktreeStrategy: "off",
+        [resumeField]: "saved", route: { provider: "system", target: "system" },
+      };
+      await prepareSessionBootstrap(config, "resumed", () => ({
+        sessionId: "saved", harnessSessionId: "backend-saved", name: "saved", prompt: "Investigate",
+        workdir: "/tmp", status: "completed", costUsd: 0, route,
+        originSessionKey: route.sessionKey, launchProvenance: "human-approved-plan-offer",
+      }));
+      assert.equal(config.launchProvenance, "human-approved-plan-offer");
+      assert.equal(config.originSessionKey, route.sessionKey);
+      assert.equal(config.route?.threadId, "26");
+      assert.equal(config.route?.provider, "telegram");
+    });
+  }
+
   it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-"));
     try {

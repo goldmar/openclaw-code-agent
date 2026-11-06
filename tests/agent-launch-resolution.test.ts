@@ -175,13 +175,14 @@ describe("resolveAgentLaunchRequest", () => {
           backendRef: { kind: "codex-app-server", conversationId: "backend-saved" },
           originChannel: "telegram|default|-1001234567890",
           originThreadId: 13832,
-          originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
+          launchProvenance: "human-approved-plan-offer",
+          originSessionKey: "agent:main:cron:approved-offer",
           route: {
             provider: "telegram",
             accountId: "default",
             target: "-1001234567890",
             threadId: "13832",
-            sessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
+            sessionKey: "agent:main:cron:approved-offer",
           },
         }),
       },
@@ -189,10 +190,11 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
+      assert.equal(result.launchProvenance, "human-approved-plan-offer");
       assert.equal(result.route?.provider, "telegram");
       assert.equal(result.route?.target, "-1001234567890");
       assert.equal(result.route?.threadId, "13832");
-      assert.equal(result.originSessionKey, "agent:main:telegram:group:-1001234567890:topic:13832");
+      assert.equal(result.originSessionKey, "agent:main:cron:approved-offer");
     }
   });
 

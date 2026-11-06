@@ -77,7 +77,7 @@ type SessionManagerLike = {
   } | undefined;
   getPersistedSession?: (ref: string) => Pick<
     PersistedSessionInfo,
-    "harness" | "model" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+    "harness" | "model" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey" | "launchProvenance"
   > & { harnessSessionId?: string } | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
 };
@@ -95,6 +95,7 @@ export type AgentLaunchResolution =
       originChannel: string;
       originThreadId?: string | number;
       originSessionKey?: string;
+      launchProvenance?: PersistedSessionInfo["launchProvenance"];
       route: ReturnType<typeof resolveSessionRoute>;
       resumeSessionId?: string;
       resolvedResumeId?: string;
@@ -406,6 +407,7 @@ export function resolveAgentLaunchRequest(
       : originChannel,
     originThreadId: routeResolution.recovered || route.provider === "webchat" ? route.threadId : originThreadId,
     originSessionKey: routeResolution.recovered ? route.sessionKey : originSessionKey,
+    launchProvenance: routeResolution.recovered ? persistedResumeSession?.launchProvenance : undefined,
     route,
     resumeSessionId,
     resolvedResumeId,

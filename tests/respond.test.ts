@@ -4,8 +4,14 @@ import assert from "node:assert/strict";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { registerHarness } from "../src/harness";
-import { createFakeHarness, createStubSession } from "./helpers";
+import { createFakeHarness, createStubSession, tick } from "./helpers";
 import { executeRespond } from "../src/actions/respond";
+import { Session } from "../src/session";
+import { SessionStore } from "../src/session-store";
+import type { SessionNotificationRequest } from "../src/wake-dispatcher";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function createStubSessionManager(sessions: Record<string, any> = {}): SessionManager {
   const sm = new SessionManager(5);
@@ -130,6 +136,64 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.requestedPermissionMode, "default");
     assert.equal("codexApprovalPolicy" in capturedConfig, false);
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
+  });
+
+  it("requests a summary after resuming a stored-only approved investigation through completion", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "approved-investigation-restart-"));
+    const indexPath = join(dir, "sessions.json");
+    const harness = createFakeHarness("approved-investigation-resume");
+    registerHarness(harness);
+    let sm: SessionManager | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const original = new Session({
+        prompt: "Investigate only", workdir: dir, harness: harness.name, model: "test-model",
+        permissionMode: "default", worktreeStrategy: "off",
+        originSessionKey: "agent:main:cron:approved-investigation",
+        launchProvenance: "human-approved-plan-offer",
+        route: { provider: "telegram", target: "-1001234567890", threadId: "42",
+          sessionKey: "agent:main:cron:approved-investigation" },
+      }, "approved-investigation");
+      original.harnessSessionId = "saved-investigation-backend";
+      original.transition("running");
+      original.transition("completed");
+      new SessionStore({ indexPath, env: {} }).persistTerminal(original);
+
+      // A new manager reads only the on-disk session; no live session survives.
+      sm = new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      assert.equal(sm.get(original.id), undefined);
+      const manager = sm;
+      const completed = new Promise<SessionNotificationRequest>((resolve, reject) => {
+        deadline = setTimeout(() => reject(new Error("Resumed investigation did not complete")), 5_000);
+        (manager as any).dispatchSessionNotification = (_session: Session, request: SessionNotificationRequest) => {
+          if (request.label === "completed") resolve(request);
+        };
+      });
+      const pendingResume = executeRespond(manager, { session: original.id, message: "Continue investigation" });
+      for (let attempt = 0; !harness.lastLaunchOptions && attempt < 100; attempt++) await tick();
+      assert.ok(harness.lastLaunchOptions, "stored session must launch the resumable backend");
+      harness.pushMessage({ type: "init", session_id: "saved-investigation-backend" });
+      const result = await pendingResume;
+      assert.equal(result.isError, undefined);
+      const resumed = manager.get(original.id)!;
+      assert.equal(resumed.launchProvenance, "human-approved-plan-offer");
+      assert.equal(resumed.originSessionKey, original.originSessionKey);
+      assert.equal(resumed.route?.threadId, "42");
+      harness.pushMessage({ type: "result", data: {
+        success: true, duration_ms: 10, total_cost_usd: 0, num_turns: 1,
+        session_id: "saved-investigation-backend",
+      } });
+      harness.endMessages();
+      const request = await completed;
+      assert.equal(request.completionWakeSummaryRequired, true);
+      assert.equal(request.completionSummary?.required, true);
+      assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences/);
+    } finally {
+      if (deadline) clearTimeout(deadline);
+      harness.endMessages();
+      sm?.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("auto-resumes completed Claude Code sessions", async () => {
@@ -1029,6 +1093,7 @@ describe("executeRespond", () => {
       killReason: "shutdown",
       harnessSessionId: undefined,
       prompt: "original prompt",
+      launchProvenance: "human-approved-plan-offer",
       workdir: "/tmp/repo",
       name: "startup-failure",
     });
@@ -1043,6 +1108,7 @@ describe("executeRespond", () => {
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /relaunched fresh/i);
     assert.equal(capturedConfig.prompt, "original prompt");
+    assert.equal(capturedConfig.launchProvenance, "human-approved-plan-offer");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 

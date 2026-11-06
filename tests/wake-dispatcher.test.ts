@@ -12,6 +12,7 @@ import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { ROUTED_REPLY_RULE } from "../src/session-route";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionLifecycleService } from "../src/session-lifecycle-service";
+import { LAUNCH_OUTCOME_WINDOW_MS } from "../src/session";
 import { createStubSession } from "./helpers";
 import { formatOriginRouteWakeBlock } from "../src/session-route";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
@@ -366,7 +367,8 @@ describe("WakeDispatcher", () => {
         id: "investigation-complete",
         harnessSessionId: "investigation-backend",
         status: "completed",
-        startedAt: Date.now() - 60_000,
+        // Completion is outside the early-launch wake deferral window.
+        startedAt: Date.now() - LAUNCH_OUTCOME_WINDOW_MS - 1_000,
         originSessionKey,
         launchProvenance: scenario.approved ? "human-approved-plan-offer" : undefined,
         route: scenario.external ? buildRoute({ sessionKey: originSessionKey })
@@ -403,6 +405,8 @@ describe("WakeDispatcher", () => {
         const deliveredCalls = calls.length;
         notifications = makeNotifications(); // Replay after reloading durable dedupe state.
         lifecycle.emitCompleted(session);
+        // Let the notification executor and mocked transport promises settle.
+        await new Promise<void>((resolve) => setImmediate(resolve));
         assert.equal(calls.length, deliveredCalls, "replay must not send another status or summary");
       } finally { dispatcher.dispose(); }
     });
