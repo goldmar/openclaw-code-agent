@@ -513,6 +513,35 @@ describe("SessionStore persisted compatibility", () => {
 });
 
 describe("SessionStore path resolution", () => {
+  it("preserves explicit plan-offer approval in running and terminal records across reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-launch-provenance-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      const store = new SessionStore({ indexPath, env: {} });
+      const session = new Session({
+        prompt: "Investigate only", workdir: dir, route: DEFAULT_ROUTE,
+        originSessionKey: "agent:main:cron:investigation-offer",
+        launchProvenance: "human-approved-plan-offer",
+      }, "approved-investigation");
+      session.harnessSessionId = "approved-investigation-backend";
+      session.transition("running");
+      store.markRunning(session);
+      assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(session.id)?.launchProvenance,
+        "human-approved-plan-offer");
+      session.transition("completed");
+      store.persistTerminal(session);
+      assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(session.id)?.launchProvenance,
+        "human-approved-plan-offer");
+
+      const data = JSON.parse(readFileSync(indexPath, "utf8"));
+      for (const invalid of [undefined, true, "system", "human-approved"]) {
+        data.sessions[0].launchProvenance = invalid;
+        writeFileSync(indexPath, JSON.stringify(data));
+        assert.equal(new SessionStore({ indexPath, env: {} }).getPersistedSession(session.id)?.launchProvenance, undefined);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("keeps restored owning PR linkage in running and terminal snapshots across reload", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-owning-pr-"));
     try {

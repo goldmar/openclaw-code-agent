@@ -253,6 +253,33 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, /No coding session was started/);
   });
 
+  it("passes recovered cron-route approval provenance into the resumed session", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+    const route = { provider: "telegram", target: "-1001234567890", threadId: "42",
+      sessionKey: "agent:main:cron:approved-investigation" };
+    setSessionManager({
+      resolve: (): undefined => undefined,
+      resolveBackendConversationId: () => "saved-backend",
+      getPersistedSession: () => ({
+        sessionId: "saved", harnessSessionId: "saved-backend", name: "saved",
+        backendRef: { kind: "claude-code", conversationId: "saved-backend" },
+        harness: "claude-code", status: "completed", workdir: "/tmp", currentPermissionMode: "default",
+        originSessionKey: route.sessionKey, route, launchProvenance: "human-approved-plan-offer",
+      }),
+      launchSession(config: Record<string, unknown>) {
+        launchConfig = config;
+        return { id: "saved", name: "saved" };
+      },
+    } as any);
+    const result = await makeAgentLaunchTool({ config: {} } as any).execute("resume", {
+      prompt: "Continue investigation", resume_session_id: "saved", workdir: "/tmp",
+    });
+    assert.ok(launchConfig, (result.content[0] as { text: string }).text);
+    assert.equal(launchConfig?.originSessionKey, route.sessionKey);
+    assert.equal(launchConfig?.launchProvenance, "human-approved-plan-offer");
+    assert.equal((launchConfig?.route as typeof route)?.threadId, "42");
+  });
+
   it("names the missing delivery route when only a session key was passed", async () => {
     let spawnCalled = false;
     setSessionManager({

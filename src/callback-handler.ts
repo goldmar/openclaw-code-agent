@@ -1433,6 +1433,7 @@ export function createCallbackHandler(
               let session: { id: string; name: string };
               try {
                 session = await sessionManager.launchPlanOffer({
+                  launchProvenance: "human-approved-plan-offer",
                   route: consumedToken.route,
                   prompt: consumedToken.launchPrompt,
                   workdir: consumedToken.launchWorkdir,

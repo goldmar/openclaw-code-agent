@@ -642,6 +642,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     originChannel,
     originThreadId,
     originSessionKey,
+    launchProvenance: raw.launchProvenance === "human-approved-plan-offer" ? raw.launchProvenance : undefined,
     route,
     outputPath: toOptionalString(raw.outputPath),
     harness,

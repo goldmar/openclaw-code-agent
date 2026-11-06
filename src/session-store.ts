@@ -675,6 +675,7 @@ export class SessionStore {
           originChannel: session.originChannel,
           originThreadId: session.originThreadId,
           originSessionKey: session.originSessionKey,
+          launchProvenance: session.launchProvenance,
         };
   }
 
@@ -779,6 +780,7 @@ export class SessionStore {
       originChannel: routing.originChannel,
       originThreadId: routing.originThreadId,
       originSessionKey: routing.originSessionKey,
+      launchProvenance: routing.launchProvenance,
       route,
       outputPath: getSessionOutputFilePath(session.id),
       harness: session.harnessName,
@@ -899,6 +901,7 @@ export class SessionStore {
       originChannel: routing.originChannel,
       originThreadId: routing.originThreadId,
       originSessionKey: routing.originSessionKey,
+      launchProvenance: routing.launchProvenance,
       route,
       outputPath,
       harness: session.harnessName,

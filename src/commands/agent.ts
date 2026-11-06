@@ -114,6 +114,7 @@ export function registerAgentCommand(api: CommandApi): void {
           originThreadId: resolution.originThreadId,
           originAgentId: ctx.agentId || undefined,
           originSessionKey: resolution.originSessionKey,
+          launchProvenance: resolution.launchProvenance,
           route: resolution.route,
           harness: resolution.harness,
           permissionMode: resolution.permissionMode,
