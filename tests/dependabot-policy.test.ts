@@ -264,6 +264,54 @@ describe("actual dependency diff eligibility", () => {
     assert.equal(dependencyScope(s), "dependency-outside-routine-allowlist");
   });
 
+  it("matches runtime override lines in unquoted and quoted (scoped) form, and nothing else", () => {
+    const unquoted = fixture();
+    assert.equal(unquoted.contents["pnpm-workspace.yaml"].before, "overrides:\n  qs@<6.16.1: 6.16.1\n");
+    assert.equal(dependencyScope(unquoted), null);
+
+    const scoped = (quote: string) => {
+      const s = fixture();
+      const name = "@hono/node-server";
+      for (const side of ["before", "after"] as const) {
+        const version = side === "before" ? "2.1.4" : "2.1.5";
+        const m = JSON.parse(s.contents["package.json"][side]);
+        m.dependencies = { [name]: version };
+        s.contents["package.json"][side] = JSON.stringify(m);
+        s.contents["pnpm-lock.yaml"][side] = lock(version).replace(`qs@${version}`, `${name}@${version}`);
+        s.contents["npm-shrinkwrap.json"][side] = JSON.stringify({ packages: { "": {}, [`node_modules/${name}`]: {
+          version, integrity: "sha512-example", resolved: `https://registry.npmjs.org/${name}/-/node-server-${version}.tgz`,
+        } } });
+        s.contents["pnpm-workspace.yaml"][side] = `overrides:\n  hono@<4.13.14: 4.13.14\n  ${quote}${name}@<${version}${quote}: ${version}\n`;
+      }
+      return s;
+    };
+    for (const quote of ['"', "'"]) assert.equal(dependencyScope(scoped(quote)), null, `quote ${quote}`);
+
+    for (const change of [
+      // Selector raised, target left behind.
+      (s: any) => { s.contents["pnpm-workspace.yaml"].after = s.contents["pnpm-workspace.yaml"].after.replace(": 2.1.5", ": 2.1.4"); },
+      // Quote style flipped.
+      (s: any) => { s.contents["pnpm-workspace.yaml"].after = s.contents["pnpm-workspace.yaml"].after.replaceAll('"', "'"); },
+      // Unrelated override changed beside the routine bump.
+      (s: any) => { s.contents["pnpm-workspace.yaml"].after = s.contents["pnpm-workspace.yaml"].after.replace("hono@<4.13.14: 4.13.14", "hono@<4.13.14: 4.14.0"); },
+      // Build policy added beside the routine bump.
+      (s: any) => { s.contents["pnpm-workspace.yaml"].after += "allowBuilds:\n  unsafe: true\n"; },
+      // Override not moved at all.
+      (s: any) => { s.contents["pnpm-workspace.yaml"].after = s.contents["pnpm-workspace.yaml"].before; },
+    ]) {
+      const s = scoped('"'); change(s);
+      assert.equal(dependencyScope(s), "override-or-build-policy-change");
+      assert.deepEqual(evaluate(s), { status: "manual-review", reason: "override-or-build-policy-change" });
+    }
+
+    // A same-named suffix in another package's selector is not the routine override.
+    const suffix = fixture();
+    for (const side of ["before", "after"] as const) {
+      suffix.contents["pnpm-workspace.yaml"][side] = suffix.contents["pnpm-workspace.yaml"][side].replace("  qs@", "  foo-qs@");
+    }
+    assert.equal(dependencyScope(suffix), "override-or-build-policy-change");
+  });
+
   it("rejects checksum or URL substitutions for existing versions and non-registry new tarballs", () => {
     for (const field of ["integrity", "resolved"]) {
       const s = fixture();

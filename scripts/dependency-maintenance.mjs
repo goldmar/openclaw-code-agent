@@ -154,10 +154,16 @@ function safeGraph(before, after, patchOnly) {
   return true;
 }
 
+const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+// Each runtime patch moves exactly one whole override line, `name@<prev: prev`.
+// YAML needs quotes around a selector that starts with `@`, so the selector may be
+// single- or double-quoted; the quote style itself must not change.
 function workspaceChange(before, after, changes) {
   let expected = before;
   for (const { name, previous, next } of changes) {
-    expected = expected.replace(`${name}@<${previous}: ${previous}`, `${name}@<${next}: ${next}`);
+    const line = new RegExp(`^  (['"]?)${escapeRegExp(name)}@<${escapeRegExp(previous)}\\1: ${escapeRegExp(previous)}$`, "mu");
+    expected = expected.replace(line, (_, quote) => `  ${quote}${name}@<${next}${quote}: ${next}`);
   }
   return expected === after;
 }
