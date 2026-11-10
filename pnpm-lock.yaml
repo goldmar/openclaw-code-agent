@@ -17,12 +17,12 @@ overrides:
   '@anthropic-ai/sdk@<0.93.0': 0.93.0
   '@modelcontextprotocol/sdk@<1.32.1': 1.32.1
   zod@>=4.0.0 <4.6.7: 4.6.7
-  ip-address@<10.7.5: 10.7.5
+  ip-address@<10.7.6: 10.7.6
   fast-uri@<3.1.9: 3.1.9
   qs@<6.17.1: 6.17.1
   proxy-addr@<2.0.8: 2.0.8
-  hono@<4.13.14: 4.13.14
-  '@hono/node-server@<2.1.5': 2.1.5
+  hono@<4.13.16: 4.13.16
+  '@hono/node-server@<2.1.6': 2.1.6
   undici@>=8.0.0 <8.9.0: 8.9.0
 
 importers:
@@ -36,23 +36,23 @@ importers:
         specifier: 1.6.0
         version: 1.6.0(zod@4.6.7)
       '@hono/node-server':
-        specifier: 2.1.5
-        version: 2.1.5(hono@4.13.14)
+        specifier: 2.1.6
+        version: 2.1.6(hono@4.13.16)
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(zod@4.6.7)
       express-rate-limit:
-        specifier: 8.7.2
-        version: 8.7.2(express@5.2.1)
+        specifier: 8.7.3
+        version: 8.7.3(express@5.2.1)
       fast-uri:
         specifier: 3.1.9
         version: 3.1.9
       hono:
-        specifier: 4.13.14
-        version: 4.13.14
+        specifier: 4.13.16
+        version: 4.13.16
       ip-address:
-        specifier: 10.7.5
-        version: 10.7.5
+        specifier: 10.7.6
+        version: 10.7.6
       qs:
         specifier: 6.17.1
         version: 6.17.1
@@ -71,10 +71,10 @@ importers:
         version: 4.10.2
       openclaw:
         specifier: 2026.10.4
-        version: 2026.10.4(@opentelemetry/api@1.10.0)
+        version: 2026.10.4(@opentelemetry/api@1.9.1)
       openclaw-baseline:
         specifier: npm:openclaw@2026.10.1
-        version: openclaw@2026.10.1(@opentelemetry/api@1.10.0)
+        version: openclaw@2026.10.1(@opentelemetry/api@1.9.1)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -192,8 +192,8 @@ packages:
     engines: {node: ^22.18.0 || >=24.11.0}
     hasBin: true
 
-  '@babel/runtime@7.29.13':
-    resolution: {integrity: sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==}
+  '@babel/runtime@7.29.10':
+    resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
     engines: {node: '>=6.9.0'}
 
   '@babel/template@8.0.0':
@@ -401,11 +401,11 @@ packages:
     resolution: {integrity: sha512-84/0u0kqKy4qcKupIDaTtbkmk+3qFDuMzxTC0NPfVlHcUT+jHGdP+QCqwEw94/GJxRezDeBLwxaclkBZgCdeUg==}
     hasBin: true
 
-  '@hono/node-server@2.1.5':
-    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
+  '@hono/node-server@2.1.6':
+    resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.13.14
+      hono: 4.13.16
 
   '@isaacs/fs-minipass@4.0.1':
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
@@ -656,8 +656,8 @@ packages:
     resolution: {integrity: sha512-MEq9TssvajMJTZxXlURwrOP7Or8CSS6c9F02rdG04BEe0LLRmfQqzTtRyrDi3uaj+yxr9tw2Tpy5yrLPuO+oZg==}
     engines: {node: '>=22'}
 
-  '@opentelemetry/api@1.10.0':
-    resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
     engines: {node: '>=8.0.0'}
 
   '@opentelemetry/semantic-conventions@1.43.0':
@@ -1226,8 +1226,8 @@ packages:
     resolution: {integrity: sha512-ge98qjkRK4IB7tL7Ju/6qmm5LHoH1eEMt5FNZrz3f4UIYhF28lggX20z3FaX1sgc67msLEn0N0BscOs29iuwyw==}
     engines: {node: '>=22'}
 
-  express-rate-limit@8.7.2:
-    resolution: {integrity: sha512-U1ScocxDD9WI09LaBVypvNkOtNR5yWAmZLkuKJdAzIchA4YKFYF6GT5IKER7epG58oXtjvGlV0/6ii0F83EyZg==}
+  express-rate-limit@8.7.3:
+    resolution: {integrity: sha512-zPLqDI2f0gV2WmGnacLf9XSSqn4VldRyP5LCzOwx0BKH40mO6+2PCFkoSsRO2jePx87/Kf6NUF6P2QOTKXHbQA==}
     engines: {node: '>= 16'}
     peerDependencies:
       express: '>= 4.11'
@@ -1361,8 +1361,8 @@ packages:
     resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
     engines: {node: '>=12.0.0'}
 
-  hono@4.13.14:
-    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
+  hono@4.13.16:
+    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
 
   hosted-git-info@10.1.1:
@@ -1411,8 +1411,8 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  ip-address@10.7.5:
-    resolution: {integrity: sha512-t2v0rkILYv9WXmSL7TpAaU3HXgaFYOPUcH3QHgwQ++gpJuH3bqyMy4Fvt/DJCTKwzH3Cf+bAp5W/mFL39KPLzA==}
+  ip-address@10.7.6:
+    resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -2220,7 +2220,7 @@ snapshots:
 
   '@anthropic-ai/sdk@1.6.0(zod@4.6.7)':
     dependencies:
-      '@opentelemetry/api': 1.10.0
+      '@opentelemetry/api': 1.9.1
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -2254,7 +2254,7 @@ snapshots:
     dependencies:
       '@babel/types': 8.0.6
 
-  '@babel/runtime@7.29.13': {}
+  '@babel/runtime@7.29.10': {}
 
   '@babel/template@8.0.0':
     dependencies:
@@ -2403,9 +2403,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@2.1.5(hono@4.13.14)':
+  '@hono/node-server@2.1.6(hono@4.13.16)':
     dependencies:
-      hono: 4.13.14
+      hono: 4.13.16
 
   '@isaacs/fs-minipass@4.0.1':
     dependencies:
@@ -2512,21 +2512,21 @@ snapshots:
       '@lydell/node-pty-win32-arm64': 1.2.0-beta.15
       '@lydell/node-pty-win32-x64': 1.2.0-beta.15
 
-  '@mistralai/mistralai@2.7.0(@opentelemetry/api@1.10.0)':
+  '@mistralai/mistralai@2.7.0(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.22.0
       zod: 4.6.7
       zod-to-json-schema: 3.25.2(zod@4.6.7)
     optionalDependencies:
-      '@opentelemetry/api': 1.10.0
+      '@opentelemetry/api': 1.9.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
   '@modelcontextprotocol/sdk@1.32.1(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.1.5(hono@4.13.14)
+      '@hono/node-server': 2.1.6(hono@4.13.16)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -2535,8 +2535,8 @@ snapshots:
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
       express: 5.2.1
-      express-rate-limit: 8.7.2(express@5.2.1)
-      hono: 4.13.14
+      express-rate-limit: 8.7.3(express@5.2.1)
+      hono: 4.13.16
       jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -2548,7 +2548,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.2(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 2.1.5(hono@4.13.14)
+      '@hono/node-server': 2.1.6(hono@4.13.16)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -2557,8 +2557,8 @@ snapshots:
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
       express: 5.2.1
-      express-rate-limit: 8.7.2(express@5.2.1)
-      hono: 4.13.14
+      express-rate-limit: 8.7.3(express@5.2.1)
+      hono: 4.13.16
       jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -2570,11 +2570,11 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)':
+  '@openclaw/ai@2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       openai: 7.23.0(ws@8.21.3)(zod@4.6.7)
       partial-json: 0.1.7
       typebox: 1.3.34
@@ -2594,11 +2594,11 @@ snapshots:
       - ws
       - zod
 
-  '@openclaw/ai@2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)':
+  '@openclaw/ai@2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
       '@google/genai': 2.24.0(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       openai: 7.23.0(ws@8.21.3)(zod@4.6.7)
       partial-json: 0.1.7
       typebox: 1.3.34
@@ -2650,7 +2650,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.24.2
       jszip: 3.10.2
 
-  '@opentelemetry/api@1.10.0': {}
+  '@opentelemetry/api@1.9.1': {}
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
@@ -3114,11 +3114,11 @@ snapshots:
       which-command: 0.1.0
       yoctocolors: 2.2.0
 
-  express-rate-limit@8.7.2(express@5.2.1):
+  express-rate-limit@8.7.3(express@5.2.1):
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.7.5
+      ip-address: 10.7.6
     transitivePeerDependencies:
       - supports-color
 
@@ -3302,7 +3302,7 @@ snapshots:
 
   highlight.js@11.12.0: {}
 
-  hono@4.13.14: {}
+  hono@4.13.16: {}
 
   hosted-git-info@10.1.1:
     dependencies:
@@ -3350,7 +3350,7 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  ip-address@10.7.5: {}
+  ip-address@10.7.6: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -3382,7 +3382,7 @@ snapshots:
 
   json-schema-to-ts@3.1.1:
     dependencies:
-      '@babel/runtime': 7.29.13
+      '@babel/runtime': 7.29.10
       ts-algebra: 2.0.0
 
   json-schema-traverse@1.0.0: {}
@@ -3540,7 +3540,7 @@ snapshots:
       ws: 8.21.3
       zod: 4.6.7
 
-  openclaw@2026.10.1(@opentelemetry/api@1.10.0):
+  openclaw@2026.10.1(@opentelemetry/api@1.9.1):
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.7)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
@@ -3554,10 +3554,10 @@ snapshots:
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.46.0)
       '@homebridge/ciao': 1.3.12
       '@lydell/node-pty': 1.2.0-beta.15
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)
+      '@openclaw/ai': 2026.10.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2
@@ -3700,7 +3700,7 @@ snapshots:
       - undici
       - utf-8-validate
 
-  openclaw@2026.10.4(@opentelemetry/api@1.10.0):
+  openclaw@2026.10.4(@opentelemetry/api@1.9.1):
     dependencies:
       '@agentclientprotocol/sdk': 1.5.0(zod@4.6.7)
       '@anthropic-ai/sdk': 0.128.0(zod@4.6.7)
@@ -3714,10 +3714,10 @@ snapshots:
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.46.0)
       '@homebridge/ciao': 1.3.12
       '@lydell/node-pty': 1.2.0-beta.15
-      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.10.0)
+      '@mistralai/mistralai': 2.7.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
       '@mozilla/readability': 0.6.0
-      '@openclaw/ai': 2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.10.0)(ws@8.21.3)(zod@4.6.7)
+      '@openclaw/ai': 2026.10.4(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@opentelemetry/api@1.9.1)(ws@8.21.3)(zod@4.6.7)
       '@openclaw/fs-safe': 0.24.2
       '@silvia-odwyer/photon-node': 0.3.4
       '@trycua/cua-driver': 0.28.2

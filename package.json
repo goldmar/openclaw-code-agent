@@ -68,12 +68,12 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.319",
     "@anthropic-ai/sdk": "1.6.0",
-    "@hono/node-server": "2.1.5",
+    "@hono/node-server": "2.1.6",
     "@modelcontextprotocol/sdk": "1.32.2",
-    "express-rate-limit": "8.7.2",
+    "express-rate-limit": "8.7.3",
     "fast-uri": "3.1.9",
-    "hono": "4.13.14",
-    "ip-address": "10.7.5",
+    "hono": "4.13.16",
+    "ip-address": "10.7.6",
     "qs": "6.17.1",
     "zod": "4.6.7"
   },
