@@ -30,10 +30,10 @@ overrides:
   "@modelcontextprotocol/sdk@<1.32.1": 1.32.1
   # Patch the exact Zod 4.6.5 dependency in both pinned OpenClaw dev hosts.
   zod@>=4.0.0 <4.6.7: 4.6.7
-  ip-address@<10.7.5: 10.7.5
+  ip-address@<10.7.6: 10.7.6
   fast-uri@<3.1.9: 3.1.9
   qs@<6.17.1: 6.17.1
   proxy-addr@<2.0.8: 2.0.8
-  hono@<4.13.14: 4.13.14
-  "@hono/node-server@<2.1.5": 2.1.5
+  hono@<4.13.16: 4.13.16
+  "@hono/node-server@<2.1.6": 2.1.6
   undici@>=8.0.0 <8.9.0: 8.9.0
