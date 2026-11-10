@@ -1006,6 +1006,100 @@ describe("ClaudeCodeHarness", () => {
   });
 });
 
+// Pins the permission and settings behaviour OCA relies on, reviewed for the
+// Agent SDK 0.3.312 boundary (auto-mode settings, resolveSettings() skipping
+// settings files with invalid auto-mode keys) and later releases. See
+// docs/DEPENDENCY-MAINTENANCE.md.
+describe("ClaudeCodeHarness permission and settings contract", () => {
+  async function optionsFor(permissionMode?: string): Promise<Record<string, any>> {
+    let sdkOptions: Record<string, any> | undefined;
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { sdkOptions = options; });
+    await collectMessages(harness.launch({ prompt: "x", cwd: "/tmp/project", ...(permissionMode ? { permissionMode } : {}) }));
+    assert.ok(sdkOptions);
+    return sdkOptions;
+  }
+
+  it("passes each supported mode verbatim and leaves Claude settings resolution to the CLI", async () => {
+    const harness = new ClaudeCodeHarness();
+    assert.deepEqual([...harness.supportedPermissionModes], ["default", "plan", "bypassPermissions"]);
+    for (const mode of harness.supportedPermissionModes) {
+      const sdkOptions = await optionsFor(mode);
+      assert.equal(sdkOptions.permissionMode, mode);
+      assert.equal(sdkOptions.allowDangerouslySkipPermissions, true);
+      // No settingSources: the CLI loads user, project and local settings as
+      // it does interactively. OCA never supplies or rewrites settings.
+      for (const key of ["settingSources", "settings", "managedSettings", "serverManagedSettings", "permissionPromptToolName"]) {
+        assert.equal(Object.hasOwn(sdkOptions, key), false, `${key} must stay unset`);
+      }
+    }
+  });
+
+  it("allows every tool outside plan mode and denies mutating tools in plan mode", async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["Write", { file_path: "/tmp/project/a.txt", content: "x" }],
+      ["Edit", { file_path: "/tmp/project/a.txt", old_string: "x", new_string: "y" }],
+      ["Bash", { command: "which -a node" }],
+      ["Monitor", { command: "tail -f log" }],
+    ];
+    for (const mode of ["default", "bypassPermissions"]) {
+      const { canUseTool, finish } = await launchForCanUseTool(mode);
+      for (const [tool, input] of calls) {
+        assert.deepEqual(await canUseTool(tool, input), { behavior: "allow", updatedInput: input }, `${mode}: ${tool}`);
+      }
+      await finish();
+    }
+    const { canUseTool, finish } = await launchForCanUseTool("plan");
+    for (const [tool, input] of calls) {
+      const result = await canUseTool(tool, input);
+      assert.equal(result.behavior, "deny", `plan: ${tool}`);
+      assert.match(result.message, /Plan mode is active/);
+    }
+    await finish();
+  });
+
+  it("follows the permission mode Claude Code reports, so plan-mode denial tracks the CLI", async () => {
+    const { canUseTool, messages, finish } = await launchForCanUseTool("default", {}, [
+      { type: "system", subtype: "status", status: null, permissionMode: "plan", session_id: "claude-1" },
+    ]);
+    for (let i = 0; i < 50 && !messages.some((message) => message.type === "settings_changed"); i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(messages.find((message) => message.type === "settings_changed"), { type: "settings_changed", permissionMode: "plan" });
+    assert.equal((await canUseTool("Write", { file_path: "/tmp/project/a.txt" })).behavior, "deny");
+    await finish();
+  });
+
+  it("completes normally around session_writes_lost and credential_expires_at (SDK 0.3.317+)", async () => {
+    const { handle } = createQueryHandle([
+      { type: "system", subtype: "session_writes_lost", error_code: "ENOSPC", lost: ["transcript"], uuid: "u-1", session_id: "claude-1" },
+      { ...OK_RESULT, credential_expires_at: "2026-12-01T00:00:00Z" },
+    ]);
+    const [result] = completions(await collectMessages(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" })));
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.outcome, "completed");
+  });
+
+  it("surfaces an invalid Claude config file at startup as the structured error code", async () => {
+    const { handle } = createQueryHandle([
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "claude-startup",
+        duration_ms: 0,
+        total_cost_usd: 0,
+        num_turns: 0,
+        errors: ["A configuration file is not valid JSON"],
+        startup_failure_reason: "config_file_invalid",
+      },
+    ]);
+    const [result] = completions(await collectMessages(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" })));
+    assert.equal(result?.data.outcome, "failed");
+    assert.equal(result?.data.errorCode, "config_file_invalid");
+  });
+});
+
 describe("ClaudeCodeHarness rewind (N23)", () => {
   const user = (uuid: string, content: unknown, parent: string | null = null): SessionMessage => ({ type: "user", uuid, session_id: "s", message: { role: "user", content }, parent_tool_use_id: parent, parent_agent_id: null });
   const assistant = (uuid: string): SessionMessage => ({ type: "assistant", uuid, session_id: "s", message: { role: "assistant", content: [] }, parent_tool_use_id: null, parent_agent_id: null });

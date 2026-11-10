@@ -38,8 +38,14 @@ workflow behavior is routine. Unknown parsing/evidence is a hold, never consent.
 
 Exact OpenClaw baseline/dev pins, host/API/peer floors and security floors remain
 owner-controlled. SDK/toolchain and release-tool groups require explicit review.
-Claude Agent SDK 0.3.312 changes permission/settings behavior and is in this lane;
-this policy does not authorize that bump. No Claude calls or quota probes. No
+Claude Agent SDK updates stay in this lane. The 0.3.312 permission/settings
+boundary (auto-mode settings; `resolveSettings()` skips user or project files
+with invalid auto-mode keys) was reviewed with 0.3.319 in #590: OCA passes no
+`settingSources` or settings and never calls `resolveSettings()`, so the CLI
+still resolves settings and OCA's permission modes are unchanged.
+`tests/claude-harness.test.ts` pins that contract. A later SDK bump needs its
+own review of changelog entries since the reviewed version; this policy never
+authorizes one. No Claude calls or quota probes. No
 publication, tag, install, runtime reload or Gateway restart is authorized by
 dependency maintenance.
 
