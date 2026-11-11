@@ -333,6 +333,8 @@ export function budgetExhausted({ pr, checks = [], comments = [] }) {
       (c.body ?? "").startsWith("<!-- greptile_summary -->") &&
       (Number((c.body ?? "").match(/Reviews \((\d+)\) · Last reviewed commit:/u)?.[1] ?? 0) > 1 ||
        ((c.body ?? "").match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1] ?? pr.head.sha) !== pr.head.sha))) return true;
+  if (runs.some(c => [c.output?.title, c.output?.summary].some(value => typeof value === "string" &&
+      /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(value)))) return true;
   // Only the authentic application's explicit quota notice, never owner/PR prose.
   return comments.some(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
     /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(c.body ?? ""));

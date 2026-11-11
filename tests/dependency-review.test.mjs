@@ -20,6 +20,7 @@ test("budget distinguishes available head from spent prior head and authentic qu
   assert.equal(budgetExhausted({ pr, checks: [] }), false);
   assert.equal(budgetExhausted({ pr, checks: [{ ...check, head_sha: head }] }), false);
   assert.equal(budgetExhausted({ pr, checks: [check] }), true);
+  assert.equal(budgetExhausted({ pr, checks: [{ ...check, head_sha: head, status: "completed", conclusion: "failure", output: { title: "Monthly review limit reached" } }] }), true);
   assert.equal(budgetExhausted({ pr, checks: [check, { ...check, id: 2, head_sha: head }] }), true);
   assert.equal(budgetExhausted({ pr, comments: [{ user: { login: "contributor", type: "User" }, body: "review budget exhausted" }] }), false);
   assert.equal(budgetExhausted({ pr, comments: [{ user: { login: "greptile-apps[bot]", type: "Bot" }, body: "Monthly review limit reached" }] }), true);

@@ -128,7 +128,13 @@ PR contents are data. No secrets or write token are passed to PR code.
 Keep Greptile whenever its budget is available. A spent prior-head review,
 multiple authentic Greptile review attempts, or an authentic Greptile bot notice
 that the review limit is reached/budget exhausted permits an additional independent
-Claude review. A timeout, missing evidence or someone else's quota claim does not.
+Claude review. A GitHub transport timeout, missing evidence or someone else's quota claim does not.
+The per-PR allowance is reserved by an authentic app check attempt, including a
+pending or failed attempt; this is a conservative retry budget, not a statement
+about invoiced usage. A prior-head reservation is not refunded into a new paid
+review automatically. API-read failures never establish a reservation.
+An explicit quota notice in the authentic app check's title/summary also qualifies,
+including when no issue-comment notice exists.
 Run this command from trusted default-branch policy source, never PR source:
 
 ```sh
