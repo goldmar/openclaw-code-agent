@@ -13,6 +13,8 @@ export const REQUIRED_CHECKS = [
   "pnpm audit --prod", "Dependency Review", "actionlint", "no-tabs", "Analyze (javascript-typescript)", "Analyze (actions)",
 ];
 const GREPTILE_APP_ID = 867647;
+export const REVIEW_MODEL = "claude-opus-5-5";
+export const REVIEW_MARKER = "oca-dependency-claude-review:v1";
 const GREPTILE_CHECK = "Greptile Review";
 const GREPTILE_SCORE = /^<!-- greptile_confidence_score:(\d+) -->$/mu;
 const SHA = /^[a-f0-9]{40}$/u;
@@ -253,12 +255,15 @@ export function evaluate(snapshot) {
       return { status: "held", reason: `required-check:${name}` };
     }
   }
+  const exhausted = snapshot.reviewEvidence && budgetExhausted(snapshot.reviewEvidence);
+  const fallback = exhausted ? claudeReceipt({ pr, comments }) : null;
   // Ignore superseded attempts, but never hide a current failing/pending check.
   const latestChecks = new Map();
   for (const check of [...checks].sort((a, b) => a.id - b.id)) {
     if (check.head_sha === pr.head.sha) latestChecks.set(`${check.app?.id}:${check.name}`, check);
   }
   if (statuses.some(status => status.state !== "success") || [...latestChecks.values()].some(check =>
+    !(fallback && check.app?.id === GREPTILE_APP_ID && check.name === GREPTILE_CHECK) &&
     !["success", "neutral", "skipped"].includes(check.conclusion))) {
     return { status: "held", reason: "additional-checks-not-green" };
   }
@@ -269,8 +274,8 @@ export function evaluate(snapshot) {
   // Greptile's machine-readable results decide this; its prose never does.
   const reviewCheck = checks.filter(check => check.name === GREPTILE_CHECK && check.head_sha === pr.head.sha &&
     check.app?.id === GREPTILE_APP_ID).sort((a, b) => b.id - a.id)[0];
-  if (reviewed !== pr.head.sha || GREPTILE_SCORE.exec(greptile?.body ?? "")?.[1] !== "5" ||
-      reviewCheck?.status !== "completed" || reviewCheck.conclusion !== "success") {
+  if (!fallback && (exhausted || reviewed !== pr.head.sha || GREPTILE_SCORE.exec(greptile?.body ?? "")?.[1] !== "5" ||
+      reviewCheck?.status !== "completed" || reviewCheck.conclusion !== "success")) {
     return { status: "held", reason: "final-head-greptile-required" };
   }
   if (threads.some(thread => thread.isResolved !== true)) return { status: "held", reason: "unresolved-review-threads" };
@@ -279,8 +284,59 @@ export function evaluate(snapshot) {
     if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state)) latestReview.set(review.user?.login, review.state);
   }
   if ([...latestReview.values()].includes("CHANGES_REQUESTED")) return { status: "held", reason: "changes-requested" };
-  return { status: "eligible", head: prepared.head, base: prepared.base, number: pr.number };
+  return { status: "eligible", head: prepared.head, base: prepared.base, number: pr.number,
+    reviewer: fallback ? "claude" : "greptile", model: fallback ? fallback.model : null };
 }
+
+export function collectReview(number, { api = githubRead } = {}) {
+  const read = path => api(["api", `repos/${REPOSITORY}/${path}`]);
+  const pages = path => api(["api", `repos/${REPOSITORY}/${path}`, "--paginate", "--slurp"]).flat();
+  const pr = read(`pulls/${number}`);
+  if (pr.number !== number || !SHA.test(pr.head?.sha ?? "") || !SHA.test(pr.base?.sha ?? "") ||
+      !Number.isInteger(pr.commits) || pr.commits < 1 || pr.commits > 250) throw new Error("unproven PR history");
+  const commits = pages(`pulls/${number}/commits?per_page=100`);
+  if (commits.length !== pr.commits || new Set(commits.map(c => c.sha)).size !== commits.length ||
+      !commits.every(c => SHA.test(c.sha ?? "")) || !commits.some(c => c.sha === pr.head.sha)) throw new Error("incomplete PR history");
+  const checks = [];
+  for (const { sha } of commits) {
+    const responses = api(["api", `repos/${REPOSITORY}/commits/${sha}/check-runs?check_name=Greptile%20Review&filter=all&per_page=100`, "--paginate", "--slurp"]);
+    const rows = responses.flatMap(page => page.check_runs ?? []);
+    if (!responses.length || responses.some(page => page.total_count !== rows.length) ||
+        new Set(rows.map(c => c.id)).size !== rows.length) throw new Error("incomplete review history");
+    checks.push(...rows.filter(c => c.app?.id === GREPTILE_APP_ID && c.name === "Greptile Review" && c.head_sha === sha));
+  }
+  if (new Set(checks.map(c => c.id)).size !== checks.length) throw new Error("changed review history");
+  const comments = pages(`issues/${number}/comments?per_page=100`);
+  const current = read(`pulls/${number}`);
+  if (current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base.sha || current.commits !== pr.commits) throw new Error("PR changed during review read");
+  return { pr, comments, checks };
+}
+
+export function budgetExhausted({ pr, checks = [], comments = [] }) {
+  const runs = checks.filter(c => c.app?.id === GREPTILE_APP_ID && c.name === "Greptile Review");
+  // One review is allowed per combined PR. A spent prior head or multiple
+  // attempts cannot demand another paid review to make the final head eligible.
+  if (runs.length > 1 || runs.some(c => c.head_sha !== pr.head.sha)) return true;
+  // Only the authentic application's explicit quota notice, never owner/PR prose.
+  return comments.some(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
+    /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(c.body ?? ""));
+}
+
+export function claudeReceipt({ pr, comments = [] }) {
+  const pattern = new RegExp(`^<!-- ${REVIEW_MARKER} (\\{[^\\n]+\\}) -->$`, "u");
+  const receipts = comments.filter(c => c.user?.login === "goldmar" && c.user?.type === "User" &&
+    c.created_at && c.created_at === c.updated_at).map(c => {
+    const match = pattern.exec(c.body ?? "");
+    try { return match ? JSON.parse(match[1]) : null; } catch { return null; }
+  }).filter(r => r && r.schema === REVIEW_MARKER && r.repo === REPOSITORY && r.number === pr.number &&
+    r.head === pr.head.sha && r.base === pr.base.sha && r.reviewer === "claude" && r.model === REVIEW_MODEL &&
+    r.transport === "claude-cli" && r.reason === "greptile-budget-exhausted" &&
+    r.verdict === "clean" && Array.isArray(r.findings) && r.findings.length === 0 &&
+    typeof r.cliVersion === "string" && /^\d+\.\d+\.\d+$/u.test(r.cliVersion) &&
+    typeof r.reviewedAt === "string" && Number.isFinite(Date.parse(r.reviewedAt)));
+  return receipts.at(-1) ?? null;
+}
+
 
 // Transport is injectable. Every operation is a read, including GraphQL query.
 export function githubRead(args) {
@@ -345,9 +401,10 @@ export function collectSnapshot(number, { api = githubRead, preparedOnly = false
   }
   const threads = threadPages.flatMap(page => page.data.repository.pullRequest.reviewThreads.nodes);
   const reviews = pages(`pulls/${number}/reviews?per_page=100`);
+  const reviewEvidence = collectReview(number, { api });
   const current = read(`pulls/${number}`);
-  if (current.head.sha !== pr.head.sha || current.base.sha !== pr.base.sha) throw new Error("PR changed during policy read");
-  return { ...snapshot, pr: current, files, contents, verifiedActionPins, checks: checkPages.flatMap(page => page.check_runs),
+  if (reviewEvidence.pr.head.sha !== pr.head.sha || reviewEvidence.pr.base.sha !== pr.base.sha || current.head.sha !== pr.head.sha || current.base.sha !== pr.base.sha) throw new Error("PR changed during policy read");
+  return { ...snapshot, reviewEvidence, pr: current, files, contents, verifiedActionPins, checks: checkPages.flatMap(page => page.check_runs),
     statuses: statusPages.flatMap(page => page.statuses), threads, reviews };
 }
 

@@ -27,7 +27,7 @@ function fixture(): any {
   } } });
   return {
     enabled: true,
-    pr: { number: 700, state: "open", draft: false, user: { login: "dependabot[bot]" },
+    pr: { number: 700, commits: 1, state: "open", draft: false, user: { login: "dependabot[bot]" },
       base: { ref: "main", sha: base, repo: { full_name: REPOSITORY } },
       head: { sha: head, repo: { full_name: REPOSITORY } },
       auto_merge: null, mergeable: true, mergeable_state: "clean", changed_files: 4,
@@ -68,6 +68,7 @@ function apiFixture(snapshot: any, mutateRead?: () => void) {
       if (prReads === 2) mutateRead?.();
       return snapshot.pr;
     }
+    if (path.includes("/commits?")) return [[{ sha: head }]];
     if (path.includes("/comments?")) return [[snapshot.comments[1]], [snapshot.comments[0]]];
     if (path.includes("/collaborators/")) return { permission: "write" };
     if (path.includes("/files?")) return [snapshot.files.slice(0, 2), snapshot.files.slice(2)];
@@ -76,7 +77,7 @@ function apiFixture(snapshot: any, mutateRead?: () => void) {
       const content = snapshot.contents[filename][ref === base ? "before" : "after"];
       return { encoding: "base64", content: Buffer.from(content).toString("base64") };
     }
-    if (path.includes("/check-runs?")) return [{ check_runs: snapshot.checks.slice(0, 5) }, { check_runs: snapshot.checks.slice(5) }];
+    if (path.includes("/check-runs?")) return [{ total_count: snapshot.checks.length, check_runs: snapshot.checks.slice(0, 5) }, { total_count: snapshot.checks.length, check_runs: snapshot.checks.slice(5) }];
     if (path.includes("/status?")) return [{ statuses: snapshot.statuses }];
     if (path === "graphql") return [{ data: { repository: { pullRequest: { reviewThreads: {
       nodes: snapshot.threads, pageInfo: { hasNextPage: false, endCursor: null },
@@ -91,7 +92,7 @@ describe("weekly dependency admission", () => {
   it("holds activation by default and permits only a prepared final head", () => {
     const s = fixture();
     assert.deepEqual(evaluate({ ...s, enabled: false }), { status: "held", reason: "activation-required" });
-    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700 });
+    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700, reviewer: "greptile", model: null });
     assert.equal(preparation(s).status, "prepared", "preparing label suppresses Greptile while CI is admitted");
   });
 
@@ -163,7 +164,7 @@ describe("weekly combined PR", () => {
 
   it("is eligible through every ordinary gate, without a preparation receipt", () => {
     assert.equal(isCombined(combined().pr), true);
-    assert.deepEqual(evaluate(combined()), { status: "eligible", head, base, number: 700 });
+    assert.deepEqual(evaluate(combined()), { status: "eligible", head, base, number: 700, reviewer: "greptile", model: null });
   });
 
   it("needs the exact branch, the label, a human author and a writer", () => {
