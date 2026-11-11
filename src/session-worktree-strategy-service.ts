@@ -44,6 +44,7 @@ import {
   syncWorktreePRByUrl,
   worktreeExists,
 } from "./worktree";
+import { runGit } from "./git-exec";
 import { createLogger } from "./logger";
 import { appendSessionStatsSuffix, sessionStats } from "./session-notification-stats";
 
@@ -840,16 +841,25 @@ export class SessionWorktreeStrategyService {
   ): Promise<boolean> {
     const admitted = this.admissionTicket(session);
     if (!admitted()) return false;
-    // The merge may have rebased the reported head itself. Like the manual
-    // merge, finish that admitted operation under its execution ticket instead
-    // of re-checking the report's head; removal still refuses a dirty worktree.
+    // The merge may have rebased the reported head itself, so cleanup does
+    // not re-check the report's head. Instead, under the repository lock, the
+    // checkout and the branch must already be contained in the base: a commit
+    // made after the merge keeps both. Removal still refuses a dirty worktree.
+    const merged = async (ref: string, cwd = repoDir) => {
+      try {
+        await runGit(["-C", cwd, "merge-base", "--is-ancestor", ref, `refs/heads/${baseBranch}`], { timeout: 10_000 });
+        return true;
+      } catch { return false; }
+    };
     const removed = !worktreeExists(worktreePath)
-      || await removeWorktree(repoDir, worktreePath, { shouldRemove: async () => admitted() });
+      || await removeWorktree(repoDir, worktreePath, {
+        shouldRemove: async () => admitted() && await merged("HEAD", worktreePath) && await merged(`refs/heads/${branchName}`) && admitted(),
+      });
     if (!admitted()) return removed;
     if (removed) {
       session.worktreePath = undefined;
       this.updatePersistedSessionFor(session, { worktreePath: undefined });
-      await deleteBranch(repoDir, branchName, admitted);
+      await deleteBranch(repoDir, branchName, async () => admitted() && await merged(`refs/heads/${branchName}`) && admitted());
     }
     if (!admitted()) return removed;
     this.markMerged(session);

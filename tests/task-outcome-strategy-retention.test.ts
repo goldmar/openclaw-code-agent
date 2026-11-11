@@ -175,6 +175,38 @@ describe("integration effects retain their task admission", () => {
     assert.deepEqual(notices.map((notice) => notice.label), ["worktree-merge-success"]);
   });
 
+  it("keeps a worktree and branch that gained a commit after the automatic merge", async (t) => {
+    const f = fixture(t, true);
+    writeFileSync(join(f.repo, "upstream.txt"), "new base\n");
+    f.git("add", "upstream.txt"); f.git("commit", "-qm", "advance main");
+    const session = reviewedTaskFixture(createStubSession({ name: "auto-merge-late-commit", status: "completed", startedAt: 1,
+      workdir: f.worktree, originalWorkdir: f.repo, worktreePath: f.worktree, worktreeBranch: "agent/task" }) as Session);
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true, isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => f.repo, getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: () => true, dispatchSessionNotification: () => {},
+      getOutputPreview: () => "", originThreadLine: () => "", getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "unused" }),
+      worktreeMessages: new SessionWorktreeMessageService(), enqueueMerge: async (_repo, fn) => fn(),
+      // Another writer commits cleanly after the merge released the repository lock.
+      mergeBranch: async (...args: Parameters<typeof mergeBranch>) => {
+        const result = await mergeBranch(...args);
+        writeFileSync(join(f.worktree, "later.txt"), "not merged\n");
+        execFileSync("git", ["-C", f.worktree, "add", "later.txt"]);
+        execFileSync("git", ["-C", f.worktree, "commit", "-qm", "later work"]);
+        return result;
+      },
+      spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true, notificationSent: false }),
+    });
+    const result = await service["handleAutoMergeStrategy"](session, f.repo, f.worktree, "agent/task", "main",
+      (await getDiffSummary(f.repo, "agent/task", "main"))!);
+    assert.equal(existsSync(join(f.repo, "task.txt")), true, "the merge landed");
+    assert.equal(result.worktreeRemoved, false);
+    assert.equal(existsSync(join(f.worktree, "later.txt")), true, "the later commit's checkout is kept");
+    assert.equal(f.git("log", "-1", "--format=%s", "agent/task"), "later work", "the branch with unmerged work is kept");
+  });
+
   it("reports an unreadable change summary as retryable without deciding anything", async (t) => {
     const f = fixture(t, true);
     const session = reviewedTaskFixture(createStubSession({ name: "diff-unreadable", status: "completed", startedAt: 1,
