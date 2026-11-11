@@ -23,7 +23,7 @@ const RESOLVED_WORKTREE_STATES = new Set([
 ]);
 
 export type PlannedWorktreeAction =
-  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string } }
+  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string; retryable?: boolean } }
   /** Integration problem and supporting details; never establishes task success. */
   | { kind: "notify"; label: string; problem: string; detail: string[] }
   | {
@@ -281,7 +281,15 @@ export class SessionWorktreeActionService {
       : undefined) ?? await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+      return {
+        kind: "skip",
+        result: {
+          notificationSent: false,
+          worktreeRemoved: false,
+          retryable: true,
+          completionNote: `⚠️ The change summary for \`${branchName}\` could not be read, so no integration action ran. The worktree is kept; submit the same outcome report again to retry.`,
+        },
+      };
     }
 
     const livePolicy = session.repoIntegrationPolicy ? undefined : await this.deps.resolveRepoPolicy?.(repoDir);

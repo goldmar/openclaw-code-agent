@@ -231,6 +231,8 @@ export class Session extends EventEmitter {
   startedAt: number;
   completedAt?: number;
   taskOutcome?: TaskOutcomeReport;
+  /** `reviewedAt` of the report whose integration follow-through settled (see PersistedSessionInfo). */
+  taskOutcomeFollowThroughAt?: string;
   /**
    * When the orchestrator first read this session's output (agent_output)
    * after it ended. An outcome wake deferred just after launch is skipped when

@@ -603,6 +603,12 @@ export interface PersistedSessionInfo {
   status: SessionStatus;
   /** Reviewed task and verification evidence; execution completion alone is not task success. */
   taskOutcome?: TaskOutcomeReport;
+  /**
+   * `reviewedAt` of the reviewed outcome whose integration follow-through
+   * (worktree strategy) reached a settled result. While it differs from
+   * `taskOutcome.reviewedAt`, an identical resubmission retries the follow-through.
+   */
+  taskOutcomeFollowThroughAt?: string;
   lifecycle?: SessionLifecycle;
   approvalState?: SessionApprovalState;
   worktreeState?: SessionWorktreeState;

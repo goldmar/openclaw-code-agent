@@ -688,7 +688,7 @@ Read buffered output without changing session state. Current `executionCycle` an
 
 ### `agent_report_outcome`
 
-Record the orchestrator's reviewed task outcome for one exact execution cycle. Read current output and check receipts first. This tool records evidence; it does not execute checks or grant integration, deployment, or infrastructure authority. See [Task outcome evidence](#task-outcome-evidence).
+Record the orchestrator's reviewed task outcome for one exact execution cycle. Read current output and check receipts first. This tool records evidence; it does not execute checks or grant integration, deployment, or infrastructure authority. See [Task outcome evidence](#task-outcome-evidence). Resubmitting an identical report does not repeat the outcome notice; if the earlier report's worktree follow-through stopped on a transient failure (for example an unreadable change summary), the resubmission retries that follow-through.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |

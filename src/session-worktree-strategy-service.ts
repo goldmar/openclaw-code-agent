@@ -59,6 +59,11 @@ export type WorktreeStrategyResult = {
   userCompletionNoticeOwed?: boolean;
   /** One extra line for the generic `✅ Completed` notice (nobody is prompted, yet something is left to do). */
   completionNote?: string;
+  /**
+   * Follow-through stopped on a transient read failure before any decision or
+   * effect; the same reviewed report may retry it.
+   */
+  retryable?: boolean;
 };
 
 type DiffSummary = NonNullable<Awaited<ReturnType<typeof getDiffSummary>>>;
@@ -834,8 +839,11 @@ export class SessionWorktreeStrategyService {
   ): Promise<boolean> {
     const admitted = this.admissionTicket(session);
     if (!admitted()) return false;
+    // The merge may have rebased the reported head itself. Like the manual
+    // merge, finish that admitted operation under its execution ticket instead
+    // of re-checking the report's head; removal still refuses a dirty worktree.
     const removed = !worktreeExists(worktreePath)
-      || await removeWorktree(repoDir, worktreePath, this.removalOptions(session, admitted));
+      || await removeWorktree(repoDir, worktreePath, { shouldRemove: async () => admitted() });
     if (!admitted()) return removed;
     if (removed) {
       session.worktreePath = undefined;

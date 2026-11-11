@@ -9,6 +9,7 @@ import { SessionManager } from "../src/session-manager";
 import type { Session } from "../src/session";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
 import { hasVerifiedTaskOutcome, type TaskOutcomeInput } from "../src/session-task-outcome";
+import type { WorktreeStrategyResult } from "../src/session-worktree-strategy-service";
 import { createStubSession } from "./helpers";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 
@@ -27,20 +28,21 @@ function fixture() {
     noteOutcomeSeen: () => false });
   // The fake session replaces only the harness execution boundary; report
   // validation, state synchronization, presentation and orchestration are real.
-  const internals = sm as unknown as { sessions: Map<string, Session>; handleWorktreeStrategy: (s: Session) => Promise<{ notificationSent: boolean; worktreeRemoved: boolean }>;
+  const internals = sm as unknown as { sessions: Map<string, Session>; handleWorktreeStrategy: (s: Session) => Promise<WorktreeStrategyResult>;
     dispatchSessionNotification: (session: Session, request: SessionNotificationRequest) => void };
   internals.sessions.set(session.id, session);
   const notifications: SessionNotificationRequest[] = [];
   internals.dispatchSessionNotification = (_session, request) => { notifications.push(request); };
   let strategies = 0;
-  internals.handleWorktreeStrategy = async () => { strategies++; return { notificationSent: false, worktreeRemoved: false }; };
+  const strategyResults: WorktreeStrategyResult[] = [];
+  internals.handleWorktreeStrategy = async () => { strategies++; return strategyResults.shift() ?? { notificationSent: false, worktreeRemoved: false }; };
   cleanups.push(() => { sm.dispose(); rmSync(dir, { recursive: true, force: true }); });
   const input = (): TaskOutcomeInput => ({ executionCycle: 100, task: "completed",
     repositories: [{ workdir: dir, head: git("rev-parse", "HEAD") }],
     checks: [{ name: "Focused checks", scope: "requested task", required: true, status: "passed", stage: "analysis",
       evidence: "receipt:focused-checks", source: "reviewed_receipt", exitCode: 0 }],
     blockers: [], remainingWork: [], summary: "Requested changes and checks were reviewed." });
-  return { sm, session, notifications, input, git, strategies: () => strategies };
+  return { sm, session, notifications, input, git, strategies: () => strategies, strategyResults };
 }
 
 describe("reviewed task outcome reporting", () => {
@@ -76,6 +78,22 @@ describe("reviewed task outcome reporting", () => {
     assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /already recorded/);
     assert.equal(f.notifications.length, 1);
     assert.equal(f.strategies(), 1);
+  });
+
+  it("lets an identical report retry follow-through that stopped on a transient failure", async () => {
+    const f = fixture();
+    f.strategyResults.push({ notificationSent: false, worktreeRemoved: false, retryable: true,
+      completionNote: "⚠️ The change summary could not be read." });
+    assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /recorded: completed/);
+    assert.equal(f.strategies(), 1);
+    assert.deepEqual(f.notifications.map((n) => n.label), ["completed", "worktree-integration-pending"]);
+    assert.match(f.notifications.at(-1)!.userMessage!, /Integration pending\n⚠️ The change summary could not be read\./);
+    const noticesAfterFirst = f.notifications.length;
+    assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /already recorded.*follow-through was retried/);
+    assert.equal(f.strategies(), 2, "the identical report retried the unsettled follow-through");
+    assert.equal(f.notifications.length, noticesAfterFirst, "the completion summary is not repeated");
+    assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /already recorded: completed; verification passed\.$/);
+    assert.equal(f.strategies(), 2, "settled follow-through is not repeated");
   });
 
   it("rejects stale cycles, stale heads, aliases and contradictory success", async () => {

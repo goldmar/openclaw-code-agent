@@ -614,6 +614,7 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     completedAt: toOptionalNumber(raw.completedAt),
     status,
     taskOutcome: normalizeTaskOutcomeReport(raw.taskOutcome),
+    taskOutcomeFollowThroughAt: toOptionalString(raw.taskOutcomeFollowThroughAt),
     lifecycle: recoveredFromRunning ? "suspended" : toOptionalLifecycle(raw.lifecycle),
     approvalState: toOptionalApprovalState(raw.approvalState),
     worktreeState: toOptionalWorktreeState(raw.worktreeState),

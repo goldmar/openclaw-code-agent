@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withRepoLock } from "../src/git-exec";
-import { mergeBranch, pushBranch } from "../src/worktree-merge";
+import { getDiffSummary, mergeBranch, pushBranch } from "../src/worktree-merge";
 import { createPR, updatePRBody, updatePRTitle, commentOnPR } from "../src/worktree-pr";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy-service";
@@ -141,6 +141,63 @@ describe("integration effects retain their task admission", () => {
     assert.notEqual(f.git("rev-parse", "agent/task"), oldHead, "the admitted integration rebased its own source");
     assert.equal(execFileSync("git", ["-C", remote, "rev-parse", "main"], { encoding: "utf8" }).trim(), f.git("rev-parse", "main"));
     assert.equal(existsSync(join(f.repo, "task.txt")), true);
+  });
+
+  it("retires the worktree after an automatic merge rebased its own reported head", async (t) => {
+    const f = fixture(t, true);
+    writeFileSync(join(f.repo, "upstream.txt"), "new base\n");
+    f.git("add", "upstream.txt"); f.git("commit", "-qm", "advance main");
+    const session = reviewedTaskFixture(createStubSession({ name: "auto-merge-rebase", status: "completed", startedAt: 1,
+      workdir: f.worktree, originalWorkdir: f.repo, worktreePath: f.worktree, worktreeBranch: "agent/task" }) as Session);
+    const oldHead = session.taskOutcome.repositories[0].head;
+    const notices: Array<{ label?: string }> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true, isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => f.repo, getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: () => true,
+      dispatchSessionNotification: (_session, request) => { notices.push(request); },
+      getOutputPreview: () => "", originThreadLine: () => "", getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "unused" }),
+      worktreeMessages: new SessionWorktreeMessageService(), enqueueMerge: async (_repo, fn) => fn(),
+      mergeBranch, spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true, notificationSent: false }),
+    });
+    const result = await service["handleAutoMergeStrategy"](session, f.repo, f.worktree, "agent/task", "main",
+      (await getDiffSummary(f.repo, "agent/task", "main"))!);
+    assert.notEqual(f.git("rev-parse", "main"), oldHead, "the merge landed a rebased head on main");
+    assert.equal(existsSync(join(f.repo, "task.txt")), true, "the merge landed");
+    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+    assert.equal(existsSync(f.worktree), false, "the merged worktree is retired");
+    assert.equal(f.git("branch", "--list", "agent/task"), "", "the merged branch is deleted");
+    assert.equal(session.worktreePath, undefined);
+    assert.deepEqual(notices.map((notice) => notice.label), ["worktree-merge-success"]);
+  });
+
+  it("reports an unreadable change summary as retryable without deciding anything", async (t) => {
+    const f = fixture(t, true);
+    const session = reviewedTaskFixture(createStubSession({ name: "diff-unreadable", status: "completed", startedAt: 1,
+      workdir: f.worktree, originalWorkdir: f.repo, worktreePath: f.worktree, worktreeBranch: "agent/task",
+      worktreeBaseBranch: "missing-base", worktreeStrategy: "auto-merge" }) as Session);
+    const patches: unknown[] = [], notices: unknown[] = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true, isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => f.repo, getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: (_ref, patch) => { patches.push(patch); return true; },
+      dispatchSessionNotification: (_session, request) => { notices.push(request); },
+      getOutputPreview: () => "", originThreadLine: () => "", getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "unused" }),
+      worktreeMessages: new SessionWorktreeMessageService(), enqueueMerge: async (_repo, fn) => fn(),
+      mergeBranch, spawnConflictResolver: async () => ({ id: "unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true, notificationSent: false }),
+    });
+    const result = await service.handleWorktreeStrategy(session);
+    assert.equal(result.retryable, true);
+    assert.equal(result.notificationSent, false);
+    assert.equal(result.worktreeRemoved, false);
+    assert.match(result.completionNote ?? "", /change summary for `agent\/task` could not be read.*submit the same outcome report again/);
+    assert.deepEqual(patches, []);
+    assert.deepEqual(notices, []);
+    assert.equal(existsSync(f.worktree), true);
   });
 
   it("retains the applied merge fact when ownership changes before stash restoration", async (t) => {
