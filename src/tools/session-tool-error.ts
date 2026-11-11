@@ -1,4 +1,4 @@
-export type SessionToolErrorCode = "session_not_found" | "session_reference_unusable" | "service_unavailable" | "invalid_parameters" | "session_target_changed";
+export type SessionToolErrorCode = "session_not_found" | "session_reference_unusable" | "service_unavailable" | "invalid_parameters" | "session_target_changed" | "task_not_ready";
 
 export function sessionToolError(code: SessionToolErrorCode, text: string, targetSelected?: boolean) {
   return {

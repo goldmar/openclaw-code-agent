@@ -2,6 +2,11 @@ import "./test-env";
 import { setPluginRuntime } from "../src/runtime-store";
 import { StatusCards } from "../src/status-card";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
 import { SessionActionTokenStore } from "../src/session-action-token-store";
@@ -130,6 +135,39 @@ function createToolResult(text: string, success: boolean, outcomeNotified = succ
   };
 }
 
+const reviewedCallbackRoots: string[] = [];
+
+/** Explicit completed-task setup for callback behavior tests; other tests keep
+ * their missing/invalid evidence and never receive a default success report. */
+function setReviewedWorktreeSessionManager(manager: Record<string, unknown>): void {
+  const workdir = mkdtempSync(join(tmpdir(), "oca-reviewed-callback-"));
+  reviewedCallbackRoots.push(workdir);
+  const git = (...args: string[]) => execFileSync("git", ["-C", workdir, ...args], { stdio: "ignore" });
+  git("init", "-b", "main");
+  git("config", "user.name", "Fixture User");
+  git("config", "user.email", "fixture@example.com");
+  writeFileSync(join(workdir, "task.txt"), "reviewed fixture task\n");
+  git("add", "task.txt");
+  git("commit", "-m", "reviewed callback task");
+  const reviewed = reviewedTaskFixture({ status: "completed", createdAt: 1, workdir });
+  for (const key of ["resolve", "getPersistedSession"] as const) {
+    const original = manager[key] as ((...args: unknown[]) => Record<string, unknown> | undefined) | undefined;
+    manager[key] = (...args: unknown[]) => {
+      const selected = original?.(...args);
+      return selected ? { ...reviewed, ...selected, taskOutcome: reviewed.taskOutcome } : undefined;
+    };
+  }
+  for (const key of ["getActionToken", "consumeActionToken"] as const) {
+    const original = manager[key] as ((...args: unknown[]) => Record<string, unknown> | undefined) | undefined;
+    manager[key] = (...args: unknown[]) => {
+      const selected = original?.(...args);
+      return selected ? { ...selected, worktreeDecisionCycle: reviewed.startedAt } : undefined;
+    };
+  }
+  // This boundary intentionally supplies only methods exercised by callbacks.
+  setSessionManager(manager as unknown as SessionManager);
+}
+
 describe("createCallbackHandler()", () => {
   beforeEach(() => {
     setPluginRuntime({}, { agents: { defaults: { userTimezone: "America/Los_Angeles" } } });
@@ -138,6 +176,7 @@ describe("createCallbackHandler()", () => {
   });
 
   afterEach(() => {
+    for (const root of reviewedCallbackRoots.splice(0)) rmSync(root, { recursive: true, force: true });
     setPluginRuntime(undefined);
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     setAutoUpdateService(null);
@@ -2379,8 +2418,48 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "💬 [sess-42] Answer sent.");
   });
 
-  it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
+  it("rejects integration controls when execution ended without reviewed task evidence", async () => {
+    let toolCalls = 0;
+    let consumed = 0;
     setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge", worktreeDecisionCycle: 1 }),
+      consumeActionToken: (): undefined => { consumed++; return undefined; },
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "unverified-task", status: "completed", createdAt: 1 }),
+    } as any);
+    const handler = createCallbackHandler("telegram", {
+      makeAgentMergeTool: () => ({ execute: async () => { toolCalls++; return createToolResult("Unexpected merge", true); } }) as any,
+    });
+    const state = createCtx("token-unverified-merge");
+    assert.deepEqual(await handler.handler(state.ctx as any), { handled: true });
+    assert.equal(toolCalls, 0);
+    assert.equal(consumed, 1);
+    assert.match(state.replies[0]!, /no longer ready.*worktree is preserved/);
+    assert.equal(state.buttonsCleared, 1);
+  });
+
+  it("rejects a previous execution's integration token despite current verified evidence", async () => {
+    let toolCalls = 0;
+    const manager = {
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge", worktreeDecisionCycle: 2 }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      resolve: (): undefined => undefined,
+      getPersistedSession: () => ({ name: "verified-new-run" }),
+    };
+    setReviewedWorktreeSessionManager(manager);
+    // The reviewed fixture is cycle 1; this control belongs to a different run.
+    manager.getActionToken = () => ({ sessionId: "sess-42", kind: "worktree-merge", worktreeDecisionCycle: 2 });
+    const handler = createCallbackHandler("telegram", {
+      makeAgentMergeTool: () => ({ execute: async () => { toolCalls++; return createToolResult("Unexpected merge", true); } }) as any,
+    });
+    const state = createCtx("token-old-run-merge");
+    assert.deepEqual(await handler.handler(state.ctx as any), { handled: true });
+    assert.equal(toolCalls, 0);
+    assert.match(state.replies[0]!, /no longer ready.*worktree is preserved/);
+  });
+
+  it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       resolve: (): undefined => undefined,
@@ -2408,7 +2487,7 @@ describe("createCallbackHandler()", () => {
 
   it("clears worktree PR buttons without replying when agent_pr succeeds", async () => {
     for (const kind of ["worktree-create-pr", "worktree-update-pr"] as const) {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind }),
         resolve: (): undefined => undefined,
@@ -2448,7 +2527,7 @@ describe("createCallbackHandler()", () => {
       },
     ];
     for (const testCase of cases) {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         resolve: (): undefined => undefined,
@@ -2517,7 +2596,7 @@ describe("createCallbackHandler()", () => {
 
     for (const testCase of cases) {
       const queued: string[] = [];
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
         resolve: (): undefined => undefined,
@@ -2541,7 +2620,7 @@ describe("createCallbackHandler()", () => {
 
   it("clears worktree decision buttons while preserving the original prompt text", async () => {
     const snoozeCalls: Array<{ sessionId: string; notifyUser?: boolean }> = [];
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
@@ -2567,7 +2646,7 @@ describe("createCallbackHandler()", () => {
 
   it("keeps Telegram worktree decision buttons when the action fails", async () => {
     const queued: string[] = [];
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
@@ -2597,7 +2676,7 @@ describe("createCallbackHandler()", () => {
     ];
 
     for (const testCase of cases) {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
@@ -2618,7 +2697,7 @@ describe("createCallbackHandler()", () => {
 
   it("uses a friendly success reply for discard while preserving raw dismiss errors", async () => {
     let shouldFail = false;
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       resolve: (): undefined => undefined,
@@ -2651,7 +2730,7 @@ describe("createCallbackHandler()", () => {
 
   it("answers and re-offers the decision when a button action throws after its token was spent", async () => {
     const reoffers: string[] = [];
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       resolve: (): undefined => undefined,
@@ -2670,7 +2749,7 @@ describe("createCallbackHandler()", () => {
 
   it("keeps a successful merge a success when only its confirmation reply fails", async () => {
     const reoffers: string[] = [];
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       resolve: (): undefined => undefined,
@@ -2693,7 +2772,7 @@ describe("createCallbackHandler()", () => {
   });
 
   it("answers when a non-worktree button action throws after its token was spent", async () => {
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
@@ -2713,7 +2792,7 @@ describe("createCallbackHandler()", () => {
     const reoffers: Array<{ failure: string; closedPr?: boolean }> = [];
     const prCalls: Array<Record<string, unknown>> = [];
     let token: Record<string, unknown> = { sessionId: "sess-42", kind: "worktree-update-pr" };
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
       resolve: (): undefined => undefined,
@@ -2752,7 +2831,7 @@ describe("createCallbackHandler()", () => {
     const prCalls: Array<Record<string, unknown>> = [];
     let reoffers = 0;
     const token = { sessionId: "sess-42", kind: "worktree-create-pr", prForceNew: true };
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => token,
       consumeActionToken: () => token,
       resolve: (): undefined => undefined,
@@ -2782,7 +2861,7 @@ describe("createCallbackHandler()", () => {
 
   it("sends nothing while a re-offered prompt is still being delivered, and reports a late failure once", async () => {
     let lateResult: ((delivered: boolean) => void) | undefined;
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
       resolve: (): undefined => undefined,
@@ -2845,7 +2924,7 @@ describe("createCallbackHandler()", () => {
   it("answers a second Discard button with the already-resolved reply and re-offers nothing", async () => {
     let reoffers = 0;
     let discarded = false;
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       resolve: (): undefined => undefined,
@@ -2868,7 +2947,7 @@ describe("createCallbackHandler()", () => {
 
   it("answers a second Discard button that hits a raw error in user terms", async () => {
     let discarded = false;
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
       resolve: (): undefined => undefined,
@@ -2897,7 +2976,7 @@ describe("createCallbackHandler()", () => {
     ];
 
     for (const testCase of cases) {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
         resolve: (): undefined => undefined,
@@ -2917,7 +2996,7 @@ describe("createCallbackHandler()", () => {
   });
 
   it("clears Discord worktree components without replacing the prompt text", async () => {
-    setSessionManager({
+    setReviewedWorktreeSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: (): undefined => undefined,
@@ -2955,7 +3034,7 @@ describe("createCallbackHandler()", () => {
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
 
     try {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
@@ -2996,7 +3075,7 @@ describe("createCallbackHandler()", () => {
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
 
     try {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
@@ -3037,7 +3116,7 @@ describe("createCallbackHandler()", () => {
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
 
     try {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,
@@ -3078,7 +3157,7 @@ describe("createCallbackHandler()", () => {
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
 
     try {
-      setSessionManager({
+      setReviewedWorktreeSessionManager({
         getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
         resolve: (): undefined => undefined,

@@ -11,6 +11,8 @@ const log = createLogger("worktree-lifecycle");
 
 export interface RemoveWorktreeOptions {
   destructive?: boolean;
+  /** Recheck task ownership under the repository lock immediately before removal. */
+  shouldRemove?: () => boolean | Promise<boolean>;
 }
 
 export interface CreateWorktreeOptions {
@@ -245,6 +247,7 @@ async function removeWorktreeLocked(
   options: RemoveWorktreeOptions,
 ): Promise<boolean> {
   const destructive = options.destructive === true;
+  if (options.shouldRemove && !(await options.shouldRemove())) return false;
   if (!existsSync(worktreePath)) {
     // Already gone (removed by hand or by an earlier cleanup): drop git's stale
     // registration when the repository is reachable and report it as removed,
@@ -271,6 +274,7 @@ async function removeWorktreeLocked(
     // A destructive removal deletes the directory either way (see the fallback
     // below); a second --force lets git do it for a locked worktree too, so its
     // registration goes with it and the branch can be deleted afterwards.
+    if (options.shouldRemove && !(await options.shouldRemove())) return false;
     await runGit(["-C", repoDir, "worktree", "remove", ...(destructive ? ["--force", "--force"] : []), worktreePath], { timeout: 15_000 });
     return true;
   } catch (err) {

@@ -13,6 +13,7 @@ import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { removeWorktree } from "./worktree";
 import { createLogger } from "./logger";
 import { assertTestSafeStatePath } from "./test-state-guard";
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent } from "./session-task-outcome";
 
 const log = createLogger("session-maintenance-service");
 
@@ -163,7 +164,8 @@ export class SessionMaintenanceService {
     if (!this.isCurrentPersistedSync(ref, generation)) return;
     this.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
     const resolvedAtIso = this.resolvedAtIso(session);
-    if (resolved.cleanupSafe && typeof resolvedAtIso === "string") {
+    if (resolved.cleanupSafe && typeof resolvedAtIso === "string" && await isTaskOutcomeCurrent(session)
+      && this.isCurrentPersistedSync(ref, generation)) {
       const resolvedAt = new Date(resolvedAtIso).getTime();
       if (Number.isFinite(resolvedAt)) {
         this.schedule(this.persistedMaintenanceKey(ref, "worktree-retention"), resolvedAt + RESOLVED_WORKTREE_RETENTION_MS, () => {
@@ -177,6 +179,7 @@ export class SessionMaintenanceService {
 
   async reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): Promise<void> {
     if (this.disposed) return;
+    if (!(await isTaskOutcomeCurrent(session))) return;
     const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
@@ -199,8 +202,17 @@ export class SessionMaintenanceService {
         log.info(`[SessionManager] Worktree ${session.worktreePath} now belongs to another session; clearing only the stale metadata`);
       } else if (existsSync(session.worktreePath)) {
         const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
-        if (!repoDir || this.disposed) return;
-        if (!(await removeWorktree(repoDir, session.worktreePath))) return;
+        if (!repoDir || this.disposed || !(await isTaskOutcomeCurrent(session))) return;
+        const latest = this.deps.store.getPersistedSession(session.sessionId ?? session.harnessSessionId);
+        if (this.otherWorktreeOwner(session) || !latest || executionCycle(latest) !== executionCycle(session)
+          || !hasVerifiedTaskOutcome(latest) || latest.taskOutcome !== session.taskOutcome) return;
+        if (!(await removeWorktree(repoDir, session.worktreePath, { shouldRemove: async () => {
+          if (!(await isTaskOutcomeCurrent(session))) return false;
+          const current = this.deps.store.getPersistedSession(session.sessionId ?? session.harnessSessionId);
+          return !this.disposed && !this.otherWorktreeOwner(session) && Boolean(current
+            && executionCycle(current) === executionCycle(session) && hasVerifiedTaskOutcome(current)
+            && current.taskOutcome === session.taskOutcome);
+        } }))) return;
       } else {
         // A worktree that is already gone only needs its metadata cleared; without
         // this, every maintenance tick retried (and warned about) the removal.

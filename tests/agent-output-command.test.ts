@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { registerAgentOutputCommand } from "../src/commands/agent-output";
 import { setSessionManager } from "../src/singletons";
 
-type AgentOutputCommandHandler = (ctx: { args?: string }) => { text: string };
+type AgentOutputCommandHandler = (ctx: { args?: string }) => Promise<{ text: string }>;
 
 function captureAgentOutputCommand(): AgentOutputCommandHandler {
   let handler: AgentOutputCommandHandler | undefined;
@@ -23,7 +23,7 @@ describe("agent_output command", () => {
     setSessionManager(null);
   });
 
-  it("supports quoted session names with flags", () => {
+  it("supports quoted session names with flags", async () => {
     let resolvedRef: string | undefined;
     setSessionManager({
       resolve(ref: string) {
@@ -44,7 +44,7 @@ describe("agent_output command", () => {
     } as any);
 
     const handler = captureAgentOutputCommand();
-    const result = handler({ args: '"agent command" --lines 2 --full' });
+    const result = await handler({ args: '"agent command" --lines 2 --full' });
 
     assert.equal(resolvedRef, "agent command");
     assert.match(result.text, /agent command/);

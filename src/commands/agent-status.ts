@@ -1,6 +1,6 @@
 import { sessionManager } from "../singletons";
 import { SERVICE_NOT_RUNNING } from "./args";
-import { getSessionsListingText } from "../application/session-view";
+import { getFreshSessionsListingText } from "../application/session-view";
 
 interface CommandApi {
   registerCommand(config: {
@@ -8,7 +8,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: { args?: string }) => { text: string };
+    handler: (ctx: { args?: string }) => Promise<{ text: string }>;
   }): void;
 }
 
@@ -19,11 +19,11 @@ export function registerAgentStatusCommand(api: CommandApi): void {
     description: "Show coding sessions waiting for a plan decision, an answer, or a merge / PR decision",
     acceptsArgs: false,
     requireAuth: true,
-    handler: () => {
+    handler: async () => {
       if (!sessionManager) {
         return { text: SERVICE_NOT_RUNNING };
       }
-      return { text: getSessionsListingText(sessionManager, "waiting", undefined, { forUser: true }) };
+      return { text: await getFreshSessionsListingText(sessionManager, "waiting", undefined, { forUser: true }) };
     },
   });
 }

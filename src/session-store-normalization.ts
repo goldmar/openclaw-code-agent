@@ -1,4 +1,5 @@
 import { canonicalizeSessionRoute } from "./session-route";
+import { normalizeTaskOutcomeReport } from "./session-task-outcome";
 import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 import { REASONING_EFFORT_SET, REPO_INTEGRATION_POLICY_SET, WORKTREE_STRATEGY_SET } from "./types";
 import type {
@@ -612,6 +613,8 @@ export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | 
     createdAt: toOptionalNumber(raw.createdAt),
     completedAt: toOptionalNumber(raw.completedAt),
     status,
+    taskOutcome: normalizeTaskOutcomeReport(raw.taskOutcome),
+    taskOutcomeFollowThroughAt: toOptionalString(raw.taskOutcomeFollowThroughAt),
     lifecycle: recoveredFromRunning ? "suspended" : toOptionalLifecycle(raw.lifecycle),
     approvalState: toOptionalApprovalState(raw.approvalState),
     worktreeState: toOptionalWorktreeState(raw.worktreeState),
@@ -739,6 +742,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     createdAt,
     planDecisionVersion: toOptionalNumber(raw.planDecisionVersion),
     expiresAt: toOptionalNumber(raw.expiresAt),
+    worktreeDecisionCycle: toOptionalPositiveInteger(raw.worktreeDecisionCycle),
     consumedAt: toOptionalNumber(raw.consumedAt),
     consumptionId: toOptionalString(raw.consumptionId),
     optionIndex: toOptionalNumber(raw.optionIndex),

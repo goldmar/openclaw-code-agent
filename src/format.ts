@@ -19,12 +19,16 @@ import type {
 } from "./types";
 import { formatCodexRateLimits } from "./harness/codex-rate-limits";
 import { formatHarnessModelLabel } from "./session-display";
+import { executionCycle, hasVerifiedTaskOutcome, type TaskOutcomeReport } from "./session-task-outcome";
 
 /** Session shape needed by list formatting utilities. */
 export interface SessionListRenderable {
   id: string;
   name: string;
   status: string;
+  startedAt?: number;
+  taskOutcome?: TaskOutcomeReport;
+  taskEvidenceCurrent?: boolean;
   duration: number;
   prompt: string;
   workdir: string;
@@ -96,7 +100,7 @@ export function generateSessionName(prompt: string): string {
 const STATUS_ICONS: Record<string, string> = {
   starting: "🟡",
   running: "🟢",
-  completed: "✅",
+  completed: "ℹ️",
   failed: "❌",
   killed: "⛔",
   awaiting_plan_decision: "📋",
@@ -143,14 +147,20 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 /** Plain-language state for a listing row (never an internal state name). */
-export function describeSessionPhase(session: Pick<SessionListRenderable, "phase" | "status">): string {
+export function describeSessionPhase(session: Pick<SessionListRenderable, "phase" | "status" | "startedAt" | "taskOutcome" | "taskEvidenceCurrent">): string {
+  if (session.status === "completed" && (!session.taskEvidenceCurrent || !hasVerifiedTaskOutcome(session))) {
+    const outcome = session.taskOutcome?.executionCycle === executionCycle(session) ? session.taskOutcome : undefined;
+    if (outcome?.task === "completed") return "execution ended; last reviewed task completed; verification freshness unverified";
+    return `execution ended; task ${outcome?.task ?? "unverified"}${outcome ? `; verification ${outcome.verification}` : ""}`;
+  }
   if (session.phase === "terminal") return PHASE_LABELS[session.status] ?? session.status;
   return PHASE_LABELS[session.phase] ?? PHASE_LABELS[session.status] ?? session.status;
 }
 
 /** Render a human-readable session row for `agent_sessions`. */
 export function formatSessionListing(session: SessionListRenderable, options: { nextStep?: string } = {}): string {
-  const icon = (session.phase === "terminal" ? undefined : STATUS_ICONS[session.phase]) ?? STATUS_ICONS[session.status] ?? "❓";
+  const icon = session.taskEvidenceCurrent && hasVerifiedTaskOutcome(session) ? "✅"
+    : (session.phase === "terminal" ? undefined : STATUS_ICONS[session.phase]) ?? STATUS_ICONS[session.status] ?? "❓";
   const duration = formatDuration(session.duration);
   const promptSummary =
     session.prompt.length > 80 ? session.prompt.slice(0, 80) + "..." : session.prompt;
@@ -171,8 +181,13 @@ export function formatSessionListing(session: SessionListRenderable, options: { 
   if (options.nextStep) {
     lines.push(`   👉 ${options.nextStep}`);
   }
+  lines.push(`   Execution cycle: ${executionCycle(session)}`);
+  if (session.taskOutcome?.executionCycle === executionCycle(session)) {
+    for (const blocker of session.taskOutcome.blockers) lines.push(`   Blocker: ${blocker}`);
+    for (const work of session.taskOutcome.remainingWork) lines.push(`   Remaining: ${work}`);
+  }
   if (session.approvalExecutionState === "implemented_without_required_approval") {
-    lines.push(`   ⚠️ Implemented without the required plan approval`);
+    lines.push(`   ⚠️ Required plan approval is not recorded for this execution`);
   }
   if (session.recovered && session.runtimeRecovery) {
     const reason = session.runtimeRecovery.reason ? ` (${session.runtimeRecovery.reason})` : "";
@@ -207,7 +222,7 @@ export function formatStats(
     `📋 Sessions`,
     `   Launched:   ${metrics.totalLaunched}`,
     `   Running:    ${runningCount}`,
-    `   Completed:  ${completed}`,
+    `   Executions ended: ${completed}`,
     `   Failed:     ${failed}`,
     `   Killed:     ${killed}`,
     ``,

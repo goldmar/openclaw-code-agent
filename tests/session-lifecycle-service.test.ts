@@ -9,12 +9,119 @@ import { createWorktree } from "../src/worktree";
 
 import { SessionLifecycleService } from "../src/session-lifecycle-service";
 import { createStubSession } from "./helpers";
+import { createTaskOutcomeReport, executionCycle, type TaskOutcomeInput, type TaskOutcomeSession } from "../src/session-task-outcome";
+import type { SessionNotificationRequest } from "../src/wake-dispatcher";
+
+function reviewedOutcome(session: TaskOutcomeSession, overrides: Partial<TaskOutcomeInput> = {}) {
+  const workdir = session.worktreePath ?? session.workdir;
+  return createTaskOutcomeReport({
+    executionCycle: executionCycle(session), task: "completed",
+    checks: [{ name: "required tests", scope: "task", required: true, status: "passed", stage: "analysis complete",
+      evidence: "reviewed test receipt", source: "reviewed_receipt", exitCode: 0 }],
+    repositories: workdir ? [{ workdir, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: workdir, encoding: "utf8" }).trim() }] : [],
+    blockers: [], remainingWork: [], summary: "Requested work and required tests passed.", ...overrides,
+  }, { source: "orchestrator" });
+}
 
 describe("SessionLifecycleService", () => {
   const originalConsoleInfo = console.info;
+  const scratchRepos: string[] = [];
+  function newRepository() {
+    const repoDir = mkdtempSync(join(tmpdir(), "oca-lifecycle-outcome-"));
+    scratchRepos.push(repoDir);
+    execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+    execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+    return repoDir;
+  }
 
   afterEach(() => {
     console.info = originalConsoleInfo;
+    for (const repoDir of scratchRepos.splice(0)) rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function terminalRecorder(overrides: Partial<ConstructorParameters<typeof SessionLifecycleService>[0]> = {}) {
+    const requests: SessionNotificationRequest[] = [];
+    let strategyCalls = 0;
+    const resumeButtons = [[{ label: "Resume", callbackData: "resume-current" }, { label: "View output", callbackData: "output-current" }]];
+    const service = new SessionLifecycleService({
+      persistSession: () => {}, clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => { strategyCalls += 1; return { notificationSent: false, worktreeRemoved: false }; },
+      resolveWorktreeRepoDir: () => undefined, updatePersistedSession: () => true,
+      dispatchSessionNotification: (_session, request) => { requests.push(request); },
+      notifySession: () => {}, clearRetryTimersForSession: () => {}, shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask", getPlanApprovalButtons: () => [],
+      getResumeButtons: () => resumeButtons, getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined, getOutputPreview: () => "Harness turn ended successfully; all work is ready.",
+      originThreadLine: () => "", debounceWaitingEvent: () => true, isAlreadyMerged: () => false,
+      ...overrides,
+    });
+    return { service, requests, resumeButtons, strategyCalls: () => strategyCalls };
+  }
+
+  for (const strategy of ["ask", "delegate", "manual", "auto-merge", "auto-pr", "off"] as const) {
+    it(`retains incomplete committed work under ${strategy} without integration prompts`, async () => {
+      const repoDir = newRepository();
+      const session = createStubSession({ id: `unfinished-${strategy}`, name: `unfinished-${strategy}`, status: "completed",
+        startedAt: 1700000000000, workdir: repoDir, worktreePath: repoDir, originalWorkdir: repoDir, worktreeStrategy: strategy });
+      session.taskOutcome = reviewedOutcome(session, { task: "blocked",
+        checks: [{ name: "required lint", scope: "channel", required: true, status: "timed_out", stage: "startup before analysis",
+          evidence: "reviewed timeout receipt", source: "reviewed_receipt" }],
+        blockers: ["Required lint did not analyze files"], remainingWork: ["Preserve nested work and complete lint"] });
+      const recorder = terminalRecorder();
+      await recorder.service.handleSessionTerminal(session);
+      assert.equal(recorder.strategyCalls(), 0);
+      assert.equal(existsSync(join(repoDir, ".git")), true, "committed task content stays available");
+      assert.equal(recorder.requests.length, 1);
+      const request = recorder.requests[0];
+      assert.equal(request.label, "task-unverified");
+      assert.match(request.userMessage ?? "", /task blocked; verification blocked/);
+      assert.match(request.userMessage ?? "", /Required lint did not analyze files/);
+      assert.match(request.userMessage ?? "", /Preserve nested work and complete lint/);
+      assert.doesNotMatch(request.userMessage ?? "", /✅|Finished on/);
+      assert.deepEqual(request.buttons, recorder.resumeButtons);
+      assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do not offer merge, PR, later or discard/);
+    });
+  }
+
+  it("downgrades a previously verified report when its real checkout HEAD changed", async () => {
+    const repoDir = newRepository();
+    const session = createStubSession({ id: "head-changed", name: "head-changed", status: "completed",
+      startedAt: 1700000000000, workdir: repoDir, worktreePath: repoDir, originalWorkdir: repoDir, worktreeStrategy: "ask" });
+    session.taskOutcome = reviewedOutcome(session);
+    execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "later work"], { cwd: repoDir, stdio: "ignore" });
+    const recorder = terminalRecorder();
+    await recorder.service.handleSessionTerminal(session);
+    assert.equal(recorder.strategyCalls(), 0);
+    assert.equal(recorder.requests[0]?.label, "task-unverified");
+    assert.match(recorder.requests[0]?.userMessage ?? "", /task completion unverified/);
+    assert.doesNotMatch(recorder.requests[0]?.userMessage ?? "", /✅/);
+    assert.deepEqual(recorder.requests[0]?.buttons, recorder.resumeButtons);
+  });
+
+  it("does not deliver an old terminal cycle after its session was replaced on resume", async () => {
+    const session = createStubSession({ id: "old-cycle", status: "completed", startedAt: 1700000000000 });
+    const recorder = terminalRecorder({ isCurrentSessionCycle: () => false });
+    await recorder.service.handleSessionTerminal(session);
+    assert.equal(recorder.strategyCalls(), 0);
+    assert.deepEqual(recorder.requests, []);
+  });
+
+  it("carries a reviewed success summary without a redundant review wake", () => {
+    const session = createStubSession({ id: "reviewed-success", name: "reviewed-success", status: "completed", startedAt: 1700000000000 });
+    session.taskOutcome = createTaskOutcomeReport({ executionCycle: executionCycle(session), task: "completed",
+      checks: [{ name: "acceptance", scope: "research task", required: true, status: "not_applicable", stage: "review",
+        evidence: "Reviewed research acceptance; no executable checks apply", source: "reviewed_receipt" }],
+      repositories: [], blockers: [], remainingWork: [], summary: "Requested research was reviewed." }, { source: "orchestrator" });
+    const recorder = terminalRecorder();
+    recorder.service.emitCompleted(session, { summary: session.taskOutcome.summary });
+    const request = recorder.requests[0];
+    assert.equal(request.label, "completed");
+    assert.match(request.userMessage ?? "", /^✅ \[reviewed-success\] Completed/);
+    assert.match(request.userMessage ?? "", /Requested research was reviewed/);
+    assert.equal(request.completionWakeSummaryRequired, false);
+    assert.equal(request.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(request.wakeMessageOnNotifyFailed, undefined);
+    assert.equal(request.buttons, undefined);
   });
 
   it("skips worktree terminal handling for goal-owned sessions", async () => {
@@ -186,6 +293,7 @@ describe("SessionLifecycleService", () => {
         id: "session-manual",
         name: "manual-keep",
         status: "completed",
+        startedAt: 1700000000000,
         worktreeStrategy: "manual",
         worktreeState: "provisioned",
         worktreePath,
@@ -193,6 +301,7 @@ describe("SessionLifecycleService", () => {
         originalWorkdir: repoDir,
       });
 
+      session.taskOutcome = reviewedOutcome(session);
       await service.handleSessionTerminal(session);
 
       assert.equal(existsSync(worktreePath), true, "manual worktrees stay for the user to merge");
@@ -241,7 +350,9 @@ describe("SessionLifecycleService", () => {
     const quick = createStubSession({ id: "quick", name: "ux-route", status: "completed", startedAt: Date.now() - 7_000 }) as any;
     service.emitCompleted(quick);
     const quickRequest = requests.at(-1)!;
-    assert.equal(quickRequest.label, "completed");
+    assert.equal(quickRequest.label, "task-unverified");
+    assert.doesNotMatch(quickRequest.userMessage, /✅/);
+    assert.match(quickRequest.wakeMessageOnNotifySuccess, /agent_report_outcome/);
     assert.equal(quickRequest.deferConditionalWakeMs, 15_000);
     assert.equal(quickRequest.skipDeferredWake(), undefined);
     quick.outcomeSeenAt = Date.now();
@@ -253,7 +364,7 @@ describe("SessionLifecycleService", () => {
     assert.equal(requests.at(-1)!.skipDeferredWake, undefined);
   });
 
-  it("emits completion wakes with an explicit follow-up contract and success diagnostics", () => {
+  it("emits unverified execution review wakes with direct-delivery and summary diagnostics", () => {
     const requests: Array<Record<string, unknown>> = [];
     const infoLogs: string[] = [];
     console.info = (message?: unknown, ...rest: unknown[]) => {
@@ -309,7 +420,7 @@ describe("SessionLifecycleService", () => {
     assert.equal(request.wakeMessage, undefined);
     assert.equal(request.requireDirectUserNotification, true);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences what was done/);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /The user saw: ✅ \[complete-session\] Completed/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /The user saw: ⚠️ \[complete-session\] Execution ended — task completion unverified/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
     assert.match(request.wakeMessageOnNotifyFailed ?? "", /did NOT reach the user/);
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_notify_succeeded\"") && line.includes("\"requestedShortFactualSummary\":true")));
@@ -321,6 +432,7 @@ describe("SessionLifecycleService", () => {
     // As in SessionManager: one terminal notice per terminal cycle.
     const seenCycles = new Set<string>();
     let strategyNotifies = true;
+    const repoDir = newRepository();
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -330,7 +442,7 @@ describe("SessionLifecycleService", () => {
         if (!strategyNotifies) return { notificationSent: false, worktreeRemoved: false };
         requests.push({
           label: "worktree-merge-success",
-          userMessage: "✅ [portfolio-move-summary] Completed — Merged: agent/example → main (4 files, +531/-0)",
+          userMessage: "ℹ️ [worktree-summary] Merged: agent/example → main (4 files, +531/-0)",
           completionWakeSummaryRequired: true,
           wakeMessageOnNotifySuccess: "Worktree follow-through outcome recorded.",
         });
@@ -365,13 +477,15 @@ describe("SessionLifecycleService", () => {
 
     const session = createStubSession({
       id: "session-worktree-merge",
-      name: "portfolio-move-summary",
+      name: "worktree-summary",
       status: "completed",
+      startedAt: 1700000000000,
       duration: 12_000,
-      worktreePath: "/tmp/worktree",
-      originalWorkdir: "/tmp/repo",
+      worktreePath: repoDir,
+      originalWorkdir: repoDir,
       worktreeStrategy: "auto-merge",
     });
+    session.taskOutcome = reviewedOutcome(session);
     await service.handleSessionTerminal(session);
 
     assert.equal(requests.length, 1);

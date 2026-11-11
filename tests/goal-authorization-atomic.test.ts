@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { createTaskOutcomeReport } from "../src/session-task-outcome";
 
 import { GoalController } from "../src/goal-controller";
 import { GoalTaskStore } from "../src/goal-store";
@@ -65,11 +67,16 @@ function setup(): { controller: GoalController; notifications: string[]; stopInG
 }
 
 async function goalTask(overrides: Partial<GoalTaskState> = {}): Promise<GoalTaskState> {
+  const workdir = overrides.workdir ?? tempDir("goal-atomic-repo-");
+  if (!overrides.workdir) {
+    execFileSync("git", ["init", "-q", "-b", "main", workdir]);
+    execFileSync("git", ["-C", workdir, "-c", "user.name=Tester", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "initial"]);
+  }
   return bindGoalTask({
     id: "goal-1",
     name: "goal-task",
     goal: "Ship the feature",
-    workdir: "/tmp",
+    workdir,
     status: "running",
     createdAt: 1,
     updatedAt: 1,
@@ -90,13 +97,22 @@ async function goalTask(overrides: Partial<GoalTaskState> = {}): Promise<GoalTas
 describe("goal authorization freshness is atomic with the guarded action", () => {
   it("a stop queued right after the success check cannot be overwritten by success", async () => {
     const { controller, notifications, stopInGap, stops } = setup();
-    const task = await goalTask();
+    const task = await goalTask({ verifierCommands: [{ label: "check", command: "true" }] });
     (controller as any).store.upsert(task);
     const arm = stopInGap(task);
-    const markTaskSucceeded = (controller as any).markTaskSucceeded.bind(controller);
-    (controller as any).markTaskSucceeded = (...args: unknown[]) => { arm(); return markTaskSucceeded(...args); };
-
-    await (controller as any).handleTerminalSession(task, createStubSession({ id: "session-1", status: "completed", getOutput: () => ["DONE"] }));
+    const session = createStubSession({ id: "session-1", status: "completed", startedAt: 1, workdir: task.workdir });
+    (controller as any).sessionManager.resolve = () => session;
+    (controller as any).sessionManager.reportTaskOutcome = async (_ref: string, input: Parameters<typeof createTaskOutcomeReport>[0], reviewer: Parameters<typeof createTaskOutcomeReport>[1]) => {
+      session.taskOutcome = createTaskOutcomeReport(input, reviewer);
+      // Arm at the last authorization boundary, after the new report await.
+      arm();
+      return "Task outcome recorded.";
+    };
+    await (controller as any).markTaskSucceeded(task, "Verified checks passed", {
+      status: "pass", sessionId: session.id, executionCycle: session.startedAt,
+      repositories: [], steps: [{ label: "check", command: "true", ok: true, exitCode: 0, durationMs: 1, output: "" }],
+      summary: "Verified checks passed", fingerprint: "passed",
+    });
     await tick(5);
 
     // The success happened first; the stop then finds a finished task.

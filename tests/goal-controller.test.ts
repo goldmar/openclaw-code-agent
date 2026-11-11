@@ -3,6 +3,7 @@ import { bindGoalTask } from "./goal-policy-fixtures";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import { GoalTaskStore } from "../src/goal-store";
 import { estimateCodexApiCostUsd } from "../src/harness/codex-cost";
 import type { GoalTaskState } from "../src/types";
 import { createStubSession, tick } from "./helpers";
+import { createTaskOutcomeReport, type TaskOutcomeInput, type TaskOutcomeReviewer } from "../src/session-task-outcome";
 
 const tempDirs: string[] = [];
 const originalBashEnv = process.env.BASH_ENV;
@@ -49,12 +51,26 @@ function createStore(): GoalTaskStore {
   } as NodeJS.ProcessEnv);
 }
 
+function initializeGoalRepo(dir: string): void {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git("init", "-b", "main");
+  git("config", "user.name", "Fixture User");
+  git("config", "user.email", "fixture@example.com");
+  git("commit", "--allow-empty", "-qm", "fixture base");
+}
+function createGoalRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "goal-controller-repo-"));
+  tempDirs.push(dir);
+  initializeGoalRepo(dir);
+  return dir;
+}
+
 async function buildTask(overrides: Partial<GoalTaskState> = {}): Promise<GoalTaskState> {
   return bindGoalTask({
     id: "goal-1",
     name: "goal-task",
     goal: "Ship the feature",
-    workdir: "/tmp",
+    workdir: createGoalRepo(),
     status: "running",
     createdAt: 1,
     updatedAt: 1,
@@ -609,7 +625,11 @@ describe("GoalController", () => {
   it("does not treat agent-internal review passes as controller iterations on first-turn Ralph success", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: (): undefined => undefined,
+      resolve: () => session,
+      reportTaskOutcome: async (_ref: string, input: TaskOutcomeInput, reviewer: TaskOutcomeReviewer) => {
+        session.taskOutcome = createTaskOutcomeReport(input, reviewer);
+        return "Task outcome recorded: completed; verification passed.";
+      },
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -626,12 +646,13 @@ describe("GoalController", () => {
     const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
+      verifierCommands: [{ label: "acceptance", command: "true" }],
       maxIterations: 20,
       sessionId: "session-1",
       sessionName: "goal-task",
       harnessSessionId: "hs-1",
     });
-    const session = createStubSession({
+    const session = createStubSession({ startedAt: 1,
       id: "session-1",
       status: "completed",
       getOutput: () => [
@@ -655,7 +676,11 @@ describe("GoalController", () => {
   it("emits controller-loop progress only when a Ralph goal actually resumes", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
-      resolve: (): undefined => undefined,
+      resolve: () => resumedSession,
+      reportTaskOutcome: async (_ref: string, input: TaskOutcomeInput, reviewer: TaskOutcomeReviewer) => {
+        resumedSession.taskOutcome = createTaskOutcomeReport(input, reviewer);
+        return "Task outcome recorded: completed; verification passed.";
+      },
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
         notifications.push({ label, text });
       },
@@ -663,7 +688,7 @@ describe("GoalController", () => {
     const store = createStore();
     (controller as any).store = store;
 
-    const resumedSession = createStubSession({
+    const resumedSession = createStubSession({ startedAt: 1,
       id: "session-2",
       name: "goal-task",
       harnessSessionId: "hs-2",
@@ -682,11 +707,12 @@ describe("GoalController", () => {
     const task = await buildTask({
       loopMode: "ralph",
       completionPromise: "DONE",
+      verifierCommands: [{ label: "acceptance", command: "true" }],
       sessionId: "session-1",
       sessionName: "goal-task",
       harnessSessionId: "hs-1",
     });
-    const firstTurn = createStubSession({
+    const firstTurn = createStubSession({ startedAt: 1,
       id: "session-1",
       status: "completed",
       getOutput: () => [
@@ -999,7 +1025,7 @@ describe("GoalController", () => {
 
     const task = await controller.launchTask({
       goal: "Make tests pass",
-      workdir: "/tmp",
+      workdir: createGoalRepo(),
       verifierCommands: [{ label: "check-1", command: "pnpm test" }],
       maxIterations: 100,
       requireVerifierConfirmation: true,
@@ -1115,7 +1141,7 @@ describe("GoalController", () => {
     await assert.rejects(
       () => controller.launchTask({
         goal: "Ship it",
-        workdir: "/tmp",
+        workdir: createGoalRepo(),
         loopMode: "verifier",
         verifierCommands: [],
       }),
@@ -1136,7 +1162,7 @@ describe("GoalController", () => {
     await assert.rejects(
       () => controller.launchTask({
         goal: "Ship it",
-        workdir: "/tmp",
+        workdir: createGoalRepo(),
         loopMode: "verifier",
         verifierCommands: [{ label: "x", command: "   " }],
       }),
@@ -1192,6 +1218,7 @@ describe("GoalController", () => {
     const controller = new GoalController({} as any);
     const dir = mkdtempSync(join(tmpdir(), "goal-controller-env-test-"));
     tempDirs.push(dir);
+    initializeGoalRepo(dir);
     const shellHookPath = join(dir, "shell-hook.sh");
     writeFileSync(shellHookPath, "export OPENCLAW_TEST_VERIFIER_HOOK=1\n", "utf8");
     process.env.BASH_ENV = shellHookPath;
@@ -1275,7 +1302,7 @@ describe("GoalController", () => {
       const task = await buildTask({ sessionId: "original", harnessSessionId: "original-thread", verifierCommands: [{ label: "fail", command: "false" }],
         ...(operation === "ralph" ? { loopMode: "ralph", completionPromise: "DONE" } : {}) }); store.upsert(task);
       let pending: Promise<unknown>;
-      if (operation === "launch") pending = controller.launchTask({ goal: "New", workdir: "/tmp", verifierCommands: [{ label: "pass", command: "true" }] });
+      if (operation === "launch") pending = controller.launchTask({ goal: "New", workdir: createGoalRepo(), verifierCommands: [{ label: "pass", command: "true" }] });
       else if (operation === "confirmation") { task.status = "awaiting_verifier_confirmation"; pending = controller.confirmVerifierCommands(task.id); }
       else { const session = createStubSession({ id: "original", harnessSessionId: "original-thread", status: "completed", getOutput: () => ["Keep working"] });
         pending = operation === "idle" ? (controller as any).resumeAfterIdleTimeout(task, session, "Continue") : (controller as any).handleTerminalSession(task, session); }

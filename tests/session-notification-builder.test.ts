@@ -13,6 +13,18 @@ import {
   buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
 import { formatOriginRouteWakeBlock } from "../src/session-route";
+import { createTaskOutcomeReport, type TaskOutcomeInput } from "../src/session-task-outcome";
+
+const reviewedCycle = 1700000000000;
+function reviewedOutcome(overrides: Partial<TaskOutcomeInput> = {}) {
+  return createTaskOutcomeReport({
+    executionCycle: reviewedCycle, task: "completed",
+    checks: [{ name: "required tests", scope: "task", required: true, status: "passed", stage: "analysis complete",
+      evidence: "reviewed test receipt for the task head", source: "reviewed_receipt", exitCode: 0 }],
+    repositories: [{ workdir: "/srv/repos/example", head: "1".repeat(40) }],
+    blockers: [], remainingWork: [], summary: "Requested work and required checks completed.", ...overrides,
+  }, { source: "orchestrator" });
+}
 
 describe("session-notification-builder", () => {
   it("builds plugin-owned review summaries for explicit plan approvals", () => {
@@ -188,34 +200,82 @@ describe("session-notification-builder", () => {
     assert.match(payload.planReviewSummary ?? "", /Skip the LLM for delegate mode wakeups/);
   });
 
-  it("requires a visible completion follow-up even when full output already contains a meaningful summary", () => {
+  it("reports structured blocked checks and preservation gaps without treating ended execution as success", () => {
+    const taskOutcome = reviewedOutcome({
+      task: "blocked",
+      checks: [
+        { name: "core tests", scope: "core", required: true, status: "passed", stage: "70 tests completed",
+          evidence: "reviewed core test receipt", source: "reviewed_receipt", exitCode: 0 },
+        { name: "core lint", scope: "core", required: true, status: "passed", stage: "analysis complete",
+          evidence: "reviewed core lint receipt", source: "reviewed_receipt", exitCode: 0 },
+        { name: "channel lint", scope: "channel", required: true, status: "timed_out", stage: "startup before analysis",
+          evidence: "reviewed timeout receipt; no analysis result", source: "reviewed_receipt" },
+      ],
+      blockers: ["Required channel lint timed out before analysis", "Nested checkout is not independently preserved"],
+      remainingWork: ["Preserve the nested work and complete required lint"],
+      summary: "Core checks passed; required channel lint and preservation remain blocked.",
+    });
     const payload = buildCompletedPayload({
-      session: {
-        id: "session-completed-summary",
-        name: "completed-summary",
-        status: "completed",
-        costUsd: 0.12,
-        duration: 12_000,
-      } as any,
+      session: { id: "session-blocked", name: "blocked-task", status: "completed", startedAt: reviewedCycle,
+        costUsd: 0.12, duration: 12_000, taskOutcome } as any,
       originThreadLine: "Origin thread: telegram topic 42",
-      preview: [
-        "Validation finished. Status: blocked, but we got useful signal.",
-        "- Do not start tomorrow as-is.",
-        "- Follow up on broker credential checks.",
-      ].join("\n"),
+      // Presentation is driven by the report, even when the harness claims success.
+      preview: "Everything completed successfully. Ready to merge.",
+      summary: taskOutcome.summary,
     });
 
-    assert.match(payload.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /The user saw: ✅ \[completed-summary\] Completed/);
+    assert.match(payload.userMessage, /^⚠️ \[blocked-task\] Execution ended — task blocked; verification blocked/);
+    assert.match(payload.userMessage, /Blocker: Required channel lint timed out before analysis/);
+    assert.match(payload.userMessage, /Blocker: Nested checkout is not independently preserved/);
+    assert.match(payload.userMessage, /Remaining: Preserve the nested work and complete required lint/);
+    assert.doesNotMatch(payload.userMessage, /✅|Finished on/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Submit agent_report_outcome/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Do not offer merge, PR, later or discard/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /which checks actually ran, and any remaining work or blockers/);
     assert.match(payload.wakeMessageOnNotifySuccess, /do not answer NO_REPLY/);
-    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
+  });
+
+  for (const preview of ["Done. All checks passed.", "Blocked. More work remains."]) {
+    it(`does not infer a missing task outcome from prose: ${preview}`, () => {
+      const payload = buildCompletedPayload({
+        session: { id: "session-unverified", name: "unverified-task", status: "completed", startedAt: reviewedCycle,
+          costUsd: 0, duration: 1_000 } as any,
+        originThreadLine: "", preview,
+      });
+      assert.match(payload.userMessage, /Execution ended — task completion unverified/);
+      assert.doesNotMatch(payload.userMessage, /✅/);
+      assert.match(payload.wakeMessageOnNotifySuccess, /executionCycle: 1700000000000/);
+      assert.match(payload.wakeMessageOnNotifySuccess, /agent_report_outcome/);
+    });
+  }
+
+  it("does not reuse a verified report after the session resumes", () => {
+    const payload = buildCompletedPayload({
+      session: { id: "session-resumed", name: "resumed-task", status: "completed", startedAt: reviewedCycle + 1,
+        costUsd: 0, duration: 1_000, taskOutcome: reviewedOutcome() } as any,
+      originThreadLine: "", preview: "Done",
+    });
+    assert.match(payload.userMessage, /Execution ended — task completion unverified/);
+    assert.doesNotMatch(payload.userMessage, /✅/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /executionCycle: 1700000000001/);
+  });
+
+  it("keeps passed checks separate from an explicitly incomplete task", () => {
+    const payload = buildCompletedPayload({
+      session: { id: "session-incomplete", name: "incomplete-task", status: "completed", startedAt: reviewedCycle,
+        costUsd: 0, duration: 1_000, taskOutcome: reviewedOutcome({ task: "incomplete", remainingWork: ["Implement the requested follow-up"] }) } as any,
+      originThreadLine: "", preview: "One phase finished",
+    });
+    assert.match(payload.userMessage, /task incomplete; verification passed/);
+    assert.match(payload.userMessage, /Remaining: Implement the requested follow-up/);
+    assert.doesNotMatch(payload.userMessage, /✅/);
   });
 
   it("keeps worktree follow-up wakes useful when only canonical facts are available", () => {
     const wake = buildWorktreeOutcomeFollowupWake({
       sessionId: "session-worktree-status-only",
       sessionName: "worktree-status-only",
-      outcomeLine: "✅ Merged: agent/example -> main",
+      outcomeLine: "ℹ️ Merged: agent/example -> main",
       originThreadLine: "",
       canonicalStatusDelivered: true,
     });
@@ -513,6 +573,8 @@ describe("session-notification-builder", () => {
         id: "session-2",
         name: "done-session",
         status: "completed",
+        startedAt: reviewedCycle,
+        taskOutcome: reviewedOutcome(),
         costUsd: 1.25,
         duration: 61_000,
         requestedPermissionMode: "plan",
@@ -526,7 +588,7 @@ describe("session-notification-builder", () => {
     assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s");
     assert.equal(payload.followupContract.requiresShortFactualSummary, true);
     assert.equal(payload.followupContract.appliesToOrdinaryTerminalCompletions, true);
-    assert.match(payload.wakeMessageOnNotifySuccess, /^\[done-session\] Completed\. ID: session-2/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /^\[done-session\] Completed\. ID: session-2; executionCycle: 1700000000000/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Requested permission mode|approved_then_implemented/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Output \(end\):/);
     assert.match(payload.wakeMessageOnNotifySuccess, /The user saw: ✅ \[done-session\] Completed/);
@@ -543,6 +605,8 @@ describe("session-notification-builder", () => {
         id: "session-2",
         name: "done-session",
         status: "completed",
+        startedAt: reviewedCycle,
+        taskOutcome: reviewedOutcome(),
         costUsd: 1.25,
         duration: 61_000,
         harnessName: "codex",
@@ -628,7 +692,7 @@ describe("session-notification-builder", () => {
     const message = buildWorktreeOutcomeFollowupWake({
       sessionId: "session-pr-summary",
       sessionName: "format-launch-notification-model-separator",
-      outcomeLine: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      outcomeLine: "ℹ️ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
       originThreadLine: "",
       detailLines: [
         "PR URL: https://github.com/goldmar/openclaw-code-agent/pull/185.",
@@ -665,7 +729,9 @@ describe("session-notification-builder", () => {
 
     assert.match(payload.wakeMessage, /agent_respond\(ocaSessionId='session-2'/);
     assert.match(payload.wakeMessage, /agent_launch\(resume_session_id='session-2', fork_session=true/);
-    assert.match(payload.wakeMessage, /⚠️ Approval: the session implemented changes without the required plan approval/);
+    assert.match(payload.wakeMessage, /⚠️ Approval: required plan approval is not recorded for this execution/);
+    assert.match(payload.wakeMessage, /This does not establish whether the user approved elsewhere/);
+    assert.doesNotMatch(payload.wakeMessage, /implemented changes without the required plan approval/);
   });
 
   it("preserves delegate worktree wake instructions", () => {

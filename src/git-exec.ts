@@ -25,6 +25,12 @@ export interface CommandOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+/** Fresh task evidence plus an immediate ownership check at a Git/PR effect. */
+export interface WorktreeMutationGuard {
+  refresh: () => Promise<boolean>;
+  isCurrent: () => boolean;
+}
+
 export type CommandError = Error & {
   code?: number | string | null;
   signal?: NodeJS.Signals | null;

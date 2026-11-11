@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -282,7 +283,12 @@ describe("SessionWorktreeController.isResolvedWorktreeEligibleForCleanup()", () 
         resumable: false,
         lifecycle: "awaiting_plan_decision",
         pendingPlanApproval: false,
-      }, Date.now(), 1), true);
+      }, Date.now(), 1), false, "ending execution without task evidence never authorizes cleanup");
+      const reviewed = reviewedTaskFixture({ ...base, status: "completed" as const, resumable: false,
+        lifecycle: "awaiting_plan_decision" as const, pendingPlanApproval: false });
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup(reviewed, Date.now(), 1), true);
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup({ ...reviewed, resumable: true }, Date.now(), 1), false);
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup({ ...reviewed, pendingPlanApproval: true }, Date.now(), 1), false);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

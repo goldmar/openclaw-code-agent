@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewPendingReminder } from "./reviewed-reminder-fixture";
 import { opsDigestInternals } from "../src/ops-digest";
 import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -934,7 +935,7 @@ describe("SessionManager.debounceWaitingEvent()", () => {
 });
 
 describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
-  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", async () => {
+  it("seeds reviewed reminders and token deadlines while preserving unreviewed resolved worktrees", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -967,6 +968,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       costUsd: 0,
       pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
     };
+    reviewPendingReminder(pending);
     const resolved = {
       sessionId: "resolved-session",
       harnessSessionId: "resolved-thread",
@@ -1005,7 +1007,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     await sm.bootstrapMaintenanceSchedules();
 
     assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
-    assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
+    assert.ok(!scheduledKeys.includes("persisted:resolved-session:worktree-retention"), "legacy success metadata cannot authorize cleanup");
     assert.ok(scheduledKeys.includes("tokens:expiry"));
     assert.ok(scheduledKeys.includes("tmp-output:cleanup"));
     assert.equal(cleanupTimes.length, 1);
@@ -1164,7 +1166,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("seeds retention for 4.x merged sessions whose lifecycle is synthesized on load", async () => {
+  it("preserves unreviewed 4.x merged sessions whose lifecycle is synthesized on load", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1202,7 +1204,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     await sm.bootstrapMaintenanceSchedules();
 
-    assert.ok(scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"));
+    assert.ok(!scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"), "synthesized lifecycle does not establish reviewed completion");
   });
 
   it("does not arm another runtime GC deadline while evicting a session from the GC callback", () => {
@@ -1350,6 +1352,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       costUsd: 0,
       pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
     };
+    reviewPendingReminder(pending);
     const dispatched: unknown[] = [];
     let current = true;
     const reminders = new SessionReminderService(
@@ -1387,6 +1390,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         costUsd: 0,
         pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
       };
+      reviewPendingReminder(pending);
       (sm as any).store.persisted.set(pending.harnessSessionId, pending);
       (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).maintenance.cancel = (() => {}) as any;
@@ -1475,6 +1479,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         costUsd: 0,
         pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
       };
+      reviewPendingReminder(pending);
 
       (sm as any).store.persisted.set(pending.harnessSessionId, pending);
       (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
@@ -1544,6 +1549,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         repoIntegrationPolicy: testCase.policy,
         pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
       };
+      reviewPendingReminder(pending);
       const dispatchCalls: Array<{ request: any }> = [];
 
       (sm as any).store.persisted.set(pending.harnessSessionId, pending);
@@ -1610,6 +1616,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       costUsd: 0,
       pendingWorktreeDecisionSince: new Date(start).toISOString(),
     };
+    reviewPendingReminder(pending);
     const texts: string[] = [];
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
@@ -1665,6 +1672,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         worktreeBranch: `agent/failed-${strategy}`,
         pendingWorktreeDecisionSince: new Date(start).toISOString(),
       };
+      reviewPendingReminder(pending);
       let deliver = false;
       const reminders = new SessionReminderService(
         (session) => ({ id: session.id ?? pending.sessionId }) as any,
@@ -1701,6 +1709,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
       worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
     };
+    reviewPendingReminder(pending);
     let dispatches = 0;
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
@@ -1728,6 +1737,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
       worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
     };
+    reviewPendingReminder(pending);
     const firstDue = start + 3 * hour;
     const snoozedDue = firstDue + 24 * hour;
     const keys: string[] = [];
@@ -1764,6 +1774,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       status: "completed", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
       worktreeStrategy: "ask", pendingWorktreeDecisionSince: new Date(start).toISOString(),
     };
+    reviewPendingReminder(pending);
     let current = true;
     let canDispatch: boolean | undefined;
     const reminders = new SessionReminderService(
@@ -1791,6 +1802,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       lastWorktreeReminderAt: new Date(start + 27 * hour).toISOString(), worktreeReminderCount: 2,
       worktreeDecisionSnoozedUntil: new Date(start + 51 * hour).toISOString(),
     };
+    reviewPendingReminder(pending);
     const reminders = new SessionReminderService(
       (session) => ({ id: session.id ?? pending.sessionId }) as any,
       (_session, request) => { request.hooks?.onNotifySucceeded?.(); },
@@ -1817,6 +1829,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       worktreeStrategy: "ask",
       pendingWorktreeDecisionSince: new Date(start).toISOString(),
     };
+    reviewPendingReminder(pending);
     let sends = 0;
     const dispatcher = new WakeDispatcher({
       directNotifications: { send: async () => { sends += 1; } },
@@ -1855,10 +1868,11 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       pendingWorktreeDecisionSince: new Date(start).toISOString(),
       lastWorktreeReminderAt: new Date(start + 3 * hour).toISOString(),
     };
-    assert.equal(await reminders.getNextReminderAt(legacy), start + 27 * hour);
+    assert.equal(SessionReminderService.remindersSent(legacy), 1);
+    assert.equal(await reminders.getNextReminderAt(legacy), undefined, "legacy timestamps alone do not establish task readiness");
   });
 
-  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", async () => {
+  it("suppresses integration reminders without current checkout evidence (pr-required)", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-unresolved-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1913,19 +1927,15 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
-
-      const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
-      assert.equal(hasButton(labels, "Merge"), false);
-      assert.equal(hasButton(labels, "Open PR"), true);
-      assert.equal(hasButton(labels, "Later"), true);
-      assert.equal(hasButton(labels, "Discard"), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), false);
+      assert.deepEqual(dispatchCalls, []);
+      assert.equal(pending.pendingWorktreeDecisionSince, undefined);
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
     }
   });
 
-  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", async () => {
+  it("suppresses integration reminders without current checkout evidence (unknown policy)", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-missing-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1980,13 +1990,9 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
-
-      const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
-      assert.equal(hasButton(labels, "Merge"), true);
-      assert.equal(hasButton(labels, "Open PR"), true);
-      assert.equal(hasButton(labels, "Later"), true);
-      assert.equal(hasButton(labels, "Discard"), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), false);
+      assert.deepEqual(dispatchCalls, []);
+      assert.equal(pending.pendingWorktreeDecisionSince, undefined);
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
     }
@@ -3761,13 +3767,14 @@ describe("SessionManager turn-end wake", () => {
       },
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [review-session] Completed | $0.00 | 12s");
+    assert.equal(request.label, "task-unverified");
+    assert.equal(request.userMessage, "⚠️ [review-session] Execution ended — task completion unverified | $0.00 | 12s");
     assert.match(request.wakeMessageOnNotifySuccess, /Output \(end\):/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
@@ -3786,19 +3793,20 @@ describe("SessionManager turn-end wake", () => {
       },
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
+    assert.equal(request.label, "task-unverified");
+    assert.equal(request.userMessage, "⚠️ [normal-session] Execution ended — task completion unverified | $0.00 | 8s");
     assert.match(request.wakeMessageOnNotifySuccess, /originRoute: \{/);
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
     assert.match(request.wakeMessageOnNotifySuccess, /message\(action='send', final=true\) to originRoute/);
-    assert.match(request.wakeMessageOnNotifySuccess, /The user saw: ✅ \[normal-session\] Completed/);
+    assert.match(request.wakeMessageOnNotifySuccess, /The user saw: ⚠️ \[normal-session\] Execution ended — task completion unverified/);
     assert.match(request.wakeMessageOnNotifySuccess, /Tell the user in one or two sentences what was done/);
     assert.match(request.wakeMessageOnNotifySuccess, /Do not repeat the status line/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /already summarized by completed session/);
@@ -3826,13 +3834,14 @@ describe("SessionManager turn-end wake", () => {
       },
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [analytics-refresh] Completed | $0.00 | 11s");
+    assert.equal(request.label, "task-unverified");
+    assert.equal(request.userMessage, "⚠️ [analytics-refresh] Execution ended — task completion unverified | $0.00 | 11s");
     assert.equal(request.completionWakeSummaryRequired, false);
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.wakeMessageOnNotifyFailed, undefined);
@@ -3854,17 +3863,18 @@ describe("SessionManager turn-end wake", () => {
       getOutput: (n?: number) => n === undefined ? lines : lines.slice(-n),
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [tail-summary-session] Completed | $0.00 | 9s");
+    assert.equal(request.label, "task-unverified");
+    assert.equal(request.userMessage, "⚠️ [tail-summary-session] Execution ended — task completion unverified | $0.00 | 9s");
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
-  it("sends nothing for the turn end of a session that is already terminal: the completed notification is the one message", async () => {
+  it("sends nothing for the turn end of a session that is already terminal: the unverified terminal notification is the one message", async () => {
     const s = fakeSession({
       id: "s-terminal-race",
       name: "terminal-race",
@@ -3880,14 +3890,15 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Applied the completion fix and added tests."],
     });
     await (sm as any).lifecycle.handleTurnEnd(s, false);
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
+    assert.equal(request.label, "task-unverified");
     assert.doesNotMatch(request.userMessage, /⏸️/);
-    assert.equal(request.userMessage, "✅ [terminal-race] Completed | $0.00 | 5s");
+    assert.equal(request.userMessage, "⚠️ [terminal-race] Execution ended — task completion unverified | $0.00 | 5s");
   });
 
 });
@@ -3938,6 +3949,9 @@ describe("SessionManager restored button parity", () => {
         worktreePath: join(repoDir, ".worktrees", "discord-worktree"),
         worktreeBranch: "agent/discord-worktree",
       } as any);
+
+      reviewPendingReminder((sm as any).store.persisted.get(telegramId));
+      reviewPendingReminder((sm as any).store.persisted.get(discordId));
 
       const telegramButtons = await (sm as any).getWorktreeDecisionButtons(telegramId);
       const discordButtons = await (sm as any).getWorktreeDecisionButtons(discordId);
@@ -4094,7 +4108,7 @@ describe("SessionManager terminal wakes", () => {
     stubDispatch(sm);
   });
 
-  it("dispatches completed notifications through the unified pipeline", () => {
+  it("dispatches unverified execution notices through the unified pipeline", () => {
     const s = fakeSession({
       id: "s-complete",
       name: "done",
@@ -4107,13 +4121,13 @@ describe("SessionManager terminal wakes", () => {
 
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
-    assert.equal(request.label, "completed");
-    assert.match(request.idempotencyKey, /^terminal-completed:s-complete:completed:/);
+    assert.equal(request.label, "task-unverified");
+    assert.match(request.idempotencyKey, /^task-outcome:s-complete:completed:/);
     assert.match(request.completionWakeOutcomeKey, /^terminal:s-complete:completed:/);
     assert.equal(request.notifyUser, "always");
-    assert.match(request.userMessage, /✅ \[done\] Completed/);
-    assert.match(request.wakeMessageOnNotifySuccess, /^\[done\] Completed\. ID: s-complete/);
-    assert.match(request.wakeMessageOnNotifyFailed, /^\[done\] Completed\. ID: s-complete/);
+    assert.match(request.userMessage, /⚠️ \[done\] Execution ended — task completion unverified/);
+    assert.match(request.wakeMessageOnNotifySuccess, /^\[done\] Execution ended — task completion unverified\. ID: s-complete/);
+    assert.match(request.wakeMessageOnNotifyFailed, /^\[done\] Execution ended — task completion unverified\. ID: s-complete/);
   });
 
   it("de-dupes duplicate terminal handling when completedAt is populated after the first pass", async () => {
@@ -4130,17 +4144,19 @@ describe("SessionManager terminal wakes", () => {
       getOutput: () => ["done"],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
     s.completedAt = 1700000009000;
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
+    assert.equal(request.label, "task-unverified");
     assert.equal(
       request.idempotencyKey,
-      "terminal-completed:s-terminal-completed-at:completed:1700000004000:thread-terminal:2:unknown",
+      "task-outcome:s-terminal-completed-at:completed:1700000004000:thread-terminal:2:unknown:unverified:unknown",
     );
   });
 
@@ -4275,13 +4291,15 @@ describe("SessionManager terminal wake behavior", () => {
       },
       getOutput: () => ["done"],
     });
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "completed");
+    assert.equal(request.label, "task-unverified");
   });
 
   it("clears the persisted completion summary flag after an ordinary terminal follow-up is confirmed delivered", async () => {
@@ -4311,9 +4329,10 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => ["Implemented the terminal wake regression fix."],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
-    assert.equal(requests[0]?.label, "completed");
+    assert.equal(requests[0]?.label, "task-unverified");
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     const persisted = sm.getPersistedSession("s-completion-wake-success");
     assert.equal(persisted?.completionWakeSummaryRequired, undefined);
@@ -4347,6 +4366,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => ["Implemented the terminal wake regression fix."],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const persisted = sm.getPersistedSession("s-completion-wake-failure");
@@ -4370,6 +4390,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: (): never[] => [],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4406,6 +4427,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => [authFailure],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4435,6 +4457,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => [`${prefix}\n\n${suffix}`],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4462,6 +4485,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => [`${planBlock}\n\n${finalBlock}`],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4483,6 +4507,7 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: () => ["Implementation finished."],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4506,7 +4531,9 @@ describe("SessionManager terminal wake behavior", () => {
       getOutput: (): never[] => [],
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4526,6 +4553,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4559,6 +4587,7 @@ describe("SessionManager terminal wake behavior", () => {
       worktreeStrategy: "delegate",
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4597,10 +4626,12 @@ describe("SessionManager terminal wake behavior", () => {
       worktreeStrategy: "delegate",
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
-    assert.equal(worktreeStrategyCalls, 1);
-    assert.equal((sm as any).__dispatchCalls.length, 0);
+    assert.equal(worktreeStrategyCalls, 0);
+    assert.equal((sm as any).__dispatchCalls.length, 1);
+    assert.match((sm as any).__dispatchCalls[0][1].userMessage, /completion unverified/);
   });
 
   it("suppresses duplicate timed-out ask-mode summaries once a provable review prompt exists", async () => {
@@ -4618,6 +4649,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     // The user already has an actionable prompt and the orchestrator has nothing to do:
@@ -4640,6 +4672,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4662,6 +4695,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4679,6 +4713,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4696,6 +4731,7 @@ describe("SessionManager terminal wake behavior", () => {
       startedAt: Date.now() - 2_000,
     });
 
+    (sm as any).sessions.set(s.id, s);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -4737,11 +4773,11 @@ describe("SessionManager.shouldRunWorktreeStrategy", () => {
     assert.equal(result, false);
   });
 
-  it("returns true when session lifecycle is 'active' and no pending plan approval", () => {
+  it("returns false for an active session without reviewed task completion", () => {
     const session = fakeSession({ pendingPlanApproval: false });
     Object.defineProperty(session, "lifecycle", { get: () => "active" });
     const result = (sm as any).shouldRunWorktreeStrategy(session);
-    assert.equal(result, true);
+    assert.equal(result, false);
   });
 });
 

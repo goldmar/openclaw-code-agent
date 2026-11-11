@@ -173,6 +173,8 @@ export class SessionStateSyncService {
   }
 
   private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
+    this.assignIfPresent(session, "taskOutcome", patch, "taskOutcome");
+    this.assignIfPresent(session, "taskOutcomeFollowThroughAt", patch, "taskOutcomeFollowThroughAt");
     this.assignIfDefined(session, "approvalRationale", patch.approvalRationale);
     this.assignIfDefined(session, "taskFlowMirror", patch.taskFlowMirror);
   }

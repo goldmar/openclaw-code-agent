@@ -169,7 +169,8 @@ describe("view, cleanup and policy execution", () => {
   });
 
   it("sessions full preserves the five-session default and enables the 24-hour view only for true", async () => {
-    manager({ list: () => Array.from({ length: 6 }, (_, i) => createStubSession({ id: `id-${i}`, name: `name-${i}`, prompt: "Task", duration: 0, costUsd: 0, startedAt: Date.now() - i })), listPersistedSessions: (): never[] => [] });
+    manager({ list: () => Array.from({ length: 6 }, (_, i) => createStubSession({ id: `id-${i}`, name: `name-${i}`, prompt: "Task", duration: 0, costUsd: 0, startedAt: Date.now() - i })),
+      listPersistedSessions: (): never[] => [], resolve: (): undefined => undefined, getPersistedSession: (): undefined => undefined });
     for (const value of [undefined, false, "false", true, "true"]) {
       const result = await makeAgentSessionsTool().execute("list", { full: value });
       assert.equal((result.content[0].text.match(/name-\d/g) ?? []).length, value === true || value === "true" ? 6 : 5);

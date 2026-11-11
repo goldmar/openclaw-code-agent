@@ -92,18 +92,18 @@ git commit -m "chore: update pnpm lockfile"
 
 OpenClaw Code Agent creates `agent/<session-name>` branches for its isolated git worktrees.
 **Do not delete these branches manually while they are in use.** OCA removes them once the
-worktree is resolved (merged, dismissed, released, or finished without changes), through its
+worktree is resolved (merged, explicitly dismissed, released, or verified complete without changes), through its
 maintenance schedules or `agent_worktree_cleanup`; the `manual` strategy keeps them until you
 act. Remote copies exist only for branches pushed for a PR.
 
 If you see stale `agent/*` branches, check `agent_worktree_status` first, then delete them
-once the associated session is confirmed finished:
+only after the associated task has a current verified completion report or an explicit dismissal. An ended, incomplete, blocked, or resumed execution does not authorize cleanup:
 
 ```bash
 # List remote agent branches
 git branch -r | grep 'origin/agent/'
 
-# Delete a specific stale branch (only when the session is confirmed finished)
+# Delete a specific stale branch only after verified task completion or explicit dismissal
 git push origin --delete agent/<session-name>
 ```
 

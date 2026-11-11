@@ -3,6 +3,7 @@ import type { SessionManager } from "../session-manager";
 import type { Session } from "../session";
 import { getSessionOutputFilePath } from "../session";
 import { formatDuration, formatSessionListing } from "../format";
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent, type TaskOutcomeReport, type TaskOutcomeSession } from "../session-task-outcome";
 import type { HarnessUsage } from "../harness";
 import type {
   ApprovalExecutionState,
@@ -28,6 +29,8 @@ export interface OutputOptions {
    * origin session, record that the launching orchestrator read the outcome.
    */
   readerSessionKey?: string;
+  /** Supplied only by the async read boundary after inspecting the checkout. */
+  taskEvidenceCurrent?: boolean;
 }
 
 interface SessionResultSummary {
@@ -46,6 +49,9 @@ interface ActiveSessionView {
   usage?: HarnessUsage;
   error?: string;
   result?: SessionResultSummary;
+  startedAt?: number;
+  taskOutcome?: TaskOutcomeReport;
+  taskEvidenceCurrent?: boolean;
 }
 
 interface SessionListingItem {
@@ -88,12 +94,16 @@ interface SessionListingItem {
   approvalState?: PersistedSessionInfo["approvalState"];
   pendingPlanApproval?: boolean;
   pendingWorktreeDecisionSince?: string;
+  taskOutcome?: TaskOutcomeReport;
+  taskEvidenceCurrent?: boolean;
 }
 
 export interface SessionListingOptions {
   full?: boolean;
   /** `/agent_status`: next steps in chat-command terms, without tool syntax. */
   forUser?: boolean;
+  /** Current proof keys, gathered by getFreshSessionsListingText. */
+  currentTaskEvidence?: ReadonlySet<string>;
 }
 
 const DEFAULT_SESSION_LIST_LIMIT = 5;
@@ -194,7 +204,7 @@ export function formatSessionUsage(usage: HarnessUsage | undefined): string | un
 }
 
 /** Build a header line for active runtime sessions. */
-function outputHeaderForActiveSession(session: ActiveSessionView): string {
+function outputHeaderForActiveSession(session: ActiveSessionView, evidenceCurrent = false): string {
   const duration = formatDuration(session.duration);
   const costStr = ` | Cost: $${session.costUsd.toFixed(4)}`;
   const phaseStr = session.phase ? ` | Phase: ${session.phase}` : "";
@@ -202,20 +212,35 @@ function outputHeaderForActiveSession(session: ActiveSessionView): string {
   const usageLine = formatSessionUsage(session.usage);
   return [
     `Session: ${session.name} [${session.id}] | Status: ${session.status.toUpperCase()}${phaseStr}${lifecycleStr}${costStr} | Duration: ${duration}`,
+    ...taskEvidenceLines(session, evidenceCurrent),
     ...(usageLine ? [usageLine] : []),
     `${"─".repeat(60)}`,
   ].join("\n");
 }
 
 /** Build a header line for persisted sessions loaded from disk/tmp output. */
-function outputHeaderForPersistedSession(persisted: PersistedSessionInfo, source: string): string {
+function outputHeaderForPersistedSession(persisted: PersistedSessionInfo, source: string, evidenceCurrent = false): string {
   const displayName = persisted.name || persisted.sessionId || persistedBackendConversationId(persisted) || "unknown";
   const phaseStr = persisted.lifecycle ? ` | Phase: ${persisted.lifecycle}` : "";
   return [
     `Session: ${displayName} | Status: ${persisted.status.toUpperCase()}${phaseStr} | Cost: $${persisted.costUsd.toFixed(4)}`,
+    ...taskEvidenceLines(persisted, evidenceCurrent),
     source,
     `${"─".repeat(60)}`,
   ].join("\n");
+}
+
+function taskEvidenceLines(session: TaskOutcomeSession, evidenceCurrent = false): string[] {
+  const cycle = executionCycle(session);
+  const report = session.taskOutcome?.executionCycle === cycle ? session.taskOutcome : undefined;
+  return [
+    report?.task === "completed" && !evidenceCurrent
+      ? `Execution cycle: ${cycle} | Last reviewed task: completed | Verification freshness: unverified`
+      : `Execution cycle: ${cycle} | Task: ${report?.task ?? "unverified"} | Verification: ${report?.verification ?? "unknown"}`,
+    ...(report ? [report.summary, ...report.blockers.map((item) => `Blocker: ${item}`), ...report.remainingWork.map((item) => `Remaining: ${item}`)] : []),
+    ...(session.status === "completed" && (!evidenceCurrent || !hasVerifiedTaskOutcome(session))
+      ? ["Execution ended; task success is not established. Review receipts and submit agent_report_outcome, or resume the remaining work."] : []),
+  ];
 }
 
 function persistedOutputSource(persisted: PersistedSessionInfo): string {
@@ -262,7 +287,7 @@ export function getSessionOutputText(
     if (persisted?.outputPath && existsSync(persisted.outputPath)) {
       try {
         const output = readOutputLinesFromFile(persisted.outputPath, options, linesToShow).join("\n");
-        const header = outputHeaderForPersistedSession(persisted, persistedOutputSource(persisted));
+        const header = outputHeaderForPersistedSession(persisted, persistedOutputSource(persisted), options.taskEvidenceCurrent);
         return output ? `${header}\n${output}` : `${header}\n(output file was empty)`;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -283,7 +308,7 @@ export function getSessionOutputText(
   const outputLines = liveOutputLines && liveOutputLines.length > 0
     ? liveOutputLines
     : (options.full ? session.getOutput() : session.getOutput(linesToShow));
-  const header = outputHeaderForActiveSession(session);
+  const header = outputHeaderForActiveSession(session, options.taskEvidenceCurrent);
   const body = outputLines.length === 0
     ? `${header}${emptyOutputDiagnostics(session)}`
     : `${header}\n${outputLines.join("\n")}`;
@@ -327,6 +352,7 @@ export function getSessionsListingText(
 ): string {
   const persisted = sm.listPersistedSessions() ?? [];
   const merged = mergeActiveAndPersistedSessions(sm.list("all"), persisted);
+  for (const session of merged) session.taskEvidenceCurrent = options.currentTaskEvidence?.has(taskEvidenceKey(session)) ?? false;
   let sessions = merged;
   if (filter === "waiting") {
     sessions = sessions.filter((s) => describeWaiting(s) !== undefined);
@@ -380,12 +406,46 @@ export function describeWaiting(session: SessionListingItem, forUser = false): s
     ? WORKTREE_DECISION_STATES.has(lifecycleState)
     : session.phase === "awaiting_worktree_decision"
       || Boolean(session.pendingWorktreeDecisionSince && !session.worktreeMerged && !session.worktreePrUrl);
-  if (pendingDecision) {
+  if (pendingDecision && session.taskEvidenceCurrent && hasVerifiedTaskOutcome(session)) {
     return session.worktreeStrategy === "delegate"
       ? `Branch waiting for the orchestrator${forUser ? "'s decision" : ": agent_merge, or agent_escalate(kind='worktree')"}`
       : `Branch waiting for the user: Merge / ${session.worktreePrUrl ? "Sync PR" : "Open PR"} / Later / Discard`;
   }
   return undefined;
+}
+
+function taskEvidenceKey(session: TaskOutcomeSession & { id?: string; sessionId?: string }): string {
+  return JSON.stringify([session.id ?? session.sessionId, executionCycle(session), session.taskOutcome]);
+}
+
+/** Fresh read boundaries keep stored reports from becoming current readiness. */
+export async function getFreshSessionOutputText(sm: SessionManager, ref: string, options: OutputOptions = {}): Promise<string> {
+  const selected = sm.resolve(ref) ?? sm.getPersistedSession(ref);
+  const key = selected ? taskEvidenceKey(selected) : undefined;
+  const fresh = selected ? await isTaskOutcomeCurrent(selected) : false;
+  const current = sm.resolve(ref) ?? sm.getPersistedSession(ref);
+  return getSessionOutputText(sm, ref, { ...options,
+    taskEvidenceCurrent: Boolean(fresh && current && taskEvidenceKey(current) === key),
+  });
+}
+
+export async function getFreshSessionsListingText(
+  sm: SessionManager,
+  filter: "all" | "running" | "waiting" | "completed" | "failed" | "killed" = "all",
+  originChannel?: string,
+  options: SessionListingOptions = {},
+): Promise<string> {
+  const rows = mergeActiveAndPersistedSessions(sm.list("all"), sm.listPersistedSessions() ?? []);
+  const candidates = rows.filter((row) => !originChannel || row.originChannel === originChannel)
+    .filter((row) => filter === "all" || filter === "waiting" || row.status === filter)
+    .filter((row) => !options.full || row.startedAt >= Date.now() - FULL_SESSION_LIST_WINDOW_MS);
+  const visible = filter === "waiting" || options.full ? candidates : candidates.slice(0, DEFAULT_SESSION_LIST_LIMIT);
+  const evidence = new Set<string>();
+  for (const row of visible) {
+    const selected = sm.resolve(row.id) ?? sm.getPersistedSession(row.id);
+    if (selected && await isTaskOutcomeCurrent(selected)) evidence.add(taskEvidenceKey(selected));
+  }
+  return getSessionsListingText(sm, filter, originChannel, { ...options, currentTaskEvidence: evidence });
 }
 
 /**
@@ -447,6 +507,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       approvalState: p.approvalState,
       pendingPlanApproval: p.pendingPlanApproval,
       pendingWorktreeDecisionSince: p.pendingWorktreeDecisionSince,
+      taskOutcome: p.taskOutcome,
     });
   }
 
@@ -490,6 +551,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       approvalState: session.approvalState,
       pendingPlanApproval: session.pendingPlanApproval,
       pendingWorktreeDecisionSince: persistedMatch?.pendingWorktreeDecisionSince,
+      taskOutcome: session.taskOutcome,
     });
   }
 

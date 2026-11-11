@@ -1,3 +1,4 @@
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent } from "../session-task-outcome";
 import { normalizeBooleanParams } from "./boolean-normalization";
 import { normalizeSessionReferenceParams, sessionReferenceProperties, requiredSessionReference } from "./session-reference-params";
 import { sessionToolError, unknownSessionError } from "./session-tool-error";
@@ -23,7 +24,7 @@ import {
   describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
-import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, owedCompletionCycle, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
+import { captureWorktreeTarget, checkWorktreeTarget, patchWorktreeTarget, worktreeDecisionRef, refuseHookChangesWithoutUser, resolveWorktreeToolTarget, summaryOwnership, summaryShownNote, withOutcomeSummary } from "./worktree-tool-context";
 import { createLogger } from "../logger";
 
 const log = createLogger("agent-merge");
@@ -167,6 +168,22 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const persistedSession = target.persistedSession;
       if (!targetSession && !persistedSession) return unknownSessionError(params.ocaSessionId);
       const admitted = captureWorktreeTarget(target);
+      const admittedCycle = executionCycle(targetSession ?? persistedSession ?? {});
+      const admittedReport = (targetSession ?? persistedSession)?.taskOutcome;
+      const mustRemainReady = _id === "callback" || (targetSession ?? persistedSession)?.worktreeStrategy === "delegate";
+      const taskStillAdmitted = (): boolean => {
+        if (!mustRemainReady) return true;
+        const current = sm.resolve(params.ocaSessionId) ?? sm.getPersistedSession(params.ocaSessionId);
+        return Boolean(current && executionCycle(current) === admittedCycle
+          && current.taskOutcome === admittedReport && hasVerifiedTaskOutcome(current));
+      };
+      const requireReady = async (): Promise<boolean> => {
+        if (!mustRemainReady) return true;
+        const current = sm.resolve(params.ocaSessionId) ?? sm.getPersistedSession(params.ocaSessionId);
+        return Boolean(taskStillAdmitted() && current && await isTaskOutcomeCurrent(current) && taskStillAdmitted());
+      };
+      const mutationGuard = mustRemainReady ? { refresh: requireReady, isCurrent: taskStillAdmitted } : undefined;
+      if (!(await requireReady())) return sessionToolError("task_not_ready", "Error: Task evidence is missing or changed. Review or resume the task before integration; its worktree is preserved.");
       if (params.base_branch !== undefined) {
         const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return sessionToolError("invalid_parameters", `Error: ${branchError}`);
@@ -263,7 +280,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       if (hookRefusal) return typeof hookRefusal === "string" ? { content: [{ type: "text", text: hookRefusal }] } : hookRefusal;
 
       // Serialise against concurrent merges on the same repo directory
-      let toolResult: { isError?: boolean; details?: ReturnType<typeof sessionToolError>["details"]; content: Array<{ type: string; text: string }>; meta?: { success: boolean; outcomeNotified?: boolean } } = {
+      let toolResult: { isError?: boolean; details?: ReturnType<typeof sessionToolError>["details"]; content: Array<{ type: string; text: string }>; meta?: { success: boolean; outcomeNotified?: boolean; code?: "task_not_ready" } } = {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
@@ -313,11 +330,29 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         }
         const freshPersisted = current.persisted;
 
+        if (!(await requireReady())) {
+          toolResult = sessionToolError("task_not_ready", "Error: Task evidence changed before merge. Its worktree is preserved; review or resume the task first.");
+          return;
+        }
+
         // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
-        const mergeResult = await mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
+        const mergeResult = await mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath, mutationGuard);
+        if (mergeResult.code === "task_not_ready") {
+          const text = mergeResult.localMerged
+            ? appendMergeWarnings(`ℹ️ [${target.sessionName}] Merged \`${branchName}\` → \`${baseBranch}\` locally. Further integration and cleanup stopped after execution ownership changed.`, mergeResult)
+            : `Error: ${mergeResult.error}`;
+          if (mergeResult.localMerged) sm.notifyWorktreeOutcome(target.notificationTarget!, text);
+          toolResult = { isError: !mergeResult.localMerged, content: [{ type: "text", text }], meta: { success: false, code: "task_not_ready", outcomeNotified: mergeResult.localMerged === true } };
+          return;
+        }
         const warningDetailLines = buildMergeWarningLines(mergeResult);
 
         if (mergeResult.success) {
+          // The admitted merge may have rebased its own source head. Continue
+          // that known successful operation under its original execution ticket.
+          const continuationGuard = mustRemainReady ? {
+            refresh: async () => taskStillAdmitted(), isCurrent: taskStillAdmitted,
+          } : undefined;
           if (checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined).changed) {
             toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile before retrying; push, cleanup and session updates were skipped." }] };
             return;
@@ -330,7 +365,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
           // Push base branch if requested
           if (shouldPush) {
-            if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
+            if (!(await pushBranch(effectiveWorkdir, baseBranch, "origin", continuationGuard))) {
               const pushFailedText = `⚠️ [${target.sessionName ?? params.ocaSessionId}] Merged \`${branchName}\` → \`${baseBranch}\` locally, but failed to push \`${baseBranch}\``;
               sm.notifyWorktreeOutcome(
                 target.notificationTarget!,
@@ -350,7 +385,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             }
           }
 
-          if (checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined).changed) {
+          if (!taskStillAdmitted() || checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined).changed) {
             toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge/push operations completed, but the selected worktree target changed. Cleanup and session updates were skipped; reconcile before retrying." }] };
             return;
           }
@@ -359,10 +394,12 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           const worktreeAlreadyAbsent = !existsSync(worktreePath);
           worktreeCleanedUp = worktreeAlreadyAbsent
             ? true
-            : await removeWorktree(effectiveWorkdir, worktreePath);
+            : await removeWorktree(effectiveWorkdir, worktreePath, mustRemainReady ? {
+              shouldRemove: async () => taskStillAdmitted(),
+            } : {});
           await pruneWorktrees(effectiveWorkdir);
           if (shouldCleanup) {
-            branchDeleted = await deleteBranch(effectiveWorkdir, branchName);
+            branchDeleted = await deleteBranch(effectiveWorkdir, branchName, mustRemainReady ? taskStillAdmitted : undefined);
           }
           const cleanupOutcome = formatCleanupOutcome({
             deleteBranchRequested: shouldCleanup,
@@ -374,12 +411,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // A post-mutation target change is an uncertain outcome, never an
           // assertion that the Git operation did not start or a retry receipt.
           const afterMerge = checkWorktreeTarget(sm, target, admitted, params.base_branch !== undefined);
-          if (afterMerge.changed) {
+          if (!taskStillAdmitted() || afterMerge.changed) {
             toolResult = { isError: true, content: [{ type: "text", text: "Error: Merge Git operations completed, but the selected worktree target changed. Reconcile Git and session state before retrying; the changed session was not patched." }] };
             return;
           }
-          // Read before the merged patch: it resolves the decision and consumes the owed `✅`.
-          const sessionCompleted = owedCompletionCycle(sm, target.generation) !== undefined;
+          // The merged patch resolves integration; task success is independent.
           {
             const mergedAt = new Date().toISOString();
             const patched = patchWorktreeTarget(sm, target, {
@@ -408,7 +444,6 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Send unified confirmation notification
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "merge",
-            sessionCompleted,
             sessionName: target.sessionName,
             branch: branchName,
             base: resolvedBaseBranch,

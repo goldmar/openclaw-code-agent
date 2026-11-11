@@ -4,6 +4,7 @@ import type { NotificationButton } from "../session-interactions";
 import type { ApprovalExecutionState, KillReason, PermissionMode } from "../types";
 import type { Session } from "../session";
 import { ROUTED_REPLY_RULE } from "../session-route";
+import { executionCycle, hasVerifiedTaskOutcome, type TaskOutcomeReport } from "../session-task-outcome";
 
 type OriginThreadLine = string;
 
@@ -40,7 +41,7 @@ export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
   if (context.approvalExecutionState !== "implemented_without_required_approval") return [];
-  return [`⚠️ Approval: the session implemented changes without the required plan approval (requested mode ${context.requestedPermissionMode ?? "unknown"}, effective ${context.currentPermissionMode ?? "unknown"}).`];
+  return [`⚠️ Approval: required plan approval is not recorded for this execution (requested mode ${context.requestedPermissionMode ?? "unknown"}, effective ${context.currentPermissionMode ?? "unknown"}). This does not establish whether the user approved elsewhere.`];
 }
 
 /** One line telling the orchestrator whether the user saw the plugin's status line. */
@@ -95,7 +96,7 @@ export function buildCompletionFollowupInstructionLines(args: {
   originThreadLine?: string;
 }): string[] {
   return [
-    `Tell the user in one or two sentences what was done (read agent_output(ocaSessionId='${args.sessionId}', full=true) if the output above is not enough). Do not repeat the status line.`,
+    `Tell the user in one or two sentences what was done, which checks actually ran, and any remaining work or blockers (read agent_output(ocaSessionId='${args.sessionId}', full=true) if the output above is not enough). Do not repeat the status line or infer task success from execution termination.`,
     `If this finished one phase of a larger job, start the next phase now instead.`,
     finalReplyRule(args.originThreadLine),
   ];
@@ -120,11 +121,13 @@ export function buildCompletedPayload(args: {
     | "harnessName"
     | "model"
     | "reasoningEffort"
-  >;
+  > & { startedAt?: number; createdAt?: number; taskOutcome?: TaskOutcomeReport };
   originThreadLine: OriginThreadLine;
   preview: string;
   /** One extra line under the completion line (for example commits an open PR does not have). */
   note?: string;
+  summary?: string;
+  forceUnverified?: boolean;
 }): {
   userMessage: string;
   wakeMessageOnNotifySuccess: string;
@@ -134,15 +137,28 @@ export function buildCompletedPayload(args: {
   const { session, originThreadLine, preview } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine.trim());
   const followupContract = buildCompletionFollowupContract();
-  const userMessage = `✅ [${session.name}] Completed${formatSessionStatsSuffix(session)}${args.note ? `\n${args.note}` : ""}`;
+  const verified = !args.forceUnverified && hasVerifiedTaskOutcome(session);
+  const report = session.taskOutcome?.executionCycle === executionCycle(session) ? session.taskOutcome : undefined;
+  const status = verified ? "Completed" : args.forceUnverified ? "Execution ended — task completion unverified" : report
+    ? `Execution ended — task ${report.task}; verification ${report.verification}`
+    : "Execution ended — task completion unverified";
+  const details = [args.summary, args.note,
+    ...(report?.blockers.map((blocker) => `Blocker: ${blocker}`) ?? []),
+    ...(report?.remainingWork.map((work) => `Remaining: ${work}`) ?? []),
+  ].filter(Boolean);
+  const userMessage = `${verified ? "✅" : "⚠️"} [${session.name}] ${status}${formatSessionStatsSuffix(session)}${details.length ? `\n${details.join("\n")}` : ""}`;
   const buildWakeMessage = (canonicalStatusDelivered: boolean): string => [
-    `[${session.name}] Completed. ID: ${session.id}`,
+    `[${session.name}] ${status}. ID: ${session.id}; executionCycle: ${executionCycle(session)}`,
     statusDeliveryLine(userMessage, canonicalStatusDelivered),
     ...(args.note ? [args.note.replace(/^⚠️\s*/u, "")] : []),
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
     ...formatApprovalExecutionContextLines(session),
     `Output (end):`,
     fenceAgentOutput(preview, "output preview"),
+    ...(!verified ? [
+      `Review the requested task, check receipts, preservation requirements and remaining blockers. Submit agent_report_outcome for this exact session and executionCycle with repository heads, checks, blockers, remainingWork and a factual summary.`,
+      `Missing evidence stays unverified. Do not offer merge, PR, later or discard merely because the execution ended. Resume unfinished work only within existing authority; preserve required user decisions.`,
+    ] : []),
     ...buildCompletionFollowupInstructionLines({ sessionId: session.id, canonicalStatusDelivered, hasOriginRouteBlock, originThreadLine }),
   ].join("\n");
 

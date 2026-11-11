@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { withGenerationMethods } from "./session-generation-fixture";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -317,7 +318,8 @@ describe("agent_merge push behavior", () => {
       writeFileSync(join(worktreePath, ".worktreeinclude"), ".env\n", "utf-8");
       git(worktreePath, "add", ".worktreeinclude");
       git(worktreePath, "commit", "-m", "include env");
-      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      const reviewed = installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      Object.assign(reviewed, reviewedTaskFixture({ status: "completed", workdir: repoDir, worktreePath }));
       const prompts: Array<{ ref: string; hookWarning?: string }> = [];
       const { sessionManager } = await import("../src/singletons");
       (sessionManager as any).requestWorktreeDecisionFromUser = async (ref: string, _summary: string, options: { hookWarning?: string } = {}) => {

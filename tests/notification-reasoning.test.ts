@@ -25,7 +25,7 @@ import { recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/
 import { codexCatalogModel, seedCodexModelCatalog } from "./codex-model-catalog-fixture";
 
 const LIFECYCLE_NOTIFICATION_VARIANTS = [
-  "launch", "resumed-launch", "progress", "running", "completed", "failed", "cancelled",
+  "launch", "resumed-launch", "progress", "running", "completed", "task-unverified", "failed", "cancelled",
   "suspended", "recovered", "restart", "resume", "fork", "notification", "agent-respond",
   "plan-submitted", "plan-approval", "plan-approved", "plan-revised", "plan-rejected",
   "plan-approval-timeout", "permission-prompt", "decision-prompt", "worktree-manual",
@@ -150,7 +150,7 @@ describe("notification reasoning visibility", () => {
         `${resumed ? "▶️ [original] Resumed | Follow-up label: reasoning-test" : "🚀 [reasoning-test] Launched"} | /tmp | codex | gpt-6.1-sol | reasoning: medium`);
       setPluginConfig({ harnesses: { codex: { reasoningEffort: "high" } } });
       for (const [label, payload] of [
-        ["completed", buildCompletedPayload({ session, preview: "Done", originThreadLine: "" })],
+        ["task-unverified", buildCompletedPayload({ session, preview: "Done", originThreadLine: "" })],
         ["failed", buildFailedPayload({ session, preview: "", originThreadLine: "", errorSummary: "Failure", worktreeAutoCleaned: false })],
       ] as const) {
         assert.match(payload.userMessage, /\| reasoning: medium(?:\n|$)/);
@@ -229,7 +229,7 @@ describe("notification reasoning visibility", () => {
       assert.match(requests[0].userMessage!, /reasoning: low$/);
       const target = resolveWorktreeToolTarget({ resolve: (): undefined => undefined, getPersistedSession: () => restored } as any, session.id);
       assert.equal(target.notificationTarget?.reasoningEffort, "low");
-      for (const outcome of ["✅ PR opened: https://example.com/pr/1", "✅ Merged task → main"]) {
+      for (const outcome of ["ℹ️ PR opened: https://example.com/pr/1", "ℹ️ Merged task → main"]) {
         service.notifyWorktreeOutcome(target.notificationTarget as any, outcome, { summaryWakeRequired: false });
         assert.match(requests.at(-1)!.userMessage!, /codex \| gpt-6.1-sol \| reasoning: low$/);
       }

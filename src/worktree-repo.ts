@@ -423,11 +423,13 @@ export async function isBranchPublished(repoDir: string, branch: string): Promis
   }
 }
 
-export async function deleteBranch(repoDir: string, branch: string): Promise<boolean> {
+/** `shouldDelete` runs under the repository lock, right before the force delete. */
+export async function deleteBranch(repoDir: string, branch: string, shouldDelete?: () => boolean | Promise<boolean>): Promise<boolean> {
   await assertBranchName(branch);
 
   return withRepoLock(repoDir, async () => {
     try {
+      if (shouldDelete && !(await shouldDelete())) return false;
       await runGit(["-C", repoDir, "branch", "-D", branch], { timeout: 10_000 });
       return true;
     } catch (err) {

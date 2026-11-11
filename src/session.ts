@@ -60,6 +60,7 @@ import { appendSessionOutput } from "./session-output";
 import { SessionTimerRegistry } from "./session-timer-registry";
 import { SessionTurnRuntime } from "./session-turn-runtime";
 import { SessionHarnessEventApplier } from "./session-harness-event-applier";
+import type { TaskOutcomeReport } from "./session-task-outcome";
 import { listDirtyWorktreeEntries } from "./worktree";
 import { isHarnessStartupFailureOutput, summarizeHarnessStartupFailure } from "./harness-startup-failure";
 import { createLogger } from "./logger";
@@ -229,6 +230,9 @@ export class Session extends EventEmitter {
   error?: string;
   startedAt: number;
   completedAt?: number;
+  taskOutcome?: TaskOutcomeReport;
+  /** `reviewedAt` of the report whose integration follow-through settled (see PersistedSessionInfo). */
+  taskOutcomeFollowThroughAt?: string;
   /**
    * When the orchestrator first read this session's output (agent_output)
    * after it ended. An outcome wake deferred just after launch is skipped when

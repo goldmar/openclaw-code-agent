@@ -139,7 +139,7 @@ describe("admitted completion wake recovery", () => {
     assert.ok(persisted.completionWakeSucceededAt);
   });
 
-  it("retries only a definitely unsubmitted wake with its exact saved message and run identity", () => {
+  it("retries only a definitely unsubmitted wake with truthful review context and its saved run identity", () => {
     const { persisted, requests, createService, request } = setup();
     createService().dispatch(persisted, request);
     requests[0]!.hooks!.onWakeStarted!();
@@ -153,7 +153,10 @@ describe("admitted completion wake recovery", () => {
     assert.equal(requests[1]!.retryUnsubmittedWake, true);
     assert.equal(requests[1]!.admittedWakeRunId, "rejected-run");
     assert.equal(requests[1]!.admittedWakeRoutedReply, true);
-    assert.equal(requests[1]!.wakeMessage, "The exact selected wake message");
+    assert.match(requests[1]!.wakeMessage!, /Execution ended — task completion unverified for this recovery/);
+    assert.match(requests[1]!.wakeMessage!, /historical unsubmitted wake tail/);
+    assert.ok(requests[1]!.wakeMessage!.includes("The exact selected wake message"), "the original intent remains historical data");
+    assert.equal(persisted.completionWakeMessage, "The exact selected wake message", "preparation alone never changes the retained journal");
     assert.equal(requests[1]!.notifyUser, "never");
     assert.equal(requests[1]!.userMessage, undefined);
   });
@@ -646,11 +649,11 @@ describe("SessionNotificationService", () => {
 
     assert.equal(
       request.userMessage,
-      "✅ [no-change-stats] Completed — no changes to merge | $0.25 | 1m1s | codex | gpt-5.5",
+      "ℹ️ [no-change-stats] No changes to merge | $0.25 | 1m1s | codex | gpt-5.5",
     );
   });
 
-  it("gives a no-change completion after an earlier PR outcome its ✅ and keeps the PR context in the wake", () => {
+  it("keeps no-change integration informational after an earlier PR outcome and preserves its wake context", () => {
     const worktreeMessages = new SessionWorktreeMessageService();
     const request = worktreeMessages.buildNoChangeNotification({
       session: {
@@ -669,7 +672,7 @@ describe("SessionNotificationService", () => {
 
     assert.equal(
       request.userMessage,
-      "✅ [pr-updated-clean] Completed — no changes to merge | 1m1s",
+      "ℹ️ [pr-updated-clean] No changes to merge | 1m1s",
     );
     assert.match(String(request.wakeMessage), /Updated a PR; no local branch changes remained to merge\./);
     assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);

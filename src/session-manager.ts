@@ -1,5 +1,6 @@
 import type { StatusCardIdentity } from "./status-card";
 import { createHash } from "crypto";
+import { isDeepStrictEqual } from "node:util";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName, resolveAllowedModelsForHarness } from "./config";
 import { assertModelAllowedForHarness } from "./harness-models";
@@ -14,6 +15,11 @@ import {
 } from "./session-backend-ref";
 import { SessionRestoreService } from "./session-restore-service";
 import { SessionStateSyncService } from "./session-state-sync-service";
+import {
+  createTaskOutcomeReport, executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent,
+  parseTaskOutcomeInput, validateTaskOutcomeSnapshot,
+  type TaskOutcomeInput, type TaskOutcomeReport, type TaskOutcomeReviewer,
+} from "./session-task-outcome";
 import { SessionReferenceService } from "./session-reference-service";
 import { SessionWorktreeStrategyService, type WorktreeStrategyResult } from "./session-worktree-strategy-service";
 import { resolveOwningPr, owningPrLinkPatch, type OwningPrResolution } from "./worktree-owning-pr";
@@ -463,23 +469,34 @@ export class SessionManager {
           originSessionKey: session.originSessionKey,
         }, { notifyLaunch: false });
       },
-      getCurrentSessionStatus: (session) => (
-        manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
-      )?.status,
+      getCurrentSessionStatus: (session) => {
+        const current = manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id });
+        return current && executionCycle(current) === executionCycle(session) ? current.status : "running";
+      },
       runAutoPr: async (session, baseBranch, retry) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
-        const result = await makeAgentPrTool(undefined, { terminalCompletion: !retry }).execute("auto-pr", {
+        const result = await makeAgentPrTool(undefined, { terminalCompletion: false }).execute("auto-pr", {
           ocaSessionId: session.id,
           base_branch: baseBranch,
-        }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean; decisionRequested?: boolean } };
+        }) as { content?: Array<{ text?: string }>; meta?: { success?: boolean; outcomeNotified?: boolean; decisionRequested?: boolean; pushed?: boolean; branch?: string; code?: string; errorSummary?: string } };
         const success = result?.meta?.success === true;
+        const partialPush = result?.meta?.pushed === true && typeof result.meta.branch === "string";
+        const errorSummary = result?.meta?.errorSummary
+          || result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").replace(/^Failed to /u, "could not ").trim()
+          || undefined;
+        if (partialPush && result.meta?.outcomeNotified !== true) {
+          // A stale retry must not hide an already-admitted remote effect.
+          manager.notifyWorktreeOutcome(session,
+            `ℹ️ [${session.name}] Pushed branch \`${result.meta!.branch}\`; ${result.meta?.code === "task_not_ready" ? "further PR actions stopped after task evidence changed" : "the PR action did not complete"}.${errorSummary ? `\n${errorSummary}` : ""}`,
+            { summaryWakeRequired: false, completionWakeOutcomeKey: `worktree-pr-partial:${session.id}:${session.startedAt}:${result.meta!.branch}` });
+        }
         return {
           success,
-          notificationSent: result?.meta?.outcomeNotified === true,
+          notificationSent: result?.meta?.outcomeNotified === true || partialPush,
           ...(result?.meta?.decisionRequested === true ? { decisionRequested: true } : {}),
-          // The `Reason: …` line under `⚠️ [name] Completed — auto-PR failed`.
+          // The reason line under the auto-PR integration-attention notice.
           ...(success ? {} : {
-            error: result?.content?.[0]?.text?.split("\n")[0]?.replace(/^(?:Error:|❌|⚠️)\s*/u, "").replace(/^Failed to /u, "could not ").trim() || undefined,
+            error: errorSummary,
           }),
         };
       },
@@ -536,10 +553,19 @@ export class SessionManager {
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
       clearRetryTimersForSession: (sessionId) => wakeDispatcher.clearRetryTimersForSession(sessionId),
       shouldEmitTerminalWake: (session) => manager.shouldEmitTerminalWake(session),
-      getCurrentSessionStatus: (session) => (
-        manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id })
-      )?.status,
+      getCurrentSessionStatus: (session) => {
+        const current = manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id });
+        return current && executionCycle(current) === executionCycle(session) ? current.status : "running";
+      },
       resolvePlanApprovalMode: (session) => manager.resolvePlanApprovalMode(session),
+      isCurrentSessionCycle: (session) => {
+        const current = manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id });
+        return Boolean(current && executionCycle(current) === executionCycle(session));
+      },
+      isCurrentTaskOutcome: (session, report) => {
+        const current = manager.get(session.id) ?? manager.getSessionGeneration({ kind: "oca", sessionId: session.id });
+        return Boolean(current && current.taskOutcome === report);
+      },
       getPlanApprovalButtons: (sessionId, session) => interactions.getPlanApprovalButtons(sessionId, session),
       getResumeButtons: (sessionId, session) => interactions.getResumeButtons(sessionId, session),
       getQuestionButtons: (sessionId, questionOptions, context) => interactions.getQuestionButtons(sessionId, questionOptions, context),
@@ -1089,6 +1115,7 @@ export class SessionManager {
   }
 
   private shouldRunWorktreeStrategy(session: Session): boolean {
+    if (!hasVerifiedTaskOutcome(session)) return false;
     const phase = session.lifecycle;
     if (phase === "starting" || phase === "awaiting_plan_decision" || phase === "awaiting_user_input") return false;
     if (session.pendingPlanApproval) return false;
@@ -1554,6 +1581,8 @@ export class SessionManager {
   ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
+    const report = session.taskOutcome;
+    if (!(await isTaskOutcomeCurrent(session))) return undefined;
     const repoDir = await this.resolveWorktreeRepoDir("originalWorkdir" in session ? session.originalWorkdir : session.workdir, session.worktreePath);
     if (repoDir) {
       const owner = await this.resolveSessionOwningPr(session, repoDir);
@@ -1563,6 +1592,7 @@ export class SessionManager {
     // A PR found closed without merging is recorded on the row, so the 🔀
     // prompt, the reminders and the re-offer all show New PR.
     const newPr = options.newPr === true || this.getPersistedSession(sessionId)?.worktreePrClosed === true;
+    if (session.taskOutcome !== report || !(await isTaskOutcomeCurrent(session))) return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions, { newPr });
   }
 
@@ -1770,6 +1800,8 @@ export class SessionManager {
       : this.getPersistedSession(ref);
     const session = activeSession ?? persistedSession;
     if (!session) return `Error: Session "${ref}" not found.`;
+    const outcomeReport = session.taskOutcome;
+    if (!(await isTaskOutcomeCurrent(session))) return "Error: Task completion and verification are not established. Resume the work or review its evidence; no integration prompt was sent.";
     if (!options.hookWarning && session.worktreeStrategy !== "delegate") {
       return `Error: Session "${ref}" already uses direct user worktree decisions. Do not send a duplicate decision prompt.`;
     }
@@ -1845,6 +1877,9 @@ export class SessionManager {
       }
     }
 
+    if (session.taskOutcome !== outcomeReport || !(await isTaskOutcomeCurrent(session))) {
+      return "Error: Task evidence changed before the integration decision could be delivered.";
+    }
     const delivery = await this.dispatchAndAwaitUserDelivery(
       this.buildRoutingProxy({
         id: sessionId,
@@ -1858,6 +1893,9 @@ export class SessionManager {
         session: {
           id: sessionId,
           name: session.name,
+          status: session.status,
+          startedAt: executionCycle(session),
+          taskOutcome: outcomeReport,
           worktreePrTargetRepo: activeSession?.worktreePrTargetRepo ?? persistedSession?.worktreePrTargetRepo,
         },
         branchName,
@@ -1983,6 +2021,7 @@ export class SessionManager {
 
   private worktreeDecisionIsOpen(ref: string): boolean {
     const persisted = this.getPersistedSession(ref);
+    if (!hasVerifiedTaskOutcome(this.resolve(ref) ?? persisted ?? {})) return false;
     if (!persisted) return Boolean(this.resolve(ref)?.worktreePath);
     const state = persisted.worktreeLifecycle?.state;
     if (state === "merged" || state === "released" || state === "dismissed" || state === "no_change") return false;
@@ -2143,10 +2182,126 @@ export class SessionManager {
     return this.worktreeStrategy.handleWorktreeStrategy(session, options);
   }
 
+  private readonly taskOutcomeReports = new Map<string, Promise<string>>();
+
+  /** A reviewed report is evidence about a stopped task, never permission to run it. */
+  reportTaskOutcome(ref: string, input: TaskOutcomeInput, reviewer: TaskOutcomeReviewer): Promise<string> {
+    const previous = this.taskOutcomeReports.get(ref) ?? Promise.resolve("");
+    const pending = previous.catch(() => "").then(() => this.acceptTaskOutcome(ref, input, reviewer));
+    this.taskOutcomeReports.set(ref, pending);
+    void pending.finally(() => {
+      if (this.taskOutcomeReports.get(ref) === pending) this.taskOutcomeReports.delete(ref);
+    }).catch(() => {});
+    return pending;
+  }
+
+  private async acceptTaskOutcome(ref: string, input: TaskOutcomeInput, reviewer: TaskOutcomeReviewer): Promise<string> {
+    const parsed = parseTaskOutcomeInput(input);
+    if (parsed.ok === false) return `Error: ${parsed.error}`;
+    const active = this.get(ref);
+    const saved = this.getSessionGeneration({ kind: "oca", sessionId: ref });
+    const selected = active ?? saved;
+    if (!selected) return "Error: Use the exact OCA session ID from the launch receipt.";
+    if (selected.goalTaskId && reviewer.source !== "goal_controller") return "Error: The goal controller owns this task's verification evidence.";
+    if (reviewer.source !== "goal_controller" && parsed.value.checks.some((check) => check.source !== "reviewed_receipt")) {
+      return "Error: An orchestrator report attests reviewed receipts. OCA-executed verifier provenance belongs to the goal controller.";
+    }
+    const current = () => this.get(ref) ?? this.getSessionGeneration({ kind: "oca", sessionId: ref });
+    const sameCycle = () => {
+      const row = current();
+      return Boolean(row && row.status === "completed" && !row.pendingPlanApproval && executionCycle(row) === input.executionCycle);
+    };
+    const snapshotError = await validateTaskOutcomeSnapshot(selected, parsed.value);
+    if (snapshotError) return `Error: ${snapshotError}`;
+    if (!sameCycle()) return "Error: The session changed while its task evidence was being checked.";
+    const report = createTaskOutcomeReport(parsed.value, reviewer);
+    const duplicate = selected.taskOutcome
+      && isDeepStrictEqual({ ...selected.taskOutcome, reviewedAt: undefined, reviewer: undefined },
+        { ...report, reviewedAt: undefined, reviewer: undefined });
+    if (duplicate) {
+      const recorded = `Task outcome already recorded: ${report.task}; verification ${report.verification}.`;
+      // An identical resubmission retries follow-through that never settled
+      // (for example after a transient Git read failure). It reuses the saved
+      // report, so effects that already happened stay deduplicated, and the
+      // completion summary is not repeated.
+      const row = current();
+      const savedReport = row?.taskOutcome;
+      if (!row || !savedReport || reviewer.source === "goal_controller" || row.autoMergeParentSessionId
+        || savedReport.task !== "completed"
+        || row.taskOutcomeFollowThroughAt === savedReport.reviewedAt) return recorded;
+      const settled = await this.followThroughTaskOutcome(ref, this.taskOutcomeTarget(ref, active, saved), savedReport, sameCycle, current);
+      return `${recorded} ${settled ? "Integration follow-through was retried." : "Integration follow-through did not settle; the work is preserved. Resolve the reported problem, then submit the same report again to retry."}`;
+    }
+    if (!this.updatePersistedSession(ref, {
+      taskOutcome: report,
+      ...(report.task !== "completed" ? {
+        pendingWorktreeDecisionSince: undefined, deferredCompletionCycle: undefined,
+        lastWorktreeReminderAt: undefined, worktreeDecisionSnoozedUntil: undefined,
+        ...(selected.worktreeState === "pending_decision" ? { worktreeState: "provisioned" as const } : {}),
+        ...(selected.lifecycle === "awaiting_worktree_decision" ? { lifecycle: "terminal" as const } : {}),
+      } : {}),
+    })) return "Error: Could not save the reviewed task outcome.";
+    if (report.task !== "completed") this.interactions.clearWorktreeDecisionTokens(ref);
+    const target = this.taskOutcomeTarget(ref, active, saved);
+    // The summary is foreground-owned. Do not wake a second orchestrator to
+    // repeat the review that supplied this report.
+    if (reviewer.source !== "goal_controller") this.lifecycle.emitCompleted(target, { summary: report.summary });
+    if (target.autoMergeParentSessionId && sameCycle()) {
+      await this.handleAutoMergeResolverTerminal(target);
+    }
+    const unsettled = !target.autoMergeParentSessionId && reviewer.source !== "goal_controller" && report.task === "completed"
+      && !(await this.followThroughTaskOutcome(ref, target, report, sameCycle, current));
+    return `Task outcome recorded: ${report.task}; verification ${report.verification}. ${report.task === "completed" ? "Integration remains subject to repository policy and existing authority." : "The work is preserved; no integration decision was requested."}${unsettled ? " Integration follow-through did not settle; the work is preserved. Resolve the reported problem, then submit the same report again to retry." : ""}`;
+  }
+
+  private taskOutcomeTarget(ref: string, active: Session | undefined, saved: PersistedSessionInfo | undefined): Session {
+    return active ?? Object.assign(this.buildRoutingProxy(saved!), saved, {
+      id: ref, startedAt: saved!.createdAt ?? 0,
+      originalWorkdir: saved!.workdir, workdir: saved!.worktreePath ?? saved!.workdir,
+      harnessName: saved!.harness, duration: Math.max(0, (saved!.completedAt ?? Date.now()) - (saved!.createdAt ?? Date.now())),
+    }) as Session;
+  }
+
+  /**
+   * Run the worktree strategy for a saved, completed report and record that it
+   * settled, unless it stopped on a transient failure. Returns whether it settled.
+   */
+  private async followThroughTaskOutcome(
+    ref: string,
+    target: Session,
+    report: TaskOutcomeReport,
+    sameCycle: () => boolean,
+    current: () => { taskOutcome?: TaskOutcomeReport } | undefined,
+  ): Promise<boolean> {
+    const stillCurrent = () => sameCycle() && current()?.taskOutcome === report;
+    if (!stillCurrent() || !(await isTaskOutcomeCurrent(target))) return false;
+    const integration = await this.handleWorktreeStrategy(target);
+    if (!stillCurrent()) return false;
+    if (integration.completionNote) {
+      this.dispatchSessionNotification(target, {
+        label: "worktree-integration-pending",
+        idempotencyKey: `worktree-integration-pending:${ref}:${report.executionCycle}:${createHash("sha256").update(integration.completionNote).digest("hex")}`,
+        userMessage: `ℹ️ [${target.name}] Integration pending\n${integration.completionNote}`,
+        notifyUser: "always",
+        shouldDispatch: stillCurrent,
+      });
+    }
+    if (integration.retryable) return false;
+    // A strategy that did nothing because the evidence check failed (possibly
+    // a transient Git read) has not settled either.
+    const acted = integration.notificationSent || integration.worktreeRemoved || Boolean(integration.completionNote);
+    if (!acted && !(await isTaskOutcomeCurrent(target))) return false;
+    if (!stillCurrent()) return false;
+    return this.updatePersistedSession(ref, { taskOutcomeFollowThroughAt: report.reviewedAt });
+  }
+
   private async onSessionTerminal(session: Session): Promise<void> {
     // The backend that asked is gone; a late button must not "answer" it.
     this.questions.discardAskUserQuestion(session.id);
     if (session.autoMergeParentSessionId) {
+      // The child also needs an honest terminal notice and evidence-review
+      // wake. Its parent association does not confer task-success evidence.
+      await this.lifecycle.handleSessionTerminal(session);
       await this.handleAutoMergeResolverTerminal(session);
       return;
     }
@@ -2181,10 +2336,31 @@ export class SessionManager {
       return;
     }
 
+    if (session.status === "completed" && !(await isTaskOutcomeCurrent(session))) {
+      this.dispatchSessionNotification(parentRoutingTarget, {
+        label: "worktree-resolver-unverified",
+        idempotencyKey: `worktree-resolver-unverified:${parentRef}:${session.id}:${executionCycle(session)}`,
+        userMessage: `⚠️ [${parentRoutingTarget.name}] Conflict resolver execution ended; resolution is unverified. The worktree is preserved. Review the resolver's checks and remaining work before any merge retry.`,
+        notifyUser: "always",
+      });
+      return;
+    }
+
     if (session.status === "completed" && parentSession) {
       this.updatePersistedSession(parentRef, { autoMergeResolverSessionId: undefined });
-      // The parent's terminal cycle already said `⚠️ … Completed — merge conflict`.
+      if (!(await isTaskOutcomeCurrent(parentSession))) {
+        this.dispatchSessionNotification(parentSession, {
+          label: "worktree-parent-revalidation-required",
+          idempotencyKey: `worktree-parent-revalidation-required:${parentRef}:${session.id}:${executionCycle(session)}`,
+          userMessage: `⚠️ [${parentSession.name}] The resolver's outcome was reviewed; the parent task still requires verification against the changed checkout. Nothing was merged automatically.`,
+          notifyUser: "always",
+        });
+        return;
+      }
       const retried = await this.handleWorktreeStrategy(parentSession, { retryAfterConflict: true });
+      // A retry that stopped on a Git read failure reopens the parent report's
+      // follow-through, so resubmitting that report retries it.
+      if (retried.retryable) this.updatePersistedSession(parentRef, { taskOutcomeFollowThroughAt: undefined });
       if (!retried.notificationSent) {
         // The user was told the merge is retried: say how it ended when the
         // retry itself sent nothing (already merged, PR up to date, or skipped
@@ -2197,7 +2373,8 @@ export class SessionManager {
           userMessage: `ℹ️ [${parentSession.name}] ${
             landed?.worktreeMerged || landed?.worktreeLifecycle?.state === "merged"
               ? "Already merged; nothing left to do."
-              : prUrl ? `PR: ${prUrl}` : "Conflict resolved; nothing was merged automatically. The branch is kept."}`,
+              : prUrl ? `PR: ${prUrl}` : "Nothing was merged automatically. The branch is kept; inspect the current integration state."}${
+            retried.completionNote ? `\n${retried.completionNote}` : ""}`,
           notifyUser: "always",
         });
       }

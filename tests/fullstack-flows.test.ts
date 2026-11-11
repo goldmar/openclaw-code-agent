@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewFullStackTask } from "./fullstack-fixture";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -140,6 +141,7 @@ for (const name of BACKEND_NAMES) {
       git(worktree, "add", "feature.txt");
       git(worktree, "commit", "-m", "add feature");
       await s.backend.endTurn("Added feature.txt.");
+      await reviewFullStackTask(s, session);
 
       const merge = await s.waitForButton("Merge");
       const prompt = s.messages().find((message) => message.buttons.some((button) => button.payload === merge.payload))!;
@@ -149,7 +151,7 @@ for (const name of BACKEND_NAMES) {
       // the deterministic summary (from the session output or its commits).
       assert.ok(s.host.llmCalls.some((call) => call.purpose === "openclaw-code-agent.worktree-decision-summary"));
       // N40: the prompt names the session; the summary lines follow the headline.
-      assert.match(prompt.text, /^🔀 \[[\w-]+\] Finished on `agent\/[\w-]+` → `main`: 1 commit, 1 file, \+1\/-0/);
+      assert.match(prompt.text, /^🔀 \[[\w-]+\] Ready for integration on `agent\/[\w-]+` → `main`: 1 commit, 1 file, \+1\/-0/);
       assert.match(prompt.text, /\n- (?:Added|Adds) feature/);
       assert.match(prompt.text, /Discard deletes the branch and its changes for good\.$/);
       await s.click(merge);

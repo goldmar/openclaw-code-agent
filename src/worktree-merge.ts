@@ -1,5 +1,5 @@
 import { assertBranchName, localBranchRef, assertBranchOrRemoteTrackingRef } from "./worktree-ref-validation";
-import { runGit, withRepoLock, type CommandError } from "./git-exec";
+import { runGit, withRepoLock, type CommandError, type WorktreeMutationGuard } from "./git-exec";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, isAbsolute, join } from "path";
@@ -21,6 +21,9 @@ export interface DiffSummary {
 
 export interface MergeResult {
   success: boolean;
+  code?: "task_not_ready";
+  /** The base moved successfully even if a later guarded effect was refused. */
+  localMerged?: boolean;
   error?: string;
   warnings?: string[];
   stashed?: boolean;
@@ -119,12 +122,13 @@ export async function getDiffSummary(
   }
 }
 
-export async function pushBranch(repoDir: string, branch: string, remote: string = "origin"): Promise<boolean> {
+export async function pushBranch(repoDir: string, branch: string, remote: string = "origin", mutationGuard?: WorktreeMutationGuard): Promise<boolean> {
   await assertBranchName(branch);
   await assertBranchName(remote);
   const branchRef = await localBranchRef(branch);
 
   try {
+    if (mutationGuard && (!(await mutationGuard.refresh()) || !mutationGuard.isCurrent())) return false;
     await runGit([...repoHookGitArgs(), "-C", repoDir, "push", remote, `${branchRef}:${branchRef}`], { timeout: 60_000 });
     return true;
   } catch (err) {
@@ -164,8 +168,13 @@ export function mergeBranch(
   base: string,
   strategy: "merge" | "squash" = "merge",
   worktreePath?: string,
+  mutationGuard?: WorktreeMutationGuard,
 ): Promise<MergeResult> {
-  return withRepoLock(repoDir, () => mergeBranchLocked(repoDir, branch, base, strategy, worktreePath));
+  return withRepoLock(repoDir, () => mergeBranchLocked(repoDir, branch, base, strategy, worktreePath, mutationGuard));
+}
+
+class TaskMutationNotReadyError extends Error {
+  constructor() { super("Task evidence or execution ownership changed before integration. Work is preserved; review or resume the task first."); }
 }
 
 async function revParse(repoDir: string, ref: string): Promise<string> {
@@ -204,13 +213,14 @@ async function hasUnmergedPaths(dir: string): Promise<boolean> {
   }
 }
 
-async function addTemporaryWorktree(repoDir: string, branch: string, hooks: string[]): Promise<string> {
+async function addTemporaryWorktree(repoDir: string, branch: string, hooks: string[], mutate: typeof runGit = runGit): Promise<string> {
   const parent = mkdtempSync(join(tmpdir(), "oca-merge-"));
   const path = join(parent, "worktree");
   try {
-    await runGit([...hooks, "-C", repoDir, "worktree", "add", path, branch], { timeout: 30_000 });
+    await mutate([...hooks, "-C", repoDir, "worktree", "add", path, branch], { timeout: 30_000 });
   } catch (err) {
     rmSync(parent, { recursive: true, force: true });
+    if (err instanceof TaskMutationNotReadyError) throw err;
     await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 }).catch(() => "");
     throw err;
   }
@@ -233,14 +243,27 @@ async function mergeBranchLocked(
   base: string,
   strategy: "merge" | "squash",
   worktreePath: string | undefined,
+  mutationGuard?: WorktreeMutationGuard,
 ): Promise<MergeResult> {
   await assertBranchName(branch);
   await assertBranchName(base);
   const branchRef = await localBranchRef(branch);
   const baseRef = await localBranchRef(base);
   const hooks = repoHookGitArgs();
+  let mutationStarted = false;
+  // Git can change the admitted head during a rebase. Refresh once before the
+  // first effect, then retain the same execution ticket through this merge.
+  const mutate: typeof runGit = async (args, options) => {
+    if (mutationGuard) {
+      if (!mutationStarted && !(await mutationGuard.refresh())) throw new TaskMutationNotReadyError();
+      if (!mutationGuard.isCurrent()) throw new TaskMutationNotReadyError();
+    }
+    mutationStarted = true;
+    return runGit(args, options);
+  };
 
   let stashed = false;
+  let localMerged = false;
   let stashRef: string | undefined;
   const warnings: string[] = [];
   const withWarnings = <T extends MergeResult>(result: T): T => (
@@ -270,12 +293,14 @@ async function mergeBranchLocked(
         });
       }
       if (!rebaseDir) {
-        temporaryWorktree = await addTemporaryWorktree(repoDir, branch, hooks);
+        temporaryWorktree = await addTemporaryWorktree(repoDir, branch, hooks, mutate);
         rebaseDir = temporaryWorktree;
       }
       try {
-        await runGit([...hooks, "-C", rebaseDir, "rebase", baseRef], { timeout: 60_000 });
+        await mutate([...hooks, "-C", rebaseDir, "rebase", baseRef], { timeout: 60_000 });
       } catch (rebaseErr) {
+        if (rebaseErr instanceof TaskMutationNotReadyError) throw rebaseErr;
+        if (mutationGuard && !mutationGuard.isCurrent()) throw new TaskMutationNotReadyError();
         // Only unmerged paths are a conflict. A rejecting hook, a held
         // index.lock or a timeout must not start a conflict resolver.
         const conflicted = await hasUnmergedPaths(rebaseDir);
@@ -321,7 +346,7 @@ async function mergeBranchLocked(
     if (!baseCheckout && strategy === "squash" && pluginConfig.worktreeGitHooks !== "skip") {
       // A squash creates a commit: make it in a temporary checkout of base so
       // the repository's commit hooks run as they would in the user's checkout.
-      temporaryBaseCheckout = await addTemporaryWorktree(repoDir, base, hooks);
+      temporaryBaseCheckout = await addTemporaryWorktree(repoDir, base, hooks, mutate);
       baseCheckout = temporaryBaseCheckout;
     }
     try {
@@ -335,22 +360,24 @@ async function mergeBranchLocked(
         } catch (err) {
           return withWarnings({ success: false, error: `Squash merge of ${branch} into ${base} hit conflicts: ${errorMessage(err)}` });
         }
-        newBase = (await runGit(["-C", repoDir, "commit-tree", tree, "-p", oldBase, "-m", `Squash merge ${branch}`], { timeout: 10_000 })).trim();
+        newBase = (await mutate(["-C", repoDir, "commit-tree", tree, "-p", oldBase, "-m", `Squash merge ${branch}`], { timeout: 10_000 })).trim();
       } else {
         newBase = await revParse(repoDir, branchRef);
         if (!(await isAncestor(repoDir, oldBase, newBase))) {
           return withWarnings({ success: false, error: `${base} moved while merging ${branch}; merge again.` });
         }
       }
-      await runGit(["-C", repoDir, "update-ref", "-m", `openclaw-code-agent: merge ${branch}`, baseRef, newBase, oldBase], { timeout: 10_000 });
+      await mutate(["-C", repoDir, "update-ref", "-m", `openclaw-code-agent: merge ${branch}`, baseRef, newBase, oldBase], { timeout: 10_000 });
+      localMerged = true;
       return withWarnings(strategy === "squash" ? { success: true, squash: true } : { success: true, fastForward: true });
     }
 
     if (await checkDirtyTracked(baseCheckout)) {
       let stashOutput: string;
       try {
-        stashOutput = await runGit(["-C", baseCheckout, "stash", "push", "-m", `pre-merge stash before ${branch}`], { timeout: 10_000 });
+        stashOutput = await mutate(["-C", baseCheckout, "stash", "push", "-m", `pre-merge stash before ${branch}`], { timeout: 10_000 });
       } catch (stashErr) {
+        if (stashErr instanceof TaskMutationNotReadyError) throw stashErr;
         return withWarnings({
           success: false,
           dirtyError: true,
@@ -369,12 +396,15 @@ async function mergeBranchLocked(
 
     try {
       if (strategy === "squash") {
-        await runGit([...hooks, "-C", baseCheckout, "merge", "--squash", branchRef], { timeout: 30_000 });
-        await runGit([...hooks, "-C", baseCheckout, "commit", "-m", `Squash merge ${branch}`], { timeout: 60_000 });
+        await mutate([...hooks, "-C", baseCheckout, "merge", "--squash", branchRef], { timeout: 30_000 });
+        await mutate([...hooks, "-C", baseCheckout, "commit", "-m", `Squash merge ${branch}`], { timeout: 60_000 });
       } else {
-        await runGit([...hooks, "-C", baseCheckout, "merge", "--ff-only", branchRef], { timeout: 30_000 });
+        await mutate([...hooks, "-C", baseCheckout, "merge", "--ff-only", branchRef], { timeout: 30_000 });
       }
+      localMerged = true;
     } catch (err) {
+      if (err instanceof TaskMutationNotReadyError) throw err;
+      if (mutationGuard && !mutationGuard.isCurrent()) throw new TaskMutationNotReadyError();
       let hookNote = "";
       if (strategy === "squash") {
         // A commit hook may have changed files before rejecting the commit
@@ -401,8 +431,10 @@ async function mergeBranchLocked(
     let stashPopConflict = false;
     if (stashed) {
       try {
+        if (mutationGuard && !mutationGuard.isCurrent()) throw new TaskMutationNotReadyError();
         await runGit(["-C", baseCheckout, "stash", "pop"], { timeout: 10_000 });
       } catch (err) {
+        if (err instanceof TaskMutationNotReadyError) throw err;
         stashPopConflict = true;
         warnRecovery("Failed to pop auto-stash after merge", err);
       }
@@ -419,8 +451,12 @@ async function mergeBranchLocked(
       if (temporaryBaseCheckout) await removeTemporaryWorktree(repoDir, temporaryBaseCheckout);
     }
   } catch (err) {
+    if (localMerged) warnings.push("Local merge completed before remaining effects stopped; cleanup and further integration require review.");
+    if (stashed && err instanceof TaskMutationNotReadyError) warnings.push(`Pre-merge stash ${stashRef ?? "(reference unavailable)"} was preserved; inspect it before restoring.`);
     return withWarnings({
-      success: false,
+      success: localMerged,
+      ...(localMerged ? { localMerged: true } : {}),
+      ...(err instanceof TaskMutationNotReadyError ? { code: "task_not_ready" as const } : {}),
       error: errorMessage(err),
       stashed: stashed || undefined,
       stashRef,

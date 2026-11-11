@@ -6,13 +6,11 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setPluginConfig } from "../src/config";
-import { createCallbackHandler } from "../src/callback-handler";
-import type { SessionStore } from "../src/session-store";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
 import { BACKEND_NAMES, waitUntil, type BackendName } from "./harness-backends";
+import { reviewedTaskInput } from "./task-outcome-fixture";
 import {
   buttonNamed,
-  buildCallbackContext,
   clickButton,
   startInteractionFixture,
   TEST_ROUTE,
@@ -64,6 +62,8 @@ async function finishSessionWithChange(
   git(worktree, "commit", "-m", "add feature");
   await created.backend.endTurn("Added feature.txt.");
   await waitUntil(() => created.session.status === "completed", "session completed");
+  const report = await created.sm.reportTaskOutcome(created.session.id, reviewedTaskInput(created.session), { source: "orchestrator" });
+  assert.doesNotMatch(report, /^Error:/);
   return created;
 }
 
@@ -93,20 +93,21 @@ for (const name of BACKEND_NAMES) {
       const outcomes = captureOutcomeLines(f);
       const buttons = await decisionButtons("worktree-merge-ask");
       assert.deepEqual(buttons.map((button) => button.label), ["Merge", "Later", "Discard"]);
-      // The prompt is the completion-time message: no ✅ yet.
-      assert.equal(userCheckmarks(f).length, 0);
+      // Task success was verified before integration became a decision.
+      assert.equal(userCheckmarks(f).length, 1);
 
       const later = await clickButton(buttonNamed(buttons, "Later"));
       assert.match(later.replies.join("\n"), /Reminder snoozed 24h/);
-      assert.equal(userCheckmarks(f).length + outcomes.length, 0, "Later keeps the decision pending");
+      assert.equal(userCheckmarks(f).length, 1, "Later keeps the verified task's decision pending");
+      assert.equal(outcomes.length, 0);
 
       await clickButton(buttonNamed(buttons, "Merge"));
       await waitUntil(() => existsSync(join(repo, "feature.txt")), "branch merged into main");
       assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "merged");
-      // The merge that resolves the pending decision carries the one completion marker.
+      // Integration is a separate milestone and cannot manufacture completion.
       assert.equal(outcomes.length, 1);
-      assert.match(outcomes[0], new RegExp(`^✅ \\[${name}-flow\\] Completed — Merged: `));
-      assert.equal(userCheckmarks(f).length, 0);
+      assert.match(outcomes[0], new RegExp(`^ℹ️ \\[${name}-flow\\] Merged: `));
+      assert.equal(userCheckmarks(f).length, 1);
 
       for (const label of ["Merge", "Discard"]) {
         const stale = await clickButton(buttonNamed(buttons, label));
@@ -123,8 +124,8 @@ for (const name of BACKEND_NAMES) {
       const discard = await clickButton(buttonNamed(buttons, "Discard"));
       assert.deepEqual(discard.replies, []);
       assert.equal(f.sm.getPersistedSession(f.session.id)?.worktreeLifecycle?.state, "dismissed");
-      // A discarded session ends without a ✅.
-      assert.equal(userCheckmarks(f).length, 0);
+      // Discard changes integration disposition, not the prior task verification.
+      assert.equal(userCheckmarks(f).length, 1);
 
       const stale = await clickButton(buttonNamed(buttons, "Merge"));
       assert.match(stale.replies.join("\n"), /already resolved \(discarded\)/);
@@ -144,7 +145,7 @@ for (const name of BACKEND_NAMES) {
       assert.equal(f.notifications.some((entry) => /branch `unknown`/.test(entry.request.userMessage ?? "")), false);
     });
 
-    it("delivers the user's Commit changes authorization only after a valid selection and protects its worktree", async () => {
+    it("preserves unfinished dirty work without integration or discard decisions", async () => {
       const repo = createRepo();
       const created = await startInteractionFixture(name, {
         config: { workdir: repo, worktreeStrategy: "ask", multiTurn: false },
@@ -153,52 +154,22 @@ for (const name of BACKEND_NAMES) {
       fixture = created;
       const worktree = created.session.worktreePath!;
       writeFileSync(join(worktree, "draft.txt"), "uncommitted\n");
-      await created.backend.endTurn("Wrote draft.txt.");
-      const buttons = await decisionButtons("worktree-dirty-uncommitted");
-      const commitButton = buttonNamed(buttons, "Commit changes");
-      // The capture-only notification fixture bypasses the real delivery's route binding.
-      // Use its production store operation to represent this button arriving in TEST_ROUTE.
-      const { store } = created.sm as unknown as { store: Pick<SessionStore, "actionTokenStore" | "whenPersisted"> };
-      store.actionTokenStore.bindActionTokensToRoute([commitButton.callbackData], TEST_ROUTE);
-      await store.whenPersisted();
-      assert.deepEqual(created.sm.getActionToken(commitButton.callbackData)?.route, TEST_ROUTE);
-      const callbackHandler = createCallbackHandler();
-      for (const rejection of ["unauthorized", "wrong-route"] as const) {
-        const replies: string[] = [];
-        const ctx = buildCallbackContext("telegram", commitButton.callbackData, {
-          ...(rejection === "wrong-route" ? { target: "-1009876543210" } : {}),
-          onReply: (text) => { replies.push(text); },
-          onClear: () => {},
-        });
-        if (rejection === "unauthorized") ctx.auth = { isAuthorizedSender: false };
-        await callbackHandler.handler(ctx as never);
-        assert.match(replies.join("\n"), rejection === "unauthorized" ? /Unauthorized/ : /belongs to another chat/);
-        assert.equal(created.backend.turns.length, 1, "a refused callback starts no authorized commit turn");
-        assert.deepEqual(created.backend.steers, [], "a refused callback sends no instruction to the backend");
-        assert.equal(existsSync(join(worktree, "draft.txt")), true);
-      }
-      const [commit, discard] = await Promise.all([
-        clickButton(commitButton),
-        clickButton(buttonNamed(buttons, "Discard")),
-      ]);
-      assert.doesNotMatch(commit.replies.join("\n"), /still being processed/);
-      // Refused either by the lock (a reply) or by the running session (the re-offered decision).
-      assert.match(
-        [...discard.replies, ...created.notifications.map((entry) => entry.request.userMessage ?? "")].join("\n"),
-        /still being processed|is still running in this worktree/,
-      );
-      assert.equal(existsSync(join(worktree, "draft.txt")), true, "the worktree is kept for the resumed session");
-      await created.backend.waitForTurns(2);
-      assert.equal(
-        created.backend.turns[1]?.text,
-        "The user selected Commit changes and explicitly authorized committing this task's existing changes. Commit the task's real changes with a clear message, and remove temporary files you created.",
-        "the actual resumed backend turn receives the user's scoped commit authorization",
-      );
-      assert.doesNotMatch(created.backend.turns[0]?.text ?? "", /The user selected Commit changes/);
-      const duplicate = await clickButton(commitButton);
-      assert.match(duplicate.replies.join("\n"), /expired or was already used/);
-      assert.equal(created.backend.turns.length, 2, "a consumed Commit changes selection starts no extra turn");
-      assert.deepEqual(created.backend.steers, [], "a consumed selection sends no extra instruction");
+      await created.backend.endTurn("Wrote draft.txt; acceptance remains incomplete.");
+      const notice = await created.waitForNotification("task-unverified");
+      assert.match(notice.request.userMessage ?? "", /completion unverified/);
+      assert.deepEqual(userCheckmarks(created), []);
+      assert.deepEqual(created.buttons("worktree-dirty-uncommitted"), []);
+      assert.deepEqual(created.buttons("worktree-merge-ask"), []);
+      const report = reviewedTaskInput(created.session);
+      report.task = "incomplete";
+      report.remainingWork = ["Finish and verify the draft"];
+      const result = await created.sm.reportTaskOutcome(created.session.id, report, { source: "orchestrator" });
+      assert.doesNotMatch(result, /^Error:/);
+      assert.equal(existsSync(join(worktree, "draft.txt")), true);
+      assert.equal(created.backend.turns.length, 1, "reporting an unfinished task starts no new execution");
+      assert.deepEqual(created.backend.steers, []);
+      assert.deepEqual(userCheckmarks(created), []);
+      assert.equal(created.notifications.some((entry) => entry.request.buttons?.flat().some((button) => /Merge|PR|Discard|Later/.test(button.label))), false);
     });
 
     it("runs only one of two decisions clicked at the same time", async () => {

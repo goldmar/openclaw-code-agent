@@ -26,8 +26,14 @@ import type {
   SessionRoute,
 } from "./types";
 import { createLogger } from "./logger";
+import { captureTaskOutcomeRepositories, executionCycle, hasVerifiedTaskOutcome, type TaskOutcomeInput } from "./session-task-outcome";
 
 const log = createLogger("goal-controller");
+type GoalVerifierProof = GoalVerifierRunResult & {
+  repositories?: TaskOutcomeInput["repositories"];
+  sessionId?: string;
+  executionCycle?: number;
+};
 
 const DEFAULT_MAX_ITERATIONS = 8;
 /** Upper bound for `max_iterations` (restarts after a gateway restart or idle timeout count too). */
@@ -909,7 +915,7 @@ export class GoalController {
     }
   }
 
-  private async runVerifiers(task: GoalTaskState, generation = this.generation): Promise<GoalVerifierRunResult | undefined> {
+  private async runVerifiers(task: GoalTaskState, generation = this.generation, owner?: Session): Promise<GoalVerifierProof | undefined> {
     { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
       if (!authorization || !this.isCurrent(generation)) return undefined; }
     const verifierCommands = normalizeVerifierCommands(task.verifierCommands);
@@ -932,6 +938,16 @@ export class GoalController {
       return result;
     }
 
+    const proofOwner = owner ?? (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined);
+    const sessionId = proofOwner?.id;
+    const cycle = proofOwner ? executionCycle(proofOwner) : undefined;
+    let repositories: TaskOutcomeInput["repositories"];
+    try {
+      repositories = await captureTaskOutcomeRepositories(task.workdir);
+    } catch (err: unknown) {
+      this.markTaskFailed(task, `Cannot bind verification to the current checkout: ${errorMessage(err)}`);
+      return undefined;
+    }
     const steps: GoalVerifierStepResult[] = [];
     for (const command of verifierCommands) {
       { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
@@ -943,9 +959,12 @@ export class GoalController {
     }
 
     const status = steps.every((step) => step.ok) ? "pass" : "fail";
-    const result: GoalVerifierRunResult = {
+    const result: GoalVerifierProof = {
       status,
       steps,
+      repositories,
+      sessionId,
+      executionCycle: cycle,
       summary: "",
       fingerprint: "",
     };
@@ -1151,9 +1170,38 @@ export class GoalController {
     this.markTaskFailed(task, `Goal task was waiting for user input and cannot continue autonomously: ${reason}`);
   }
 
-  private async markTaskSucceeded(task: GoalTaskState, summary: string): Promise<void> {
+  private async markTaskSucceeded(task: GoalTaskState, summary: string, verifier?: GoalVerifierProof): Promise<void> {
     { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
       if (!authorization) return; }
+    const session = task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined;
+    const proofIsCurrent = () => {
+      const current = task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined;
+      return Boolean(current && verifier?.sessionId === current.id
+        && verifier.executionCycle === executionCycle(current) && current.status === "completed");
+    };
+    if (verifier?.sessionId && !proofIsCurrent()) return;
+    if (!session || verifier?.status !== "pass" || !verifier.steps.length || !verifier.repositories
+      || !verifier.sessionId || !Number.isSafeInteger(verifier.executionCycle) || verifier.executionCycle <= 0) {
+      this.markTaskFailed(task, "Task success requires current structured verifier evidence and its execution session.");
+      return;
+    }
+    const accepted = await this.sessionManager.reportTaskOutcome(session.id, {
+      executionCycle: executionCycle(session), task: "completed", repositories: verifier.repositories,
+      checks: verifier.steps.map((step) => ({
+        name: step.label, scope: task.goal, required: true, status: step.ok ? "passed" : "failed",
+        stage: "verifier", evidence: `Goal ${task.id}, iteration ${task.iteration}: ${truncate(step.command, 4000)}\n${truncate(step.output, 2000)}`,
+        source: "oca_verifier", exitCode: step.exitCode,
+      })),
+      blockers: [], remainingWork: [], summary,
+    }, { source: "goal_controller" });
+    if (!proofIsCurrent()) return;
+    if (!hasVerifiedTaskOutcome(session) || session.taskOutcome?.reviewer.source !== "goal_controller") {
+      this.markTaskFailed(task, `Task verification could not establish completion: ${accepted}`);
+      return;
+    }
+    { let authorization; do authorization = await this.checkTaskAuthorized(task); while (authorization && !authorization.isCurrent());
+      if (!authorization) return; }
+    if (!proofIsCurrent()) return;
     task.status = "succeeded";
     task.lastVerifierSummary = summary;
     task.updatedAt = Date.now();
@@ -1402,7 +1450,7 @@ export class GoalController {
 
         // Retain proof identity across the final await, through success/repair consumption.
         const proofRevision = JSON.stringify(task.goalVerificationBinding);
-        const verifier = await this.runVerifiers(task, generation);
+        const verifier = await this.runVerifiers(task, generation, session);
         { let authorization; do authorization = await this.checkVerifierProofAuthorized(task, proofRevision); while (authorization && !authorization.isCurrent());
           if (!authorization || !this.isCurrent(generation) || !verifier) return; }
         task.lastVerifierSummary = verifier.summary;
@@ -1412,6 +1460,7 @@ export class GoalController {
           await this.markTaskSucceeded(
             task,
             [`Completion promise "${completionPromise}" detected.`, verifier.summary].join("\n"),
+            verifier,
           );
           return;
         }
@@ -1486,14 +1535,14 @@ export class GoalController {
     }
 
     const proofRevision = JSON.stringify(task.goalVerificationBinding);
-    const verifier = await this.runVerifiers(task, generation);
+    const verifier = await this.runVerifiers(task, generation, session);
     { let authorization; do authorization = await this.checkVerifierProofAuthorized(task, proofRevision); while (authorization && !authorization.isCurrent());
       if (!authorization || !this.isCurrent(generation) || !verifier) return; }
     task.lastVerifierSummary = verifier.summary;
     task.updatedAt = Date.now();
 
     if (verifier.status === "pass") {
-      await this.markTaskSucceeded(task, verifier.summary);
+      await this.markTaskSucceeded(task, verifier.summary, verifier);
       return;
     }
 

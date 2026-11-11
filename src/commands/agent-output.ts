@@ -1,5 +1,5 @@
 import { sessionManager } from "../singletons";
-import { getSessionOutputText } from "../application/session-view";
+import { getFreshSessionOutputText } from "../application/session-view";
 import { SERVICE_NOT_RUNNING, tokenizeCommandArgs } from "./args";
 
 const DEFAULT_OUTPUT_LINES = 50;
@@ -10,7 +10,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: { args?: string }) => { text: string };
+    handler: (ctx: { args?: string }) => Promise<{ text: string }>;
   }): void;
 }
 
@@ -22,7 +22,7 @@ export function registerAgentOutputCommand(api: CommandApi): void {
       "Show recent output from a coding agent session. Usage: /agent_output <id-or-name> [--full] [--lines N]",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: { args?: string }) => {
+    handler: async (ctx: { args?: string }) => {
       if (!sessionManager) {
         return { text: SERVICE_NOT_RUNNING };
       }
@@ -54,7 +54,7 @@ export function registerAgentOutputCommand(api: CommandApi): void {
       }
 
       // Tool results keep `Error:`; the command answers in user terms.
-      return { text: getSessionOutputText(sessionManager, ref, { full, lines }).replace(/^Error:/u, "❌") };
+      return { text: (await getFreshSessionOutputText(sessionManager, ref, { full, lines })).replace(/^Error:/u, "❌") };
     },
   });
 }

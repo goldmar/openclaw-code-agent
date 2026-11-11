@@ -13,6 +13,7 @@ import { makeAgentOutputTool } from "./src/tools/agent-output";
 import { makeAgentRespondTool } from "./src/tools/agent-respond";
 import { makeAgentSessionActionTool } from "./src/tools/agent-session-action";
 import { makeAgentEscalateTool } from "./src/tools/agent-escalate";
+import { makeAgentReportOutcomeTool } from "./src/tools/agent-report-outcome";
 import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
 import { makeAgentStatsTool } from "./src/tools/agent-stats";
 import { makeAgentRepoPolicyTool } from "./src/tools/agent-repo-policy";
@@ -403,6 +404,7 @@ export function register(api: OpenClawPluginApi): void {
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSessionActionTool(ctx), { optional: false, name: "agent_session_action" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentEscalateTool(ctx), { optional: false, name: "agent_escalate" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentReportOutcomeTool(ctx), { optional: false, name: "agent_report_outcome" });
   // Opt-in: external workflows that post "Start plan" offers enable it with `planOfferTool: true`.
   if ((api.pluginConfig as { planOfferTool?: unknown } | undefined)?.planOfferTool === true) {
     registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });

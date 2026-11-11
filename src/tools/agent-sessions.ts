@@ -3,7 +3,7 @@ import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { resolveAgentChannel } from "../config";
 import type { OpenClawPluginToolContext } from "../types";
-import { getSessionsListingText } from "../application/session-view";
+import { getFreshSessionsListingText } from "../application/session-view";
 
 type SessionsFilter = "all" | "running" | "waiting" | "completed" | "failed" | "killed";
 
@@ -60,7 +60,7 @@ export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
       const filter = parseStatus(input);
       const originChannel = ctx?.workspaceDir ? resolveAgentChannel(ctx.workspaceDir) : undefined;
       const full = input.full === true;
-      const text = getSessionsListingText(sessionManager, filter, originChannel, { full });
+      const text = await getFreshSessionsListingText(sessionManager, filter, originChannel, { full });
       return { content: [{ type: "text", text }] };
     },
   };

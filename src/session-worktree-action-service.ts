@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { hasVerifiedTaskOutcome } from "./session-task-outcome";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
 import { existsSync } from "node:fs";
@@ -22,8 +23,8 @@ const RESOLVED_WORKTREE_STATES = new Set([
 ]);
 
 export type PlannedWorktreeAction =
-  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string } }
-  /** `problem` completes `⚠️ [name] Completed — `; `detail` lines follow it. */
+  | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string; retryable?: boolean } }
+  /** Integration problem and supporting details; never establishes task success. */
   | { kind: "notify"; label: string; problem: string; detail: string[] }
   | {
       kind: "dirty-uncommitted";
@@ -153,6 +154,7 @@ export class SessionWorktreeActionService {
   async plan(session: Session, options: { sourceBranch?: string } = {}): Promise<PlannedWorktreeAction> {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     const skip: PlannedWorktreeAction = { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+    if (!hasVerifiedTaskOutcome(session)) return skip;
     const recordedState =
       RESOLVED_WORKTREE_STATES.has(session.worktreeState)
         ? session.worktreeState
@@ -279,7 +281,15 @@ export class SessionWorktreeActionService {
       : undefined) ?? await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
-      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+      return {
+        kind: "skip",
+        result: {
+          notificationSent: false,
+          worktreeRemoved: false,
+          retryable: true,
+          completionNote: `⚠️ The change summary for \`${branchName}\` against \`${baseBranch}\` could not be read (a Git read failure or a missing base), so no integration action ran. The worktree is kept; the orchestrator can retry by resubmitting the same outcome report once the repository is readable.`,
+        },
+      };
     }
 
     const livePolicy = session.repoIntegrationPolicy ? undefined : await this.deps.resolveRepoPolicy?.(repoDir);

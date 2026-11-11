@@ -312,27 +312,29 @@ describe("one message per chat command (Telegram topic)", () => {
     assert.deepEqual(visible(s, own, beforeOwn).notices.map((message) => message.text), []);
   });
 
-  // A turn that ends without a question completes the session
-  // (`SessionTurnRuntime.finishSuccessfulTurn`): there is no "idle after a
-  // turn" state and no notice for one.
+  // Harness termination ends execution. Without reviewed task evidence the
+  // user gets one honest unverified notice and no integration decision.
   for (const backend of ["codex", "claude-code"] as const) {
-    it(`${backend}: a turn that ends without a question completes the session with exactly one ✅`, async () => {
+    it(`${backend}: a turn ending without a question reports unverified completion once`, async () => {
       const s = stack = await startFullStack({ backend, pluginConfig: PLUGIN_CONFIG });
       const session = await s.launch({ name: "turn-done" });
       const before = s.host.durableSends.length;
       await s.backend.endTurn("Turn finished.");
-      await s.waitForMessage(/^✅ \[turn-done\] Completed/, before);
+      await s.waitForMessage(/^⚠️ \[turn-done\] Execution ended — task completion unverified/, before);
       await settleCompleted(s, "turn-done");
 
       assert.equal(session.status, "completed");
       const texts = s.messages().filter((message) => message.index >= before).map((message) => message.text);
-      assert.equal(texts.filter((text) => /^✅ \[turn-done\]/.test(text)).length, 1, texts.join(" | "));
-      assert.deepEqual(texts.filter((text) => !/^✅ \[turn-done\]/.test(text)), [], "nothing else is sent for the turn");
+      assert.equal(texts.length, 1, texts.join(" | "));
+      assert.match(texts[0]!, /^⚠️ \[turn-done\] Execution ended — task completion unverified/);
+      assert.doesNotMatch(texts.join("\n"), /✅|Ready for integration/);
+      const notices = s.messages().filter((message) => message.index >= before);
+      assert.equal(notices.flatMap((notice) => notice.buttons).some((button) => /Merge|PR|Discard/.test(button.label)), false);
 
-      // Closing it again as completed changes nothing and sends no second ✅.
+      // Closing execution again cannot manufacture task-success evidence.
       assert.equal(await s.runTool("agent_kill", { ocaSessionId: session.id, reason: "completed" }), "ℹ️ [turn-done] Already completed; nothing to stop.");
       await new Promise((resolve) => setTimeout(resolve, 200));
-      assert.equal(s.messages().filter((message) => /^✅ \[turn-done\]/.test(message.text)).length, 1);
+      assert.equal(s.messages().filter((message) => /^✅ \[turn-done\]/.test(message.text)).length, 0);
     });
   }
 });

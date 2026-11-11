@@ -60,13 +60,13 @@ The user can approve, request a revision, or reject the plan from the originatin
 
 ### Worktree Decisions
 
-In `ask`, the user controls branch follow-through after the agent finishes, with **Merge** and **Open PR** on the first row and **Later** and **Discard** on the second. Once a PR exists, **Open PR** becomes **Sync PR** and a **View PR** link button opens it.
+In `ask`, the user controls branch follow-through after current task completion and required verification are evidenced, with **Merge** and **Open PR** on the first row and **Later** and **Discard** on the second. Once a PR exists, **Open PR** becomes **Sync PR** and a **View PR** link button opens it.
 
 ![Ask-mode worktree decisions](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-ask.png)
 
 ### Delegated Worktrees
 
-In `delegate`, the orchestrator reviews the completed worktree and attempts the merge follow-through when the change is clean. The agent edits files in the managed worktree so the main checkout is not touched during implementation; after review, delegated follow-through merges the finished branch back to the base branch unless a conflict, error, or explicit policy requires escalation. Before a PR, the orchestrator can ask Codex for an inline review of the branch diff with `agent_session_action`; a finished session is resumed with `agent_respond` first, because session actions need a running session.
+In `delegate`, the orchestrator reviews the task result and check receipts, records a structured outcome, and attempts merge follow-through only when current completion and verification evidence pass. The agent edits files in the managed worktree so the main checkout is not touched during implementation; after review, delegated follow-through merges the finished branch back to the base branch unless a conflict, error, or explicit policy requires escalation. Before a PR, the orchestrator can ask Codex for an inline review of the branch diff with `agent_session_action`; a finished session is resumed with `agent_respond` first, because session actions need a running session.
 
 The orchestrator merges with a one- or two-line `summary`, which appears under the merge line, so the user gets one message for the outcome. Without a summary (for example after the user pressed **Merge**), the orchestrator is asked for a short follow-up in the original chat or thread.
 
@@ -226,7 +226,7 @@ Session notification headings include a concise `| reasoning: medium` field when
 
 ### Worktree Follow-Through
 
-New sessions use delegated worktree follow-through unless configured otherwise. That keeps changes in an isolated branch and wakes the orchestrator with diff context. In `ask` mode, user-facing buttons depend on state:
+New sessions use delegated worktree follow-through unless configured otherwise. That keeps changes in an isolated branch. After the outcome evidence gate passes, the orchestrator receives diff context. In `ask` mode, user-facing buttons depend on state:
 
 | State | First row | Second row |
 | --- | --- | --- |
@@ -240,7 +240,9 @@ New worktrees honor the same repository conventions as OpenClaw managed worktree
 
 Merge and PR follow-through is governed by a per-repository integration policy (`pr-required`, `pr-allowed`, `never-pr`, or `manual`). `agent_repo_policy` and `/agent_policy` show, set, and reset it, also for a repository whose directory was deleted.
 
-After a completion, merge or PR the plugin posts the status line first, then asks the orchestrator for one short factual summary in the session's original chat or thread. A merge or PR the orchestrator made with `summary` already carries it, so no second message follows.
+Execution ending and task completion are separate. Ordinary sessions first report `Execution ended — task completion unverified`; the orchestrator reviews output, repository heads, and required check receipts, then records `agent_report_outcome`. Only current completed work with passed verification earns `✅` and enables automatic worktree decisions or reminders. Blocked or incomplete work keeps its changes for resumption and reports what remains. See [Task outcome evidence](docs/REFERENCE.md#task-outcome-evidence).
+
+The report's summary gives the user the verified result or remaining blockers without a redundant wake. A merge or PR is a separate integration outcome; when it has no supplied `summary`, the plugin asks for one short factual follow-up in the original chat or thread.
 
 ### Goal Tasks
 
@@ -283,9 +285,10 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_respond` | Reply, steer, answer a question, forward the user's plan decision, or approve a delegated plan |
 | `agent_session_action` | Compact context or run an inline review in a running Codex session |
 | `agent_escalate` | Hand a delegated plan (`kind='plan'`) or worktree decision (`kind='worktree'`) to the user with buttons |
-| `agent_output` | Read buffered session output |
+| `agent_output` | Read buffered session output and current outcome evidence |
+| `agent_report_outcome` | Record reviewed task, verification, blocker, and repository evidence for the current execution |
 | `agent_sessions` | List active and recent sessions; `status="waiting"` lists what needs a decision or answer |
-| `agent_kill` | Stop or mark a session completed |
+| `agent_kill` | Stop or close execution; task completion still requires evidence |
 | `agent_stats` | Show aggregate usage, cost, and Codex usage-limit windows |
 | `agent_repo_policy` | Show, set, reset, or clean up the per-repository merge and PR policy |
 | `agent_merge` | Merge a worktree branch back to base, optionally with a `summary` for the user |

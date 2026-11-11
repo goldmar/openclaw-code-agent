@@ -1,4 +1,5 @@
 import { buildDelegateReminderWakeMessage } from "./session-notification-builder";
+import { hasVerifiedTaskOutcome, isTaskOutcomeCurrent } from "./session-task-outcome";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { ManagedWorktreeLifecycleState, PersistedSessionInfo } from "./types";
@@ -115,7 +116,7 @@ export class SessionReminderService {
     const nextReminderAt = await this.getNextReminderAt(session);
     if (nextReminderAt == null || nextReminderAt > now) return false;
     // The resolution checks above await git; drop the send if the schedule moved meanwhile.
-    if (!stillCurrent()) return false;
+    if (!stillCurrent() || !(await isTaskOutcomeCurrent(session)) || !stillCurrent()) return false;
 
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
@@ -188,12 +189,14 @@ export class SessionReminderService {
       route: session.route,
     });
 
+    if (!stillCurrent() || !(await isTaskOutcomeCurrent(session)) || !stillCurrent()) return false;
+    const shouldDispatch = () => stillCurrent() && hasVerifiedTaskOutcome(session);
     if (session.worktreeStrategy === "delegate") {
       return this.awaitReminderDelivery((settle) => this.dispatchNotification(routingProxy, {
         label: `worktree-stale-reminder-${session.name}`,
         wakeMessage: buildDelegateReminderWakeMessage(session, pendingHours),
         notifyUser: "never",
-        shouldDispatch: stillCurrent,
+        shouldDispatch,
         idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${session.pendingWorktreeDecisionSince}:${sent + 1}:${deadline}`,
         hooks: {
           onWakeSucceeded: () => { onAttempt(); settle(true); },
@@ -211,13 +214,13 @@ export class SessionReminderService {
       session,
     );
     // Building policy-aware buttons awaits git; a snooze may have landed meanwhile.
-    if (!stillCurrent()) return false;
+    if (!stillCurrent() || !(await isTaskOutcomeCurrent(session)) || !stillCurrent()) return false;
     return this.awaitReminderDelivery((settle) => this.dispatchNotification(routingProxy, {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
       requireDirectUserNotification: true,
-      shouldDispatch: stillCurrent,
+      shouldDispatch,
       // A Later press can move the deadline while the previous send is in flight.
       // The next scheduled reminder must not reuse that old send's dedupe key.
       idempotencyKey: `worktree-stale-reminder:${session.sessionId ?? session.name}:${session.pendingWorktreeDecisionSince}:${sent + 1}:${deadline}`,
@@ -282,6 +285,9 @@ export class SessionReminderService {
     pendingSince?: number,
   ): Promise<WorktreeDecisionReminderStatus> {
     if (this.hasResolvedWorktreeDecisionMarker(session)) return "resolved";
+    if (!hasVerifiedTaskOutcome(session) || !(await isTaskOutcomeCurrent(session))) {
+      return session.worktreeDigestKey ? "resolved" : "inactive";
+    }
     if (!session.pendingWorktreeDecisionSince) return "inactive";
     const parsedPendingSince = pendingSince ?? new Date(session.pendingWorktreeDecisionSince).getTime();
     if (!Number.isFinite(parsedPendingSince)) return "inactive";
@@ -306,6 +312,9 @@ export class SessionReminderService {
   }
 
   private async isResolvedWorktreeDecision(session: PersistedSessionInfo): Promise<boolean> {
+    // Retire only scheduling metadata; unknown/obsolete task evidence never
+    // grants branch cleanup or an integration decision.
+    if (!hasVerifiedTaskOutcome(session) || !(await isTaskOutcomeCurrent(session))) return true;
     if (this.hasResolvedWorktreeDecisionMarker(session)) return true;
 
     const resolved = await resolveWorktreeLifecycle(session, {

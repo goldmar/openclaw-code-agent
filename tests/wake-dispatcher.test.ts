@@ -323,7 +323,7 @@ describe("WakeDispatcher", () => {
     { name: "unapproved cron with an external route", cron: true, approved: false, external: true, summary: false },
     { name: "ordinary interactive completion", cron: false, approved: false, external: true, summary: true },
   ]) {
-    it(`preserves completion delivery and deduplication for ${scenario.name}`, async () => {
+    it(`preserves unverified execution delivery and deduplication for ${scenario.name}`, async () => {
       const dispatcher = createDispatcher();
       const persisted: Partial<PersistedSessionInfo> = {};
       const makeNotifications = () => new SessionNotificationService(dispatcher, (_ref, patch) => {
@@ -379,6 +379,8 @@ describe("WakeDispatcher", () => {
         if (scenario.external) lifecycle.emitCompleted(session); // Retry while delivery is in flight.
         await waitFor(() => statusSettled === 1, "completion status delivery settled");
         if (scenario.summary) await waitFor(() => summaryDelivered === 1, "completion summary delivered");
+        assert.equal(requests[0]?.label, "task-unverified");
+        assert.doesNotMatch(requests[0]?.userMessage ?? "", /✅/);
         assert.equal(requests[0]?.completionSummary?.required, scenario.summary);
         assert.equal(requests[0]?.completionWakeSummaryRequired, scenario.summary);
         const sends = calls.filter((call) => call.kind === "durable-send");
@@ -389,7 +391,8 @@ describe("WakeDispatcher", () => {
           assert.equal(status.accountId, "bot");
           assert.equal(status.to, "-1001234567890");
           assert.equal(status.threadId, "11239");
-          assert.match(status.text, /Completed/);
+          assert.match(status.text, /Execution ended — task completion unverified/);
+          assert.doesNotMatch(status.text, /✅/);
         }
         const wakes = calls.filter((call) => call.kind === "chat-send");
         assert.equal(wakes.length, scenario.summary ? 1 : 0);
@@ -397,6 +400,8 @@ describe("WakeDispatcher", () => {
           assert.equal(wakes[0]!.params.sessionKey, originSessionKey);
           const message = String(wakes[0]!.params.message);
           assert.match(message, /Tell the user in one or two sentences what was done/);
+          assert.match(message, /agent_report_outcome/);
+          assert.match(message, /Do not offer merge, PR, later or discard/);
           assert.ok(message.includes(formatOriginRouteWakeBlock(session)));
           assert.ok(persisted.completionWakeSucceededAt);
         } else {

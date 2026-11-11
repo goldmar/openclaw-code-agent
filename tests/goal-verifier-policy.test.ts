@@ -1,8 +1,10 @@
 import "./test-env";
 import { bindGoalTask } from "./goal-policy-fixtures";
+import { createTaskOutcomeReport, type TaskOutcomeInput, type TaskOutcomeReviewer } from "../src/session-task-outcome";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { processIdentity } from "../scripts/e2e/oca-goal-host-acceptance.mjs";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +31,8 @@ const specs = (commands: string[]): GoalVerifierSpec[] => commands.map((command,
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "goal-policy-"));
   dirs.push(dir);
+  execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("git", ["-c", "user.name=Fixture User", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-qm", "fixture base"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
   const store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: join(dir, "goals.json") });
   let launches = 0;
   let confirmations = 0;
@@ -39,13 +43,25 @@ function fixture() {
     sendGoalVerifierConfirmation: () => { confirmations += 1; },
     setGoalTaskAuthorizer: (callback: (id: string, workdir?: string) => Promise<GoalAuthorizationTicket>, isActive?: (id: string) => boolean) => { authorizer = callback; activeCheck = isActive; },
     kill: () => {},
+    reportTaskOutcome: async (ref: string, input: TaskOutcomeInput, reviewer: TaskOutcomeReviewer) => {
+      const selected = (manager as unknown as Pick<SessionManager, "resolve">).resolve(ref);
+      if (!selected) return "Error: Missing goal session.";
+      selected.taskOutcome = createTaskOutcomeReport(input, reviewer);
+      return "Task outcome recorded: completed; verification passed.";
+    },
     resolve: (): undefined => undefined,
     resolveBackendConversationId: (ref: string) => ref,
-    launchAndAwaitRunning: async () => { launches += 1; return Object.assign(new EventEmitter(), createStubSession({ id: "session", name: "session", status: "running" })); },
+    launchAndAwaitRunning: async () => { launches += 1; return Object.assign(new EventEmitter(), createStubSession({ startedAt: 1, id: "session", name: "session", status: "running" })); },
   };
   const controller = new GoalController(manager as any);
   (controller as any).store = store;
   return { controller, store, dir, manager, counters: () => ({ launches, confirmations }), authorize: (id: string, workdir?: string) => authorizer!(id, workdir), isActive: (id: string) => activeCheck!(id) };
+}
+function completedGoalSession(f: ReturnType<typeof fixture>, current: GoalTaskState, overrides: Record<string, unknown> = {}) {
+  const session = createStubSession({ startedAt: 1, id: current.sessionId ?? "session", status: "completed", ...overrides });
+  current.sessionId = session.id;
+  (f.manager as any).resolve = () => session;
+  return session;
 }
 async function task(commands: string[], overrides: Partial<GoalTaskState> = {}): Promise<GoalTaskState> {
   return bindGoalTask({ id: "goal", name: "goal", goal: "Ship", workdir: dirs.at(-1) ?? "/tmp", status: "running", createdAt: 1,
@@ -206,7 +222,7 @@ describe("required suite execution and recovery", () => {
     setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
     const current = await task(commands, { workdir: f.dir });
     f.store.upsert(current);
-    await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed" }));
+    await (f.controller as any).handleTerminalSession(current, createStubSession({ startedAt: 1, status: "completed" }));
     assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "AAB");
     assert.equal(current.status, "failed");
     assert.match(current.lastVerifierSummary ?? current.failureReason ?? "", /FAIL check-3/);
@@ -218,7 +234,7 @@ describe("required suite execution and recovery", () => {
       const f = fixture();
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [command] } });
       const current = await f.controller.launchTask({ goal: "Ralph", workdir: f.dir, loopMode: "ralph", maxIterations: 1 });
-      await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["<promise>DONE</promise>"] }));
+      await (f.controller as any).handleTerminalSession(current, completedGoalSession(f, current, { getOutput: () => ["<promise>DONE</promise>"] }));
       assert.equal(current.status, command === "true" ? "succeeded" : "failed");
       assert.deepEqual(current.goalVerificationBinding?.requiredCommands, [command]);
     }
@@ -229,23 +245,24 @@ describe("required suite execution and recovery", () => {
     const current = await f.controller.launchTask({ goal: "Keep baseline", workdir: f.dir, loopMode: "ralph" });
     const binding = structuredClone(current.goalVerificationBinding);
     setPluginConfig({});
-    await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
+    await (f.controller as any).handleTerminalSession(current, createStubSession({ startedAt: 1, status: "completed", getOutput: () => ["DONE"] }));
     assert.equal(current.status, "failed"); assert.deepEqual(current.goalVerificationBinding, binding);
     assert.equal(existsSync(join(f.dir, "unexpected")), false);
   });
 
-  it("Ralph promise-only is denied under required policy and remains compatible when absent", async () => {
+  it("Ralph promise-only cannot establish verified success even when no baseline is configured", async () => {
     const f = fixture();
     setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
     const blocked = await task([], { loopMode: "ralph", completionPromise: "DONE" });
     f.store.upsert(blocked);
-    await (f.controller as any).handleTerminalSession(blocked, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
+    await (f.controller as any).handleTerminalSession(blocked, createStubSession({ startedAt: 1, status: "completed", getOutput: () => ["DONE"] }));
     assert.equal(blocked.status, "failed");
     setPluginConfig({});
     const legacy = await task([], { id: "legacy", loopMode: "ralph", completionPromise: "DONE" });
     f.store.upsert(legacy);
-    await (f.controller as any).handleTerminalSession(legacy, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
-    assert.equal(legacy.status, "succeeded");
+    await (f.controller as any).handleTerminalSession(legacy, createStubSession({ startedAt: 1, status: "completed", getOutput: () => ["DONE"] }));
+    assert.equal(legacy.status, "failed");
+    assert.match(legacy.failureReason ?? "", /structured verifier evidence/);
   });
 
   for (const transition of ["changed", "roundtrip", "equivalent"] as const) {
@@ -256,7 +273,7 @@ describe("required suite execution and recovery", () => {
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
       const current = await task(commands, { workdir: f.dir, maxIterations: 8 });
       f.store.upsert(current);
-      const evaluation = (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed" }));
+      const evaluation = (f.controller as any).handleTerminalSession(current, completedGoalSession(f, current));
       await waitForFile(join(f.dir, "started"));
       if (transition === "equivalent") setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands.map((c) => ` ${c} `) }, idleTimeoutMinutes: 1 });
       else {
@@ -277,7 +294,7 @@ describe("required suite execution and recovery", () => {
     writeFileSync(join(f.dir, "lint.sh"), "touch unexpected-lint\n");
     setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
     const current = await f.controller.launchTask({ goal: "Eager policy", workdir: f.dir, maxIterations: 8 });
-    const session = createStubSession({ id: current.sessionId, name: current.sessionName, harnessSessionId: "original-thread", status: "completed" });
+    const session = createStubSession({ startedAt: 1, id: current.sessionId, name: current.sessionName, harnessSessionId: "original-thread", status: "completed" });
     (f.manager as any).resolve = () => session;
     const evaluation: Promise<void> = (f.controller as any).reconcileTask(current);
     try {
@@ -306,7 +323,7 @@ describe("required suite execution and recovery", () => {
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
       f.controller.start(); await (f.controller as any).restorePromise;
       const current = await task(commands, { workdir: f.dir, loopMode, maxIterations: 8, sessionId: "original", harnessSessionId: "thread" });
-      const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
+      const session = createStubSession({ startedAt: 1, id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
       (f.manager as any).resolve = () => session;
       let notifications = 0; f.manager.emitGoalTaskUpdate = () => { notifications += 1; };
       f.store.upsert(current);
@@ -328,13 +345,14 @@ describe("required suite execution and recovery", () => {
     const f = fixture(), first = "if [ ! -f new-owner ]; then touch started; while [ ! -f release ]; do sleep 0.01; done; fi; printf A >> trace";
     const commands = [first, "printf B >> trace"]; setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
     const current = await task(commands, { workdir: f.dir, sessionId: "original", harnessSessionId: "thread" });
-    const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed" });
+    const session = createStubSession({ startedAt: 1, id: "original", name: current.name, harnessSessionId: "thread", status: "completed" });
     (f.manager as any).resolve = () => session; f.store.upsert(current);
     const pending: Promise<void> = (f.controller as any).reconcileTask(current);
     try {
       await waitForFile(join(f.dir, "started")); f.controller.stop();
       const path = join(f.dir, "goals.json"), fresh = fixture(); (fresh.controller as any).store = new GoalTaskStore({ OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH: path });
       const restored = fresh.controller.getTask(current.id)!; writeFileSync(join(f.dir, "new-owner"), "new owner\n");
+      (fresh.manager as any).resolve = () => session;
       await (fresh.controller as any).handleTerminalSession(restored, session); assert.equal(restored.status, "succeeded");
       const terminal = readFileSync(path, "utf8"); writeFileSync(join(f.dir, "release"), "release\n"); await pending;
       assert.equal(readFileSync(path, "utf8"), terminal); assert.equal(readFileSync(join(f.dir, "trace"), "utf8"), "ABA");
@@ -347,7 +365,7 @@ describe("required suite execution and recovery", () => {
       const f = fixture(), commands = [`printf A >> trace; ${exit}`];
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: commands } });
       const current = await task(commands, { workdir: f.dir, loopMode, sessionId: "original" }); f.store.upsert(current);
-      const session = createStubSession({ id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
+      const session = createStubSession({ startedAt: 1, id: "original", name: current.name, harnessSessionId: "thread", status: "completed", getOutput: () => ["DONE"] });
       (f.manager as any).resolve = () => session;
       const run = (f.controller as any).runVerifiers.bind(f.controller); let captured = "";
       (f.controller as any).restoreRecoverableTasks = async (): Promise<void> => {};
@@ -370,7 +388,7 @@ describe("required suite execution and recovery", () => {
       const current = await task(["true"], { workdir: f.dir, maxIterations: 8, harnessSessionId: "thread", sessionId: "session", loopMode: phase === "ralph" ? "ralph" : "verifier" });
       f.store.upsert(current);
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
-      const session = createStubSession({ status: phase === "reply" ? "running" : "completed", harnessSessionId: "thread", getOutput: () => ["Should I continue?"], pendingInputState: phase === "reply" ? { kind: "question" } : undefined });
+      const session = createStubSession({ startedAt: 1, status: phase === "reply" ? "running" : "completed", harnessSessionId: "thread", getOutput: () => ["Should I continue?"], pendingInputState: phase === "reply" ? { kind: "question" } : undefined });
       if (phase === "restore") { (f.controller as any).started = true; await (f.controller as any).restoreRecoverableTasks(); }
       else if (phase === "idle") await (f.controller as any).resumeAfterIdleTimeout(current, session, "Continue");
       else if (phase === "reply") await (f.controller as any).handleRunningSession(current, session);
@@ -405,7 +423,7 @@ describe("required suite execution and recovery", () => {
     const f = fixture();
     const current = await task(["true"]);
     f.store.upsert(current);
-    const session = Object.assign(new EventEmitter(), createStubSession({ status: "running" }));
+    const session = Object.assign(new EventEmitter(), createStubSession({ startedAt: 1, status: "running" }));
     (f.controller as any).attachSessionObservers(current, session);
     setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
     await assert.rejects( f.authorize(current.id));
@@ -431,7 +449,7 @@ describe("goal-owned session execution boundaries", () => {
     f.store.upsert(current);
     const manager = new SessionManager(5);
     manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-    const owner = createStubSession({ id: "owner", harnessSessionId: "thread", backendRef: { kind: "claude-code", conversationId: "thread" }, goalTaskId: current.id });
+    const owner = createStubSession({ startedAt: 1, id: "owner", harnessSessionId: "thread", backendRef: { kind: "claude-code", conversationId: "thread" }, goalTaskId: current.id });
     (manager as any).sessions.set("owner", owner);
     const launch = { prompt: "Continue", workdir: f.dir, resumeSessionId: "thread" };
     assert.equal((await (manager as any).goalOwnedLaunch(launch)).goalTaskId, "goal");
@@ -463,7 +481,7 @@ describe("goal-owned session execution boundaries", () => {
     manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
     for (const status of ["running", "killed"] as const) {
       let releases = 0;
-      const owner = createStubSession({ status, goalTaskId: "goal", pendingPlanApproval: true,
+      const owner = createStubSession({ startedAt: 1, status, goalTaskId: "goal", pendingPlanApproval: true,
         harnessSessionId: "thread", switchPermissionMode: () => { releases += 1; }, sendMessage: async () => { releases += 1; } });
       (manager as any).sessions.set(owner.id, owner);
       manager.launchAndAwaitRunning = async () => { releases += 1; throw new Error("must not resume"); };
@@ -645,7 +663,10 @@ describe("goal-owned session execution boundaries", () => {
       sessions[name] = session;
     }
     // The sessions started under the active goal; the goal then succeeds.
-    await (f.controller as any).markTaskSucceeded(current, "done");
+    current.sessionId = sessions.reply!.id;
+    const verifiedTerminal = createStubSession({ startedAt: 1, id: current.sessionId, status: "completed" });
+    (f.manager as any).resolve = () => verifiedTerminal;
+    await (f.controller as any).markTaskSucceeded(current, "done", { sessionId: current.sessionId, executionCycle: 1, status: "pass", repositories: [], steps: [{ label: "acceptance", command: "true", ok: true, exitCode: 0, durationMs: 1, output: "" }] });
     assert.equal(f.store.get("goal")?.status, "succeeded");
     const evidence = JSON.stringify(f.store.get("goal"));
     assert.equal((await executeRespond(manager, { session: sessions.reply!.id, message: "One more tweak", userInitiated: true })).isError, undefined);
@@ -724,7 +745,7 @@ describe("independent M1 review regressions", () => {
           });
           return pending;
         };
-        await (f.controller as any).handleTerminalSession(current, createStubSession({ status: "completed", getOutput: () => ["DONE"] }));
+        await (f.controller as any).handleTerminalSession(current, createStubSession({ startedAt: 1, status: "completed", getOutput: () => ["DONE"] }));
         assert.equal(readFileSync(join(f.dir, "proof"), "utf8"), "X", "real shell batch executed");
         assert.equal(current.status, "failed");
         assert.match(current.failureReason ?? "", /policy.*changed/);
@@ -743,7 +764,7 @@ describe("independent M1 review regressions", () => {
     await assert.rejects( f.authorize("missing-id"), /owner is missing/);
     const manager = new SessionManager(5);
     manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-    const original = createStubSession({ id: "original", status: "killed", goalTaskId: "missing-id", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+    const original = createStubSession({ startedAt: 1, id: "original", status: "killed", goalTaskId: "missing-id", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
     (manager as any).sessions.set(original.id, original);
     let preparation = 0;
     (manager as any).restore.prepareSpawn = () => { preparation += 1; throw new Error("must not prepare"); };
@@ -762,7 +783,7 @@ describe("independent M1 review regressions", () => {
       f.store.upsert(current);
       const manager = new SessionManager(5);
       manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-      const original = createStubSession({ id: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+      const original = createStubSession({ startedAt: 1, id: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
       if (!persistedOnly) (manager as any).sessions.set(original.id, original);
       const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", backendRef: original.backendRef };
       manager.getPersistedSession = (ref: string) => ["original", "original-thread"].includes(ref) ? saved as any : undefined;
@@ -801,7 +822,7 @@ describe("independent M1 review regressions", () => {
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["false"] } });
       const manager = new SessionManager(5);
       manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-      const original = createStubSession({ id: "original", name: "original", status: "running", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 });
+      const original = createStubSession({ startedAt: 1, id: "original", name: "original", status: "running", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 });
       if (!persistedOnly) (manager as any).sessions.set(original.id, original);
       const saved = { sessionId: "original", name: "original", status: "killed", goalTaskId: "goal", pendingPlanApproval: true, approvalState: "pending", planDecisionVersion: 1 };
       manager.getPersistedSession = () => saved as any;
@@ -893,8 +914,8 @@ describe("canonical session identity precedes human aliases (R6)", () => {
         setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: [permitted ? "true" : "false"] } });
         const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "sessions.json") } });
         manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-        const source = createStubSession({ id: "original-session", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
-        const mask = createStubSession({ id: "unrelated-session", name: "original-thread", status: "killed", backendRef: { kind: "claude-code", conversationId: "unrelated-thread" } });
+        const source = createStubSession({ startedAt: 1, id: "original-session", name: "original", status: "killed", goalTaskId: "goal", backendRef: { kind: "claude-code", conversationId: "original-thread" } });
+        const mask = createStubSession({ startedAt: 1, id: "unrelated-session", name: "original-thread", status: "killed", backendRef: { kind: "claude-code", conversationId: "unrelated-thread" } });
         if (!persistedOnly) {
           (manager as any).sessions.set(source.id, source);
           (manager as any).sessions.set(mask.id, mask);
@@ -942,8 +963,8 @@ describe("canonical session identity precedes human aliases (R6)", () => {
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
       const manager = new SessionManager(5, 100, { store: { indexPath: join(f.dir, "conflicts.json") } });
       manager.setGoalTaskAuthorizer((id, workdir) => f.authorize(id, workdir));
-      const sourceA = createStubSession({ id: "stable-a", name: "first", status: "killed", goalTaskId: "first", backendRef: { kind: "claude-code", conversationId: "backend-a" } });
-      const sourceB = createStubSession({ id: "stable-b", name: "second", status: "killed", goalTaskId: "second", backendRef: { kind: "claude-code", conversationId: "backend-b" } });
+      const sourceA = createStubSession({ startedAt: 1, id: "stable-a", name: "first", status: "killed", goalTaskId: "first", backendRef: { kind: "claude-code", conversationId: "backend-a" } });
+      const sourceB = createStubSession({ startedAt: 1, id: "stable-b", name: "second", status: "killed", goalTaskId: "second", backendRef: { kind: "claude-code", conversationId: "backend-b" } });
       for (const source of [sourceA, sourceB]) {
         if (!persistedOnly) (manager as any).sessions.set(source.id, source);
         else (manager as any).store.replacePersistedSession({ sessionId: source.id, name: source.name, status: "killed", goalTaskId: source.goalTaskId, backendRef: source.backendRef, harnessSessionId: source.backendRef!.conversationId, route: { provider: "system", target: "system" } });
@@ -1167,7 +1188,8 @@ describe("relocated feature boundary coverage", () => {
       const f = fixture();
       setPluginConfig({ goalVerificationPolicies: { defaultRequiredCommands: ["true"] } });
       const current = await f.controller.launchTask({ goal: "Terminal", workdir: f.dir, maxIterations: 1 });
-      const session = Object.assign(new EventEmitter(), createStubSession({ id: current.sessionId, status: "completed" }));
+      const session = Object.assign(new EventEmitter(), createStubSession({ startedAt: 1, id: current.sessionId, status: "completed" }));
+      (f.manager as any).resolve = () => session;
       (f.controller as any).attachSessionObservers(current, session);
       if (outcome === "stopped") f.controller.stopTask(current.id);
       else {
