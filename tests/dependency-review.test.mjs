@@ -117,3 +117,13 @@ test("persistent authentic summary recovers a reviewed SHA removed by a rewrite"
   assert.equal(budgetExhausted({ pr, comments: [{ user: { login: "greptile-apps[bot]", type: "Bot" },
     body: "<!-- greptile_summary -->\n<sub>Reviews (2) · Last reviewed commit: current</sub>" }] }), true);
 });
+
+
+test("installed safe-mode CLI omits disabled memory and reports only immutable builtin plugins", () => {
+  const e = events(); delete e[0].memory_paths;
+  e[0].plugins = [{ name: "cc-plugin-privacy", path: "builtin", source: "cc-plugin-privacy@builtin" }];
+  assert.equal(parseClaudeReview(stream(e), identity, { cwd }).isolation, "empty-cwd-safe-mode-v1");
+  for (const plugin of [{ path: "/untrusted", source: "example@builtin" }, { path: "builtin", source: "external@marketplace" }]) {
+    e[0].plugins = [plugin]; assert.throws(() => parseClaudeReview(stream(e), identity, { cwd }));
+  }
+});

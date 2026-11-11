@@ -12,10 +12,10 @@ export function parseClaudeReview(stdout, identity, { cwd } = {}) {
   const models = Object.keys(result?.modelUsage ?? {}).map(canonicalModel);
   const assistants = events.filter(e => e.type === "assistant").map(e => canonicalModel(e.message?.model));
   if (typeof cwd !== "string" || init?.cwd !== cwd ||
-      !init?.memory_paths || Array.isArray(init.memory_paths) || Object.keys(init.memory_paths).length ||
+      (init?.memory_paths != null && (typeof init.memory_paths !== "object" || Array.isArray(init.memory_paths) || Object.keys(init.memory_paths).length)) ||
       !Array.isArray(init?.additional_directories) || init.additional_directories.length ||
       !Array.isArray(init?.skills) || init.skills.length ||
-      !Array.isArray(init?.plugins) || init.plugins.length ||
+      !Array.isArray(init?.plugins) || init.plugins.some(p => p?.path !== "builtin" || typeof p.source !== "string" || !p.source.endsWith("@builtin")) ||
       canonicalModel(init?.model) !== REVIEW_MODEL || !/^\d+\.\d+\.\d+$/u.test(init?.claude_code_version ?? "") ||
       init?.apiKeySource !== "none" ||
       !Array.isArray(init?.mcp_servers) || init.mcp_servers.length ||

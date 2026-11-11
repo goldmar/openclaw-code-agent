@@ -140,7 +140,8 @@ or action file, then calls the existing host `claude` CLI with model
 `claude-opus-5-5`, no tools, MCP servers or model fallback. It runs in a fresh
 empty temporary directory under `--safe-mode --restricted`, with auto memory,
 CLAUDE.md and attachment loading explicitly disabled. Init must attest that cwd,
-no memory paths, extra directories, skills or plugins. The v2 receipt requires
+no memory paths, extra directories, skills or loadable plugins. The CLI's own
+immutable builtin plugin metadata is permitted, matching the existing host CLI contract. The v2 receipt requires
 `isolation: empty-cwd-safe-mode-v1`; earlier v1 receipts grant no fallback.
 See the official [CLI reference](https://code.claude.com/docs/en/cli-reference)
 and [environment reference](https://code.claude.com/docs/en/env-vars). Fable is never allowed.
