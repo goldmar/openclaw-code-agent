@@ -94,3 +94,20 @@ test("missing history and changing heads fail closed before Claude or posting", 
     assert.throws(() => collectReview(591, { api }));
   }
 });
+
+
+test("persistent authentic summary recovers a reviewed SHA removed by a rewrite", () => {
+  const f = apiFixture();
+  const api = args => {
+    if (args[1].endsWith("/pulls/591")) return { ...structuredClone(pr), commits: 1 };
+    if (args[1].includes("/commits?")) return [[{ sha: head }]];
+    if (args[1].includes("/comments?")) return [[{ user: { login: "greptile-apps[bot]", type: "Bot" },
+      body: `<!-- greptile_summary -->\nLast reviewed commit: [old](https://github.com/goldmar/openclaw-code-agent/commit/${old})` }]];
+    return f.api(args);
+  };
+  const snapshot = collectReview(591, { api });
+  assert.equal(budgetExhausted(snapshot), true);
+  assert.ok(snapshot.checks.some(c => c.head_sha === old));
+  assert.equal(budgetExhausted({ pr, comments: [{ user: { login: "greptile-apps[bot]", type: "Bot" },
+    body: "<!-- greptile_summary -->\n<sub>Reviews (2) · Last reviewed commit: current</sub>" }] }), true);
+});

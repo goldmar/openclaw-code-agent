@@ -297,8 +297,20 @@ export function collectReview(number, { api = githubRead } = {}) {
   const commits = pages(`pulls/${number}/commits?per_page=100`);
   if (commits.length !== pr.commits || new Set(commits.map(c => c.sha)).size !== commits.length ||
       !commits.every(c => SHA.test(c.sha ?? "")) || !commits.some(c => c.sha === pr.head.sha)) throw new Error("incomplete PR history");
+  const comments = pages(`issues/${number}/comments?per_page=100`);
+  // Summaries and authenticated head-bound requests survive a force-push.
+  // Keep their reviewed heads even when no longer reachable in PR commits.
+  const persistentHeads = comments.flatMap(c => {
+    if (c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" && (c.body ?? "").startsWith("<!-- greptile_summary -->")) {
+      return [...(c.body ?? "").matchAll(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/gu)].map(m => m[1]);
+    }
+    if (c.user?.login === "goldmar" && c.user?.type === "User" && /@greptileai\b/u.test(c.body ?? "")) {
+      return [...(c.body ?? "").matchAll(/<!-- dependency-review-request:v1 ([a-f0-9]{40}) -->/gu)].map(m => m[1]);
+    }
+    return [];
+  });
   const checks = [];
-  for (const { sha } of commits) {
+  for (const sha of new Set([...commits.map(c => c.sha), ...persistentHeads])) {
     const responses = api(["api", `repos/${REPOSITORY}/commits/${sha}/check-runs?check_name=Greptile%20Review&filter=all&per_page=100`, "--paginate", "--slurp"]);
     const rows = responses.flatMap(page => page.check_runs ?? []);
     if (!responses.length || responses.some(page => page.total_count !== rows.length) ||
@@ -306,7 +318,6 @@ export function collectReview(number, { api = githubRead } = {}) {
     checks.push(...rows.filter(c => c.app?.id === GREPTILE_APP_ID && c.name === "Greptile Review" && c.head_sha === sha));
   }
   if (new Set(checks.map(c => c.id)).size !== checks.length) throw new Error("changed review history");
-  const comments = pages(`issues/${number}/comments?per_page=100`);
   const current = read(`pulls/${number}`);
   if (current.head?.sha !== pr.head.sha || current.base?.sha !== pr.base.sha || current.commits !== pr.commits) throw new Error("PR changed during review read");
   return { pr, comments, checks };
@@ -317,6 +328,10 @@ export function budgetExhausted({ pr, checks = [], comments = [] }) {
   // One review is allowed per combined PR. A spent prior head or multiple
   // attempts cannot demand another paid review to make the final head eligible.
   if (runs.length > 1 || runs.some(c => c.head_sha !== pr.head.sha)) return true;
+  if (comments.some(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
+      (c.body ?? "").startsWith("<!-- greptile_summary -->") &&
+      (Number((c.body ?? "").match(/Reviews \((\d+)\) · Last reviewed commit:/u)?.[1] ?? 0) > 1 ||
+       ((c.body ?? "").match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1] ?? pr.head.sha) !== pr.head.sha))) return true;
   // Only the authentic application's explicit quota notice, never owner/PR prose.
   return comments.some(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
     /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(c.body ?? ""));

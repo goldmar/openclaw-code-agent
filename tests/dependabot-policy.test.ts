@@ -566,3 +566,32 @@ describe("configuration and integration boundaries", () => {
     assert.match(observer, /types: \[created, edited\]/);
   });
 });
+
+
+describe("exhausted-budget final policy decision", () => {
+  const fallback = () => {
+    const s = fixture();
+    s.reviewEvidence = { pr: s.pr, checks: [{ id: 80, name: "Greptile Review", app: { id: 867647 }, head_sha: other }], comments: [] };
+    const receipt = { schema: "oca-dependency-claude-review:v1", repo: REPOSITORY, number: 700, head, base,
+      reviewer: "claude", model: "claude-opus-5-5", transport: "claude-cli", reason: "greptile-budget-exhausted",
+      verdict: "clean", findings: [], cliVersion: "2.1.319", reviewedAt: "2026-11-10T12:00:00Z" };
+    s.comments.push({ user: { login: "goldmar", type: "User" }, created_at: "2026-11-10T12:01:00Z", updated_at: "2026-11-10T12:01:00Z",
+      body: `<!-- oca-dependency-claude-review:v1 ${JSON.stringify(receipt)} -->` });
+    s.checks = s.checks.filter((c: any) => c.app.id !== 867647);
+    return s;
+  };
+  it("accepts the independent exact-head/base review and records Claude", () => {
+    assert.deepEqual(evaluate(fallback()), { status: "eligible", head, base, number: 700, reviewer: "claude", model: "claude-opus-5-5" });
+  });
+  it("retains scope, required/additional CI, threads, change requests and exact bytes", () => {
+    for (const change of [
+      (s: any) => { s.checks[0].conclusion = "failure"; },
+      (s: any) => { s.checks.push({ id: 999, name: "Other", head_sha: head, app: { id: 42 }, conclusion: "failure" }); },
+      (s: any) => { s.threads = [{ isResolved: false }]; },
+      (s: any) => { s.reviews = [{ id: 1, user: { login: "reviewer" }, state: "CHANGES_REQUESTED" }]; },
+      (s: any) => { editManifest(s, m => { m.dependencies.qs = "7.0.0"; }); },
+      (s: any) => { s.comments.pop(); },
+      (s: any) => { s.pr.head.sha = other; }, (s: any) => { s.pr.base.sha = other; },
+    ]) { const s = fallback(); change(s); assert.notEqual(evaluate(s).status, "eligible"); }
+  });
+});
