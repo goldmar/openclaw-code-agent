@@ -27,7 +27,7 @@ function fixture(): any {
   } } });
   return {
     enabled: true,
-    pr: { number: 700, state: "open", draft: false, user: { login: "dependabot[bot]" },
+    pr: { number: 700, commits: 1, state: "open", draft: false, user: { login: "dependabot[bot]" },
       base: { ref: "main", sha: base, repo: { full_name: REPOSITORY } },
       head: { sha: head, repo: { full_name: REPOSITORY } },
       auto_merge: null, mergeable: true, mergeable_state: "clean", changed_files: 4,
@@ -68,6 +68,7 @@ function apiFixture(snapshot: any, mutateRead?: () => void) {
       if (prReads === 2) mutateRead?.();
       return snapshot.pr;
     }
+    if (path.includes("/commits?")) return [[{ sha: head }]];
     if (path.includes("/comments?")) return [[snapshot.comments[1]], [snapshot.comments[0]]];
     if (path.includes("/collaborators/")) return { permission: "write" };
     if (path.includes("/files?")) return [snapshot.files.slice(0, 2), snapshot.files.slice(2)];
@@ -76,7 +77,7 @@ function apiFixture(snapshot: any, mutateRead?: () => void) {
       const content = snapshot.contents[filename][ref === base ? "before" : "after"];
       return { encoding: "base64", content: Buffer.from(content).toString("base64") };
     }
-    if (path.includes("/check-runs?")) return [{ check_runs: snapshot.checks.slice(0, 5) }, { check_runs: snapshot.checks.slice(5) }];
+    if (path.includes("/check-runs?")) return [{ total_count: snapshot.checks.length, check_runs: snapshot.checks.slice(0, 5) }, { total_count: snapshot.checks.length, check_runs: snapshot.checks.slice(5) }];
     if (path.includes("/status?")) return [{ statuses: snapshot.statuses }];
     if (path === "graphql") return [{ data: { repository: { pullRequest: { reviewThreads: {
       nodes: snapshot.threads, pageInfo: { hasNextPage: false, endCursor: null },
@@ -91,7 +92,7 @@ describe("weekly dependency admission", () => {
   it("holds activation by default and permits only a prepared final head", () => {
     const s = fixture();
     assert.deepEqual(evaluate({ ...s, enabled: false }), { status: "held", reason: "activation-required" });
-    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700 });
+    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700, reviewer: "greptile", model: null });
     assert.equal(preparation(s).status, "prepared", "preparing label suppresses Greptile while CI is admitted");
   });
 
@@ -163,7 +164,7 @@ describe("weekly combined PR", () => {
 
   it("is eligible through every ordinary gate, without a preparation receipt", () => {
     assert.equal(isCombined(combined().pr), true);
-    assert.deepEqual(evaluate(combined()), { status: "eligible", head, base, number: 700 });
+    assert.deepEqual(evaluate(combined()), { status: "eligible", head, base, number: 700, reviewer: "greptile", model: null });
   });
 
   it("needs the exact branch, the label, a human author and a writer", () => {
@@ -563,5 +564,43 @@ describe("configuration and integration boundaries", () => {
     assert.match(observer, /persist-credentials: false/);
     assert.doesNotMatch(observer, /: write|gh pr merge|fetch-metadata|--admin|--force|head\.sha/);
     assert.match(observer, /types: \[created, edited\]/);
+  });
+});
+
+
+describe("exhausted-budget final policy decision", () => {
+  const fallback = () => {
+    const s = fixture();
+    s.reviewEvidence = { pr: s.pr, checks: [{ id: 80, name: "Greptile Review", app: { id: 867647 }, head_sha: other }], comments: [] };
+    const receipt = { schema: "oca-dependency-claude-review:v2", repo: REPOSITORY, number: 700, head, base,
+      reviewer: "claude", model: "claude-opus-5-5", transport: "claude-cli", isolation: "empty-cwd-safe-mode-v1", reason: "greptile-budget-exhausted",
+      verdict: "clean", findings: [] as string[], cliVersion: "2.1.319", reviewedAt: "2026-11-10T12:00:00Z" };
+    s.comments.push({ user: { login: "goldmar", type: "User" }, created_at: "2026-11-10T12:01:00Z", updated_at: "2026-11-10T12:01:00Z",
+      body: `<!-- oca-dependency-claude-review:v2 ${JSON.stringify(receipt)} -->` });
+    s.checks = s.checks.filter((c: any) => c.app.id !== 867647);
+    return s;
+  };
+  it("accepts the independent exact-head/base review and records Claude", () => {
+    assert.deepEqual(evaluate(fallback()), { status: "eligible", head, base, number: 700, reviewer: "claude", model: "claude-opus-5-5" });
+  });
+  it("permits quota-only failure only when the current authentic check attests it", () => {
+    const s = fallback(); s.comments.splice(1, 1);
+    s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure", output: { title: "Monthly review limit reached" } });
+    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700, reviewer: "claude", model: "claude-opus-5-5" });
+  });
+  it("retains scope, required/additional CI, threads, change requests and exact bytes", () => {
+    for (const change of [
+      (s: any) => { s.checks[0].conclusion = "failure"; },
+      (s: any) => { s.checks.push({ id: 999, name: "Other", head_sha: head, app: { id: 42 }, conclusion: "failure" }); },
+      (s: any) => { s.threads = [{ isResolved: false }]; },
+      (s: any) => { s.reviews = [{ id: 1, user: { login: "reviewer" }, state: "CHANGES_REQUESTED" }]; },
+      (s: any) => { editManifest(s, m => { m.dependencies.qs = "7.0.0"; }); },
+      (s: any) => { s.comments.pop(); },
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace("greptile_confidence_score:5", "greptile_confidence_score:4"); },
+      (s: any) => { s.checks.push({ id: 100, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
+      (s: any) => { s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "in_progress", conclusion: null }); },
+      (s: any) => { s.comments.push({ user: { login: "greptile-apps[bot]", type: "Bot" }, body: "Monthly review limit reached", created_at: "2026-01-01T00:00:00Z" }); s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
+      (s: any) => { s.pr.head.sha = other; }, (s: any) => { s.pr.base.sha = other; },
+    ]) { const s = fallback(); change(s); assert.notEqual(evaluate(s).status, "eligible"); }
   });
 });

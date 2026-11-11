@@ -45,7 +45,7 @@ with invalid auto-mode keys) was reviewed with 0.3.319 in #590: OCA passes no
 still resolves settings and OCA's permission modes are unchanged.
 `tests/claude-harness.test.ts` pins that contract. A later SDK bump needs its
 own review of changelog entries since the reviewed version; this policy never
-authorizes one. No Claude calls or quota probes. No
+authorizes one. Claude is authorized only for the independent review fallback below; no quota probes. No
 publication, tag, install, runtime reload or Gateway restart is authorized by
 dependency maintenance.
 
@@ -67,8 +67,9 @@ Each week's routine proposals become one PR, so they share one Greptile review.
    writer's PR when it opens, and CI runs normally. No readiness receipt applies.
 4. Inspect current Greptile checks/comments first. Request `@greptileai` only if
    this head has neither a pending nor completed review, which normally means only
-   after a repair push. Coalesce any repair before pushing it, so each PR spends at
-   most one review per final head. If no compatible routine update remains after a
+   after a repair push. Coalesce repairs; the allowance is one Greptile review per PR.
+   A prior-head review spends it. When exhausted, use the independent Claude fallback below
+   instead of waiting for or requesting another Greptile review. If no compatible routine update remains after a
    repair, hold the batch and leave the originals open.
 5. From the trusted, reviewed default-branch policy source, run:
 
@@ -79,8 +80,9 @@ Each week's routine proposals become one PR, so they share one Greptile review.
    Only `status: eligible` permits the weekly owner to proceed. It requires a
    repository writer as author, the actual allowed dependency diff, all ten required
    GitHub Actions checks successful (not skipped), other current checks green,
-   Greptile's own check run successful on the full head SHA, with its latest summary
-   carrying a confidence score of 5 for that SHA,
+   either Greptile's own successful check and 5/5 summary on the full head SHA
+   within its review allowance, or a valid independent Claude review when that
+   allowance is exhausted,
    and no unresolved review threads or outstanding change requests. The JSON
    result is evidence, not a merge command or a durable grant.
 6. Immediately recheck the live head/base, required branch protections and review
@@ -120,6 +122,51 @@ The policy command performs only GETs and a GraphQL query, never PR checkout,
 installation, review writes, readiness writes or merging. Its workflow checks
 out the immutable trusted workflow SHA, with credentials persistence disabled.
 PR contents are data. No secrets or write token are passed to PR code.
+
+## Independent Claude fallback (owner decision 2026-11-10)
+
+Keep Greptile whenever its budget is available. A spent prior-head review,
+multiple authentic Greptile review attempts, or an authentic Greptile bot notice
+that the review limit is reached/budget exhausted permits an additional independent
+Claude review. A GitHub transport timeout, missing evidence or someone else's quota claim does not.
+The per-PR allowance is reserved by an authentic app check attempt, including a
+pending or failed attempt; this is a conservative retry budget, not a statement
+about invoiced usage. A prior-head reservation is not refunded into a new paid
+review automatically. API-read failures never establish a reservation.
+An explicit quota notice in the authentic app check's title/summary also qualifies,
+including when no issue-comment notice exists.
+Run this command from trusted default-branch policy source, never PR source:
+
+```sh
+node scripts/dependency-claude-review.mjs --pr NUMBER --post
+```
+
+It reads the complete immutable base/head contents for every changed dependency
+or action file, then calls the existing host `claude` CLI with model
+`claude-opus-5-5`, no tools, MCP servers or model fallback. It runs in a fresh
+empty temporary directory under `--safe-mode --restricted`, with auto memory,
+CLAUDE.md and attachment loading explicitly disabled. Init must attest that cwd,
+no memory paths, extra directories, skills or loadable plugins. The CLI's own
+immutable builtin plugin metadata is permitted, matching the existing host CLI contract. The v2 receipt requires
+`isolation: empty-cwd-safe-mode-v1`; earlier v1 receipts grant no fallback.
+See the official [CLI reference](https://code.claude.com/docs/en/cli-reference)
+and [environment reference](https://code.claude.com/docs/en/env-vars). Fable is never allowed.
+The CLI's init, assistant model and usage must attest Opus 5.5, and a successful
+structured result must report no findings for that exact head/base. Findings,
+quota failure, missing/truncated input or a changed PR fail closed. No separate
+quota probe is made. Dependency scope, required CI, genuine current-head Greptile objections or pending reviews, unresolved threads, change
+requests, branch protection and exact-head merge gates all remain enforced.
+
+Only the authenticated repository owner's unedited standalone
+`oca-dependency-claude-review:v2` comment is accepted as the CLI attestation.
+It records reviewer, model, transport, CLI version, head/base, verdict and reason.
+This is an owner attestation, not a claim that GitHub independently attests model
+execution. The trusted helper produces it only after validating the real CLI
+response. Never hand-write/copy a receipt. Any push or base change invalidates it.
+The policy result records `reviewer` (`greptile` or `claude`) and the Claude model;
+the workspace rechecks that evidence independently at completion. If neither
+reviewer supplies valid evidence, hold without merging. No install/reload/restart
+or broader Claude usage is authorized.
 
 ## Greptile behaviour
 
