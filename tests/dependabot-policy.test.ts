@@ -574,7 +574,7 @@ describe("exhausted-budget final policy decision", () => {
     s.reviewEvidence = { pr: s.pr, checks: [{ id: 80, name: "Greptile Review", app: { id: 867647 }, head_sha: other }], comments: [] };
     const receipt = { schema: "oca-dependency-claude-review:v1", repo: REPOSITORY, number: 700, head, base,
       reviewer: "claude", model: "claude-opus-5-5", transport: "claude-cli", reason: "greptile-budget-exhausted",
-      verdict: "clean", findings: [], cliVersion: "2.1.319", reviewedAt: "2026-11-10T12:00:00Z" };
+      verdict: "clean", findings: [] as string[], cliVersion: "2.1.319", reviewedAt: "2026-11-10T12:00:00Z" };
     s.comments.push({ user: { login: "goldmar", type: "User" }, created_at: "2026-11-10T12:01:00Z", updated_at: "2026-11-10T12:01:00Z",
       body: `<!-- oca-dependency-claude-review:v1 ${JSON.stringify(receipt)} -->` });
     s.checks = s.checks.filter((c: any) => c.app.id !== 867647);
@@ -582,6 +582,11 @@ describe("exhausted-budget final policy decision", () => {
   };
   it("accepts the independent exact-head/base review and records Claude", () => {
     assert.deepEqual(evaluate(fallback()), { status: "eligible", head, base, number: 700, reviewer: "claude", model: "claude-opus-5-5" });
+  });
+  it("permits quota-only failure only when the current authentic check attests it", () => {
+    const s = fallback(); s.comments.splice(1, 1);
+    s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure", output: { title: "Monthly review limit reached" } });
+    assert.deepEqual(evaluate(s), { status: "eligible", head, base, number: 700, reviewer: "claude", model: "claude-opus-5-5" });
   });
   it("retains scope, required/additional CI, threads, change requests and exact bytes", () => {
     for (const change of [
@@ -591,6 +596,9 @@ describe("exhausted-budget final policy decision", () => {
       (s: any) => { s.reviews = [{ id: 1, user: { login: "reviewer" }, state: "CHANGES_REQUESTED" }]; },
       (s: any) => { editManifest(s, m => { m.dependencies.qs = "7.0.0"; }); },
       (s: any) => { s.comments.pop(); },
+      (s: any) => { s.comments[1].body = s.comments[1].body.replace("greptile_confidence_score:5", "greptile_confidence_score:4"); },
+      (s: any) => { s.checks.push({ id: 100, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
+      (s: any) => { s.comments.push({ user: { login: "greptile-apps[bot]", type: "Bot" }, body: "Monthly review limit reached", created_at: "2026-01-01T00:00:00Z" }); s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
       (s: any) => { s.pr.head.sha = other; }, (s: any) => { s.pr.base.sha = other; },
     ]) { const s = fallback(); change(s); assert.notEqual(evaluate(s).status, "eligible"); }
   });

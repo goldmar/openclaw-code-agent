@@ -257,6 +257,7 @@ export function evaluate(snapshot) {
   }
   const exhausted = snapshot.reviewEvidence && budgetExhausted(snapshot.reviewEvidence);
   const fallback = exhausted ? claudeReceipt({ pr, comments }) : null;
+  if (fallback && greptileObjection(snapshot)) return { status: "held", reason: "current-head-greptile-objection" };
   // Ignore superseded attempts, but never hide a current failing/pending check.
   const latestChecks = new Map();
   for (const check of [...checks].sort((a, b) => a.id - b.id)) {
@@ -335,6 +336,19 @@ export function budgetExhausted({ pr, checks = [], comments = [] }) {
   // Only the authentic application's explicit quota notice, never owner/PR prose.
   return comments.some(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
     /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(c.body ?? ""));
+}
+
+export function greptileObjection({ pr, checks = [], comments = [] }) {
+  // An independent fallback never erases an actual current-head objection.
+  const summaries = comments.filter(c => c.user?.login === "greptile-apps[bot]" && c.user?.type === "Bot" &&
+    (c.body ?? "").startsWith("<!-- greptile_summary -->") &&
+    (c.body ?? "").match(/Last reviewed commit: \[[^\n]*?\]\(https:\/\/github\.com\/goldmar\/openclaw-code-agent\/commit\/([a-f0-9]{40})\)/u)?.[1] === pr.head.sha);
+  if (summaries.some(c => GREPTILE_SCORE.exec(c.body ?? "")?.[1] !== "5")) return true;
+  const latest = checks.filter(c => c.app?.id === GREPTILE_APP_ID && c.name === GREPTILE_CHECK && c.head_sha === pr.head.sha)
+    .sort((a, b) => b.id - a.id)[0];
+  const unavailable = [latest?.output?.title, latest?.output?.summary].some(value => typeof value === "string" &&
+    /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(value));
+  return Boolean(latest?.status === "completed" && !["success", "neutral", "skipped"].includes(latest.conclusion) && !unavailable);
 }
 
 export function claudeReceipt({ pr, comments = [] }) {
