@@ -137,15 +137,21 @@ node scripts/dependency-claude-review.mjs --pr NUMBER --post
 
 It reads the complete immutable base/head contents for every changed dependency
 or action file, then calls the existing host `claude` CLI with model
-`claude-opus-5-5`, no tools, MCP servers or model fallback. Fable is never allowed.
+`claude-opus-5-5`, no tools, MCP servers or model fallback. It runs in a fresh
+empty temporary directory under `--safe-mode --restricted`, with auto memory,
+CLAUDE.md and attachment loading explicitly disabled. Init must attest that cwd,
+no memory paths, extra directories, skills or plugins. The v2 receipt requires
+`isolation: empty-cwd-safe-mode-v1`; earlier v1 receipts grant no fallback.
+See the official [CLI reference](https://code.claude.com/docs/en/cli-reference)
+and [environment reference](https://code.claude.com/docs/en/env-vars). Fable is never allowed.
 The CLI's init, assistant model and usage must attest Opus 5.5, and a successful
 structured result must report no findings for that exact head/base. Findings,
 quota failure, missing/truncated input or a changed PR fail closed. No separate
-quota probe is made. Dependency scope, required CI, unresolved threads, change
+quota probe is made. Dependency scope, required CI, genuine current-head Greptile objections or pending reviews, unresolved threads, change
 requests, branch protection and exact-head merge gates all remain enforced.
 
 Only the authenticated repository owner's unedited standalone
-`oca-dependency-claude-review:v1` comment is accepted as the CLI attestation.
+`oca-dependency-claude-review:v2` comment is accepted as the CLI attestation.
 It records reviewer, model, transport, CLI version, head/base, verdict and reason.
 This is an owner attestation, not a claim that GitHub independently attests model
 execution. The trusted helper produces it only after validating the real CLI

@@ -572,11 +572,11 @@ describe("exhausted-budget final policy decision", () => {
   const fallback = () => {
     const s = fixture();
     s.reviewEvidence = { pr: s.pr, checks: [{ id: 80, name: "Greptile Review", app: { id: 867647 }, head_sha: other }], comments: [] };
-    const receipt = { schema: "oca-dependency-claude-review:v1", repo: REPOSITORY, number: 700, head, base,
-      reviewer: "claude", model: "claude-opus-5-5", transport: "claude-cli", reason: "greptile-budget-exhausted",
+    const receipt = { schema: "oca-dependency-claude-review:v2", repo: REPOSITORY, number: 700, head, base,
+      reviewer: "claude", model: "claude-opus-5-5", transport: "claude-cli", isolation: "empty-cwd-safe-mode-v1", reason: "greptile-budget-exhausted",
       verdict: "clean", findings: [] as string[], cliVersion: "2.1.319", reviewedAt: "2026-11-10T12:00:00Z" };
     s.comments.push({ user: { login: "goldmar", type: "User" }, created_at: "2026-11-10T12:01:00Z", updated_at: "2026-11-10T12:01:00Z",
-      body: `<!-- oca-dependency-claude-review:v1 ${JSON.stringify(receipt)} -->` });
+      body: `<!-- oca-dependency-claude-review:v2 ${JSON.stringify(receipt)} -->` });
     s.checks = s.checks.filter((c: any) => c.app.id !== 867647);
     return s;
   };
@@ -598,6 +598,7 @@ describe("exhausted-budget final policy decision", () => {
       (s: any) => { s.comments.pop(); },
       (s: any) => { s.comments[1].body = s.comments[1].body.replace("greptile_confidence_score:5", "greptile_confidence_score:4"); },
       (s: any) => { s.checks.push({ id: 100, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
+      (s: any) => { s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "in_progress", conclusion: null }); },
       (s: any) => { s.comments.push({ user: { login: "greptile-apps[bot]", type: "Bot" }, body: "Monthly review limit reached", created_at: "2026-01-01T00:00:00Z" }); s.checks.push({ id: 101, name: "Greptile Review", app: { id: 867647 }, head_sha: head, status: "completed", conclusion: "failure" }); },
       (s: any) => { s.pr.head.sha = other; }, (s: any) => { s.pr.base.sha = other; },
     ]) { const s = fallback(); change(s); assert.notEqual(evaluate(s).status, "eligible"); }

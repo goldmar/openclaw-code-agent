@@ -14,7 +14,7 @@ export const REQUIRED_CHECKS = [
 ];
 const GREPTILE_APP_ID = 867647;
 export const REVIEW_MODEL = "claude-opus-5-5";
-export const REVIEW_MARKER = "oca-dependency-claude-review:v1";
+export const REVIEW_MARKER = "oca-dependency-claude-review:v2";
 const GREPTILE_CHECK = "Greptile Review";
 const GREPTILE_SCORE = /^<!-- greptile_confidence_score:(\d+) -->$/mu;
 const SHA = /^[a-f0-9]{40}$/u;
@@ -348,7 +348,7 @@ export function greptileObjection({ pr, checks = [], comments = [] }) {
     .sort((a, b) => b.id - a.id)[0];
   const unavailable = [latest?.output?.title, latest?.output?.summary].some(value => typeof value === "string" &&
     /^(?:your |the |greptile )?(?:(?:monthly )?review limit (?:has been )?reached|(?:review |monthly )?(?:budget|quota) (?:is |has been )?exhausted)[.!]?$/imu.test(value));
-  return Boolean(latest?.status === "completed" && !["success", "neutral", "skipped"].includes(latest.conclusion) && !unavailable);
+  return Boolean(latest && !unavailable && (latest.status !== "completed" || !["success", "neutral", "skipped"].includes(latest.conclusion)));
 }
 
 export function claudeReceipt({ pr, comments = [] }) {
@@ -359,7 +359,7 @@ export function claudeReceipt({ pr, comments = [] }) {
     try { return match ? JSON.parse(match[1]) : null; } catch { return null; }
   }).filter(r => r && r.schema === REVIEW_MARKER && r.repo === REPOSITORY && r.number === pr.number &&
     r.head === pr.head.sha && r.base === pr.base.sha && r.reviewer === "claude" && r.model === REVIEW_MODEL &&
-    r.transport === "claude-cli" && r.reason === "greptile-budget-exhausted" &&
+    r.transport === "claude-cli" && r.isolation === "empty-cwd-safe-mode-v1" && r.reason === "greptile-budget-exhausted" &&
     r.verdict === "clean" && Array.isArray(r.findings) && r.findings.length === 0 &&
     typeof r.cliVersion === "string" && /^\d+\.\d+\.\d+$/u.test(r.cliVersion) &&
     typeof r.reviewedAt === "string" && Number.isFinite(Date.parse(r.reviewedAt)));

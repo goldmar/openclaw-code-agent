@@ -2,17 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { budgetExhausted, claudeReceipt, parseClaudeReview, collectReview, REVIEW_MARKER, REVIEW_MODEL } from "../scripts/lib/dependency-review.mjs";
 import { runReview } from "../scripts/dependency-claude-review.mjs";
+const cwd = "/tmp/synthetic-review";
 const head = "a".repeat(40), base = "b".repeat(40), old = "c".repeat(40);
 const pr = { number: 591, head: { sha: head }, base: { sha: base }, commits: 2, changed_files: 1 };
 const check = { id: 1, name: "Greptile Review", app: { id: 867647 }, head_sha: old };
 const identity = { number: 591, head, base };
 const events = () => [
-  { type: "system", subtype: "init", model: REVIEW_MODEL, apiKeySource: "none", claude_code_version: "2.1.319", tools: ["StructuredOutput"], mcp_servers: [] },
+  { type: "system", subtype: "init", cwd, memory_paths: {}, additional_directories: [], skills: [], plugins: [], model: REVIEW_MODEL, apiKeySource: "none", claude_code_version: "2.1.319", tools: ["StructuredOutput"], mcp_servers: [] },
   { type: "assistant", message: { model: REVIEW_MODEL } },
   { type: "result", subtype: "success", is_error: false, modelUsage: { [REVIEW_MODEL]: {} }, structured_output: { head, base, verdict: "clean", findings: [] } },
 ];
 const stream = values => values.map(v => JSON.stringify(v)).join("\n");
-const receipt = () => parseClaudeReview(stream(events()), identity);
+const receipt = () => parseClaudeReview(stream(events()), identity, { cwd });
 const comment = value => ({ user: { login: "goldmar", type: "User" }, created_at: "2026-11-10T12:00:00Z", updated_at: "2026-11-10T12:00:00Z", body: `<!-- ${REVIEW_MARKER} ${JSON.stringify(value)} -->` });
 
 test("budget distinguishes available head from spent prior head and authentic quota notice", () => {
@@ -42,8 +43,8 @@ test("transport refuses wrong model, tools, auth, findings and incomplete result
   for (const change of [e => { e[0].model = "claude-fable-5"; }, e => { e[2].modelUsage = { "claude-fable-5": {} }; },
     e => { e[1].message.model = "claude-fable-5"; }, e => { e[0].tools.push("Bash"); }, e => { e[0].apiKeySource = "env"; },
     e => { e[0].mcp_servers.push({ name: "unsafe" }); }, e => { e[2].is_error = true; },
-    e => { e[2].structured_output.findings.push("unsafe"); }, e => { e[2].structured_output.head = old; }, e => { e.pop(); }, e => { e.splice(1, 1); }]) {
-    const e = events(); change(e); assert.throws(() => parseClaudeReview(stream(e), identity));
+    e => { e[2].structured_output.findings.push("unsafe"); }, e => { e[2].structured_output.head = old; }, e => { e.pop(); }, e => { e.splice(1, 1); }, e => { e[0].memory_paths = { auto: "/untrusted" }; }, e => { e[0].cwd = "/wrong"; }]) {
+    const e = events(); change(e); assert.throws(() => parseClaudeReview(stream(e), identity, { cwd }));
   }
 });
 
@@ -71,13 +72,18 @@ test("review fetches complete bytes, pins CLI, posts structured owner receipt on
       assert.equal(args.includes("--fallback-model"), false);
       assert.equal(args[args.indexOf("--tools") + 1], "");
       assert.equal(JSON.parse(options.input.slice(options.input.indexOf("\n") + 1)).files.length, 1);
-      return stream(events());
+      assert.equal(args.includes("--safe-mode"), true);
+      assert.equal(args.includes("--restricted"), true);
+      assert.equal(options.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
+      assert.equal(options.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS, "1");
+      const response = events(); response[0].cwd = options.cwd;
+      return stream(response);
     }
     writes.push({ command, args, options }); return "{}";
   };
   assert.equal(runReview(591, { api: f.api, execute, post: true }).model, REVIEW_MODEL);
   assert.equal(writes.length, 1);
-  assert.match(JSON.parse(writes[0].options.input).body, /oca-dependency-claude-review:v1/u);
+  assert.match(JSON.parse(writes[0].options.input).body, /oca-dependency-claude-review:v2/u);
   assert.throws(() => runReview(591, { api: f.api, execute: () => { throw new Error("quota"); }, post: true }));
   assert.equal(writes.length, 1);
 });
