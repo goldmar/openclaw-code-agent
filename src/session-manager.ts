@@ -2230,7 +2230,7 @@ export class SessionManager {
         || savedReport.task !== "completed"
         || row.taskOutcomeFollowThroughAt === savedReport.reviewedAt) return recorded;
       const settled = await this.followThroughTaskOutcome(ref, this.taskOutcomeTarget(ref, active, saved), savedReport, sameCycle, current);
-      return `${recorded} ${settled ? "Integration follow-through was retried." : "Integration follow-through did not settle; the work is preserved."}`;
+      return `${recorded} ${settled ? "Integration follow-through was retried." : "Integration follow-through did not settle; the work is preserved. Resolve the reported problem, then submit the same report again to retry."}`;
     }
     if (!this.updatePersistedSession(ref, {
       taskOutcome: report,
@@ -2249,10 +2249,9 @@ export class SessionManager {
     if (target.autoMergeParentSessionId && sameCycle()) {
       await this.handleAutoMergeResolverTerminal(target);
     }
-    if (!target.autoMergeParentSessionId && reviewer.source !== "goal_controller" && report.task === "completed") {
-      await this.followThroughTaskOutcome(ref, target, report, sameCycle, current);
-    }
-    return `Task outcome recorded: ${report.task}; verification ${report.verification}. ${report.task === "completed" ? "Integration remains subject to repository policy and existing authority." : "The work is preserved; no integration decision was requested."}`;
+    const unsettled = !target.autoMergeParentSessionId && reviewer.source !== "goal_controller" && report.task === "completed"
+      && !(await this.followThroughTaskOutcome(ref, target, report, sameCycle, current));
+    return `Task outcome recorded: ${report.task}; verification ${report.verification}. ${report.task === "completed" ? "Integration remains subject to repository policy and existing authority." : "The work is preserved; no integration decision was requested."}${unsettled ? " Integration follow-through did not settle; the work is preserved. Resolve the reported problem, then submit the same report again to retry." : ""}`;
   }
 
   private taskOutcomeTarget(ref: string, active: Session | undefined, saved: PersistedSessionInfo | undefined): Session {
@@ -2359,6 +2358,9 @@ export class SessionManager {
         return;
       }
       const retried = await this.handleWorktreeStrategy(parentSession, { retryAfterConflict: true });
+      // A retry that stopped on a Git read failure reopens the parent report's
+      // follow-through, so resubmitting that report retries it.
+      if (retried.retryable) this.updatePersistedSession(parentRef, { taskOutcomeFollowThroughAt: undefined });
       if (!retried.notificationSent) {
         // The user was told the merge is retried: say how it ended when the
         // retry itself sent nothing (already merged, PR up to date, or skipped
@@ -2371,7 +2373,8 @@ export class SessionManager {
           userMessage: `ℹ️ [${parentSession.name}] ${
             landed?.worktreeMerged || landed?.worktreeLifecycle?.state === "merged"
               ? "Already merged; nothing left to do."
-              : prUrl ? `PR: ${prUrl}` : "Nothing was merged automatically. The branch is kept; inspect the current integration state."}`,
+              : prUrl ? `PR: ${prUrl}` : "Nothing was merged automatically. The branch is kept; inspect the current integration state."}${
+            retried.completionNote ? `\n${retried.completionNote}` : ""}`,
           notifyUser: "always",
         });
       }

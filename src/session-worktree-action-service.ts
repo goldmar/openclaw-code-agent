@@ -287,7 +287,7 @@ export class SessionWorktreeActionService {
           notificationSent: false,
           worktreeRemoved: false,
           retryable: true,
-          completionNote: `⚠️ The change summary for \`${branchName}\` could not be read, so no integration action ran. The worktree is kept; submit the same outcome report again to retry.`,
+          completionNote: `⚠️ The change summary for \`${branchName}\` against \`${baseBranch}\` could not be read (a Git read failure or a missing base), so no integration action ran. The worktree is kept; the orchestrator can retry by resubmitting the same outcome report once the repository is readable.`,
         },
       };
     }

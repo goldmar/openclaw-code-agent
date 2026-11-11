@@ -60,8 +60,9 @@ export type WorktreeStrategyResult = {
   /** One extra line for the generic `✅ Completed` notice (nobody is prompted, yet something is left to do). */
   completionNote?: string;
   /**
-   * Follow-through stopped on a transient read failure before any decision or
-   * effect; the same reviewed report may retry it.
+   * Follow-through stopped on a Git read failure (possibly transient, possibly
+   * a missing base) before any decision or effect; the same reviewed report
+   * may retry it once the repository is readable.
    */
   retryable?: boolean;
 };

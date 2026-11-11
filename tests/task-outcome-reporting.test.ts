@@ -10,6 +10,7 @@ import type { Session } from "../src/session";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
 import { hasVerifiedTaskOutcome, type TaskOutcomeInput } from "../src/session-task-outcome";
 import type { WorktreeStrategyResult } from "../src/session-worktree-strategy-service";
+import { normalizePersistedEntry } from "../src/session-store-normalization";
 import { createStubSession } from "./helpers";
 import { getSessionOutputText, getSessionsListingText } from "../src/application/session-view";
 
@@ -84,8 +85,9 @@ describe("reviewed task outcome reporting", () => {
     const f = fixture();
     f.strategyResults.push({ notificationSent: false, worktreeRemoved: false, retryable: true,
       completionNote: "⚠️ The change summary could not be read." });
-    assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /recorded: completed/);
+    assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /recorded: completed.*follow-through did not settle/);
     assert.equal(f.strategies(), 1);
+    assert.equal(f.session.taskOutcomeFollowThroughAt, undefined);
     assert.deepEqual(f.notifications.map((n) => n.label), ["completed", "worktree-integration-pending"]);
     assert.match(f.notifications.at(-1)!.userMessage!, /Integration pending\n⚠️ The change summary could not be read\./);
     const noticesAfterFirst = f.notifications.length;
@@ -94,6 +96,11 @@ describe("reviewed task outcome reporting", () => {
     assert.equal(f.notifications.length, noticesAfterFirst, "the completion summary is not repeated");
     assert.match(await f.sm.reportTaskOutcome(f.session.id, f.input(), { source: "orchestrator" }), /already recorded: completed; verification passed\.$/);
     assert.equal(f.strategies(), 2, "settled follow-through is not repeated");
+    assert.equal(f.session.taskOutcomeFollowThroughAt, f.session.taskOutcome?.reviewedAt);
+    const settledAt = f.session.taskOutcomeFollowThroughAt;
+    assert.equal(normalizePersistedEntry({ sessionId: "s", harnessSessionId: "h", name: "n", prompt: "p", workdir: "/nonexistent/w",
+      status: "completed", backendRef: { kind: "codex", conversationId: "h" }, route: { provider: "telegram", target: "12345" },
+      taskOutcomeFollowThroughAt: settledAt })?.taskOutcomeFollowThroughAt, settledAt, "the marker survives a store reload");
   });
 
   it("rejects stale cycles, stale heads, aliases and contradictory success", async () => {

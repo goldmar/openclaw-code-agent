@@ -165,6 +165,8 @@ describe("integration effects retain their task admission", () => {
     const result = await service["handleAutoMergeStrategy"](session, f.repo, f.worktree, "agent/task", "main",
       (await getDiffSummary(f.repo, "agent/task", "main"))!);
     assert.notEqual(f.git("rev-parse", "main"), oldHead, "the merge landed a rebased head on main");
+    assert.equal(f.git("rev-list", "--merges", "main"), "", "the task commit was rebased, not merged");
+    assert.equal(f.git("rev-list", "--count", "main"), "3", "base, advanced base and the rebased task commit");
     assert.equal(existsSync(join(f.repo, "task.txt")), true, "the merge landed");
     assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
     assert.equal(existsSync(f.worktree), false, "the merged worktree is retired");
@@ -194,7 +196,7 @@ describe("integration effects retain their task admission", () => {
     assert.equal(result.retryable, true);
     assert.equal(result.notificationSent, false);
     assert.equal(result.worktreeRemoved, false);
-    assert.match(result.completionNote ?? "", /change summary for `agent\/task` could not be read.*submit the same outcome report again/);
+    assert.match(result.completionNote ?? "", /change summary for `agent\/task` against `missing-base` could not be read.*resubmitting the same outcome report/);
     assert.deepEqual(patches, []);
     assert.deepEqual(notices, []);
     assert.equal(existsSync(f.worktree), true);
