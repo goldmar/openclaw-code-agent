@@ -1,4 +1,6 @@
 import "./test-env";
+import { reviewFullStackTask } from "./fullstack-fixture";
+import { reviewedTaskInput } from "./task-outcome-fixture";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -67,6 +69,7 @@ async function finishConflictingSession(
   commit(worktree, "feature.txt", "feature\n", "add feature");
   commit(repo, "README.md", "hello from main\n", "main edit");
   await s.backend.endTurn("Edited README.md and added feature.txt.");
+  await reviewFullStackTask(s, session);
   return { repo, session };
 }
 
@@ -401,6 +404,7 @@ describe("the merge target of a session", () => {
     commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
     const heads = () => ({ main: git(repo, "rev-parse", "main"), develop: git(repo, "rev-parse", "develop") });
     await s.backend.endTurn("Added feature.txt.");
+    await reviewFullStackTask(s, session);
     await waitUntil(() => session.status === "completed", "session completed");
     return { repo, session, heads };
   }
@@ -408,7 +412,7 @@ describe("the merge target of a session", () => {
   it("the 🔀 prompt, the Merge button and the outcome line all name the session's recorded base", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { repo, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
-    const prompt = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const prompt = await s.waitForMessage(/^🔀 \[merge-target\] Ready for integration on `[^`]+` → `develop`/);
     const before = heads();
     const merge = buttonIn(prompt, "Merge");
 
@@ -416,7 +420,7 @@ describe("the merge target of a session", () => {
     await waitUntil(() => exists(repo, "develop", "feature.txt"), "merged into the recorded base", 10_000);
     const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
 
-    assert.match(outcome.text, /^✅ \[merge-target\] Completed — Merged: `[^`]+` → `develop`/);
+    assert.match(outcome.text, /^ℹ️ \[merge-target\] Merged: `[^`]+` → `develop`/);
     assert.equal(heads().main, before.main, "the default branch is untouched");
     assert.equal(exists(repo, "main", "feature.txt"), false);
   });
@@ -456,9 +460,10 @@ describe("the merge target of a session", () => {
     commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
     const developBefore = git(repo, "rev-parse", "develop");
     await s.backend.endTurn("Added feature.txt.");
+    await reviewFullStackTask(s, session);
 
-    const prompt = await s.waitForMessage(/^🔀 \[merge-pr-base\] Finished on `[^`]+` → `[^`]+`/);
-    assert.match(prompt.text, /^🔀 \[merge-pr-base\] Finished on `[^`]+` → `main`/);
+    const prompt = await s.waitForMessage(/^🔀 \[merge-pr-base\] Ready for integration on `[^`]+` → `[^`]+`/);
+    assert.match(prompt.text, /^🔀 \[merge-pr-base\] Ready for integration on `[^`]+` → `main`/);
     await s.click(buttonIn(prompt, "Merge"));
     await waitUntil(() => exists(repo, "main", "feature.txt"), "merged where the prompt said", 10_000);
     const outcome = await s.waitForMessage(/Merged: `[^`]+` → `[^`]+`/, prompt.index + 1);
@@ -469,7 +474,7 @@ describe("the merge target of a session", () => {
   it("a resumed session keeps its recorded base: the second prompt and its Merge button name it again", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { repo, session, heads } = await finishedSession(s, { strategy: "ask", launchFrom: "develop", recordBase: true });
-    const first = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `develop`/);
+    const first = await s.waitForMessage(/^🔀 \[merge-target\] Ready for integration on `[^`]+` → `develop`/);
     const before = heads();
 
     // The user continues the session instead of deciding; it completes again.
@@ -482,8 +487,9 @@ describe("the merge target of a session", () => {
     assert.equal(resumed.worktreeBaseBranch, "develop");
     commit(resumed.worktreePath!, "more.txt", "more\n", "add more");
     await s.backend.endTurn("Added more.txt.");
+    await reviewFullStackTask(s, resumed);
 
-    const second = await s.waitForMessage(/^🔀 \[merge-target\] Finished on `[^`]+` → `[^`]+`/, first.index + 1);
+    const second = await s.waitForMessage(/^🔀 \[merge-target\] Ready for integration on `[^`]+` → `[^`]+`/, first.index + 1);
     assert.match(second.text, /→ `develop`/);
     await s.click(buttonIn(second, "Merge"));
     await waitUntil(() => exists(repo, "develop", "more.txt"), "merged into the recorded base", 10_000);
@@ -507,31 +513,51 @@ describe("the merge target of a session", () => {
 });
 
 describe("auto-merge conflicts", () => {
-  it("starts a conflict resolver session on a real rebase conflict and merges once it finishes", async () => {
-    const s = stack = await startFullStack({ backend: "codex" });
+  it("starts a conflict resolver on a real rebase conflict and integrates after reviewing the resolver and parent", async () => {
+    // This scenario has two independent backend conversations. The Codex
+    // driver uses one fixed thread ID, whereas Claude allocates one per launch.
+    const s = stack = await startFullStack({ backend: "claude-code" });
     const turnsBefore = s.backend.turns.length;
     const { repo, session } = await finishConflictingSession(s, "auto-merge");
-    await s.waitForMessage(/Completed — merge conflict[^\n]*\nResolver session [\w-]+ is fixing it; the merge is retried automatically when it succeeds\./);
+    await s.waitForMessage(/Integration needs attention — merge conflict[^\n]*\nResolver session [\w-]+ is fixing it; the merge is retried automatically when it succeeds\./);
     await waitUntil(() => s.backend.turns.length > turnsBefore + 1, "the resolver's first turn");
     const resolver = s.sm.list("all").find((candidate) => candidate.autoMergeParentSessionId === session.id);
     assert.ok(resolver, "a resolver session linked to the parent");
+    assert.notEqual(resolver.harnessSessionId, session.harnessSessionId, "independent executions need distinct backend identities");
+    assert.equal(s.sm.getPersistedSession(session.id)?.sessionId, session.id, "the resolver must not replace the parent's persisted generation");
     assert.equal(resolver.workdir, session.worktreePath, "the resolver works in the conflicting worktree");
     assert.match(s.backend.turns.at(-1)?.text ?? "", /conflict/i);
 
-    // The resolver settles the conflict, then finishes its turn.
-    git(repo, "reset", "--hard", "HEAD~1");
+    // Resolve in the task checkout while keeping main intact. The resulting
+    // rewritten head invalidates the parent's earlier verification receipt.
+    const mainHead = git(repo, "rev-parse", "main");
+    assert.throws(() => git(session.worktreePath!, "rebase", "main"), /./);
+    assert.match(git(session.worktreePath!, "diff", "--name-only", "--diff-filter=U"), /README\.md/);
+    writeFileSync(join(session.worktreePath!, "README.md"), "hello from main and the branch\n");
+    git(session.worktreePath!, "add", "README.md");
+    git(session.worktreePath!, "-c", "core.editor=true", "rebase", "--continue");
+    assert.equal(git(session.worktreePath!, "status", "--porcelain"), "");
+    assert.equal(git(repo, "rev-parse", "main"), mainHead);
     await s.backend.endTurn("Resolved the conflict.");
-    await waitUntil(() => resolver.status === "completed", "resolver completed");
+    await waitUntil(() => resolver.status === "completed", "resolver execution ended");
+    await reviewFullStackTask(s, resolver);
+    await s.waitForMessage(/The resolver's outcome was reviewed; the parent task still requires verification against the changed checkout\. Nothing was merged automatically\./);
+    assert.notEqual(s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state, "merged");
+    const parentReview = await s.runTool("agent_report_outcome", {
+      ocaSessionId: session.id, ...reviewedTaskInput(session),
+      summary: "Reviewed the parent task and required checks after conflict resolution.",
+    });
+    assert.match(parentReview, /^Task outcome recorded: completed; verification passed/);
     await waitUntil(
       () => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged",
       "parent branch merged after the resolver finished",
       10_000,
     );
     assert.ok(existsSync(join(repo, "feature.txt")));
-    await s.waitForMessage(/^ℹ️ \[[\w-]+\] Merged: `agent\/codex-fullstack` → `main`/);
+    await s.waitForMessage(/^ℹ️ \[[\w-]+\] Merged: `agent\/claude-code-fullstack` → `main`/);
   });
 
-  it("only logs when a resolver finishes after its parent session is gone", async () => {
+  it("preserves the resolver terminal notice and only logs integration when its parent is gone", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const workdir = mkdtempSync(join(tmpdir(), "oca-orphan-resolver-"));
     const sendsBefore = s.host.durableSends.length;
@@ -553,7 +579,10 @@ describe("auto-merge conflicts", () => {
     await waitUntil(() => resolver.status === "completed", "resolver completed");
     await waitUntil(() => s.host.logs.some((entry) => /original session no-such-parent could not be found/.test(entry.message)), "orphan warning");
     assert.equal(s.sm.getPersistedSession(resolver.id)?.status, "completed");
-    assert.equal(s.host.durableSends.length, sendsBefore, "nothing is sent for an orphaned resolver");
+    const terminal = await s.waitForMessage(/^⚠️ \[orphan-resolver\] Execution ended — task completion unverified/, sendsBefore);
+    assert.equal(s.host.durableSends.length, sendsBefore + 1, "the resolver still owes one honest terminal notice");
+    assert.ok(terminal.buttons.some((button) => button.label === "View output"));
+    assert.equal(terminal.buttons.some((button) => /Merge|PR|Discard/.test(button.label)), false);
   });
 });
 
@@ -565,6 +594,7 @@ describe("snooze and reminders", () => {
     const session = await s.launch({ workdir: repo, worktreeStrategy: "ask" });
     commit(session.worktreePath!, "feature.txt", "feature\n", "add feature");
     await s.backend.endTurn("Added feature.txt.");
+    await reviewFullStackTask(s, session);
     const later = await s.waitForButton("Later");
     const click = await s.click(later);
     assert.match(click.replies.join("\n"), /Reminder snoozed 24h/);
@@ -893,7 +923,7 @@ describe("goal loop", () => {
     await s.sm.whenStorePersisted();
 
     const text = await s.runTool("agent_kill", { ocaSessionId: session.id, reason: "completed" });
-    assert.match(text, /Marked as completed \(it was not running\)\. Its goal task "[\w-]+" is stopped: the session was closed without running, so its verifiers did not run\./);
+    assert.match(text, /Execution closed \(it was not running\); task completion remains unverified\. Its goal task "[\w-]+" is stopped: the session was closed without running, so its verifiers did not run\./);
 
     assert.equal(s.sm.getPersistedSession(session.id)?.status, "completed");
     await waitUntil(() => ["stopped", "failed", "succeeded"].includes(s.gc.getTask(task.id)?.status ?? ""), "the goal task ends");

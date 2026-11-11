@@ -92,8 +92,8 @@ export function getKillSessionText(
       // Only the orchestrator's tool can ask for this. No completion handling
       // runs for a session that was not running, so an open branch is named.
       const branch = openWorktreeBranch(target);
-      return `ℹ️ [${target.name}] Marked as completed (it was not running).${goalTask ? ` Its goal task "${goalTask}" is stopped: the session was closed without running, so its verifiers did not run.` : ""}${branch
-        ? ` Its branch \`${branch}\` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).`
+      return `ℹ️ [${target.name}] Execution closed (it was not running); task completion remains unverified.${goalTask ? ` Its goal task "${goalTask}" is stopped: the session was closed without running, so its verifiers did not run.` : ""}${branch
+        ? ` Its branch \`${branch}\` is preserved. Review its evidence or resume the remaining work; no integration decision follows.`
         : ""}`;
     }
     if (closed === "unsaved") return `❌ [${target.name}] Not stopped: the stop could not be saved. Try again.`;
@@ -108,9 +108,9 @@ export function getKillSessionText(
   }
 
   if (reason === "completed") {
-    // A real completion: the lifecycle sends the user `✅ [name] Completed`.
+    // Close execution only; task success still requires reviewed evidence.
     session.complete();
-    return `ℹ️ [${session.name}] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).`;
+    return `ℹ️ [${session.name}] Execution closed; task completion requires reviewed evidence. The user gets the actual task status.`;
   }
 
   // A goal's session is stopped through its goal task: the task's

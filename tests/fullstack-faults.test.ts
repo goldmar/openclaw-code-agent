@@ -1,10 +1,12 @@
 import "./test-env";
+import { reviewFullStackTask } from "./fullstack-fixture";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isTaskOutcomeCurrent } from "../src/session-task-outcome";
 import { runtimeLlmTimeoutsMs } from "../src/runtime-llm";
 import { sessionStoreStorageInternals } from "../src/session-store-storage";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
@@ -97,6 +99,7 @@ describe("restart from every saved store snapshot", () => {
     git(worktree, "add", "feature.txt");
     git(worktree, "commit", "-m", "add feature");
     await s.backend.endTurn("Added feature.txt.");
+    await reviewFullStackTask(s, session);
     await s.click(await s.waitForButton("Merge"));
     await waitUntil(() => s.sm.getPersistedSession(session.id)?.worktreeLifecycle?.state === "merged", "merge recorded", 10_000);
     await s.sm.whenStorePersisted();
@@ -109,6 +112,8 @@ describe("restart from every saved store snapshot", () => {
       const label = `snapshot ${index + 1}/${snapshots.length}`;
       const saved = JSON.parse(snapshot) as IndexFile;
       await s.restartFromIndex(snapshot);
+      await (s.sm as unknown as { maintenance: { whenIdle(): Promise<void> } }).maintenance.whenIdle();
+      const integrationReady = new Set<string>();
       const turnsBefore = s.backend.turns.length;
 
       for (const row of saved.sessions) {
@@ -119,14 +124,19 @@ describe("restart from every saved store snapshot", () => {
           assert.equal(loaded.pendingPlanApproval, true, `${label}: pending plan kept`);
           assert.equal(loaded.actionablePlanDecisionVersion, row.actionablePlanDecisionVersion, `${label}: plan version kept`);
         }
-        // An open worktree decision stays open and still has a live button to decide it.
+        // A saved integration decision stays actionable only while its exact
+        // reviewed checkout still exists. Replaying pre-merge metadata against
+        // the final merged filesystem must retire its stale decision instead.
         const lifecycle = row.worktreeLifecycle?.state;
         if (row.pendingWorktreeDecisionSince && !RESOLVED_LIFECYCLE.has(lifecycle ?? "")) {
-          assert.ok(loaded.pendingWorktreeDecisionSince, `${label}: pending worktree decision kept`);
-          const live = saved.actionTokens.filter((token) => token.sessionId === row.sessionId
-            && WORKTREE_DECISION_KINDS.has(token.kind) && token.consumedAt == null);
-          if (live.length > 0) {
-            assert.ok(live.some((token) => s.sm.getActionToken(token.id)), `${label}: a live worktree button survives`);
+          if (await isTaskOutcomeCurrent(loaded)) {
+            integrationReady.add(row.sessionId);
+            assert.ok(loaded.pendingWorktreeDecisionSince, `${label}: verified pending decision kept`);
+            const live = saved.actionTokens.filter((token) => token.sessionId === row.sessionId
+              && WORKTREE_DECISION_KINDS.has(token.kind) && token.consumedAt == null);
+            if (live.length > 0) assert.ok(live.some((token) => s.sm.getActionToken(token.id)), `${label}: a verified integration button survives`);
+          } else {
+            assert.equal(loaded.pendingWorktreeDecisionSince, undefined, `${label}: stale integration eligibility retired`);
           }
         }
         // No orphan worktree state: a resolved decision keeps no pending marker.
@@ -135,11 +145,17 @@ describe("restart from every saved store snapshot", () => {
         }
       }
 
-      // Every unused button survives the restart, including the buttons of a
-      // pending question (they resume the suspended session with the answer).
+      // Approval and question controls remain recoverable. Obsolete
+      // integration controls must never act merely because their token survived.
       for (const token of saved.actionTokens) {
         if (token.consumedAt != null || (token.expiresAt != null && token.expiresAt <= Date.now())) continue;
-        assert.ok(s.sm.getActionToken(token.id), `${label}: live ${token.kind} button survives the restart`);
+        if (WORKTREE_DECISION_KINDS.has(token.kind) && !integrationReady.has(token.sessionId)) {
+          const stale = await s.click(token.id);
+          assert.doesNotMatch(stale.replies.join("\n"), ACTED, `${label}: stale ${token.kind} acted`);
+          assert.equal(git(repo, "rev-parse", "main"), mainHead, `${label}: stale integration left Git unchanged`);
+        } else {
+          assert.ok(s.sm.getActionToken(token.id), `${label}: live ${token.kind} button survives the restart`);
+        }
       }
 
       // A button already used before the restart never acts again. Each one is
@@ -223,6 +239,7 @@ describe("host model faults", () => {
     git(session.worktreePath!, "add", "feature.txt");
     git(session.worktreePath!, "commit", "-m", "add feature");
     await s.backend.endTurn("Added feature.txt with the new flag.");
+    await reviewFullStackTask(s, session);
     return repo;
   }
 
@@ -281,6 +298,7 @@ describe("Gateway stop during a button action", () => {
     git(session.worktreePath!, "add", "feature.txt");
     git(session.worktreePath!, "commit", "-m", "add feature");
     await s.backend.endTurn("Added feature.txt.");
+    await reviewFullStackTask(s, session);
     const merge = await s.waitForButton("Merge");
     await s.sm.whenStorePersisted();
     const [click] = await Promise.all([s.click(merge), s.host.stopServices()]);

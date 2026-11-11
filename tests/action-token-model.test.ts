@@ -2,6 +2,13 @@ import "./test-env";
 import { after, afterEach, before, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
+import type { PersistedSessionInfo } from "../src/types";
+import type { TaskOutcomeReport } from "../src/session-task-outcome";
 import { createCallbackHandler } from "../src/callback-handler";
 import { SessionActionTokenStore } from "../src/session-action-token-store";
 import { setAutoUpdateService, setSessionManager } from "../src/singletons";
@@ -44,6 +51,7 @@ type TokenModel = {
 type Model = {
   tokens: TokenModel[];
   settled: Map<string, "merged" | "discarded">;
+  ready: Map<string, boolean>;
 };
 
 type Action = { sessionId: string; kind: Kind };
@@ -53,11 +61,13 @@ type Real = {
   actions: Action[];
   /** Outcome of the next worktree tool/action per session (true = success). */
   nextOutcome: Map<string, boolean>;
-  persisted: Map<string, { name: string; worktreeMerged?: boolean; worktreeDismissedAt?: string }>;
+  persisted: Map<string, PersistedSessionInfo>;
+  reviewedReports: Map<string, TaskOutcomeReport>;
   handler: ReturnType<typeof createCallbackHandler>["handler"];
 };
 
 let clock = 1_000_000;
+let modelRepo: string;
 
 function isLive(token: TokenModel): boolean {
   return !token.deleted && !token.consumed && !(token.expiresAt !== undefined && token.expiresAt <= clock);
@@ -99,13 +109,19 @@ function buildCtx(payload: string, channel: "telegram" | "discord", replies: str
   return ctx as unknown as Ctx;
 }
 
-function createReal(): Real {
+function createReal(ready: boolean): Real {
   const store = new SessionActionTokenStore(() => {}, RETENTION_MS);
   const actions: Action[] = [];
   const nextOutcome = new Map<string, boolean>();
-  const persisted = new Map<string, { name: string; worktreeMerged?: boolean; worktreeDismissedAt?: string }>(
-    SESSIONS.map((id) => [id, { name: `${id}-name` }]),
-  );
+  const reviewedReports = new Map<string, TaskOutcomeReport>();
+  const persisted = new Map<string, PersistedSessionInfo>(SESSIONS.map((id): [string, PersistedSessionInfo] => {
+    const row: PersistedSessionInfo = { sessionId: id, harnessSessionId: `${id}-backend`, name: `${id}-name`,
+      prompt: "Model task", workdir: modelRepo, status: "completed", createdAt: 1_000_000, costUsd: 0 };
+    reviewedTaskFixture(row);
+    reviewedReports.set(id, row.taskOutcome!);
+    if (!ready) row.taskOutcome = undefined;
+    return [id, row];
+  }));
   const outcome = (sessionId: string): boolean => nextOutcome.get(sessionId) ?? true;
 
   // Only the members the callback handler calls for these action kinds.
@@ -130,7 +146,7 @@ function createReal(): Real {
   };
   setSessionManager(manager as unknown as SessionManager);
 
-  const toolResult = (success: boolean) => ({ content: [{ type: "text", text: success ? "✅ done" : "❌ failed" }], meta: { success, outcomeNotified: success } });
+  const toolResult = (success: boolean) => ({ content: [{ type: "text", text: success ? "ℹ️ integration done" : "❌ failed" }], meta: { success, outcomeNotified: success } });
   const mergeTool = (() => ({
     execute: async (_id: string, params: { ocaSessionId: string }) => {
       await Promise.resolve();
@@ -150,7 +166,7 @@ function createReal(): Real {
 
   // plan-offer-dismiss and plugin-update-dismiss act by replying; count those replies.
   const handler = createCallbackHandler("telegram", { makeAgentMergeTool: mergeTool, makeAgentPrTool: prTool }).handler;
-  return { store, actions, nextOutcome, persisted, handler };
+  return { store, actions, nextOutcome, persisted, reviewedReports, handler };
 }
 
 /** Replies that mean a non-worktree token acted. */
@@ -172,7 +188,10 @@ class Mint implements Command {
   async run(model: Model, real: Real): Promise<void> {
     const sessionId = SESSIONS[this.session];
     const expiresAt = this.ttl === undefined ? undefined : clock + this.ttl;
-    const token = real.store.createActionToken(sessionId, this.kind, expiresAt === undefined ? {} : { expiresAt });
+    const token = real.store.createActionToken(sessionId, this.kind, {
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(isWorktreeKind(this.kind) ? { worktreeDecisionCycle: real.persisted.get(sessionId)!.createdAt } : {}),
+    });
     model.tokens.push({ id: token.id, sessionId, kind: this.kind, expiresAt, consumed: false, deleted: false, acted: 0 });
     assertStoreMatchesModel(model, real);
   }
@@ -217,7 +236,12 @@ function applyClick(model: Model, token: TokenModel | undefined, wasLive: boolea
     assert.ok(replies.some((text) => text.includes(`already resolved (${settledBefore})`)), `${label}: ${JSON.stringify(replies)}`);
     return;
   }
-  assert.equal(acted, 1, `${label}: a live token did not act`);
+  if (isWorktreeKind(token.kind) && model.ready.get(token.sessionId) !== true) {
+    assert.equal(acted, 0, `${label}: unverified worktree decision acted`);
+    assert.ok(replies.some((text) => /no longer ready|evidence changed/.test(text)), `${label}: ${JSON.stringify(replies)}`);
+    return;
+  }
+  assert.equal(acted, 1, `${label}: a live, ready token did not act`);
   token.acted += 1;
   assert.equal(token.acted, 1, `${label}: token acted twice`);
   if (actionsRun.length === 1) {
@@ -261,7 +285,10 @@ class DoubleClick implements Command {
     for (const sessionId of SESSIONS) {
       const worktreeActions = actions.filter((action) => action.sessionId === sessionId);
       assert.ok(worktreeActions.length <= 1, `${this.toString()}: concurrent worktree actions on ${sessionId}`);
-      if (worktreeActions.length > 0) assert.equal(settledBefore.get(sessionId), undefined, `${this.toString()}: acted on a settled worktree`);
+      if (worktreeActions.length > 0) {
+        assert.equal(settledBefore.get(sessionId), undefined, `${this.toString()}: acted on a settled worktree`);
+        assert.equal(model.ready.get(sessionId), true, `${this.toString()}: acted without task readiness`);
+      }
     }
     // Every live token that was clicked is consumed unless the worktree lock
     // turned its click away; read that back from the store.
@@ -333,6 +360,19 @@ class SettleElsewhere implements Command {
   toString(): string { return `settleElsewhere(${SESSIONS[this.session]},${this.how})`; }
 }
 
+/** Reviewed evidence can arrive or be withdrawn independently of token liveness. */
+class SetReadiness implements Command {
+  constructor(readonly session: number, readonly ready: boolean) {}
+  check(): boolean { return true; }
+  async run(model: Model, real: Real): Promise<void> {
+    const sessionId = SESSIONS[this.session];
+    real.persisted.get(sessionId)!.taskOutcome = this.ready ? real.reviewedReports.get(sessionId) : undefined;
+    model.ready.set(sessionId, this.ready);
+    assertStoreMatchesModel(model, real);
+  }
+  toString(): string { return `readiness(${SESSIONS[this.session]},${this.ready})`; }
+}
+
 const sessionIndexArb = fc.nat({ max: SESSIONS.length - 1 });
 const commandArbs: fc.Arbitrary<Command>[] = [
   fc.tuple(sessionIndexArb, fc.constantFrom<Kind>(...WORKTREE_KINDS, ...OTHER_KINDS), fc.option(fc.integer({ min: 1, max: 5_000 }), { nil: undefined }))
@@ -344,32 +384,55 @@ const commandArbs: fc.Arbitrary<Command>[] = [
   fc.nat({ max: 20 }).map((ref) => new ExternalConsume(ref)),
   fc.constant(new Purge()),
   sessionIndexArb.map((session) => new DeleteSessionTokens(session)),
+  fc.tuple(sessionIndexArb, fc.boolean()).map(([session, ready]) => new SetReadiness(session, ready)),
   fc.tuple(sessionIndexArb, fc.constantFrom<"merged" | "discarded">("merged", "discarded")).map(([session, how]) => new SettleElsewhere(session, how)),
 ];
 
 describe("action tokens and worktree decisions (model-based)", () => {
   before(() => {
+    modelRepo = mkdtempSync(join(tmpdir(), "oca-action-token-model-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", modelRepo, ...args], { stdio: "ignore" });
+    git("init", "-b", "main");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-m", "model baseline");
     mock.method(Date, "now", () => clock);
     setAutoUpdateService(null);
   });
-  after(() => mock.restoreAll());
+  after(() => { mock.restoreAll(); rmSync(modelRepo, { recursive: true, force: true }); });
   afterEach(() => setSessionManager(null));
 
   it("acts at most once per live token and never on a settled worktree", async () => {
     await fc.assert(
       fc.asyncProperty(fc.commands(commandArbs, { maxCommands: 35 }), async (commands) => {
         clock = 1_000_000;
-        const real = createReal();
-        const model: Model = { tokens: [], settled: new Map() };
+        const real = createReal(true);
+        const model: Model = { tokens: [], settled: new Map(), ready: new Map(SESSIONS.map((id) => [id, true])) };
         await fc.asyncModelRun(() => ({ model, real }), commands);
       }),
       propertyParams(120),
     );
   });
 
+  it("consumes a current live worktree token without acting when task evidence is absent", async () => {
+    clock = 1_000_000;
+    const real = createReal(false);
+    const token = real.store.createActionToken("sess-a", "worktree-merge", { worktreeDecisionCycle: 1_000_000 });
+    const replies: string[] = [];
+    await real.handler(buildCtx(token.id, "telegram", replies));
+    assert.deepEqual(real.actions, []);
+    assert.ok(replies.some((text) => /no longer ready/.test(text)));
+    const consumed = real.store.getActionToken(token.id);
+    assert.ok(consumed, "consumption remains available as an audit receipt");
+    assert.equal(consumed.consumedAt, clock);
+    assert.equal(typeof consumed.consumptionId, "string");
+    const receipt = structuredClone(consumed);
+    await real.handler(buildCtx(token.id, "telegram", replies));
+    assert.deepEqual(real.actions, [], "a repeat click cannot act after refusal consumed the token");
+    assert.deepEqual(real.store.getActionToken(token.id), receipt, "repeat refusal preserves the original consumption receipt");
+  });
+
   it("rejects a token that expires between mint and click", async () => {
     clock = 5_000;
-    const real = createReal();
+    const real = createReal(false);
     const token = real.store.createActionToken("sess-a", "worktree-merge", { expiresAt: clock + 10 });
     clock += 10;
     const replies: string[] = [];

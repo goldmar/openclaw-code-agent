@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -74,6 +75,19 @@ function stubDispatch(sm: SessionManager): void {
   (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
 }
 
+function registerReviewedSession(sm: SessionManager, session: any): void {
+  reviewedTaskFixture(session);
+  (sm as any).sessions.set(session.id, session);
+  for (const [key, row] of (sm as any).store.persisted) {
+    if (key === session.id || row.harnessSessionId === session.harnessSessionId) {
+      Object.assign(row, { taskOutcome: session.taskOutcome, createdAt: session.startedAt });
+    }
+  }
+  sm.updatePersistedSession(session.harnessSessionId ?? session.id, {
+    taskOutcome: session.taskOutcome, createdAt: session.startedAt,
+  });
+}
+
 function buttonLabels(rows: Array<Array<{ label: string }>> | undefined): string[][] {
   return (rows ?? []).map((row) => row.map((button) => button.label));
 }
@@ -123,6 +137,7 @@ async function createPendingDelegateDecisionFixture(policy: "pr-required" | "nev
     pendingWorktreeDecisionSince: new Date().toISOString(),
     pendingPlanApproval: false,
   });
+  reviewedTaskFixture((sm as any).sessions.get(`s-live-policy-${policy}`));
 
   return {
     sm,
@@ -193,6 +208,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "No repo changes were needed after validation.",
         ],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -202,7 +218,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.match(request.userMessage, /^✅ \[no-change\] Completed — no changes to merge/);
+      assert.match(request.userMessage, /^ℹ️ \[no-change\] No changes to merge/);
       assert.equal(request.notifyUser, "always");
       assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
@@ -299,6 +315,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "Final local worktree is clean.",
         ],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -310,7 +327,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
       // A completed session gets its ✅ even after an earlier PR outcome (A7).
-      assert.match(request.userMessage, /^✅ \[pr-updated-clean\] Completed — no changes to merge/);
+      assert.match(request.userMessage, /^ℹ️ \[pr-updated-clean\] No changes to merge/);
       assert.match(request.wakeMessage, /Updated a PR; no local branch changes remained to merge/);
       const persisted = (sm as any).store.persisted.get("h-pr-updated-clean");
       assert.equal(persisted.worktreePath, undefined);
@@ -344,7 +361,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
-      (sm as any).store.persisted.set("h-pr-open-no-change", {
+      (sm as any).store.replacePersistedSession({
+        sessionId: "s-pr-open-no-change",
         harnessSessionId: "h-pr-open-no-change",
         backendRef: { kind: "claude-code", conversationId: "h-pr-open-no-change" },
         name: "pr-open-no-change",
@@ -398,6 +416,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "Existing PR remains open.",
         ],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -408,7 +427,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.match(request.userMessage, /Completed — no changes to merge/);
+      assert.match(request.userMessage, /No changes to merge/);
       assert.match(request.wakeMessage, /Completed with no branch changes to merge/);
       assert.doesNotMatch(request.wakeMessage, /completed with no repository changes/);
       const persisted = (sm as any).store.persisted.get("h-pr-open-no-change");
@@ -504,6 +523,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         pendingPlanApproval: false,
         getOutput: () => ["Implemented the requested feature change."],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -579,6 +599,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "- Add regression coverage for no-change planning sessions",
         ],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -587,7 +608,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "✅ [plan-report] Completed — no changes to merge");
+      assert.equal(request.userMessage, "ℹ️ [plan-report] No changes to merge");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);
@@ -638,6 +659,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "Recommended fix: inspect output before sending the generic no-change notification.",
         ],
       };
+      registerReviewedSession(sm, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
@@ -646,7 +668,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "✅ [investigation-report] Completed — no changes to merge");
+      assert.equal(request.userMessage, "ℹ️ [investigation-report] No changes to merge");
       assert.match(request.wakeMessage, /Tell the user in one or two sentences what was done/);
       assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /Do not repeat the status line/);
@@ -656,7 +678,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("marks dirty uncommitted worktree completion as a pending decision instead of no-change", async () => {
+  it("preserves dirty unfinished work without creating integration decisions", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-dirty-completion-"));
     let cleanup = () => {};
     try {
@@ -712,24 +734,12 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: false });
       assert.equal(existsSync(worktreePath), true);
-      const calls = (sm as any).__dispatchCalls;
-      assert.equal(calls.length, 1);
-      const [_sessionArg, request] = calls[0];
-      assert.equal(request.label, "worktree-dirty-uncommitted");
-      assert.match(request.userMessage, /^⚠️ \[[\w-]+\] Completed — uncommitted changes on `[^`]+`[^\n]*\nThe branch has no commits, so there is nothing to merge yet\.\n/);
-      // N44: the guidance comes with buttons to act on it.
-      assert.deepEqual(request.buttons?.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Commit changes", "View output", "Discard"]]);
-      assert.match(request.userMessage, /new-file\.txt/);
-      // Buttons that cannot be delivered have no text-only fallback: the orchestrator asks the user instead.
-      assert.match(request.wakeMessageOnNotifyFailed ?? "", /the Commit changes \/ Discard buttons could not be shown/);
-      assert.match(request.wakeMessageOnNotifyFailed ?? "", /agent_worktree_cleanup\(ocaSessionId='.+', dismiss_session=true\)/);
+      assert.deepEqual((sm as any).__dispatchCalls, []);
       const persisted = (sm as any).store.persisted.get("h-dirty-completion");
-      assert.equal(persisted.lifecycle, "awaiting_worktree_decision");
-      assert.equal(persisted.worktreeState, "pending_decision");
-      assert.equal(persisted.worktreeLifecycle?.state, "pending_decision");
-      assert.deepEqual(persisted.worktreeLifecycle?.notes, ["dirty_uncommitted_completion"]);
+      assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+      assert.notEqual(persisted.worktreeState, "pending_decision");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -803,12 +813,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         originSessionKey: "agent:main:telegram:group:-1001234567890:topic:13832",
         pendingPlanApproval: false,
       };
+      registerReviewedSession(sm, session);
       (sm as any).sessions.set(session.id, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
       // The wake goes only to the orchestrator; terminal handling still owes the user `✅ Completed`.
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false, userCompletionNoticeOwed: true });
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
       const calls = (sm as any).__dispatchCalls;
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
@@ -834,7 +845,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         ].join("\n"),
       );
 
-      assert.match(response, /Canonical worktree decision prompt sent/);
+      assert.match(response, /Canonical worktree decision prompt (?:sent|is being delivered)/);
       assert.equal(calls.length, 2);
       const [_promptSessionArg, promptRequest] = calls[1];
       assert.equal(promptRequest.label, "worktree-merge-ask");
@@ -861,7 +872,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         "The branch is ready for a worktree decision.",
       );
 
-      assert.match(response, /Canonical worktree decision prompt sent/);
+      assert.match(response, /Canonical worktree decision prompt (?:sent|is being delivered)/);
       const request = fixture.dispatchCalls().at(-1)?.[1];
       assert.equal(request.label, "worktree-merge-ask");
       const labels = buttonLabels(request.buttons);
@@ -888,12 +899,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       Object.assign(active, { backendRef, route, originalWorkdir: undefined, worktreePath: undefined,
         worktreeBranch: undefined, worktreeBaseBranch: undefined });
       const response = await fixture.sm.requestWorktreeDecisionFromUser(id, "Review the legacy worktree.");
-      assert.match(response, /Canonical worktree decision prompt sent/);
-      const [target, request] = fixture.dispatchCalls().at(-1)!;
-      assert.equal(target.id, id);
-      assert.match(request.userMessage, /Review the legacy worktree/);
-      assert.equal(hasButton(buttonLabels(request.buttons), "Open PR"), true);
-      assert.equal(hasButton(buttonLabels(request.buttons), "Merge"), false);
+      assert.match(response, /^Error: Task completion and verification are not established/);
+      assert.deepEqual(fixture.dispatchCalls(), []);
     } finally {
       fixture.cleanup();
     }
@@ -908,7 +915,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "The branch is ready for a worktree decision.",
         );
 
-        assert.match(response, /Canonical worktree decision prompt sent/);
+        assert.match(response, /Canonical worktree decision prompt (?:sent|is being delivered)/);
         const request = fixture.dispatchCalls().at(-1)?.[1];
         assert.equal(request.label, "worktree-merge-ask");
         const labels = buttonLabels(request.buttons);
@@ -1004,6 +1011,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
           "Verified with focused regression tests for summary quality and callback cleanup.",
         ],
       };
+      registerReviewedSession(sm, session);
       (sm as any).sessions.set(session.id, session);
 
       const result = await (sm as any).handleWorktreeStrategy(session);
@@ -1013,7 +1021,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-merge-ask");
-      assert.match(request.userMessage, /^🔀 \[ask-summary\] Finished on `agent\/ask-summary` → `main`/);
+      assert.match(request.userMessage, /^🔀 \[ask-summary\] Ready for integration on `agent\/ask-summary` → `main`/);
       assert.match(request.userMessage, /Fixed the worktree decision notification so it explains the completed UX changes/);
       assert.match(request.userMessage, /Updated callback cleanup so successful decisions resolve the original Telegram buttons/);
       assert.match(request.userMessage, /Covered the summary and callback behavior with focused regression tests/);
@@ -1082,6 +1090,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         },
       });
 
+      reviewedTaskFixture((sm as any).store.persisted.get("h-resolved"));
       await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
@@ -1140,7 +1149,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(newerLive.worktreeState, "pending_decision", "the old row's patch never reaches the newer live session");
       assert.equal(newerLive.pendingWorktreeDecisionSince, "2026-01-01T00:00:00.000Z");
       assert.equal(existsSync(worktreePath), true, "the newer session's worktree is kept");
-      assert.equal((sm as any).store.persisted.get("h-old").worktreePath, undefined, "the stale row forgets the path");
+      assert.equal((sm as any).store.persisted.get("h-old").worktreePath, worktreePath, "unverified historical metadata is preserved");
       const newer = (sm as any).store.listPersistedSessions().find((row: { sessionId?: string; harnessSessionId?: string; worktreePath?: string }) => row.sessionId === "s-new");
       assert.equal(newer?.worktreePath, worktreePath, JSON.stringify((sm as any).store.listPersistedSessions().map((row: { sessionId?: string; harnessSessionId?: string; worktreePath?: string }) => [row.sessionId, row.harnessSessionId, row.worktreePath])));
     } finally {
@@ -1149,7 +1158,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup clears metadata for a resolved worktree that is already gone", async () => {
+  it("retention preserves unavailable historical metadata without task evidence", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-gone-"));
     let cleanup = () => {};
     try {
@@ -1196,10 +1205,10 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-gone"), Date.now());
 
       const persisted = (sm as any).store.persisted.get("h-gone");
-      assert.equal(persisted.worktreePath, undefined);
-      assert.equal(persisted.worktreeState, "none");
-      // git's stale registration was pruned through the primary checkout.
-      assert.doesNotMatch(git(repoDir, "worktree", "list"), /already-gone/);
+      assert.equal(persisted.worktreePath, worktreePath);
+      assert.equal(persisted.worktreeState, "merged");
+      // No cleanup operation was authorized from this unverified legacy row.
+      assert.match(git(repoDir, "worktree", "list"), /already-gone/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -1255,7 +1264,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup removes 4.x dismissed worktrees whose lifecycle is synthesized on load", async () => {
+  it("retention preserves legacy dismissed worktrees without reviewed task evidence", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-dismissed-"));
     let cleanup = () => {};
     try {
@@ -1298,10 +1307,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
 
-      assert.equal(existsSync(worktreePath), false);
+      assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-legacy-dismissed");
-      assert.equal(persisted.worktreePath, undefined);
-      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreePath, worktreePath);
       assert.equal(persisted.worktreeLifecycle?.state, "dismissed");
       assert.equal(persisted.worktreeLifecycle?.resolvedAt, dismissedAt);
     } finally {
@@ -1310,7 +1318,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup removes 4.x merged-disposition worktrees whose lifecycle is synthesized on load", async () => {
+  it("retention preserves legacy merged worktrees without reviewed task evidence", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-merged-"));
     let cleanup = () => {};
     try {
@@ -1353,10 +1361,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-merged"), Date.now());
 
-      assert.equal(existsSync(worktreePath), false);
+      assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-legacy-merged");
-      assert.equal(persisted.worktreePath, undefined);
-      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreePath, worktreePath);
       assert.equal(persisted.worktreeLifecycle?.state, "merged");
       assert.equal(persisted.worktreeLifecycle?.resolvedAt, mergedAt);
     } finally {

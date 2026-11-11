@@ -187,25 +187,11 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
 }
 
 /**
- * Defined (the cycle key) when this terminal cycle's completion notice was deferred to a `🔀`
- * decision prompt and the session is still completed, so the outcome that
- * resolves the decision is its `✅`. The prompt defers it under `ask`, under
- * `auto-merge` / `auto-pr` with hook or worktree-setup changes, and under a
- * policy-blocked `delegate` with such changes; an unblocked `delegate` sends
- * its wake and the generic `✅ Completed` instead, and the retry after a
- * conflict resolver defers nothing.
- * Read it immediately before the patch that resolves the decision and clear
- * `deferredCompletionCycle` in that patch: the `✅` is then sent exactly once,
- * a failed attempt leaves it owed, and it survives a Gateway restart.
+ * Legacy deferred-completion markers never grant task success. Structured task
+ * reporting owns the success notice; integration outcomes remain milestones.
  */
-export function owedCompletionCycle(sm: SessionManager, generation: SessionGeneration | undefined): number | undefined {
-  if (!generation) return undefined;
-  const row = sm.getSessionGeneration(generation);
-  const cycle = row?.deferredCompletionCycle;
-  // A marker from an earlier run of this id (the row's `createdAt` moved on) is stale.
-  if (!row || cycle === undefined || (row.createdAt !== undefined && row.createdAt !== cycle)) return undefined;
-  const activeId = generation.kind === "oca" ? generation.sessionId : generation.pinnedLiveSessionId;
-  return ((activeId ? sm.get(activeId) : undefined) ?? row).status === "completed" ? cycle : undefined;
+export function owedCompletionCycle(_sm: SessionManager, _generation: SessionGeneration | undefined): number | undefined {
+  return undefined;
 }
 
 export function patchWorktreeTarget(sm: SessionManager, target: ResolvedWorktreeToolTarget, patch: Partial<PersistedSessionInfo>): boolean {

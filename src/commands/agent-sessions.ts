@@ -1,6 +1,6 @@
 import { sessionManager } from "../singletons";
 import { SERVICE_NOT_RUNNING } from "./args";
-import { getSessionsListingText } from "../application/session-view";
+import { getFreshSessionsListingText } from "../application/session-view";
 
 interface CommandApi {
   registerCommand(config: {
@@ -8,7 +8,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: { args?: string }) => { text: string };
+    handler: (ctx: { args?: string }) => Promise<{ text: string }>;
   }): void;
 }
 
@@ -19,13 +19,13 @@ export function registerAgentSessionsCommand(api: CommandApi): void {
     description: "List coding agent sessions. Usage: /agent_sessions [--full]",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: { args?: string }) => {
+    handler: async (ctx: { args?: string }) => {
       if (!sessionManager) {
         return { text: SERVICE_NOT_RUNNING };
       }
 
       const full = (ctx.args ?? "").split(/\s+/).includes("--full");
-      return { text: getSessionsListingText(sessionManager, "all", undefined, { full }) };
+      return { text: await getFreshSessionsListingText(sessionManager, "all", undefined, { full }) };
     },
   });
 }

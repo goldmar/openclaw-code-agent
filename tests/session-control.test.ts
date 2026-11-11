@@ -97,7 +97,7 @@ describe("session-control app layer", () => {
     assert.equal(text, "⛔ [recovered] Stopped (it was not running).");
   });
 
-  it("marks recovered persisted-only sessions completed when requested", () => {
+  it("closes recovered persisted-only execution without certifying task completion", () => {
     let patch: Record<string, unknown> | undefined;
     const sm: any = {
       resolve: (): undefined => undefined,
@@ -118,10 +118,10 @@ describe("session-control app layer", () => {
 
     assert.equal(patch?.status, "completed");
     assert.equal(patch?.killReason, "done");
-    assert.equal(text, "ℹ️ [recovered] Marked as completed (it was not running).");
+    assert.equal(text, "ℹ️ [recovered] Execution closed (it was not running); task completion remains unverified.");
   });
 
-  it("marks session completed when requested", () => {
+  it("closes running execution without certifying task completion", () => {
     let completed = false;
     const session = {
       name: "s",
@@ -132,7 +132,7 @@ describe("session-control app layer", () => {
     const sm: any = { resolve: () => session };
     const text = getKillSessionText(sm, "s", "completed");
     assert.equal(completed, true);
-    assert.equal(text, "ℹ️ [s] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).");
+    assert.equal(text, "ℹ️ [s] Execution closed; task completion requires reviewed evidence. The user gets the actual task status.");
   });
 
   it("kills session via SessionManager when reason is killed", () => {
@@ -186,7 +186,7 @@ describe("session-control app layer", () => {
       closeSuspendedSession: (ref: string, completed: boolean) => { closed.push([ref, completed]); return completed ? "completed" : "killed"; },
     };
     assert.equal(getKillSessionText(sm, "s", "killed"), "⛔ [s] Stopped (it was not running).");
-    assert.equal(getKillSessionText(sm, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
+    assert.equal(getKillSessionText(sm, "s", "completed"), "ℹ️ [s] Execution closed (it was not running); task completion remains unverified.");
     assert.deepEqual(closed, [["s", false], ["s", true]]);
     assert.equal(killed, false, "nothing is running: no kill and no stop notice");
 
@@ -207,7 +207,7 @@ describe("session-control app layer", () => {
     const withBranch: any = { resolve: () => branch, closeSuspendedSession: () => "completed" };
     assert.equal(
       getKillSessionText(withBranch, "s", "completed"),
-      "ℹ️ [s] Marked as completed (it was not running). Its branch `agent/s` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).",
+      "ℹ️ [s] Execution closed (it was not running); task completion remains unverified. Its branch `agent/s` is preserved. Review its evidence or resume the remaining work; no integration decision follows.",
     );
     const goalStops: Array<[string | undefined, string]> = [];
     const goal: any = {
@@ -222,7 +222,7 @@ describe("session-control app layer", () => {
     };
     assert.equal(
       getKillSessionText(goal, "s", "completed"),
-      "ℹ️ [s] Marked as completed (it was not running). Its goal task \"ship-it\" is stopped: the session was closed without running, so its verifiers did not run.",
+      "ℹ️ [s] Execution closed (it was not running); task completion remains unverified. Its goal task \"ship-it\" is stopped: the session was closed without running, so its verifiers did not run.",
     );
     assert.equal(getKillSessionText(goal, "s", "killed"), "⛔ [s] Stopped (it was not running); goal task \"ship-it\" stopped.");
     assert.deepEqual(goalStops, [["goal-1", "completed"], ["goal-1", "killed"]], "the goal is told how its session was closed");
@@ -234,7 +234,7 @@ describe("session-control app layer", () => {
     const unsavedGoal: any = { ...goal, closeSuspendedSession: () => "unsaved", stopGoalOfClosedSession: () => { throw new Error("must not stop the goal"); } };
     assert.match(getKillSessionText(unsavedGoal, "s", "killed"), /^❌ \[s\] Not stopped/);
     const merged: any = { resolve: () => ({ ...branch, worktreeMerged: true }), closeSuspendedSession: () => "completed" };
-    assert.equal(getKillSessionText(merged, "s", "completed"), "ℹ️ [s] Marked as completed (it was not running).");
+    assert.equal(getKillSessionText(merged, "s", "completed"), "ℹ️ [s] Execution closed (it was not running); task completion remains unverified.");
   });
 
   it("rejects a plan that still waits when a suspended session is closed, loaded or stored", () => {

@@ -1,21 +1,22 @@
 import "./test-env";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Session } from "../src/session";
 import { SessionWorktreeActionService, type PlannedWorktreeAction } from "../src/session-worktree-action-service";
 import { SessionWorktreeController } from "../src/session-worktree-controller";
 import { createWorktree, getBranchName } from "../src/worktree";
-import { buildMergedPatch } from "../src/worktree-session-patches";
+import { buildMergedPatch, buildPrOpenPatch } from "../src/worktree-session-patches";
 import { createFakeGitHub, git, type FakeGitHub } from "./fake-github";
-import { startFullStack, type FullStack, type SentButton, type SentMessage } from "./fullstack-fixture";
+import { startFullStack, reviewFullStackTask, type FullStack, type SentButton, type SentMessage } from "./fullstack-fixture";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { waitUntil } from "./harness-backends";
 
 /**
  * Commits made after a session's PR was opened (or its branch was merged) must
- * not end with a plain `✅`: the worktree is "resolved" only while the branch
- * has nothing new.
+ * require integration follow-through after reviewed task success. A worktree
+ * remains resolved only while the branch has nothing new.
  */
 
 let github: FakeGitHub;
@@ -67,8 +68,19 @@ async function sessionWithMidRunPr(
   const branch = session.worktreeBranch!;
   commit(session.worktreePath!, `${name}-one.txt`, "one\n", "add one");
 
-  await s.runTool("agent_pr", { ocaSessionId: session.id });
-  await s.waitForMessage(new RegExp(`^ℹ️ \\[${name}\\] PR opened: `));
+  if (strategy === "delegate") {
+    // A human can open a PR while the delegated task runs. Delegated agent
+    // integration itself requires reviewed completion evidence.
+    git(session.worktreePath!, "push", "origin", branch);
+    const opened = github.seedPr({ headRefName: branch });
+    assert.equal(s.sm.updatePersistedSession(session.id, {
+      ...buildPrOpenPatch(session, { prUrl: opened.url, prNumber: opened.number, baseBranch: "main" }),
+      worktreePrHeadBranch: branch, worktreePrBaseBranch: "main",
+    }), true);
+  } else {
+    await s.runTool("agent_pr", { ocaSessionId: session.id });
+    await s.waitForMessage(new RegExp(`^ℹ️ \\[${name}\\] PR opened: `));
+  }
   const prUrl = github.readState().prs.at(-1)!.url;
   assert.equal(github.remoteHead(branch), git(github.repoDir, "rev-parse", branch), "the PR has the first commit");
   assert.equal(session.status, "running");
@@ -76,14 +88,15 @@ async function sessionWithMidRunPr(
 }
 
 describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
-  it("ask: the completion is the 🔀 prompt with Sync PR, and Sync PR pushes the commit and carries the ✅", async () => {
+  it("ask: reviewed task success precedes Sync PR, which pushes the commit with an informational outcome", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { session, branch, prUrl } = await sessionWithMidRunPr(s, "pr-run", "ask");
 
     const second = commit(session.worktreePath!, "pr-run-two.txt", "two\n", "add two");
     await s.backend.endTurn("Added both files.");
+    await reviewFullStackTask(s, session);
 
-    const prompt = await s.waitForMessage(/^🔀 \[pr-run\] Finished on /);
+    const prompt = await s.waitForMessage(/^🔀 \[pr-run\] Ready for integration on /);
     assert.match(prompt.text.split("\n")[0]!, /: 1 commit, 1 file, \+1\/-0/, "counts what the PR does not have");
     assert.match(prompt.text, /made after the PR was opened and are not in it yet/);
     assert.match(prompt.text, /add two/);
@@ -91,11 +104,11 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
     const labels = prompt.buttons.map((button) => button.label);
     for (const label of ["Sync PR", "View PR", "Later", "Discard"]) assert.ok(labels.includes(label), labels.join(", "));
     assert.equal(labels.includes("Open PR"), false);
-    assert.deepEqual(completionLines(s, "pr-run"), [], "the prompt replaces the completion line");
+    assert.equal(completionLines(s, "pr-run").length, 1, "reviewed success precedes the integration prompt");
     assert.notEqual(github.remoteHead(branch), second, "not pushed before the user decides");
 
     await s.click(buttonIn(prompt, "Sync PR"));
-    const outcome = await s.waitForMessage(/^✅ \[pr-run\] Completed — PR updated: /, prompt.index + 1);
+    const outcome = await s.waitForMessage(/^ℹ️ \[pr-run\] PR updated: /, prompt.index + 1);
 
     assert.ok(outcome.text.includes(prUrl), outcome.text);
     assert.equal(github.remoteHead(branch), second, "add two was pushed");
@@ -104,15 +117,16 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
     assert.equal(completionLines(s, "pr-run").length, 1, "exactly one completion line for the cycle");
   });
 
-  it("ask: nothing committed after the mid-run PR ends with the plain ✅ and no prompt", async () => {
+  it("ask: reviewed work already present in the mid-run PR needs no integration prompt", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
-    await sessionWithMidRunPr(s, "pr-synced", "ask");
+    const { session } = await sessionWithMidRunPr(s, "pr-synced", "ask");
 
     await s.backend.endTurn("Added the file.");
+    await reviewFullStackTask(s, session);
     const done = await s.waitForMessage(/^✅ \[pr-synced\] Completed/);
 
     assert.doesNotMatch(done.text, /not in the PR/);
-    assert.equal(done.text.split("\n").length, 1);
+    assert.match(done.text, /Reviewed fixture task and verification receipts/);
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(about(s, "pr-synced").some((message) => message.text.startsWith("🔀")), false);
     assert.equal(completionLines(s, "pr-synced").length, 1);
@@ -125,6 +139,7 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
 
     const second = commit(session.worktreePath!, "pr-delegate-two.txt", "two\n", "add two");
     await s.backend.endTurn("Added both files.");
+    await reviewFullStackTask(s, session);
 
     await waitUntil(() => s.wakes.slice(wakesBefore).some((wake) => /\[pr-delegate\] Finished on /.test(wake.message)), "the delegate wake");
     const wake = s.wakes.slice(wakesBefore).find((candidate) => /\[pr-delegate\] Finished on /.test(candidate.message))!;
@@ -142,16 +157,18 @@ describe("commits after a mid-run PR (fullstack, real git, fake gh)", () => {
     assert.equal(completionLines(s, "pr-delegate").length, 1);
   });
 
-  it("manual: the ✅ says how many commits the PR does not have", async () => {
+  it("manual: reviewed success and the unsynced commit warning are separate notices", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     const { session, branch, prUrl } = await sessionWithMidRunPr(s, "pr-manual", "manual");
 
     commit(session.worktreePath!, "pr-manual-two.txt", "two\n", "add two");
     commit(session.worktreePath!, "pr-manual-three.txt", "three\n", "add three");
     await s.backend.endTurn("Added the files.");
+    await reviewFullStackTask(s, session);
 
-    const done = await s.waitForMessage(/^✅ \[pr-manual\] Completed/);
-    assert.deepEqual(done.text.split("\n").slice(1), [`⚠️ 2 commits on \`${branch}\` are not in the PR: ${prUrl}`]);
+    await s.waitForMessage(/^✅ \[pr-manual\] Completed/);
+    const pending = await s.waitForMessage(/^ℹ️ \[pr-manual\] Integration pending/);
+    assert.deepEqual(pending.text.split("\n").slice(1), [`⚠️ 2 commits on \`${branch}\` are not in the PR: ${prUrl}`]);
     assert.equal(completionLines(s, "pr-manual").length, 1);
   });
 });
@@ -160,7 +177,7 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
   // Commit times have one-second resolution: the new commit is clearly after the merge.
   const afterTheMerge = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 2_100));
 
-  it("auto-merge: commits made after the branch was merged are merged at completion, with one ✅", async () => {
+  it("auto-merge: reviewed commits made after the earlier merge are integrated with a separate informational outcome", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     await s.sm.setRepoPolicy(github.repoDir, "never-pr");
     try {
@@ -178,8 +195,9 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
       await afterTheMerge();
       commit(session.worktreePath!, "merge-again-two.txt", "two\n", "add two");
       await s.backend.endTurn("Added both files.");
+      await reviewFullStackTask(s, session);
 
-      await s.waitForMessage(/^✅ \[merge-again\] Completed — Merged: /);
+      await s.waitForMessage(/^ℹ️ \[merge-again\] Merged: /);
       assert.equal(git(github.repoDir, "show", "main:merge-again-two.txt"), "two", "the commit made after the merge is on main");
       const persisted = s.sm.getPersistedSession(session.id);
       assert.equal(persisted?.worktreeLifecycle?.state, "merged");
@@ -191,14 +209,14 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     }
   });
 
-  it("auto-pr: commits made after the PR was merged get a new PR, with one ✅", async () => {
+  it("auto-pr: reviewed commits made after the merged PR get a new PR and one task-success notice", async () => {
     const s = stack = await startFullStack({ backend: "codex" });
     await s.sm.setRepoPolicy(github.repoDir, "pr-allowed");
     const session = await s.launch({ workdir: github.repoDir, worktreeStrategy: "auto-pr", name: "pr-again" });
     const branch = session.worktreeBranch!;
     commit(session.worktreePath!, "pr-again-one.txt", "one\n", "add one");
     await s.runTool("agent_pr", { ocaSessionId: session.id });
-    await s.waitForMessage(/^ℹ️ \[pr-again\] PR opened: /);
+    const initialPrOutcome = await s.waitForMessage(/^ℹ️ \[pr-again\] PR opened: /);
     const first = github.readState().prs.at(-1)!;
     assert.equal(s.sm.getPersistedSession(session.id)?.worktreePrHeadBranch, branch, "the pushed branch is recorded as the PR's head");
 
@@ -212,9 +230,10 @@ describe("commits after a merge (fullstack, real git, fake gh)", () => {
     await afterTheMerge();
     const second = commit(session.worktreePath!, "pr-again-two.txt", "two\n", "add two");
     await s.backend.endTurn("Added both files.");
+    await reviewFullStackTask(s, session);
 
-    // Automatic completion runs the full Git/PR pipeline before notifying.
-    const done = await s.waitForMessage(/^✅ \[pr-again\] Completed — PR opened: /, 0, 10_000);
+    // Reviewed follow-through creates a new PR after the prior PR outcome.
+    const done = await s.waitForMessage(/^ℹ️ \[pr-again\] PR opened: /, initialPrOutcome.index + 1, 10_000);
     const latest = github.readState().prs.at(-1)!;
     assert.notEqual(latest.number, first.number, "a new PR, not the merged one");
     assert.equal(latest.state, "OPEN");
@@ -273,7 +292,7 @@ describe("planner: a resolved worktree with new commits is not resolved", () => 
       resolveRepoPolicy: () => ({ policy: "pr-allowed", source: "stored", provider: "github", prAvailable: true }),
     });
     return {
-      session, branch, worktreePath, plan: () => service.plan(session),
+      session, branch, worktreePath, plan: () => service.plan(existsSync(session.worktreePath!) ? reviewedTaskFixture(session) : session),
       recordPublishedPr: (head = branch) => {
         const publishedHead = github.remoteHead(head);
         assert.match(publishedHead, /^[a-f0-9]{40}$/, "the API head is an actually published commit");

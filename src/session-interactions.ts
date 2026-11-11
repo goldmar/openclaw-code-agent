@@ -1,3 +1,4 @@
+import { executionCycle, hasVerifiedTaskOutcome, type TaskOutcomeSession } from "./session-task-outcome";
 import type {
   PersistedSessionInfo,
   PermissionMode,
@@ -155,23 +156,27 @@ export class SessionInteractionService {
    */
   async getWorktreeDecisionButtons(
     sessionId: string,
-    session: Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource | undefined,
+    session: ((Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource) & TaskOutcomeSession) | undefined,
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
     options: { newPr?: boolean } = {},
   ): Promise<NotificationButton[][]> {
-    if (!session) return [];
-
+    if (!session || !hasVerifiedTaskOutcome(session)) return [];
+    const cycle = executionCycle(session);
+    const report = session.taskOutcome;
     const prButtons = allowedActions.pr && await this.isGitHubCliAvailable();
+    if (!hasVerifiedTaskOutcome(session) || executionCycle(session) !== cycle || session.taskOutcome !== report) return [];
+    const makeDecisionButton = (kind: SessionActionKind, label: string, options: Partial<Omit<SessionActionToken, "id" | "sessionId" | "kind" | "createdAt">> = {}) =>
+      this.makeActionButton(sessionId, kind, label, { ...options, worktreeDecisionCycle: cycle });
     const landRow: NotificationButton[] = [];
     if (allowedActions.merge) {
-      landRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
+      landRow.push(makeDecisionButton("worktree-merge", "Merge"));
     }
     if (prButtons && options.newPr) {
-      landRow.push(this.makeActionButton(sessionId, "worktree-create-pr", "New PR", { prForceNew: true }));
+      landRow.push(makeDecisionButton("worktree-create-pr", "New PR", { prForceNew: true }));
     } else if (prButtons) {
       landRow.push(session.worktreePrUrl
-        ? this.makeActionButton(sessionId, "worktree-update-pr", "Sync PR")
-        : this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"));
+        ? makeDecisionButton("worktree-update-pr", "Sync PR")
+        : makeDecisionButton("worktree-create-pr", "Open PR"));
     }
     if (session.worktreePrUrl) {
       landRow.push({ label: "View PR", callbackData: "", url: session.worktreePrUrl });
@@ -179,8 +184,8 @@ export class SessionInteractionService {
     const rows: NotificationButton[][] = [];
     if (landRow.length > 0) rows.push(landRow);
     rows.push([
-      this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
-      this.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
+      makeDecisionButton("worktree-decide-later", "Later"),
+      makeDecisionButton("worktree-dismiss", "Discard"),
     ]);
     return rows;
   }

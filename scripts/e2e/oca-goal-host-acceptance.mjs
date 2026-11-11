@@ -663,7 +663,11 @@ export class FeatureRun {
       assert.equal(row.name, goal?.sessionName ?? fixture.name);
       assert.equal(row.goalTaskId, goal?.id);
       const listing = await this.invoke("agent_sessions", { status: "all", full: true });
-      const blocks = listing.content.map(c => c.text ?? "").join("\n").split("\n\n").filter(block => block.startsWith(`✅ ${row.name} [${id}] — completed · `));
+      // This observes the execution owner, not task-success evidence. A
+      // naturally ended ordinary run remains unverified until receipt review.
+      const blocks = listing.content.map(c => c.text ?? "").join("\n").split("\n\n").filter(block =>
+        block.startsWith(`ℹ️ ${row.name} [${id}] — execution ended; `)
+        || block.startsWith(`✅ ${row.name} [${id}] — completed · `));
       assert.equal(blocks.length, 1);
       assert.ok(!blocks[0].includes("♻️ Recovered after a Gateway restart; no live process"));
     } else {

@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { formatUnknownRepoPolicyMessage } from "../src/repo-policy";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -839,7 +840,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => true,
       });
-      const action = await service.plan({
+      const action = await service.plan(reviewedTaskFixture({
         id: "s-policy-pr",
         name: "policy-pr",
         status: "completed",
@@ -851,7 +852,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         repoIntegrationPolicy: "pr-required",
         originalWorkdir: repoDir,
         harnessSessionId: "h-policy-pr",
-      } as any);
+      } as any));
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
         assert.equal(action.strategy, "auto-pr");
@@ -885,7 +886,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
           },
         }),
       });
-      const action = await service.plan({
+      const action = await service.plan(reviewedTaskFixture({
         id: "s-policy-live",
         name: "policy-live",
         status: "completed",
@@ -896,7 +897,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         worktreeStrategy: "auto-merge",
         originalWorkdir: repoDir,
         harnessSessionId: "h-policy-live",
-      } as any);
+      } as any));
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
         assert.equal(action.strategy, "auto-pr");
@@ -918,7 +919,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => false,
       });
-      const action = await service.plan({
+      const action = await service.plan(reviewedTaskFixture({
         id: "s-policy-block",
         name: "policy-block",
         status: "completed",
@@ -930,7 +931,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         repoIntegrationPolicy: "pr-required",
         originalWorkdir: repoDir,
         harnessSessionId: "h-policy-block",
-      } as any);
+      } as any));
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
         assert.equal(action.policyBlocked, true);
@@ -952,7 +953,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => true,
       });
-      const action = await service.plan({
+      const action = await service.plan(reviewedTaskFixture({
         id: "s-stale-pr-url",
         name: "stale-pr-url",
         status: "completed",
@@ -965,7 +966,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         worktreePrUrl: "https://github.com/example/repo/pull/1",
         originalWorkdir: repoDir,
         harnessSessionId: "h-stale-pr-url",
-      } as any);
+      } as any));
 
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
@@ -988,7 +989,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => true,
       });
-      const action = await service.plan({
+      const action = await service.plan(reviewedTaskFixture({
         id: "s-stale-lifecycle-open-pr",
         name: "stale-lifecycle-open-pr",
         status: "completed",
@@ -1007,7 +1008,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         worktreePrUrl: "https://github.com/example/repo/pull/2",
         originalWorkdir: repoDir,
         harnessSessionId: "h-stale-lifecycle-open-pr",
-      } as any);
+      } as any));
 
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {

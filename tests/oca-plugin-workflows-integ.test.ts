@@ -1,4 +1,6 @@
 import "./test-env";
+import { execFileSync } from "node:child_process";
+import { reviewedTaskFixture } from "./task-outcome-fixture";
 import { StatusCards } from "../src/status-card";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -327,14 +329,18 @@ describe("OCA plugin workflow integration coverage", () => {
 
   it("builds worktree ask/delegate notifications with policy-aware buttons and routed source-material rules", async () => {
     const { sm, cleanup } = createWorkflowManager();
+    const repoDir = mkdtempSync(join(tmpdir(), "oca-workflow-reviewed-"));
+    execFileSync("git", ["init", "-b", "main", repoDir]);
+    execFileSync("git", ["-C", repoDir, "-c", "user.name=Tester", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "reviewed task"]);
     try {
-      const session = createStubSession({
+      const session = reviewedTaskFixture(createStubSession({
+        status: "completed", workdir: repoDir,
         id: "worktree-decision-session",
         name: "worktree-decision",
         prompt: "Implement the requested plugin workflow coverage.",
         worktreeStrategy: "delegate",
         worktreePrTargetRepo: "goldmar/openclaw-code-agent",
-      });
+      }));
       (sm as any).sessions.set(session.id, session);
       const diffSummary = {
         commits: 2,
@@ -405,6 +411,7 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.doesNotMatch(delegated.wakeMessage ?? "", /undefined|NaN/u);
     } finally {
       cleanup();
+      rmSync(repoDir, { recursive: true, force: true });
     }
   });
 

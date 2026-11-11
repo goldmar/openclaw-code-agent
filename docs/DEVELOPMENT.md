@@ -311,6 +311,8 @@ Before merging a behavior change, confirm:
 5. `package.json` compatibility/build metadata matches the intended OpenClaw release floor.
 6. `package.json.version` and `openclaw.plugin.json.version` match the intended release version.
 7. Approval docs mention both interactive Approve / Revise / Reject buttons and plain-text fallback behavior.
+8. Completion examples distinguish execution termination, reviewed task outcome, required verification, and integration. No example earns `✅` from a harness terminal event, commits, no-change branch, or merge alone.
+9. Outcome regressions cover blocked or timed-out required checks, incomplete work with commits, verified success, resume/head invalidation, and ask/delegate/manual behavior. Assert structured readiness and actual emitted notices/buttons/wakes, including failure and approval notices; avoid output-prose success oracles.
 
 ### OpenClaw compatibility release proof
 

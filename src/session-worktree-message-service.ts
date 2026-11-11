@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { hasVerifiedTaskOutcome, type TaskOutcomeSession } from "./session-task-outcome";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import {
@@ -19,7 +20,7 @@ type DiffSummary = {
 
 type RemoteWorktreeOutcome = "pr-updated" | "pr-opened";
 
-/** The retried merge found nothing left to land (after `… Completed — merge conflict`). */
+/** The retried merge found nothing left to land (after the merge-conflict notice). */
 export const NO_CHANGES_AFTER_RESOLUTION = "No changes left to merge after conflict resolution";
 
 /**
@@ -27,6 +28,14 @@ export const NO_CHANGES_AFTER_RESOLUTION = "No changes left to merge after confl
  * from message formatting.
  */
 export class SessionWorktreeMessageService {
+  private buildUnverifiedNotice(session: { id: string; name: string }): SessionNotificationRequest {
+    return {
+      label: "worktree-task-unverified",
+      userMessage: `⚠️ [${session.name}] Task completion is unverified. Review the evidence or resume the task; its worktree is preserved.`,
+      notifyUser: "always",
+    };
+  }
+
   buildNoChangeNotification(args: {
     session: Pick<
       Session,
@@ -56,7 +65,7 @@ export class SessionWorktreeMessageService {
     /** The open PR whose worktree is preserved (with `preservedSummary`). */
     prUrl?: string;
     remoteOutcome?: RemoteWorktreeOutcome;
-    /** After this cycle's conflict resolver: the cycle already has its `Completed —` line. */
+    /** After this cycle's conflict resolver: the cycle already has its integration-attention notice. */
     retry?: boolean;
   }): SessionNotificationRequest {
     const {
@@ -102,13 +111,12 @@ export class SessionWorktreeMessageService {
         ? "worktree-no-changes-preserved"
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
       idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
-      // This is the completed session's one `✅`, also after an earlier PR
-      // outcome (`remoteOutcome`): that was a milestone of an earlier turn.
+      // Task reporting owns the success marker; these are integration facts.
       userMessage: preservedSummary
-        ? `${retry ? "ℹ️" : "✅"} [${session.name}] ${retry ? "" : "Completed — "}PR is up to date${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
+        ? `ℹ️ [${session.name}] PR is up to date${prUrl ? `: ${prUrl}` : ""}${statSuffix}`
         : cleanupSucceeded
-        ? `${retry ? `ℹ️ [${session.name}] ${NO_CHANGES_AFTER_RESOLUTION}` : `✅ [${session.name}] Completed — no changes to merge`}${statSuffix}`
-        : `⚠️ [${session.name}] ${retry ? `${NO_CHANGES_AFTER_RESOLUTION}; worktree cleanup failed` : `Completed — no changes to merge; worktree cleanup failed${statSuffix}`}\nWorktree still exists at ${worktreePath}`,
+        ? `ℹ️ [${session.name}] ${retry ? NO_CHANGES_AFTER_RESOLUTION : "No changes to merge"}${statSuffix}`
+        : `⚠️ [${session.name}] No changes to merge; worktree cleanup failed${statSuffix}\nWorktree still exists at ${worktreePath}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
@@ -130,7 +138,7 @@ export class SessionWorktreeMessageService {
   }
 
   buildAskNotification(args: {
-    session: Pick<Session, "id" | "name" | "worktreePrTargetRepo">;
+    session: Pick<Session, "id" | "name" | "worktreePrTargetRepo"> & TaskOutcomeSession;
     branchName: string;
     baseBranch: string;
     diffSummary: DiffSummary;
@@ -144,6 +152,7 @@ export class SessionWorktreeMessageService {
     /** The counted commits were made after the session's PR was opened and are not in it. */
     afterOpenPr?: boolean;
   }): SessionNotificationRequest {
+    if (!hasVerifiedTaskOutcome(args.session)) return this.buildUnverifiedNotice(args.session);
     const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
@@ -171,7 +180,7 @@ export class SessionWorktreeMessageService {
         diffSummary.commitMessages.map((commit) => commit.hash).join(","),
       ].join(":"),
       userMessage: [
-        `🔀 [${session.name}] Finished on ${branchLine}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${args.stats ? formatSessionStatsSuffix(args.stats) : ""}`,
+        `🔀 [${session.name}] Ready for integration on ${branchLine}: ${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}${args.stats ? formatSessionStatsSuffix(args.stats) : ""}`,
         ...(args.afterOpenPr ? ["", "These commits were made after the PR was opened and are not in it yet."] : []),
         ...(summaryLines.length > 0 ? ["", ...summaryLines.map((line) => `- ${line}`)] : []),
         ...(policyReason ? ["", `Policy: ${policyReason}`] : []),
@@ -188,7 +197,7 @@ export class SessionWorktreeMessageService {
       ].join("\n"),
       wakeDelivery: "next-turn",
       wakeMessageOnNotifyFailed: [
-        `[${session.name}] Finished on ${branchLine} (${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
+        `[${session.name}] Ready for integration on ${branchLine} (${formatCount(diffSummary.commits, "commit")}, ${formatCount(diffSummary.filesChanged, "file")}, +${diffSummary.insertions}/-${diffSummary.deletions}); the merge decision buttons could not be shown. ID: ${session.id}`,
         prOffered
           ? `Ask the user: merge, open a PR, keep it for later, or discard. Then call agent_merge, agent_pr, or agent_worktree_cleanup(ocaSessionId='${session.name}', dismiss_session=true).`
           : `Ask the user: merge, keep it for later, or discard. Then call agent_merge or agent_worktree_cleanup(ocaSessionId='${session.name}', dismiss_session=true).`,
@@ -197,7 +206,7 @@ export class SessionWorktreeMessageService {
   }
 
   buildDelegateNotification(args: {
-    session: Pick<Session, "id" | "name" | "prompt">;
+    session: Pick<Session, "id" | "name" | "prompt"> & TaskOutcomeSession;
     branchName: string;
     baseBranch: string;
     diffSummary: DiffSummary;
@@ -207,6 +216,7 @@ export class SessionWorktreeMessageService {
     hookWarning?: string;
     openPrUrl?: string;
   }): SessionNotificationRequest {
+    if (!hasVerifiedTaskOutcome(args.session)) return this.buildUnverifiedNotice(args.session);
     const { session, branchName, baseBranch, diffSummary, policyReason, allowedActions, originThreadLine, hookWarning } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)

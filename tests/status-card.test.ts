@@ -1,4 +1,5 @@
 import "./test-env";
+import { reviewPendingReminder } from "./reviewed-reminder-fixture";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { setPluginRuntime } from "../src/runtime-store";
@@ -203,6 +204,7 @@ describe("approved plan cards", () => {
     const row: any = { sessionId: "held", name: "notification-demo", status: "completed",
       lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/demo",
       pendingWorktreeDecisionSince: new Date(start).toISOString() };
+    reviewPendingReminder(row);
     const messages: any[] = [], queued: any[] = [];
     const reminders = new SessionReminderService(() => ({}) as any,
       (_s, r) => { messages.push(r); r.hooks?.onNotifySucceeded?.(); },
@@ -279,6 +281,7 @@ it("persists unknown queue admission as independent cleanup intent", async () =>
     lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision",
     worktreeReminderCount: 2, lastWorktreeReminderAt: new Date(now - 8 * 86400_000).toISOString(),
     pendingWorktreeDecisionSince: new Date(now - 10 * 86400_000).toISOString() };
+  reviewPendingReminder(row);
   const reminders = new SessionReminderService(() => ({}) as any,
     () => assert.fail("unknown queue admission cannot fall back to a standalone message"),
     (_ref, patch) => { Object.assign(row, patch); return true; }, async () => undefined);

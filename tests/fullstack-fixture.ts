@@ -33,6 +33,7 @@ import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { launchEarlyOutcomeInternals } from "../src/tools/launch-early-outcome";
 import { createFakeHost, type DurableSendParams, type DurableSendResult, type FakeHost, type LlmReply } from "./fake-host";
 import { createBackend, waitUntil, type BackendDriver, type BackendName } from "./harness-backends";
+import { reviewedTaskInput } from "./task-outcome-fixture";
 import { buildCallbackContext, type CallbackChannel } from "./user-interaction-fixture";
 
 export type ChatSurface = {
@@ -124,6 +125,16 @@ export type FullStack = {
   restartFromIndex(index: string): Promise<void>;
   dispose(): Promise<void>;
 };
+
+/** Explicit positive task evidence for integration-flow fixtures. Execution
+ * ending by itself remains unverified in every full-stack test. */
+export async function reviewFullStackTask(stack: FullStack, session: Session): Promise<void> {
+  await waitUntil(() => session.status === "completed", "execution ended before task review");
+  const result = await stack.runTool("agent_report_outcome", {
+    ocaSessionId: session.id, ...reviewedTaskInput(session),
+  });
+  if (!/^Task outcome (?:recorded|already recorded):/.test(result)) throw new Error(`Reviewed fixture outcome was refused: ${result}`);
+}
 
 const GATEWAY_CONFIG: FakeHost["serviceContext"]["config"] = {};
 

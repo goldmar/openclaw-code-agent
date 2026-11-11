@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { hasVerifiedTaskOutcome } from "./session-task-outcome";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";
 import { existsSync } from "node:fs";
@@ -23,7 +24,7 @@ const RESOLVED_WORKTREE_STATES = new Set([
 
 export type PlannedWorktreeAction =
   | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean; completionNote?: string } }
-  /** `problem` completes `⚠️ [name] Completed — `; `detail` lines follow it. */
+  /** Integration problem and supporting details; never establishes task success. */
   | { kind: "notify"; label: string; problem: string; detail: string[] }
   | {
       kind: "dirty-uncommitted";
@@ -153,6 +154,7 @@ export class SessionWorktreeActionService {
   async plan(session: Session, options: { sourceBranch?: string } = {}): Promise<PlannedWorktreeAction> {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     const skip: PlannedWorktreeAction = { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+    if (!hasVerifiedTaskOutcome(session)) return skip;
     const recordedState =
       RESOLVED_WORKTREE_STATES.has(session.worktreeState)
         ? session.worktreeState

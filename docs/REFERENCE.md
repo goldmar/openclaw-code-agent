@@ -448,25 +448,36 @@ Revision and approval rules are version-scoped:
 - `Reject` closes the current plan decision, invalidates its decision tokens, and prevents old Plan v2 prompts for that killed/rejected session from being treated as actionable
 - approval-prompt delivery state is tracked separately from backend approval state, so a missing button delivery should be treated as a delivery problem, not as proof that the plan is no longer awaiting approval
 
-Terminal completion wakes and no-change worktree completion wakes now include deterministic approval context for plan-gated sessions:
+Terminal review wakes and no-change worktree wakes include recorded approval context for plan-gated sessions:
 
 - `requestedPermissionMode`: the original launch-time mode
-- `currentPermissionMode`: the effective mode at completion time
-- `approvalExecutionState`: one of `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
+- `currentPermissionMode`: the effective mode when execution ends
+- `approvalExecutionState`: `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
-Treat those fields as authoritative in orchestration logic:
+Describe only what that evidence establishes. `approved_then_implemented` records approved execution. Missing approval records or `awaiting_approval` do not by themselves prove an approval bypass. Keep genuine pending approval requests actionable and report an explicit recorded anomaly without trying to repair correlation from output prose.
 
-- `approved_then_implemented` is normal approved execution and should not be narrated as an approval bypass
-- `implemented_without_required_approval` is the explicit approval-bypass case
-- successful completion wakes already correspond to a canonical plugin-sent completion notification, and the orchestrator should usually follow that with a short factual outcome summary
-- that expectation applies to ordinary terminal/manual completions and no-change completion wakes too, not just delegated worktree flows
-- a final summary that exists only inside `agent_output(ocaSessionId, full=true)` is source material, not visible delivery; when the plugin has posted only its terse status line, the orchestrator must still send one short routed summary
-- send at most one orchestrator-owned human summary for a terminal/worktree outcome; if a duplicate wake can confirm that prior orchestrator follow-up was already visibly delivered, skip the duplicate
-- otherwise skip the summary only when the orchestrator is silently continuing an internal pipeline, there is no meaningful confirmed outcome to report yet, result data is incomplete or unreliable, or an explicit NO_REPLY/silent cron/system opt-out applies
+Ordinary execution ending requests outcome review, not a success summary. Read `agent_output(ocaSessionId, full=true)`, inspect the task and required check receipts, and submit [a structured outcome report](#agent_report_outcome). The report summary must explain the verified result or remaining blockers. It supplies the factual user explanation without a redundant summary wake. Other terminal and integration follow-ups retain their delivery contract: output text alone is not a visible user message, and at most one orchestrator-owned factual summary should reach the original route for the same outcome. Missing task evidence must be reported as unverified rather than used to skip a required terminal notice.
+
+## Task Outcome Evidence
+
+OCA tracks four distinct facts:
+
+| Fact | What establishes it |
+| --- | --- |
+| Execution termination | The harness ended, was stopped, failed, or suspended; runtime status `completed` remains an execution state for compatibility |
+| Task completion | A reviewed report for the current `executionCycle` records `task: "completed"` with no blockers or remaining work |
+| Verification readiness | Required check receipts passed, or explicitly justify `not_applicable`, and the report binds the current task checkout and repository heads |
+| Integration outcome | The actual merge, push, or PR result; it does not establish task completion or deployment |
+
+Only a current completed task with passed verification earns `✅` or unlocks automatic worktree strategy, integration decisions, delegated escalation, and decision reminders. Ordinary sessions accept reviewed receipts; OCA need not rerun their checks. Goal loops use controller-owned verifier evidence. A successful process exit, a commit, an open PR, no changes to merge, or an agent's prose claim is insufficient.
+
+Missing reports stay unverified. Required checks that failed, timed out, or did not run keep verification unready. A check that timed out before analysis is `timed_out` with that stage; passing an earlier check does not cover it. For Git work, a report must include the task checkout root and its current full head, plus affected repository heads, including separately owned nested repositories when relevant. A completed report requires those checkouts to be clean; changed heads or uncommitted changes prevent integration readiness. Unpreserved required work remains a blocker.
+
+Resume starts a new execution cycle and invalidates prior readiness. Changed heads, stale reports, and legacy pending decisions without positive current evidence cannot authorize success, automatic landing, buttons, or reminders. Incomplete and blocked work preserves its changes for resumption and communicates blockers and remaining work. Explicit manual integrations requested by the user remain subject to policy and approval checks and are reported as milestones. They cannot upgrade the task's status.
 
 ## Worktree Strategies
 
-Worktree strategies now control isolation and the requested follow-through mode. The repository integration policy is the authority for whether direct merge or PR automation is allowed.
+Worktree strategies control isolation and requested follow-through. Automatic follow-through first requires [current task and verification evidence](#task-outcome-evidence); repository integration policy and existing approval rules then determine which actions are allowed.
 
 On first worktree use in a git repo with no stored policy, `agent_launch` blocks and asks the operator to set one policy with `agent_repo_policy` or `/agent_policy`. Inline policy buttons continue the deferred launch automatically. If buttons are unavailable, `agent_repo_policy(workdir="...", policy="...")` or `/agent_policy <policy>` also continues automatically when exactly one matching pending launch is waiting.
 
@@ -485,14 +496,14 @@ GitHub is the only PR provider supported in this release. OCA calls `gh` only wh
 | --- | --- | --- |
 | `off` | Tool param or config | No worktree; session runs in the main checkout |
 | `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through; the worktree is kept after the session ends (lifecycle `provisioned`, shown as `active`) |
-| `ask` | Tool param or config | Keep the branch local, notify the user, and send inline 4-button decision UI |
-| `delegate` | Tool param or config | Keep the branch local and wake the orchestrator with diff context; no user decision buttons are sent automatically |
-| `auto-merge` | Tool param or config | Merge back automatically; spawn a conflict resolver if needed |
-| `auto-pr` | Tool param or config | Create or update the PR automatically; on failure, fall back to an explicit pending worktree decision |
+| `ask` | Tool param or config | After verified task completion, keep the branch local and send the state-aware integration decision UI |
+| `delegate` | Tool param or config | After verified task completion, keep the branch local and wake the orchestrator with diff context; no user decision buttons are sent automatically |
+| `auto-merge` | Tool param or config | After verified task completion, attempt merge; spawn a conflict resolver if needed |
+| `auto-pr` | Tool param or config | After verified task completion, create or update the PR; failures retain the branch and report the integration problem |
 
 ### Worktree Decision Buttons
 
-When a session completes with changes under `ask`, or when the orchestrator escalates a `delegate` worktree with `agent_escalate(kind='worktree')`, the user gets decision buttons in a fixed layout: the actions that land the branch on the first row, **Later** and **Discard** on the second.
+When current task completion and verification evidence pass for changes under `ask`, or for a `delegate` worktree escalated with `agent_escalate(kind='worktree')`, the user gets decision buttons in a fixed layout: the actions that land the branch on the first row, **Later** and **Discard** on the second.
 
 | Button | Action |
 | --- | --- |
@@ -504,19 +515,19 @@ When a session completes with changes under `ask`, or when the orchestrator esca
 | **Later** | Snooze reminders for 24h |
 | **Discard** | Permanently delete branch and worktree (irreversible) |
 
-Each button acts once: its token is used before the action runs, so a second click (or a click in another runtime) never repeats it. When Merge, Open PR / Sync PR, or Discard fails (for example on a rebase conflict), OCA sends the still-open decision again with fresh buttons and, once that message is delivered, clears the used controls and retires the older buttons, so the user can fix the cause and retry. If the new message cannot be delivered, the original buttons stay usable. If its delivery takes longer than 10 seconds, the button sends nothing in the meantime: the prompt is the answer when it arrives, and a plain `❌ [name] <action> failed: <reason>.` reply follows if the delivery fails after all, its outcome stays unknown (a send that timed out; the prompt may then arrive as well, and its buttons work), or no outcome is reported within about 55 seconds after the action failed (the 10-second wait plus 45 seconds), or the plugin stops while the send is still in flight (the line is then sent first thing in the shutdown). A merge that started a conflict-resolver session is in progress and is not re-offered.
+Each button acts once: its token is used before the action runs, so a second click (or a click in another runtime) never repeats it. When Merge, Open PR / Sync PR, or Discard fails (for example on a rebase conflict), OCA rechecks readiness before sending the still-open decision again with fresh buttons and, once that message is delivered, clears the used controls and retires the older buttons, so the user can fix the cause and retry. If the new message cannot be delivered, the original buttons stay usable. If its delivery takes longer than 10 seconds, the button sends nothing in the meantime: the prompt is the answer when it arrives, and a plain `❌ [name] <action> failed: <reason>.` reply follows if the delivery fails after all, its outcome stays unknown (a send that timed out; the prompt may then arrive as well, and its buttons work), or no outcome is reported within about 55 seconds after the action failed (the 10-second wait plus 45 seconds), or the plugin stops while the send is still in flight (the line is then sent first thing in the shutdown). A merge that started a conflict-resolver session is in progress and is not re-offered.
 
 ### Worktree Lifecycle
 
 | Lifecycle state | Meaning | Cleanup semantics |
 | --- | --- | --- |
 | `provisioned` / active | Sandbox exists and is still in play | Never auto-clean |
-| `pending_decision` | Waiting for merge / PR / dismiss follow-through | Preserved and reminded |
+| `pending_decision` | Waiting for integration follow-through | Preserved; reminded only while current completion and verification evidence pass |
 | `pr_open` | PR exists and sandbox is being preserved | Preserved while PR is open |
 | `merged` | Branch landed by normal git ancestry | Safe cleanup candidate |
 | `released` | Content already exists on the base branch even though branch SHAs differ | Safe cleanup candidate |
 | `dismissed` | User intentionally discarded the sandbox | Safe cleanup candidate |
-| `no_change` | Session finished without a committed delta | Safe cleanup candidate |
+| `no_change` | No committed branch delta remains; this alone says nothing about task success | Cleanup remains subject to retention and task-readiness safeguards |
 | `cleanup_failed` | Cleanup tried but could not finish cleanly | Retained for review |
 
 Notes:
@@ -526,7 +537,7 @@ Notes:
 - Explicit per-launch `worktree_strategy` wins over the plugin default, but repo policy can downgrade unsafe or impossible follow-through.
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
-- Stale-decision reminders back off: the first comes 3h after the decision was requested, the second 24h later, the third a week after that, and then they stop. **Later** snoozes the next one for 24h. Delegated decisions remind the orchestrator instead of the user.
+- Only integration-ready decisions receive stale-decision reminders; unknown, blocked, incomplete, or stale reports suppress them without discarding work. Eligible reminders back off: the first comes 3h after the decision was requested, the second 24h later, the third a week after that, and then they stop. **Later** snoozes the next one for 24h. Delegated decisions remind the orchestrator instead of the user.
 - Claude Code, Codex, and OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. If a resumed session's worktree directory is gone, OCA recreates it from the stored `agent/*` branch; if that fails, the launch fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
@@ -548,9 +559,9 @@ If either step fails, the launch fails with the reason (for the setup script, th
 
 `worktreeGitHooks` controls repository hooks during OCA's own git operations: the merge (rebase, fast-forward or squash commit), pushes, and `git worktree add`. `run` (default) lets them run as git normally would; `skip` runs those commands with `core.hooksPath=/dev/null`.
 
-Whatever the setting, a merge or PR whose branch changes hook or worktree-provisioning locations is never automatic: `.husky/`, `.githooks/`, the repository's in-repo `core.hooksPath` directory, pre-commit's `.pre-commit-config.yaml` / `.pre-commit-config.yml`, lefthook's config (`lefthook`, `.lefthook` or `.config/lefthook` with the extension `.yml`, `.yaml`, `.toml`, `.json` or `.jsonc`, and the same names for `lefthook-local`) and its script directories `.lefthook/` and `.lefthook-local/`, `.openclaw/worktree-setup.sh`, and `.worktreeinclude`. Paths are matched from the repository root: exact file names and directory prefixes, so `docs/lefthook.yml` is not a hook file. Those files run code on the next git operation or worktree creation. For such a branch `auto-merge` and `auto-pr` post the Merge / Open PR / Later / Discard prompt instead, the prompt names the changed files, and `agent_merge` / `agent_pr` called by the orchestrator are refused (they post the same prompt). The user's Merge or Open PR button proceeds.
+Whatever the setting, a merge or PR whose branch changes hook or worktree-provisioning locations is never automatic: `.husky/`, `.githooks/`, the repository's in-repo `core.hooksPath` directory, pre-commit's `.pre-commit-config.yaml` / `.pre-commit-config.yml`, lefthook's config (`lefthook`, `.lefthook` or `.config/lefthook` with the extension `.yml`, `.yaml`, `.toml`, `.json` or `.jsonc`, and the same names for `lefthook-local`) and its script directories `.lefthook/` and `.lefthook-local/`, `.openclaw/worktree-setup.sh`, and `.worktreeinclude`. Paths are matched from the repository root: exact file names and directory prefixes, so `docs/lefthook.yml` is not a hook file. Those files run code on the next git operation or worktree creation. For such a branch, after the completion and verification gate passes, `auto-merge` and `auto-pr` post the Merge / Open PR / Later / Discard prompt instead, the prompt names the changed files, and `agent_merge` / `agent_pr` called by the orchestrator are refused (they post the same prompt). The user's Merge or Open PR button proceeds.
 
-<a id="git-hooks-and-worktree-setup-changes"></a>The check compares the branch with the base its changes are reviewed against: the landing base for a merge and for a new PR, the PR's own base when an open PR is updated. The push and PR head owner use the configured push remote, including a different fork. With `target_repo` (including an inferred upstream), the hook check selects the remote whose repository matches the PR target and uses its remote-tracking base, even when a local or fork-origin branch has the same name. Without a target repository the PR target remains origin’s repository; a different push fork does not change its review base. A custom remote uses a remote-tracking base; default `origin` allows the local base first. Missing remote bases are fetched; an unknown target remote fails closed. When `agent_pr` pushes the PR's head branch instead of the session's branch (a follow-up session of an existing PR), that branch is checked as well. The check fails closed: when it cannot be computed (the base cannot be found on the selected remote or git fails), the change counts as present, the prompt says `Could not check this branch for git hook or worktree setup changes`, and only the user's button proceeds (the one exception is a session branch that git reports as not existing: it has nothing to merge or push, and the call reports that). This holds for `auto-merge`, `auto-pr`, `agent_merge` and `agent_pr`. `agent_pr` rechecks the selected PR before moving a branch and before pushing. A changed identity, state, head branch or base stops the call; retry checks the current PR. An auto-PR hook refusal that already sent the decision prompt preserves deferred completion until the user resolves it. A call that pushes and moves nothing (the PR was already merged, a refused `force_new`) runs no check.
+<a id="git-hooks-and-worktree-setup-changes"></a>The check compares the branch with the base its changes are reviewed against: the landing base for a merge and for a new PR, the PR's own base when an open PR is updated. The push and PR head owner use the configured push remote, including a different fork. With `target_repo` (including an inferred upstream), the hook check selects the remote whose repository matches the PR target and uses its remote-tracking base, even when a local or fork-origin branch has the same name. Without a target repository the PR target remains origin’s repository; a different push fork does not change its review base. A custom remote uses a remote-tracking base; default `origin` allows the local base first. Missing remote bases are fetched; an unknown target remote fails closed. When `agent_pr` pushes the PR's head branch instead of the session's branch (a follow-up session of an existing PR), that branch is checked as well. The check fails closed: when it cannot be computed (the base cannot be found on the selected remote or git fails), the change counts as present, the prompt says `Could not check this branch for git hook or worktree setup changes`, and only the user's button proceeds (the one exception is a session branch that git reports as not existing: it has nothing to merge or push, and the call reports that). This holds for `auto-merge`, `auto-pr`, `agent_merge` and `agent_pr`. `agent_pr` rechecks the selected PR before moving a branch and before pushing. A changed identity, state, head branch or base stops the call; retry checks the current PR. An auto-PR hook refusal preserves the pending integration decision, whose later actions still require current readiness evidence. A call that pushes and moves nothing (the PR was already merged, a refused `force_new`) runs no check.
 
 ### Child Process Environments
 
@@ -644,7 +655,7 @@ Hand a delegated decision to the user with buttons, once per decision, then wait
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `ocaSessionId` | `string` | Yes (or legacy `session`) | Session name or ID |
-| `kind` | `plan \| worktree` | Yes | `plan`: Approve / Revise / Reject for a session waiting on a `delegate` or `approve` mode plan review (refused in `ask` mode, where the user already has the prompt). `worktree`: Merge / Open PR / Later / Discard for a finished `delegate` worktree session |
+| `kind` | `plan \| worktree` | Yes | `plan`: Approve / Revise / Reject for a session waiting on a `delegate` or `approve` mode plan review (refused in `ask` mode, where the user already has the prompt). `worktree`: Merge / Open PR / Later / Discard for a `delegate` worktree with current completed task and passed verification evidence |
 | `summary` | `string` | Yes | Shown to the user: why you escalate, what changes, risk, and open questions |
 
 ### `agent_send_plan_offer`
@@ -667,13 +678,67 @@ Use this as the primary generic primitive for external/local automation that wan
 
 ### `agent_output`
 
-Read buffered output without changing session state. Where the harness reports them, the output also shows the running cost, the per-model cost, Claude Code context fill and live background tasks, and a pending Claude Code plan.
+Read buffered output without changing session state. Current `executionCycle` and structured outcome evidence distinguish execution status from task and verification status. Use the exact current cycle in `agent_report_outcome`. Where the harness reports them, the output also shows the running cost, the per-model cost, Claude Code context fill and live background tasks, and a pending Claude Code plan.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `ocaSessionId` | `string` | Yes (or legacy `session`) | Name or internal ID |
 | `lines` | `number` | No | Defaults to `50` |
 | `full` | `boolean` | No | Show the full buffered stream |
+
+### `agent_report_outcome`
+
+Record the orchestrator's reviewed task outcome for one exact execution cycle. Read current output and check receipts first. This tool records evidence; it does not execute checks or grant integration, deployment, or infrastructure authority. See [Task outcome evidence](#task-outcome-evidence).
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `ocaSessionId` | `string` | Yes (or legacy `session`) | Exact session reference |
+| `executionCycle` | `number` | Yes | Current cycle from `agent_output` or session status; never reuse a pre-resume cycle |
+| `task` | `completed \| incomplete \| blocked \| failed` | Yes | Reviewed task result, independently of execution status |
+| `checks` | `array` | Yes | Required and supporting check receipts described below |
+| `repositories` | `array` | Yes | Objects with unique absolute checkout-root `workdir` and full Git `head`; include the task Git checkout and affected repositories |
+| `blockers` | `string[]` | Yes | Unresolved blockers, empty only when none remain |
+| `remainingWork` | `string[]` | Yes | Work still required for the task, empty only when none remains |
+| `summary` | `string` | Yes | Factual user explanation of the result, limitations, and next step; carried by the outcome notice without a redundant summary wake |
+
+Each check contains `name`, `scope`, `required` (boolean), `status` (`passed`, `failed`, `timed_out`, `not_run`, or `not_applicable`), `stage`, `evidence`, `source: "reviewed_receipt"`, and optional numeric `exitCode`. The public tool accepts reviewed receipts the orchestrator actually inspected. It records a review attestation, not independently executed verification. Internal goal-controller reports use `oca_verifier`; callers cannot grant themselves that provenance. `not_applicable` needs an evidence-backed justification. A missing result or a timeout before analysis cannot be recorded as passed. Unrun and inapplicable checks have no exit code; a passing check cannot carry a nonzero exit code.
+
+OCA records schema version 1, review time, and caller reviewer provenance, and derives verification as `passed`, `failed`, `blocked`, or `unknown`. Success requires a completed task, no blockers or remaining work, passing required receipt(s) or justified non-applicability, and current matching repository heads. Partial and blocked reports are useful: they preserve honest status without unlocking integration decisions.
+
+Synthetic blocked report:
+
+```json
+{
+  "ocaSessionId": "example-session",
+  "executionCycle": 1700000000000,
+  "task": "blocked",
+  "checks": [
+    {
+      "name": "core tests",
+      "scope": "core",
+      "required": true,
+      "status": "passed",
+      "stage": "tests",
+      "evidence": "reviewed local test receipt for the recorded head",
+      "source": "reviewed_receipt",
+      "exitCode": 0
+    },
+    {
+      "name": "channel lint",
+      "scope": "channel",
+      "required": true,
+      "status": "timed_out",
+      "stage": "startup before analysis",
+      "evidence": "reviewed timeout receipt; analysis did not start",
+      "source": "reviewed_receipt"
+    }
+  ],
+  "repositories": [{"workdir": "/srv/repos/example", "head": "1111111111111111111111111111111111111111"}],
+  "blockers": ["Required channel lint has no completed result"],
+  "remainingWork": ["Resolve the lint timeout and verify the required analysis"],
+  "summary": "Core tests passed. Required channel lint timed out before analysis; the task remains blocked."
+}
+```
 
 ### `agent_sessions`
 
@@ -684,18 +749,18 @@ List active and recent sessions.
 | `status` | `all \| running \| waiting \| completed \| failed \| killed` | No | Filter by runtime state. `waiting` lists every session that waits for a plan decision, an answer, or a merge / PR decision, with the next step (the `/agent_status` command shows the same list) |
 | `full` | `boolean` | No | Show the broader recent view instead of the short default |
 
-`agent_sessions` merges active runtime sessions and persisted sessions into one view. Each row shows the session name and ID, a plain-language state (for example `waiting for plan approval`), duration, cost, directory, harness and model, and the worktree branch; recovered rows and approval anomalies add a line.
+`agent_sessions` merges active runtime sessions and persisted sessions into one view. Each row shows the session name and ID, a plain-language state (for example `waiting for plan approval`), duration, cost, directory, harness and model, and the worktree branch; recovered rows and approval anomalies add a line. The current execution cycle and outcome evidence distinguish a compatible `completed` execution state from verified task completion.
 
 ### `agent_kill`
 
-Terminate a running session or mark it complete.
+Terminate or close execution. This does not certify task completion.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `ocaSessionId` | `string` | Yes (or legacy `session`) | Name or internal ID |
-| `reason` | `killed \| completed` | No | Omit to stop; `completed` marks a running session done, and the user gets the completion notice (`✅ [name] Completed`, or the worktree prompt or outcome). The tool result is `ℹ️ [name] Marked as completed; the user gets the completion notice (✅ Completed, or the worktree prompt or outcome).` |
+| `reason` | `killed \| completed` | No | Omit to stop; `completed` closes execution using the compatible runtime status. It supplies no task or verification evidence and does not by itself issue a success notice or integration prompt |
 
-A suspended session (stopped by the idle timeout, or recovered after a Gateway restart) has no running process: `agent_kill` closes it without a user notice, whether it is still loaded or only stored, and answers `⛔ [name] Stopped (it was not running).` (`ℹ️ [name] Marked as completed (it was not running).` with `reason: completed`). A plan that still waited for a decision is rejected and its buttons are retired, as when a running session is stopped. A goal task that owned the session stops at once with its one `⛔ [task] Goal task stopped` notice. Without `reason` (or `killed`) that notice says `Stopped by user.` and the tool result is `⛔ [name] Stopped (it was not running); goal task "<task>" stopped.`; the `/agent_kill` command answers the same line from another chat, and in the task's own chat its reply is the goal notice itself. With `reason: completed` the notice says `The session was closed as completed without running.` and the tool result is `ℹ️ [name] Marked as completed (it was not running). Its goal task "<task>" is stopped: the session was closed without running, so its verifiers did not run.` The session no longer blocks a new launch in its chat. A stopped session can still be continued with `agent_respond` or its **Resume** button, like any stopped session; one marked completed cannot. Marking a suspended worktree session completed runs no completion handling (no merge, PR or `🔀` prompt): for a worktree session the result then ends ``Its branch `<branch>` is left as it is: no merge, PR or decision prompt follows. Land it with agent_merge or agent_pr, or discard it with agent_worktree_cleanup(ocaSessionId, dismiss_session=true).`` A suspended session that was never stored can only be stopped, and the result says `Stopped`. If the stop cannot be saved the result is `❌ [name] Not stopped: the stop could not be saved. Try again.`
+A suspended session (idle timeout or Gateway recovery) has no running process. Closing it preserves its branch and does not execute verifiers, certify task completion, or initiate a merge, PR, or decision prompt. A pending plan is rejected and its decision controls are retired. A goal that owns the session is stopped with its goal-stop notice. A normal stopped session can be continued with `agent_respond` or its **Resume** button. For execution closed with `reason: completed`, inspect the tool's continuation state; do not infer readiness from its compatible `completed` status. A save failure reports that the stop could not be saved and leaves the operation unresolved.
 
 Any other parameter is rejected with `Invalid parameters` and nothing is stopped.
 
@@ -794,14 +859,11 @@ A merge never switches the user's checkout to another branch. `merge` rebases th
 
 `agent_merge` does not start a conflict resolver: with `strategy: merge`, rebase conflicts are reported with manual resolution steps, and a conflicting `strategy: squash` merge is reported as a merge failure. Only the `auto-merge` worktree strategy starts a conflict-resolver session for rebase conflicts.
 
-Merge outcome lines name the session and come in two forms. `✅` always means the session completed; `ℹ️` is a milestone that says nothing about completion.
-
-- ``ℹ️ [fix-auth] Merged: `agent/fix-auth` → `main` (3 files, +40/-2)``: a manual merge (`agent_merge` or the **Merge** button). The session may still be running, or its completion was already announced. After a `delegate` completion the user already has `✅ [fix-auth] Completed`, so the orchestrator's later merge is `ℹ️`.
-- ``✅ [fix-auth] Completed — Merged: `agent/fix-auth` → `main` (3 files, +40/-2)``: the merge is the session's completion notice. This is an `auto-merge`, or the merge (button or `agent_merge`) that resolves a completion deferred to the `🔀 [name] Finished on …` prompt. That prompt is sent at completion without a `✅` under `ask`, and under `auto-merge` or `auto-pr` when the branch changes hook or worktree-setup files (a `delegate` session gets it only when repository policy also blocks follow-through; otherwise it sends the delegate wake and `✅ [name] Completed` as usual); the action that resolves it carries the `✅` once, also after a Gateway restart or a failed first attempt. A later outcome for the same session, or one for a session that is running again, is `ℹ️`. **Later** keeps the decision pending and sends no `✅`; **Discard** ends the session with `🗑️`, never `✅`. A completion that ended in a `⚠️ [name] Completed — <problem>` attention line (see [Notifications](#notifications)) owes no `✅`: a later merge or PR for it is `ℹ️`. Branch names are written in backticks in every line and tool result.
+Merge outcome lines name the session and report integration milestones: ``ℹ️ [example] Merged: `agent/example` → `main` (3 files, +40/-2)``. This applies to manual actions, buttons, automatic merges, and conflict-resolution retries. The canonical `✅` task notice belongs to accepted current task and verification evidence, before strategy handling; a merge never supplies it. **Later** retains an eligible integration decision, and **Discard** reports `🗑️`. Neither action establishes task success. Branch names are written in backticks in every line and tool result.
 
 The tool result starts with the same outcome line the user received (without the footer), followed by `Merge type: Fast-forward.` (or `Squash commit` / `Merge commit`), ` Pushed.` when pushed, and the cleanup result.
 
-Both forms end with the same footer as the `✅ [name] Completed` notice (cost, duration, harness, model, reasoning). With `summary`, the summary is shown under that line and the outcome counts as summarized: no follow-up wake is sent and no pending-summary flag is stored. Without it (a **Merge** button press, or an auto-merge), the plugin sends the outcome line and then wakes the orchestrator with `completionWakeSummaryRequired=true`, the outcome facts, and the session's origin route; the orchestrator sends one short factual summary to that route. The persisted `completionWakeSummaryRequired` bit is cleared only after the saved run has a matching terminal source-delivery receipt for a routed wake, or a visible non-empty terminal reply for plain WebChat. `NO_REPLY` alone does not prove delivery. A failed `push=true` is reported as such and always wakes the orchestrator. PR outcomes carry the raw PR URL only in the outcome line; follow-ups refer to the PR by number.
+Integration outcomes end with the same stats footer as task outcome notices (cost, duration, harness, model, reasoning). With `summary`, the summary is shown under that line and the outcome counts as summarized: no follow-up wake is sent and no pending-summary flag is stored. Without it (a **Merge** button press, or an auto-merge), the plugin sends the outcome line and then wakes the orchestrator with `completionWakeSummaryRequired=true`, the outcome facts, and the session's origin route; the orchestrator sends one short factual summary to that route. The persisted `completionWakeSummaryRequired` bit is cleared only after the saved run has a matching terminal source-delivery receipt for a routed wake, or a visible non-empty terminal reply for plain WebChat. `NO_REPLY` alone does not prove delivery. A failed `push=true` is reported as such and always wakes the orchestrator. PR outcomes carry the raw PR URL only in the outcome line; follow-ups refer to the PR by number.
 
 ### `agent_pr`
 
@@ -822,7 +884,7 @@ The branch's PR is looked up among the PRs whose head is this repository's branc
 
 When `title` or `body` is omitted, `agent_pr` prefers LLM-generated PR metadata from the host's `api.runtime.llm.complete(...)`. It also reads a bounded, redacted preview of active or persisted coding-session output. If no metadata provider is configured, or if the provider fails or returns invalid/unsafe output, structured `Root cause`, `Fix`/`Changes`, and `Validation` sections from the completed session report provide task-specific metadata; the commit subject supplies the title. If neither source is usable while creating a new PR, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete. Existing generated PR metadata refreshes are non-destructive: unavailable task-specific evidence preserves the current generated PR title/body and reports the refresh failure instead of replacing richer metadata with generic fallback text.
 
-PR opened and PR updated outcomes follow the same rules as merge outcomes. A manual PR is `ℹ️ [name] PR opened: <url>` or `ℹ️ [name] PR updated: <url>` (`PR opened against <repo>: <url>` for a cross-repository PR); `auto-pr`, and the PR that resolves a completion deferred to the `🔀` prompt, report `✅ [name] Completed — PR opened: <url>` (or `PR updated`). A later update of that PR is `ℹ️`. When the PR needs no new outcome, the result is `PR was already merged: <url>` or `PR is up to date: <url>`: as `✅ [name] Completed — …` sent to the user when it resolves a deferred completion, otherwise as `ℹ️ [name] …` in the tool result only. A **Open PR** / **Sync PR** button press always gets one answer: the outcome notice, or the first line of the tool text as its reply. When the PR was closed without merging, the tool answers `⚠️ A PR exists but was closed without merging: <url>` with the choices (reopen it, or `agent_pr(force_new=true)` for a fresh PR), and the button re-offers the decision with a **New PR** button. A PR update whose comment could not be posted is still recorded as an open PR: the outcome line (`✅ [name] Completed — PR updated: <url>` when it resolves a deferred completion, otherwise `ℹ️ [name] PR updated: <url>`) is followed by `⚠️ The PR comment could not be added.` With `summary` the user gets one message; otherwise the outcome line comes first and the orchestrator is woken for one concise summary in the session's origin route.
+PR outcomes are integration milestones: `ℹ️ [name] PR opened: <url>` or `ℹ️ [name] PR updated: <url>` (`PR opened against <repo>: <url>` for a cross-repository PR). The same rule applies to `auto-pr`, an eligible decision button, and an already-merged or up-to-date PR. None grants `✅` or certifies deployment. An **Open PR** / **Sync PR** button gets one answer: the outcome notice, or the first line of the tool result. If the PR was closed without merging, the tool reports `⚠️ A PR exists but was closed without merging: <url>`; a fresh decision with **New PR** is offered only while current readiness still passes. If a PR update succeeded but its comment failed, the outcome adds `⚠️ The PR comment could not be added.` With `summary` the user gets one message; otherwise the plugin requests one concise factual follow-up in the original route.
 
 ### `agent_worktree_status`
 
@@ -985,7 +1047,7 @@ Thread routing is separate from channel routing. When OpenClaw provides the orig
 
 Legacy CLI context fallbacks and stored continuation routes may carry the internal `webchat|cli` envelope even when they operate on a Telegram, Discord, or other external-channel session. Only that accountless CLI envelope is recovered from an external route in `originSessionKey`. Genuine WebChat origins, including `webchat|<sessionKey>` when the UI opens an external-channel session, remain internal. Other explicit WebChat targets are also preserved.
 
-Routed completion wakes carry explicit Gateway origin fields, preserving account and thread selection even for custom or channel-agnostic session keys, while `deliver=false` suppresses automatic delivery. These fields require the public authenticated Gateway SDK with requested `operator.admin` scope; the stock CLI requests only write scope for `chat.send`, and Gateway authentication, device pairing and scope grants remain enforced. A `chat.send` admission acknowledgment is not completion proof. OCA persists the run ID, semantic outcome, and reply contract before submitting the wake, then uses `agent.wait` to confirm the matching terminal delivery receipt. Uncertain results keep the summary pending and suppress fallback resends; restart recovery waits for the public `gateway_start` readiness hook, then observes that saved run without repeating the notification or starting another turn. A wake proven not to have reached transport submission can be retried with its saved message and identity. OpenClaw 2026.9.7 keeps terminal receipts in memory; after a Gateway process restart or receipt expiry, an uncertain run without receipt evidence remains pending and is not replayed.
+Routed completion wakes carry explicit Gateway origin fields, preserving account and thread selection even for custom or channel-agnostic session keys, while `deliver=false` suppresses automatic delivery. These fields require the public authenticated Gateway SDK with requested `operator.admin` scope; the stock CLI requests only write scope for `chat.send`, and Gateway authentication, device pairing and scope grants remain enforced. A `chat.send` admission acknowledgment is not completion proof. OCA persists the run ID, semantic outcome, and reply contract before submitting the wake, then uses `agent.wait` to confirm the matching terminal delivery receipt. Uncertain results keep the summary pending and suppress fallback resends; restart recovery waits for the public `gateway_start` readiness hook, then observes that saved run without repeating the notification or starting another turn. A wake proven not to have reached transport submission can be retried with the same saved identity, truthful current-status review instructions, and fenced historical context. OpenClaw 2026.9.7 keeps terminal receipts in memory; after a Gateway process restart or receipt expiry, an uncertain run without receipt evidence remains pending and is not replayed.
 
 Session-key recovery follows OpenClaw's current provider-owned grammar: generic `:thread:` suffixes (Discord, Slack, and other channels) use the public `openclaw/plugin-sdk/routing` `parseThreadSessionSuffix` helper, for both the route and the session's recorded origin thread. Telegram forum `:topic:` suffixes are parsed by OCA itself: the host's topic helpers are private to the Telegram channel plugin and the private-local `channel-route` runtime, and the public `parseAgentSessionKey` lower-cases peer ids, so it cannot recover a deliverable target.
 
@@ -1003,22 +1065,24 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Plan revision (**Revise**) | `✏️ [name] Reply with the changes you want; they go to the agent.` |
 | Plan approved | `👍 [name] Plan approved` (`Plan approved (session resumed)` when the approval resumed a suspended session), with `Why: <rationale>` on the next line when the orchestrator approved with `approval_rationale`. An **Approve** button on a plan that is already approved replies `👍 [name] Plan vN was already approved; the session is resuming or running.` |
 | Resumed | `▶️ [name] Resumed \| <dir> \| <harness \| model>`; a session killed during startup is `▶️ [name] Relaunched fresh`. The **Resume** button replies `▶️ [name] Resumed.` only when no such notice was sent; pressed for a session that already runs, it replies `ℹ️ [name] Already running.` and sends the agent nothing (a button with its own instruction, such as **Commit changes**, still delivers it and replies `💬 [name] Message sent.`) |
-| Completed | `✅ [name] Completed`. A worktree session that finished without commits gets `✅ [name] Completed — no changes to merge`, or `✅ [name] Completed — PR is up to date: <url>` when its PR is still open |
-| Completed with an automatic merge / PR (`auto-merge`, `auto-pr`), or the merge / PR that resolves a completion deferred to the `🔀` prompt | ``✅ [name] Completed — Merged: `<branch>` → `<base>` ``, `✅ [name] Completed — PR opened: <url>`, `✅ [name] Completed — PR updated: <url>`, `✅ [name] Completed — PR was already merged: <url>` or `✅ [name] Completed — PR is up to date: <url>` |
-| Manual merge / PR milestone (`agent_merge`, `agent_pr`, buttons) in every other case | ``ℹ️ [name] Merged: `<branch>` → `<base>` ``, `ℹ️ [name] PR opened: <url>` (`PR opened against <repo>: <url>`) or `ℹ️ [name] PR updated: <url>`, with the orchestrator's `summary` under it when given. A PR update whose comment could not be posted adds the line `⚠️ The PR comment could not be added.` A Merge / PR button that changes nothing replies `ℹ️ [name] Already merged.`, `ℹ️ [name] PR was already merged: <url>` or `ℹ️ [name] PR is up to date: <url>`. Not a completion marker |
+| Execution ended without outcome evidence | `⚠️ [name] Execution ended — task completion unverified`, followed by review of the current output and receipts; worktree content is retained |
+| Verified task completion | `✅ [name] Completed` with the accepted report summary, once for the current execution, before integration follow-through |
+| Automatic merge / PR | An `ℹ️` integration milestone naming what actually merged, opened, updated, or was already up to date; task success remains a separate notice |
+| Manual merge / PR milestone (`agent_merge`, `agent_pr`, buttons) | An `ℹ️` integration outcome with a supplied summary when available. Comment, push, or other partial failures are stated explicitly. A no-op reports the existing state without a success marker |
 | Merge queued | `🕐 [name] Merge queued — another merge for this repo is in progress. Will notify when complete.` |
 | Worktree discarded | ``🗑️ [name] Discarded: branch `<branch>` and its worktree were permanently deleted.`` (the **Discard** button sends no second reply). No `✅` |
 | Failed | `❌ [name] Failed` with the error on the next line, plus **Resume** (when the session can resume) and **View output** buttons |
-| Completed, but needs attention | No `✅`. The first line of the terminal cycle is `⚠️ [name] Completed — <problem>` with the completion footer; the detail follows on the next lines. Problems: `merge conflict` (`Resolver session <name> is fixing it; the merge is retried automatically when it succeeds.`, or, when a resumed session completes and conflicts again, `The automatic conflict resolution was already used for this branch.` with the decision buttons), `merge conflict; the resolver failed to start` (the error), `merge blocked` / `merge failed` (the reason, then ``Branch `<branch>` is kept; choose below.`` with the decision buttons; the decision is pending and gets the usual reminders), `auto-PR failed` (`Reason: <reason>. The worktree is kept; choose below.`), `blocked by repo policy` (the policy reason, for example `Repo integration policy is unknown.`), ``uncommitted changes on `<branch>` `` (`The branch has no commits, so there is nothing to merge yet.` or `Commit or discard them before the branch is merged.`, the worktree path and the files, with **Commit changes**, **View output** and **Discard**), ``no commits on `<branch>`, but `<base>` moved`` (commits likely landed outside the branch; the worktree path), `original repository not found`, `branch name unknown`, and `no changes to merge; worktree cleanup failed` (the worktree path). Most carry the decision buttons |
-| Follow-ups in the same terminal cycle | Plain `⚠️ [name] …` lines without `Completed —`: `Auto-merge could not finish after one conflict-resolution attempt.`, `Auto-merge conflict resolution did not complete successfully.` (ending `Resolver session <name> failed.` or `… was stopped.`), and whatever the automatic retry after a conflict resolver runs into (`Merge failed`, ``Uncommitted changes on `<branch>` ``, `Blocked by repo policy`, …). A retry that succeeds is ``ℹ️ [name] Merged: `<branch>` → `<base>` ``; one that finds nothing left to land is `ℹ️ [name] No changes left to merge after conflict resolution`. A retry that sends nothing itself is closed with `ℹ️ [name] Already merged; nothing left to do.`, `ℹ️ [name] PR: <url>` or `ℹ️ [name] Conflict resolved; nothing was merged automatically. The branch is kept.` (the session runs again, or its worktree was settled meanwhile). A retry that ends in the `🔀` prompt defers no `✅`. A merge or PR made afterwards is `ℹ️` |
+| Incomplete, blocked, or unverified task | Report the actual task and verification status, unresolved required checks, blockers, and remaining work. Retain content for resumption; no automatic Merge / PR / Later / Discard prompt or integration reminder |
+| Integration needs attention | A `⚠️` line reports the actual merge, PR, policy, checkout, or cleanup problem. Task verification and integration remain separate; any decision controls require current readiness |
+| Integration retry or resolver follow-up | Report the actual resolver or retry result. A merge or PR is `ℹ️`; failed or stopped resolution is stated explicitly. Retry never establishes task completion, and stale readiness cannot re-offer integration controls |
 | Idle timeout | `💤 [name] Suspended after idle timeout` with **Resume** / **View output** buttons |
 | Stopped | `⛔ [name] Stopped by user` (or `by shutdown`, `by startup timeout`, `unexpectedly`) |
-| Worktree decision in `ask` (also `auto-merge` or `auto-pr` when the branch changes hook or worktree-setup files, and `delegate` when repository policy blocks follow-through and the branch changes such files) | ``🔀 [name] Finished on `<branch>` → `<base>` `` with Merge / Open PR / Later / Discard buttons |
-| Commits made after the session's PR was opened, or after its branch was merged (the PR or merge happened while it ran, or it was resumed) | The worktree counts as resolved only while the branch has nothing new. For a recorded PR the branch is compared with GitHub's immutable head commit, also after a merge or branch pruning; this resolves the head for legacy sessions and keeps commits made between the GitHub merge and OCA settlement new. Unknown counts as new. Local merges without a PR use the recorded merge time and the base. When the session completes with such commits: `ask` (and `auto-merge`, which never merges past an open PR on its own) sends the `🔀` prompt counting those commits, with the line `These commits were made after the PR was opened and are not in it yet.` and Merge / **Sync PR** / View PR / Later / Discard; **Sync PR** pushes them, comments on the PR and carries the `✅ [name] Completed — PR updated: <url>`. `delegate` wakes the orchestrator (`… not yet in its PR`, with the PR and `agent_pr(ocaSessionId=…)` to sync it) and the user gets `✅ [name] Completed`. `manual` / `off` prompt nobody: the `✅ [name] Completed` notice gets the line ``⚠️ <N> commits on `<branch>` are not in the PR: <url>``. `manual` / `off` report an unknown count as `Could not determine which commits … are in the PR`. `auto-pr` updates the PR as before. After a merge the branch is open again: `auto-merge` merges the new commits (`✅ [name] Completed — Merged: …`), and `auto-pr` opens a new PR for them (`✅ [name] Completed — PR opened: <url>`). `agent_pr` and the PR buttons do the same: a merged PR settles the call (`PR was already merged: <url>`) only while the branch has nothing its immutable merged head lacks (unknown stops without pushing or settling); otherwise the commits are pushed and a new PR is opened. With nothing new, the completion is the plain `✅ [name] Completed` |
-| Worktree decision in `delegate` | The user gets `✅ [name] Completed`; the decision goes to the orchestrator as a wake (no buttons until it escalates), also when the branch changes hook or worktree-setup files (the wake names them, and only the user's button can then merge or open a PR). Its later merge or PR is an `ℹ️` milestone |
-| Stale worktree decision | ``⏰ [name] Branch `<branch>` still waits for your decision (<age>).`` with the decision buttons (3h, then 24h, then a week later, then no more); the third ends `… (<age>). Last reminder.` |
+| Worktree decision in `ask` | After current verified task completion, an integration-ready branch gets Merge / Open PR / Later / Discard buttons, subject to repository and hook policy. Ending execution alone never sends this prompt |
+| Commits after a PR or merge | New commits require fresh current task/check evidence before automatic follow-through. Existing PR heads are compared with the branch to distinguish new work; unknown comparison does not establish readiness. PR sync or a new PR is an `ℹ️` integration milestone |
+| Worktree decision in `delegate` | After the verified outcome notice, the orchestrator receives diff context for permitted integration. An escalation or later merge/PR remains separate from the task-completion notice |
+| Stale worktree decision | An eligible decision is reminded after 3h, then 24h, then a week, with no further reminders. Current task and verification readiness are rechecked; resumed, incomplete, blocked, unverified, or stale work receives no integration reminder |
 | **Later** | ``⏭️ [name] Reminder snoozed 24h for `<branch>`.``; after the last reminder ``⏭️ [name] Kept for later: `<branch>`. No more reminders; /agent_status lists it.`` |
-| A Merge, PR or Discard button failed | One message with fresh buttons: ``❌ [name] Merge failed: <reason>. The decision for `<branch>` is still open.`` (`PR failed: …`, `Discard failed: …`). A merge that was refused (repository policy, uncommitted changes) says `Merge blocked: <reason>.`; a rebase conflict is ``Merge failed: rebase of `<branch>` onto `<base>` hit conflicts; resolve them manually in `<checkout path>`.``; a failed push is ``PR failed: could not push `<branch>` …``; a PR that was closed without merging is `PR failed: the earlier PR was closed without merging: <url>`, ending `New PR opens a fresh pull request.`, with a **New PR** button in place of **Open PR** / **Sync PR**. Without a deliverable prompt the reply is `❌ [name] Merge failed: <reason>.` The reason never contains a session id or tool syntax |
+| A Merge, PR or Discard button failed | Report the actual action failure or refusal. Re-offer fresh controls only if the current outcome remains integration-ready; otherwise preserve work and report its blockers. A failed push is stated explicitly |
 | A merge that landed locally but could not be pushed (`agent_merge(push=true)`) | ``⚠️ [name] Merged `<branch>` → `<base>` locally, but failed to push `<base>` `` |
 | A button on a decision that was already settled | `⚠️ [name] This decision was already resolved (merged). Nothing was changed.` (`discarded`, `no changes to keep`); a second decision while one is running: `⚠️ [name] Another decision for this worktree is still being processed. Try again when it finishes.` |
 | A used or outdated button | `⚠️ This button has expired or was already used.` (the session is unknown), and with the session's name: `⚠️ [name] This question was already answered or replaced.`, `⚠️ [name] That answer is already being submitted. If the question remains active, try again.`, `⚠️ [name] This plan is no longer awaiting approval.`, `⚠️ [name] This plan decision is stale because a newer plan review state already exists.`, `⚠️ [name] This plan decision is already being processed.` The old **View PR** button answers `ℹ️ PR: <url>` |
@@ -1038,19 +1102,19 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 
 The user's own messages forwarded with `agent_respond` are not echoed back. **View output** buttons stay usable and do not remove the message's other buttons. A button press is answered by one message: either the notice of what it did or a short reply, never both. The one exception is a repository-policy button, which is two events: `🧭 Repo policy saved: <policy>.`, then the `🚀 [name] Launched | …` notice of the launch that was waiting for it.
 
-A turn that ends without a question or a plan decision completes the session; there is no separate "turn completed, session idle" notice. Under `ask` and `delegate` the worktree decision message is the completion signal. Under `delegate` the user also gets the `✅ [name] Completed` line at completion; it does not wake the orchestrator a second time. Under `ask` the `🔀` prompt is the completion-time message, and the `✅` comes with the merge or PR that resolves the decision.
+A turn that ends without a question or a plan decision ends execution. The runtime status `completed` remains compatible, but ordinary execution initially reports `Execution ended — task completion unverified` and requests outcome review. Questions and plan approvals retain their existing notices and decisions.
 
-`✅` means "the session completed" and nothing else (a goal task that succeeded reports `✅ [task] Completed — goal succeeded`). Failed, stopped, suspended and discarded sessions never get it. A completed session gets it exactly once per terminal cycle: the generic `✅ [name] Completed`, or `✅ [name] Completed — <outcome>` for an automatic merge / PR, a no-change completion, and the action that resolves a completion deferred to the `🔀` prompt. Two kinds of completed sessions get no `✅`: one whose `🔀` decision is resolved outside a merge or PR (kept for **Later**, **Discard**, a merge made outside the plugin, or `agent_worktree_cleanup`), and one whose completion needs attention: its first line is `⚠️ [name] Completed — <problem>`, and a later merge or PR for it is `ℹ️`. A session that still runs (it waits for an answer or a plan decision) and is closed with `agent_kill(reason='completed')` gets its completion notice then: `✅ [name] Completed`, or the worktree prompt or outcome.
+`✅` means verified successful task completion for the current execution cycle. OCA sends the canonical notice when a current completed outcome report is accepted with passed verification, before worktree strategy handling. Ask and delegate decisions do not defer success to a merge or PR. Goal success uses its verifier evidence. Unknown, incomplete, blocked, failed, stopped, or suspended work cannot earn `✅` from the execution state. `agent_kill(reason='completed')` closes execution only. Integration lines, including automatic merge/PR and no-change outcomes, are `ℹ️` milestones; legacy `deferredCompletionCycle` metadata cannot authorize a success notice.
 
 Each marker has one meaning:
 
 | Marker | Meaning |
 | --- | --- |
-| `✅` | The session (or goal task) completed |
-| `⚠️` | Needs the user's attention although the session is fine: `Completed — <problem>`, its follow-ups, and benign button replies (expired, already answered, already resolved, being processed) |
+| `✅` | Current task completion and required verification are evidenced; goal tasks use verifier-controller evidence |
+| `⚠️` | Blocked or incomplete work, verification or integration problems, and benign button replies (expired, already answered, already resolved, being processed) |
 | `❌` | A failed session, goal task or launch, and a tool or button action that failed (`❌ [name] <reason>`) |
-| `ℹ️` | A milestone that says nothing about completion (manual merge or PR, an outcome after the completion was announced), and `Already …; nothing to …` replies |
-| `🔀` | A finished branch waits for the user's decision |
+| `ℹ️` | Execution-ended information or an integration milestone (merge, PR, no changes), and `Already …; nothing to …` replies |
+| `🔀` | A verified integration-ready branch waits for the user's decision |
 | `🗑️` | A worktree was discarded |
 | `⛔` | Stopped or cancelled (session, plan, goal task) |
 | `💤` | Suspended after the idle timeout |
@@ -1072,11 +1136,11 @@ Each marker has one meaning:
 
 Text the user reads carries no raw session ids and no tool names or call syntax; tool results for the orchestrator keep both. In a tool result, `❌` (or `Error:`) means that call failed and the session is unchanged; `⚠️` means the call needs the orchestrator's attention (for example a rebase conflict or a failed push).
 
-Session lines lead with `marker [name]`. Terminal lines (`✅`, `⚠️ [name] Completed — …`, `❌ [name] Failed`, `⛔`, `💤`, the `🔀` prompt heading, `📋 … still waiting for approval`, merge / PR outcome lines, goal success / failure / stop) carry one footer on their first line: cost, duration, harness, model and reasoning. Every other session heading sent as a notification (`❓`, `📋`, `🕐`, `⏰`, `🗑️`, `▶️`, `👍`, `⚠️` follow-ups, …) gets only the short suffix `| <harness> | <model> | <reasoning>` on its first line, and only when all three are known. Button and command replies are not notifications: they carry a footer only where this table says so (`/agent_kill`, **Reject**, and the `/agent_goal` stop or failure line), and any other notice returned as a command reply has no short suffix. Counts are written with their noun in the right number (`1 file`, `2 files`).
+Session lines lead with `marker [name]`. Terminal lines (`✅`, execution-ended or blocked/incomplete task notices, `❌ [name] Failed`, `⛔`, `💤`, the `🔀` prompt heading, `📋 … still waiting for approval`, merge / PR outcome lines, goal success / failure / stop) carry one footer on their first line: cost, duration, harness, model and reasoning. Every other session heading sent as a notification (`❓`, `📋`, `🕐`, `⏰`, `🗑️`, `▶️`, `👍`, `⚠️` follow-ups, …) gets only the short suffix `| <harness> | <model> | <reasoning>` on its first line, and only when all three are known. Button and command replies are not notifications: they carry a footer only where this table says so (`/agent_kill`, **Reject**, and the `/agent_goal` stop or failure line), and any other notice returned as a command reply has no short suffix. Counts are written with their noun in the right number (`1 file`, `2 files`).
 
 ### Orchestrator wakes
 
-The orchestrator is woken (an agent turn through `chat.send`) only when it has something to do: a delegated plan or worktree decision, a completion or outcome summary, a failure, or a user prompt that could not be delivered. Context it needs only if the user answers in chat (a question or plan prompt that reached the user, a worktree prompt with buttons, a Revise press) is queued as a system event without a turn (`wakeDelivery: "next-turn"`); OpenClaw prepends it to the orchestrator's next turn in that chat. A plan-approval reminder for a prompt the user already has, and the repo-policy "buttons delivered" note, are not sent at all. Wakes name the session as `[name]`, fence agent output as untrusted data, and state the origin route once.
+The orchestrator is woken (an agent turn through `chat.send`) only when it has something to do: a delegated plan or verified worktree decision, an execution-outcome review, a required factual outcome summary, a failure, or a user prompt that could not be delivered. Context it needs only if the user answers in chat (a question or plan prompt that reached the user, a worktree prompt with buttons, a Revise press) is queued as a system event without a turn (`wakeDelivery: "next-turn"`); OpenClaw prepends it to the orchestrator's next turn in that chat. A plan-approval reminder for a prompt the user already has, and the repo-policy "buttons delivered" note, are not sent at all. Wakes name the session as `[name]`, fence agent output as untrusted data, and state the origin route once.
 
 ## OpenClaw Host Integration
 

@@ -10,6 +10,7 @@ export {
 } from "./session-notification-builders/waiting";
 export { buildPlanApprovalPromptContent, buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review-summary";
 export {
+  buildCompletionFollowupInstructionLines,
   buildCompletedPayload,
   buildFailedPayload,
   buildGoalTaskSucceededFollowupWake,

@@ -5,6 +5,8 @@ import { Type } from "../tool-parameter-schema";
 import type { OpenClawPluginToolContext } from "../types";
 import { sessionManager } from "../singletons";
 import { deleteBranch, removeWorktree } from "../worktree";
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent } from "../session-task-outcome";
+import { pathsReferToSameLocation } from "../path-utils";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
@@ -100,7 +102,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
           baseBranch: params.base_branch,
         });
 
-        if (!resolved.cleanupSafe) {
+        if (!resolved.cleanupSafe || !(await isTaskOutcomeCurrent(persisted ?? target))) {
           if (includeRetained) {
             const retainedReasons = resolved.reasons.length > 0
               ? resolved.reasons.map(formatWorktreePreserveReason).join(", ")
@@ -113,11 +115,22 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         safeNow.push(`${target.name} (${formatWorktreeLifecycleState(resolved.derivedState)})`);
         if (dryRun) continue;
 
+        const sm = sessionManager;
+        const shouldRemove = async (): Promise<boolean> => {
+          if (!persisted || !(await isTaskOutcomeCurrent(persisted))) return false;
+          const current = sm.getPersistedSession(persisted.sessionId ?? target.id);
+          if (!current || executionCycle(current) !== executionCycle(persisted) || !hasVerifiedTaskOutcome(current)
+            || current.taskOutcome !== persisted.taskOutcome) return false;
+          return !sm.list("all").some((owner) => owner.worktreePath && target.worktreePath
+            && pathsReferToSameLocation(owner.worktreePath, target.worktreePath)
+            && (owner.id !== persisted.sessionId || owner.status === "starting" || owner.status === "running"));
+        };
+
         try {
           const repoDir = target.workdir;
           // A worktree that became dirty after the lifecycle check is kept:
           // keep its metadata too, or nothing would track it any more.
-          if (target.worktreePath && !(await removeWorktree(repoDir, target.worktreePath, { destructive: false }))) {
+          if (target.worktreePath && !(await removeWorktree(repoDir, target.worktreePath, { destructive: false, shouldRemove }))) {
             failures.push(`${target.name}: the worktree at ${target.worktreePath} was not removed (it may have new uncommitted changes)`);
             continue;
           }

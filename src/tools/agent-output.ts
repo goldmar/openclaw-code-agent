@@ -4,7 +4,7 @@ import { sessionToolError, unknownSessionError } from "./session-tool-error";
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getSessionOutputText } from "../application/session-view";
+import { getFreshSessionOutputText } from "../application/session-view";
 
 interface AgentOutputParams {
   ocaSessionId: string;
@@ -44,7 +44,7 @@ export function makeAgentOutputTool(ctx?: OpenClawPluginToolContext) {
       if (!sm.resolve(params.ocaSessionId) && !sm.getPersistedSession(params.ocaSessionId)) {
         return unknownSessionError(params.ocaSessionId);
       }
-      const text = getSessionOutputText(sm, params.ocaSessionId, {
+      const text = await getFreshSessionOutputText(sm, params.ocaSessionId, {
         full: params.full,
         lines: params.lines,
         readerSessionKey: ctx?.sessionKey || undefined,

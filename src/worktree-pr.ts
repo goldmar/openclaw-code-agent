@@ -1,5 +1,5 @@
 import { assertBranchName, localBranchRef } from "./worktree-ref-validation";
-import { runGh, runGit, type CommandError } from "./git-exec";
+import { runGh, runGit, type CommandError, type WorktreeMutationGuard } from "./git-exec";
 import { hasGitHubRemote, isGitHubCLIAvailable, knownGitHubHosts } from "./worktree-repo";
 import { createLogger } from "./logger";
 import { formatCount } from "./format";
@@ -8,6 +8,7 @@ const log = createLogger("worktree-pr");
 
 export interface PRResult {
   success: boolean;
+  code?: "task_not_ready";
   prUrl?: string;
   error?: string;
   warnings?: string[];
@@ -46,6 +47,7 @@ function normalizePrState(state: string): PRStatus["state"] {
 export interface CreatePROptions {
   draft?: boolean;
   pushRemote?: string;
+  mutationGuard?: WorktreeMutationGuard;
 }
 
 const ESCAPED_NEWLINE_SEPARATOR = /(?<!\\)\\(?:r\\)?n/g;
@@ -71,7 +73,7 @@ export interface WorktreeOutcomeParams {
   prUrl?: string;
   /** Session name shown as `[name]` after the status icon. */
   sessionName?: string;
-  /** This outcome is the successful terminal session notice, not a manual milestone. */
+  /** @deprecated Integration outcomes are always milestones; task reporting owns success. */
   sessionCompleted?: boolean;
 }
 
@@ -293,6 +295,9 @@ export async function createPR(
       args.push("--fill-verbose");
     }
 
+    if (options.mutationGuard && (!(await options.mutationGuard.refresh()) || !options.mutationGuard.isCurrent())) {
+      return { success: false, code: "task_not_ready", error: "Task evidence changed before PR creation; work is preserved." };
+    }
     const result = await runGh(args, { cwd: repoDir, timeout: 30_000 });
     const prUrl = result.trim();
     return { success: true, prUrl };
@@ -316,6 +321,9 @@ export async function createPR(
     if ((options.draft ?? true) && args && /draft/i.test(reason)) {
       try {
         const retryArgs = args.filter((a) => a !== "--draft");
+        if (options.mutationGuard && (!(await options.mutationGuard.refresh()) || !options.mutationGuard.isCurrent())) {
+          return { success: false, code: "task_not_ready", error: "Task evidence changed before PR creation retry; work is preserved." };
+        }
         const retryResult = await runGh(retryArgs, { cwd: repoDir, timeout: 30_000 });
         const retryUrl = retryResult.trim();
         return { success: true, prUrl: retryUrl, warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."] };
@@ -494,7 +502,7 @@ export async function getPRBody(repoDir: string, prNumberOrUrl: number | string,
   }
 }
 
-export async function updatePRBody(repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string): Promise<boolean> {
+export async function updatePRBody(repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string, mutationGuard?: WorktreeMutationGuard): Promise<boolean> {
   if (!(await isGitHubCLIAvailable())) {
     return false;
   }
@@ -504,6 +512,7 @@ export async function updatePRBody(repoDir: string, prNumberOrUrl: number | stri
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
+    if (mutationGuard && (!(await mutationGuard.refresh()) || !mutationGuard.isCurrent())) return false;
     await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
@@ -512,7 +521,7 @@ export async function updatePRBody(repoDir: string, prNumberOrUrl: number | stri
   }
 }
 
-export async function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string): Promise<boolean> {
+export async function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string, mutationGuard?: WorktreeMutationGuard): Promise<boolean> {
   if (!(await isGitHubCLIAvailable())) {
     return false;
   }
@@ -522,6 +531,7 @@ export async function updatePRTitle(repoDir: string, prNumberOrUrl: number | str
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
+    if (mutationGuard && (!(await mutationGuard.refresh()) || !mutationGuard.isCurrent())) return false;
     await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
@@ -530,7 +540,7 @@ export async function updatePRTitle(repoDir: string, prNumberOrUrl: number | str
   }
 }
 
-export async function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string): Promise<boolean> {
+export async function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string, mutationGuard?: WorktreeMutationGuard): Promise<boolean> {
   if (!(await isGitHubCLIAvailable())) {
     return false;
   }
@@ -540,6 +550,7 @@ export async function commentOnPR(repoDir: string, prNumber: number, body: strin
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
+    if (mutationGuard && (!(await mutationGuard.refresh()) || !mutationGuard.isCurrent())) return false;
     await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
@@ -551,7 +562,7 @@ export async function commentOnPR(repoDir: string, prNumber: number, body: strin
 export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
   const stats = formatOutcomeStats(params);
   const tag = params.sessionName ? `[${params.sessionName}] ` : "";
-  const prefix = params.sessionCompleted ? `✅ ${tag}Completed — ` : `ℹ️ ${tag}`;
+  const prefix = `ℹ️ ${tag}`;
   if (params.kind === "merge") {
     return `${prefix}Merged: \`${params.branch}\` → \`${params.base ?? "main"}\`${stats}`;
   }

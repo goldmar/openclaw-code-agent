@@ -11,6 +11,7 @@ import {
   formatStats,
 } from "../src/format";
 import type { SessionMetrics } from "../src/types";
+import { createTaskOutcomeReport } from "../src/session-task-outcome";
 
 describe("formatDuration", () => {
   it("returns 0s for zero", () => {
@@ -166,7 +167,7 @@ describe("formatSessionListing", () => {
       makeSession({ status: "completed", prompt: "x".repeat(100), multiTurn: false }),
     );
     assert.ok(result.includes("..."), "should truncate long prompt");
-    assert.match(result.split("\n")[0]!, /— completed ·/);
+    assert.match(result.split("\n")[0]!, /— execution ended; task unverified ·/);
   });
 
   it("does not show backend conversation ids", () => {
@@ -190,7 +191,7 @@ describe("formatSessionListing", () => {
     }));
     assert.doesNotMatch(normal, /approved_then_implemented|requested=|Approval/);
     const anomaly = formatSessionListing(makeSession({ approvalExecutionState: "implemented_without_required_approval" }));
-    assert.match(anomaly, /⚠️ Implemented without the required plan approval/);
+    assert.match(anomaly, /⚠️ Required plan approval is not recorded for this execution/);
   });
 
   it("describes waiting states in plain language", () => {
@@ -204,11 +205,24 @@ describe("formatSessionListing", () => {
 
   it("shows the next step when given", () => {
     const result = formatSessionListing(makeSession({ status: "running", phase: "awaiting_user_input" }), { nextStep: "Answer it" });
-    assert.match(result, /👉 Answer it$/);
+    assert.match(result, /👉 Answer it(?:\n|$)/);
   });
 
-  it("uses the status icon for terminal rows", () => {
-    assert.match(formatSessionListing(makeSession({ status: "completed", phase: "terminal" })), /^✅ /);
+  it("does not infer a success marker from a terminal execution", () => {
+    const listing = formatSessionListing(makeSession({ status: "completed", phase: "terminal" }));
+    assert.match(listing, /^ℹ️ /);
+    assert.match(listing, /execution ended; task unverified/);
+    assert.doesNotMatch(listing, /✅/);
+  });
+
+  it("renders verified current task success separately from integration status", () => {
+    const report = createTaskOutcomeReport({ executionCycle: 1, task: "completed", repositories: [],
+      checks: [{ name: "acceptance", scope: "requested task", required: true, status: "passed", stage: "review", evidence: "fixture:receipt", source: "reviewed_receipt" }],
+      blockers: [], remainingWork: [], summary: "Reviewed task acceptance." }, { source: "orchestrator" });
+    const listing = formatSessionListing(makeSession({ status: "completed", phase: "terminal", startedAt: 1,
+      taskOutcome: report, taskEvidenceCurrent: true }));
+    assert.match(listing, /^✅ /);
+    assert.match(listing, /— completed ·/);
   });
 
   it("uses worktree lifecycle state when rendering merged worktrees", () => {
@@ -269,7 +283,7 @@ describe("formatStats", () => {
     const result = formatStats(metrics, 2);
     assert.ok(result.includes("Launched:   8"));
     assert.ok(result.includes("Running:    2"));
-    assert.ok(result.includes("Completed:  5"));
+    assert.ok(result.includes("Executions ended: 5"));
     assert.ok(result.includes("2m0s"), "avg duration should be 120s = 2m0s");
     assert.ok(result.includes("Estimated API cost: $1.50"));
     assert.ok(result.includes("big-job"), "should show notable session");

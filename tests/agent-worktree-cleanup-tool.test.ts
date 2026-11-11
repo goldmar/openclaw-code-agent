@@ -10,6 +10,9 @@ import { makeAgentWorktreeCleanupTool } from "../src/tools/agent-worktree-cleanu
 import { makeAgentWorktreeStatusTool } from "../src/tools/agent-worktree-status";
 import { createWorktree, getBranchName } from "../src/worktree";
 import type { PersistedSessionInfo } from "../src/types";
+import { createTaskOutcomeReport } from "../src/session-task-outcome";
+import { withRepoLock } from "../src/git-exec";
+import { createStubSession } from "./helpers";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -34,6 +37,17 @@ async function createCommittedWorktree(repoDir: string, name: string, fileName =
   git(worktreePath, "add", fileName);
   git(worktreePath, "commit", "-m", `feat: ${name}`);
   return { worktreePath, branchName };
+}
+
+function reviewedCompletion(session: PersistedSessionInfo): void {
+  const workdir = session.worktreePath ?? session.workdir;
+  session.createdAt ??= 1700000000000;
+  session.taskOutcome = createTaskOutcomeReport({ executionCycle: session.createdAt, task: "completed",
+    checks: [{ name: "required checks", scope: session.prompt, required: true, status: "passed", stage: "analysis complete",
+      evidence: "reviewed passing receipt for the recorded head", source: "reviewed_receipt", exitCode: 0 }],
+    repositories: [{ workdir, head: git(workdir, "rev-parse", "HEAD") }],
+    blockers: [], remainingWork: [], summary: "Requested task and required checks reviewed.",
+  }, { source: "orchestrator" });
 }
 
 function installFakeGh(dir: string, prsJson: string): string {
@@ -118,6 +132,7 @@ describe("agent_worktree_status", () => {
           baseBranch: "main",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],
@@ -174,6 +189,7 @@ describe("agent_worktree_status", () => {
           baseBranch: "main",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],
@@ -254,6 +270,7 @@ describe("agent_worktree_status", () => {
           targetRepo: "goldmar/openclaw-code-agent",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],
@@ -306,6 +323,62 @@ describe("agent_worktree_status", () => {
 });
 
 describe("agent_worktree_cleanup", () => {
+  for (const resumeWhileLocked of [false, true]) {
+    it(resumeWhileLocked ? "refuses clean_safe when an owner resumes while its repository lock is held"
+      : "preserves a legacy resolved checkout without reviewed task evidence", async () => {
+      const repoDir = initRepo("cleanup-outcome-guard-");
+      let releaseLock: (() => void) | undefined;
+      let held: Promise<void> | undefined;
+      try {
+        const merged = await createCommittedWorktree(repoDir, "outcome-guard");
+        git(repoDir, "merge", "--ff-only", merged.branchName);
+        const persisted: PersistedSessionInfo = {
+          sessionId: "cleanup-guard", harnessSessionId: "cleanup-guard-backend", name: "cleanup-guard", prompt: "task",
+          workdir: repoDir, status: "completed", createdAt: 1700000000000, costUsd: 0,
+          worktreePath: merged.worktreePath, worktreeBranch: merged.branchName, worktreeBaseBranch: "main",
+          worktreeState: "merged", worktreeLifecycle: { state: "merged", updatedAt: new Date().toISOString() },
+        };
+        if (resumeWhileLocked) reviewedCompletion(persisted);
+        let resumed = false;
+        const active = createStubSession({ id: persisted.sessionId, name: persisted.name, status: "running",
+          startedAt: persisted.createdAt! + 1, worktreePath: merged.worktreePath });
+        let patches = 0;
+        setSessionManager({
+          list: () => resumed ? [active] : [],
+          resolve: () => resumed ? active : undefined,
+          listPersistedSessions: () => [persisted], getPersistedSession: () => persisted,
+          updatePersistedSession: () => { patches++; return true; },
+        } as any);
+        const tool = makeAgentWorktreeCleanupTool();
+        if (resumeWhileLocked) {
+          let acquired!: () => void;
+          const lockAcquired = new Promise<void>((resolve) => { acquired = resolve; });
+          held = withRepoLock(repoDir, async () => {
+            acquired();
+            await new Promise<void>((resolve) => { releaseLock = resolve; });
+          });
+          await lockAcquired;
+        }
+        // Target/lifecycle selection begins with the completed persisted row.
+        const cleaning = tool.execute("tool-id", { mode: "clean_safe", ocaSessionId: persisted.sessionId });
+        if (resumeWhileLocked) resumed = true;
+        releaseLock?.();
+        if (held) await held;
+        const result = await cleaning;
+        const text = (result.content[0] as { text: string }).text;
+        assert.equal(existsSync(merged.worktreePath), true);
+        assert.equal(git(repoDir, "rev-parse", "--verify", merged.branchName), git(merged.worktreePath, "rev-parse", "HEAD"));
+        assert.equal(patches, 0, "refused cleanup must preserve its metadata");
+        assert.doesNotMatch(text, /CLEANED \(1\)/);
+        assert.match(text, resumeWhileLocked ? /not removed|KEPT/ : /KEPT \(1\)/);
+      } finally {
+        releaseLock?.();
+        if (held) await held;
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("preview_all reports safe released worktrees and kept unresolved worktrees with reasons", async () => {
     const repoDir = initRepo("cleanup-preview-");
     try {
@@ -356,6 +429,7 @@ describe("agent_worktree_cleanup", () => {
           },
         },
       ];
+      for (const session of persisted) reviewedCompletion(session as PersistedSessionInfo);
 
       setSessionManager({
         list: (): never[] => [],
@@ -417,6 +491,7 @@ describe("agent_worktree_cleanup", () => {
           baseBranch: "main",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],
@@ -498,6 +573,7 @@ describe("agent_worktree_cleanup", () => {
           baseBranch: "main",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],
@@ -569,6 +645,7 @@ describe("agent_worktree_cleanup", () => {
           baseBranch: "main",
         },
       };
+      reviewedCompletion(persisted);
 
       setSessionManager({
         list: (): never[] => [],

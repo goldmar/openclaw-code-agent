@@ -1,10 +1,11 @@
 export type { OpenClawPluginToolContext } from "../api";
 import type { HarnessLaunchOptions } from "./harness/types";
 import type { CompletionSummaryFact } from "./completion-summary-coordinator";
+import type { TaskOutcomeReport } from "./session-task-outcome";
 
 // Plugin types
 
-/** Runtime lifecycle state for a session. */
+/** Execution lifecycle only; task success requires a reviewed taskOutcome. */
 export type SessionStatus = "starting" | "running" | "completed" | "failed" | "killed";
 export type SessionLifecycle =
   | "starting"
@@ -282,6 +283,8 @@ export interface SessionActionToken {
   kind: SessionActionKind;
   createdAt: number;
   planDecisionVersion?: number;
+  /** Current execution cycle that authorized an integration decision; legacy tokens lack authority. */
+  worktreeDecisionCycle?: number;
   expiresAt?: number;
   consumedAt?: number;
   /**
@@ -598,6 +601,8 @@ export interface PersistedSessionInfo {
   createdAt?: number;
   completedAt?: number;
   status: SessionStatus;
+  /** Reviewed task and verification evidence; execution completion alone is not task success. */
+  taskOutcome?: TaskOutcomeReport;
   lifecycle?: SessionLifecycle;
   approvalState?: SessionApprovalState;
   worktreeState?: SessionWorktreeState;
@@ -685,9 +690,8 @@ export interface PersistedSessionInfo {
   /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge or PR. */
   pendingWorktreeDecisionSince?: string;
   /**
-   * Set (to the run's start time, the row's `createdAt`) when a completed
-   * session's `✅` was deferred to the `🔀` decision prompt. The merge or PR
-   * that resolves the decision sends the `✅` and clears it; a resume makes it stale.
+   * Historical deferred-notice marker. Retained for compatibility and cleared
+   * on resolution; it never grants task success or integration readiness.
    */
   deferredCompletionCycle?: number;
   /** ISO timestamp of last stale-branch reminder sent. */

@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import { isTaskOutcomeCurrent } from "./session-task-outcome";
 import type { PersistedSessionInfo } from "./types";
 import { getBranchName, getCommitsAheadCount, hasDirtyWorktreeEntries, isBranchAncestorOfBase, wouldMergeBeNoop } from "./worktree";
 
@@ -43,6 +44,9 @@ export class SessionWorktreeController {
     now: number,
     retentionMs: number,
   ): Promise<boolean> {
+    // A stopped execution is not permission to retire unfinished task data,
+    // including additional repositories nested under a managed worktree.
+    if (!(await isTaskOutcomeCurrent(session))) return false;
     if (!session.worktreePath || !session.workdir) return false;
     if (!existsSync(session.worktreePath)) return false;
     if (session.pendingWorktreeDecisionSince) return false;

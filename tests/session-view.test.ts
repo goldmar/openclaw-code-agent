@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "url";
 import { getSessionsListingText, getSessionOutputText } from "../src/application/session-view";
 import { getSessionOutputFilePath } from "../src/session";
+import { createTaskOutcomeReport } from "../src/session-task-outcome";
 
 describe("session-view app layer", () => {
   it("shows only the 5 most recent sessions by default", () => {
@@ -59,14 +60,14 @@ describe("session-view app layer", () => {
     assert.match(text, /👉 Plan waiting for the orchestrator's review/);
     assert.match(text, /question \[4\] — waiting for an answer/);
     assert.match(text, /👉 Question waiting for an answer/);
-    assert.match(text, /branch \[5\][\s\S]*👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
+    assert.doesNotMatch(text, /branch \[5\]|Branch waiting/);
 
     // `/agent_status` shows the same rows without tool syntax.
     const forUser = getSessionsListingText(sm, "waiting", undefined, { forUser: true });
     assert.match(forUser, /👉 Plan waiting for the user: Approve \/ Revise \/ Reject \(buttons, or reply approve, reject, or the changes\)(?:\n|$)/);
     assert.match(forUser, /👉 Plan waiting for the orchestrator's review(?:\n|$)/);
     assert.match(forUser, /👉 Question waiting for your answer: \/agent_output question shows it; answer with \/agent_respond question <answer>(?:\n|$)/);
-    assert.match(forUser, /👉 Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard(?:\n|$)/);
+    assert.doesNotMatch(forUser, /Branch waiting/);
     assert.doesNotMatch(forUser, /agent_escalate|agent_merge|agent_respond\)|userInitiated/);
 
     // A branch with an existing PR that is pending again (new commits) still waits.
@@ -80,10 +81,23 @@ describe("session-view app layer", () => {
         createdAt: now - 3000, completedAt: now - 2000,
       }],
     };
-    assert.match(getSessionsListingText(withPr, "waiting"), /resync \[7\][\s\S]*👉 Branch waiting for the user: Merge \/ Sync PR \/ Later \/ Discard/);
+    assert.equal(getSessionsListingText(withPr, "waiting"), "Nothing is waiting for a decision or an answer.");
 
     const idle: any = { list: () => [{ ...base, status: "running", name: "busy", id: "1", phase: "active", startedAt: now }], listPersistedSessions: (): never[] => [] };
     assert.equal(getSessionsListingText(idle, "waiting"), "Nothing is waiting for a decision or an answer.");
+  });
+
+  it("renders worktree decisions only with current reviewed evidence supplied by the read boundary", () => {
+    const report = createTaskOutcomeReport({ executionCycle: 1, task: "completed", repositories: [],
+      checks: [{ name: "acceptance", scope: "requested work", required: true, status: "passed", stage: "review", evidence: "fixture:receipt", source: "reviewed_receipt" }],
+      blockers: [], remainingWork: [], summary: "Reviewed acceptance." }, { source: "orchestrator" });
+    const row = { sessionId: "reviewed", harnessSessionId: "backend", name: "reviewed", prompt: "work", workdir: "/tmp", status: "completed",
+      lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeStrategy: "ask", createdAt: 1, completedAt: 2,
+      worktreePath: "/nonexistent/reviewed", worktreeBranch: "agent/reviewed", costUsd: 0, taskOutcome: report };
+    const sm: any = { list: (): never[] => [], listPersistedSessions: () => [row] };
+    assert.equal(getSessionsListingText(sm, "waiting"), "Nothing is waiting for a decision or an answer.");
+    const evidence = new Set([JSON.stringify([row.sessionId, row.createdAt, row.taskOutcome])]);
+    assert.match(getSessionsListingText(sm, "waiting", undefined, { currentTaskEvidence: evidence }), /✅ reviewed \[reviewed\][\s\S]*Branch waiting for the user: Merge \/ Open PR \/ Later \/ Discard/);
   });
 
   it("includes harness and model metadata for active sessions in the listing text", () => {
@@ -282,7 +296,7 @@ describe("session-view app layer", () => {
       ],
     };
     const text = getSessionsListingText(sm, "completed");
-    assert.match(text, /✅ done-job \[s-persisted\]/);
+    assert.match(text, /ℹ️ done-job \[s-persisted\] — execution ended; task unverified/);
     assert.doesNotMatch(text, /Persisted: no live runtime process/);
   });
 
@@ -340,7 +354,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "completed");
-    assert.match(text, /✅ legacy-session \[s-legacy\]/);
+    assert.match(text, /ℹ️ legacy-session \[s-legacy\] — execution ended; task unverified/);
     assert.match(text, /📁 \(unknown\)/);
   });
 
@@ -364,7 +378,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "all");
-    assert.match(text, /✅ good-session \[s-good\]/);
+    assert.match(text, /ℹ️ good-session \[s-good\] — execution ended; task unverified/);
     assert.doesNotMatch(text, /h2 \[h2\]/);
   });
 

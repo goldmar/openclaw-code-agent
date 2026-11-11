@@ -4,9 +4,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createFakeGitHub, git, type FakeGitHub } from "./fake-github";
-import { startFullStack, type FullStack } from "./fullstack-fixture";
+import { startFullStack, reviewFullStackTask, type FullStack } from "./fullstack-fixture";
 import { resolveOwningPr } from "../src/worktree-owning-pr";
 import { resolveWorktreeLifecycle } from "../src/worktree-lifecycle-resolver";
+import { waitUntil } from "./harness-backends";
+import { reviewedTaskInput } from "./task-outcome-fixture";
 import type { WorktreeStrategy } from "../src/types";
 
 let github: FakeGitHub;
@@ -44,10 +46,11 @@ async function fixture(strategy: WorktreeStrategy = "ask") {
 }
 
 describe("owning PR discovery through a differently named upstream", () => {
-  it("completes up to date, persists linkage, and retains the worktree without a landing prompt", async () => {
+  it("reports reviewed success and up-to-date PR linkage while retaining the worktree without a landing prompt", async () => {
     const f = await fixture("delegate");
     await f.s.backend.endTurn("Updated the existing dependency PR using git and gh.");
-    const done = await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR is up to date`));
+    await reviewFullStackTask(f.s, f.session);
+    const done = await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR is up to date`));
     assert.ok(done.text.includes(f.pr.url));
     const row = f.s.sm.getPersistedSession(f.session.id)!;
     assert.equal(row.worktreePrUrl, f.pr.url);
@@ -73,12 +76,13 @@ describe("owning PR discovery through a differently named upstream", () => {
     const f = await fixture();
     const second = commit(f.session.worktreePath!, "second.txt");
     await f.s.backend.endTurn("Added a follow-up commit.");
+    await reviewFullStackTask(f.s, f.session);
     const prompt = await f.s.waitForMessage(new RegExp(`^🔀 \\[${f.session.name}\\]`));
     assert.ok(prompt.buttons.some((button) => button.label === "Sync PR"));
     assert.equal(prompt.buttons.some((button) => button.label === "Open PR"), false);
     assert.notEqual(github.remoteHead(f.head), second);
     await f.s.click(prompt.buttons.find((button) => button.label === "Sync PR")!);
-    await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`));
+    await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR updated`));
     assert.equal(github.remoteHead(f.head), second);
     assert.equal(github.remoteHead(f.branch), "");
     assert.equal(github.ghCalls("create").length, 0);
@@ -89,7 +93,8 @@ describe("owning PR discovery through a differently named upstream", () => {
     const f = await fixture("auto-pr");
     const second = commit(f.session.worktreePath!, "second.txt");
     await f.s.backend.endTurn("Ready to sync.");
-    await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
+    await reviewFullStackTask(f.s, f.session);
+    await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
     assert.equal(github.remoteHead(f.head), second);
     assert.equal(github.ghCalls("create").length, 0);
   });
@@ -98,8 +103,10 @@ describe("owning PR discovery through a differently named upstream", () => {
     const f = await fixture("manual");
     const second = commit(f.session.worktreePath!, "second.txt");
     await f.s.backend.endTurn("One follow-up remains local.");
-    const done = await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed`));
-    assert.match(done.text, /1 commit.*not in the PR/);
+    await reviewFullStackTask(f.s, f.session);
+    await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed`));
+    const pending = await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] Integration pending`));
+    assert.match(pending.text, /1 commit.*not in the PR/);
     assert.notEqual(github.remoteHead(f.head), second);
     assert.equal(github.ghCalls("create").length, 0);
   });
@@ -123,13 +130,14 @@ describe("owning PR discovery through a differently named upstream", () => {
           assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /PR updated/);
         } else {
           await f.s.backend.endTurn("Review fixes were committed on the PR parent.");
+          await reviewFullStackTask(f.s, f.session);
           if (mode === "ask") {
             const prompt = await f.s.waitForMessage(new RegExp(`^🔀 \\[${f.session.name}\\]`));
             assert.match(prompt.text, /1 commit/);
             assert.notEqual(github.remoteHead(f.head), parentCommit);
             await f.s.click(prompt.buttons.find((button) => button.label === "Sync PR")!);
           }
-          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0,
+          await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR updated`), 0,
             mode === "auto-pr" ? AUTO_PR_COMPLETION_TIMEOUT_MS : undefined);
         }
         assert.equal(github.remoteHead(f.head), parentCommit);
@@ -152,7 +160,8 @@ describe("owning PR discovery through a differently named upstream", () => {
         if (mode === "tool") assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /PR updated/);
         else {
           await f.s.backend.endTurn("Committed review fixes in the helper.");
-          await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
+          await reviewFullStackTask(f.s, f.session);
+          await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR updated`), 0, AUTO_PR_COMPLETION_TIMEOUT_MS);
         }
         assert.equal(github.remoteHead(f.head), helperCommit);
         assert.equal(github.ghCalls("create").length, 0);
@@ -192,7 +201,8 @@ describe("owning PR discovery through a differently named upstream", () => {
         pr.url = `https://github.com/upstream/widget/pull/${pr.number}`;
       });
       await f.s.backend.endTurn("Updated the existing fork PR.");
-      await f.s.waitForMessage(new RegExp(`^✅ \\[${f.session.name}\\] Completed — PR is up to date`));
+      await reviewFullStackTask(f.s, f.session);
+      await f.s.waitForMessage(new RegExp(`^ℹ️ \\[${f.session.name}\\] PR is up to date`));
       const row = f.s.sm.getPersistedSession(f.session.id)!;
       assert.equal(row.worktreePrTargetRepo, "upstream/widget");
       github.updateState((state) => { state.prs.find((candidate) => candidate.number === f.pr.number)!.state = "MERGED"; });
@@ -208,13 +218,14 @@ describe("owning PR discovery through a differently named upstream", () => {
     }
   });
 
-  it("ambiguity blocks completion and creation", async () => {
+  it("ambiguity blocks integration and creation after task review", async () => {
     const f = await fixture();
     github.seedPr({ headRefName: f.branch });
     assert.equal((await f.resolve()).kind, "blocked");
     assert.match(await f.s.runTool("agent_pr", { ocaSessionId: f.session.id }), /Refusing to create a sibling PR/);
     await f.s.backend.endTurn("Ownership needs inspection.");
-    const done = await f.s.waitForMessage(new RegExp(`^⚠️ \\[${f.session.name}\\] Completed — owning PR could not be verified`));
+    await reviewFullStackTask(f.s, f.session);
+    const done = await f.s.waitForMessage(new RegExp(`^⚠️ \\[${f.session.name}\\] Integration needs attention — owning PR could not be verified`));
     assert.equal(done.buttons.length, 0);
     assert.equal(github.ghCalls("create").length, 0);
     assert.equal(existsSync(f.session.worktreePath!), true);
@@ -265,17 +276,26 @@ describe("owning PR discovery through a differently named upstream", () => {
     assert.equal(github.ghCalls("create").length, 1);
   });
 
-  it("uncommitted changes still require a commit decision even when the PR has every commit", async () => {
+  it("uncommitted work stays blocked and preserved even when the PR has every commit", async () => {
     const f = await fixture();
     writeFileSync(join(f.session.worktreePath!, "pending.txt"), "not committed\n");
     await f.s.backend.endTurn("Uncommitted work remains.");
     // Multi-turn sessions first get the existing finalization instruction. If the
-    // backend still finishes dirty, owning-PR settlement must preserve the commit decision.
+    // backend still finishes dirty, the reviewed blocked report must preserve that work.
     await f.s.backend.waitForTurns(2);
     assert.match(f.s.backend.turns[1]!.text, /worktree still has uncommitted changes/);
     await f.s.backend.endTurn("Unable to commit the remaining file.");
-    const prompt = await f.s.waitForMessage(new RegExp(`\\[${f.session.name}\\].*uncommitted`, "i"));
-    assert.ok(prompt.buttons.some((button) => button.label === "Commit changes"));
+    await waitUntil(() => f.session.status === "completed", "blocked execution ended before review");
+    const input = reviewedTaskInput(f.session);
+    assert.match(await f.s.runTool("agent_report_outcome", { ocaSessionId: f.session.id, ...input,
+      task: "blocked", blockers: ["Uncommitted work remains"], remainingWork: ["Review and commit the remaining file"],
+      checks: input.checks.map((check) => ({ ...check, status: "not_run" })),
+      summary: "Requested work is incomplete; uncommitted changes are preserved.",
+    }), /recorded: blocked/);
+    const notice = await f.s.waitForMessage(new RegExp(`\\[${f.session.name}\\].*task blocked`, "i"));
+    assert.match(notice.text, /Uncommitted work remains/);
+    assert.equal(notice.buttons.some((button) => /Merge|PR|Discard|Commit changes/.test(button.label)), false);
+    assert.equal(f.s.messages().some((message) => message.text.startsWith(`✅ [${f.session.name}]`)), false);
     assert.equal(github.ghCalls("create").length, 0);
     assert.equal(existsSync(join(f.session.worktreePath!, "pending.txt")), true);
   });

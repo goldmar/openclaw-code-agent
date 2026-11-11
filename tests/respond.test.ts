@@ -138,7 +138,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
-  it("requests a summary after resuming a stored-only approved investigation through completion", async () => {
+  it("requests outcome review after resuming a stored-only approved investigation ends execution", async () => {
     const dir = mkdtempSync(join(tmpdir(), "approved-investigation-restart-"));
     const indexPath = join(dir, "sessions.json");
     const harness = createFakeHarness("approved-investigation-resume");
@@ -166,7 +166,7 @@ describe("executeRespond", () => {
       const completed = new Promise<SessionNotificationRequest>((resolve, reject) => {
         deadline = setTimeout(() => reject(new Error("Resumed investigation did not complete")), 5_000);
         (manager as any).dispatchSessionNotification = (_session: Session, request: SessionNotificationRequest) => {
-          if (request.label === "completed") resolve(request);
+          if (request.label === "task-unverified") resolve(request);
         };
       });
       const pendingResume = executeRespond(manager, { session: original.id, message: "Continue investigation" });
@@ -185,6 +185,9 @@ describe("executeRespond", () => {
       } });
       harness.endMessages();
       const request = await completed;
+      assert.match(request.userMessage ?? "", /Execution ended — task completion unverified/);
+      assert.doesNotMatch(request.userMessage ?? "", /✅/);
+      assert.match(request.wakeMessageOnNotifySuccess ?? "", /agent_report_outcome/);
       assert.equal(request.completionWakeSummaryRequired, true);
       assert.equal(request.completionSummary?.required, true);
       assert.match(request.wakeMessageOnNotifySuccess ?? "", /Tell the user in one or two sentences/);

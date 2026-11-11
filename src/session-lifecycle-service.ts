@@ -28,6 +28,7 @@ import {
   type QuestionContextSummaryProvider,
 } from "./question-context-summary";
 import { createLogger } from "./logger";
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent, type TaskOutcomeReport } from "./session-task-outcome";
 
 const log = createLogger("session-lifecycle-service");
 
@@ -157,6 +158,8 @@ export class SessionLifecycleService {
        * object then stays `completed`. Default: the captured session's status.
        */
       getCurrentSessionStatus?: (session: Session) => SessionStatus | undefined;
+      isCurrentSessionCycle?: (session: Session) => boolean;
+      isCurrentTaskOutcome?: (session: Session, report: TaskOutcomeReport | undefined) => boolean;
       resolvePlanApprovalMode: (session: Session | PersistedSessionInfo) => PlanApprovalMode;
       getPlanApprovalButtons: (sessionId: string, session?: {
         worktreePrUrl?: string;
@@ -343,6 +346,18 @@ export class SessionLifecycleService {
       } else {
         await this.emitWaitingForInput(session);
       }
+      this.deps.clearRetryTimersForSession(session.id);
+      return;
+    }
+
+    // A backend terminal is execution evidence only. Preserve unfinished work
+    // before any worktree strategy can turn commits into a landing decision.
+    if (session.status === "completed" && !(await isTaskOutcomeCurrent(session))) {
+      if (this.deps.isCurrentSessionCycle?.(session) === false) return;
+      if (this.deps.shouldEmitTerminalWake(session)) this.emitCompleted(session, {
+        forceUnverified: hasVerifiedTaskOutcome(session),
+        ...(hasVerifiedTaskOutcome(session) ? { note: "Verification evidence no longer matches the current checkout; review or revalidate before integration." } : {}),
+      });
       this.deps.clearRetryTimersForSession(session.id);
       return;
     }
@@ -735,22 +750,28 @@ export class SessionLifecycleService {
     });
   }
 
-  emitCompleted(session: Session, options: { userNoticeOnly?: boolean; note?: string } = {}): void {
+  emitCompleted(session: Session, options: { userNoticeOnly?: boolean; note?: string; summary?: string; forceUnverified?: boolean } = {}): void {
+    const report = session.taskOutcome;
+    const verified = !options.forceUnverified && hasVerifiedTaskOutcome(session);
     const preview = this.deps.getOutputPreview(session);
     // `userNoticeOnly`: another notice already woke the orchestrator for this terminal cycle.
-    const followupSummaryRequired = !options.userNoticeOnly && this.shouldRequestCompletionFollowup(session);
+    const followupSummaryRequired = !options.userNoticeOnly && !options.summary && this.shouldRequestCompletionFollowup(session);
     const payload = buildCompletedPayload({
       session,
       originThreadLine: this.deps.originThreadLine(session),
       preview,
       note: options.note,
+      summary: options.summary,
+      forceUnverified: options.forceUnverified,
     });
     const terminalCycleKey = buildTerminalCycleKey(session);
     const terminalOutcomeKey = `terminal:${session.id}:${terminalCycleKey}`;
     let canonicalStatusDelivered: boolean | undefined;
     this.deps.dispatchSessionNotification(session, {
-      label: "completed",
-      idempotencyKey: `terminal-completed:${session.id}:${terminalCycleKey}`,
+      label: verified ? "completed" : "task-unverified",
+      idempotencyKey: verified
+        ? `task-success:${session.id}:${executionCycle(session)}`
+        : `task-outcome:${session.id}:${terminalCycleKey}:${session.taskOutcome?.task ?? "unverified"}:${session.taskOutcome?.reviewedAt ?? "unknown"}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       completionSummary: {
@@ -761,6 +782,9 @@ export class SessionLifecycleService {
       completionWakeSummaryRequired: followupSummaryRequired,
       completionWakeOutcomeKey: terminalOutcomeKey,
       requireDirectUserNotification: true,
+      buttons: verified ? undefined : this.deps.getResumeButtons(session.id, session),
+      shouldDispatch: () => this.deps.isCurrentSessionCycle?.(session) !== false
+        && session.taskOutcome === report && this.deps.isCurrentTaskOutcome?.(session, report) !== false,
       wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
       wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,
       ...(followupSummaryRequired ? this.launchOutcomeWakeDeferral(session, "completed") : {}),

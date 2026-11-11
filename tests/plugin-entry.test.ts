@@ -474,6 +474,7 @@ describe("plugin entry source", () => {
       "agent_respond",
       "agent_session_action",
       "agent_escalate",
+      "agent_report_outcome",
       "agent_send_plan_offer",
       "agent_stats",
       "agent_repo_policy",
@@ -692,13 +693,15 @@ describe("plugin entry source", () => {
     const plain = createPluginHost();
     register(plain.api);
     assert.equal(toolNames(plain).includes("agent_send_plan_offer"), false);
-    assert.equal(toolNames(plain).length, 14);
+    assert.equal(toolNames(plain).length, 15);
+    assert.equal(toolNames(plain).includes("agent_report_outcome"), true);
     resetSharedRuntimeSlotForTests();
 
     const optedIn = createPluginHost({ planOfferTool: true });
     register(optedIn.api);
     assert.equal(toolNames(optedIn).includes("agent_send_plan_offer"), true);
-    assert.equal(toolNames(optedIn).length, 15);
+    assert.equal(toolNames(optedIn).length, 16);
+    assert.equal(toolNames(optedIn).includes("agent_report_outcome"), true);
   });
 
   it("keeps tool construction side-effect free and starts before execution", async () => {

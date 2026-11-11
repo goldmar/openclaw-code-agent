@@ -1,4 +1,5 @@
 import { autoUpdateService, goalController, sessionManager } from "./singletons";
+import { executionCycle, hasVerifiedTaskOutcome, isTaskOutcomeCurrent } from "./session-task-outcome";
 import { executeRespond, rejectPlanDecision, requestPlanDecisionChanges } from "./actions/respond";
 import { makeAgentMergeTool } from "./tools/agent-merge";
 import { makeAgentPrTool } from "./tools/agent-pr";
@@ -1215,6 +1216,23 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
+        const worktreeDecisionReady = async (decision: SessionActionToken): Promise<boolean> => {
+          const selected = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
+          if (!selected || !hasVerifiedTaskOutcome(selected)
+            || decision.worktreeDecisionCycle === undefined || decision.worktreeDecisionCycle !== executionCycle(selected)) return false;
+          const report = selected.taskOutcome;
+          if (!(await isTaskOutcomeCurrent(selected))) return false;
+          const current = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
+          return Boolean(current && current.taskOutcome === report && hasVerifiedTaskOutcome(current)
+            && decision.worktreeDecisionCycle === executionCycle(current));
+        };
+        if (WORKTREE_DECISION_ACTIONS.has(token.kind) && !(await worktreeDecisionReady(token))) {
+          sessionManager.consumeActionToken(tokenId);
+          await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+          await replyText(ctx, `⚠️ [${actionSessionName}] This integration decision is no longer ready. Resume the task or review its current outcome before integrating. The worktree is preserved.`);
+          return { handled: true };
+        }
+
         // Read-only buttons (N47): they keep the message's other buttons and stay
         // usable, so they are neither consumed nor cleared.
         if (token.kind === "view-output") {
@@ -1253,6 +1271,12 @@ export function createCallbackHandler(
             forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss"
               || token.kind === "goal-verifiers-confirm" || token.kind === "goal-verifiers-decline",
           }));
+          return { handled: true };
+        }
+
+        if (WORKTREE_DECISION_ACTIONS.has(consumedToken.kind) && !(await worktreeDecisionReady(consumedToken))) {
+          await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+          await replyText(ctx, `⚠️ [${actionSessionName}] Task evidence changed before this decision could run. The worktree is preserved; review or resume the task first.`);
           return { handled: true };
         }
 
