@@ -77,6 +77,8 @@ curl --fail --silent --show-error --max-time 120 --max-filesize 67108864 --proto
 pnpm_exe_sri='qFWBneHJAJ73W4whtbaFOL1M/7DBC6ILHXuxc7ZPtEhfPuT1zeZiGrmKHoMAfJA+mcm6xhOFljqVTUS+00Jabw=='
 [ "$(openssl dgst -sha512 -binary "$task_root/pnpm-exe.tgz" | openssl base64 -A)" = "$pnpm_exe_sri" ]
 npm install --prefix "$task_root/pm" --ignore-scripts --no-audit --no-fund "$task_root/pnpm.tgz" "$task_root/pnpm-exe.tgz" > "$task_root/pm-install.log" 2>&1
+# Without the pinned platform binary the wrapper would download another one itself.
+[ -f "$task_root/pm/node_modules/@pnpm/exe.linux-x64/pnpm" ]
 [ "$(pnpm --version)" = 12.6.0 ]
 if [ "$mode" != host ]; then
   pnpm install --frozen-lockfile --store-dir "$task_root/store"
