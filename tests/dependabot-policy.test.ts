@@ -341,6 +341,36 @@ describe("actual dependency diff eligibility", () => {
   it("reads the real pinned graph, allowing unchanged prereleases but holding unknown syntax", () => {
     assert.ok(Object.keys(pnpmVersions(read("pnpm-lock.yaml"))).length > 100);
     assert.throws(() => pnpmVersions("lockfileVersion: 'future'\n"));
+    // pnpm 12 puts the pinned package manager's own lockfile in a first YAML document.
+    const manager = (version: string) => `---\n${lock(version).replace(/qs@/u, "pnpm@")}\n---\n${lock("6.16.1")}`;
+    assert.deepEqual(Object.keys(pnpmVersions(manager("12.6.0"))), [
+      "packageManager/node_modules/pnpm/12.6.0/node_modules/pnpm", "node_modules/qs/6.16.1/node_modules/qs",
+    ]);
+    assert.ok(Object.keys(pnpmVersions(read("pnpm-lock.yaml"))).includes("packageManager/node_modules/pnpm/12.6.0/node_modules/pnpm"));
+    assert.throws(() => pnpmVersions(`${manager("12.6.0")}\n---\n${lock("6.16.1")}`));
+    assert.throws(() => pnpmVersions(manager("12.6.0").replace("lockfileVersion: '9.0'", "lockfileVersion: 'future'")));
+    // Any change to the package manager's document is held, in both lanes and for patch bumps.
+    const managed = (s: any, before: string | undefined, after: string | undefined) => {
+      const doc = (version: string | undefined, project: string) => version === undefined ? project : `---\n${lock(version).replace(/qs@/u, "pnpm@")}\n---\n${project}`;
+      s.contents["pnpm-lock.yaml"] = { before: doc(before, s.contents["pnpm-lock.yaml"].before), after: doc(after, s.contents["pnpm-lock.yaml"].after) };
+      return s;
+    };
+    const development = () => {
+      const s = fixture();
+      s.contents["package.json"].after = s.contents["package.json"].before;
+      editManifest(s, m => { m.devDependencies["fast-check"] = "^4.11.0"; });
+      s.contents["pnpm-lock.yaml"] = { before: lock("6.16.1").replace("qs@6.16.1", "fast-check@4.10.2"),
+        after: lock("6.16.1").replace("qs@6.16.1", "fast-check@4.11.0") };
+      s.contents["npm-shrinkwrap.json"].after = s.contents["npm-shrinkwrap.json"].before;
+      s.contents["pnpm-workspace.yaml"].after = s.contents["pnpm-workspace.yaml"].before;
+      return s;
+    };
+    assert.equal(dependencyScope(managed(fixture(), "12.6.0", "12.6.0")), null);
+    assert.equal(dependencyScope(managed(development(), "12.6.0", "12.6.0")), null);
+    for (const [before, after] of [["12.6.0", "12.6.1"], ["12.6.0", "12.7.0"], [undefined, "12.6.0"], ["12.6.0", undefined]]) {
+      assert.equal(dependencyScope(managed(fixture(), before, after)), "package-manager-change");
+      assert.equal(dependencyScope(managed(development(), before, after)), "package-manager-change");
+    }
     assert.throws(() => pnpmVersions(lock("6.16.1").replace("qs@6.16.1", "qs@https://invalid")));
   });
 

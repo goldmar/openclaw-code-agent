@@ -44,6 +44,11 @@ function fixture(t: { after: (fn: () => void) => void }) {
 describe("independently pinned OpenClaw SDKs", () => {
   it("accepts equal or newer exact dev pins", () => {
     assert.deepEqual(validateOpenClawSdkPins(pkg(), lock), { baseline: "2026.10.1", dev: "2026.10.4" });
+    // pnpm 12 puts the pinned package manager's own lockfile in a first YAML document.
+    const manager = "---\nimporters:\n\n  .:\n    packageManagerDependencies:\n      pnpm:\n        specifier: 12.6.0\n        version: 12.6.0\n";
+    assert.deepEqual(validateOpenClawSdkPins(pkg(), `${manager}\n---\n${lock}`), { baseline: "2026.10.1", dev: "2026.10.4" });
+    assert.throws(() => validateOpenClawSdkPins(pkg(), `${manager}\n---\n${lock}\n---\n${lock}`), /package manager and project documents/);
+    assert.throws(() => validateOpenClawSdkPins(pkg(), `---\n${lock}\n---\n${manager.slice(4)}`), /does not match/);
     const same = pkg(); same.devDependencies.openclaw = "2026.10.1";
     assert.equal(validateOpenClawSdkPins(same).dev, "2026.10.1");
   });

@@ -7,7 +7,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 ## Prerequisites
 
 - **Node.js** 24.16.0+ on Node 24 or 26.1.0+ on Node 26, matching the pinned OpenClaw SDK
-- **pnpm** 11 — the repo pins `pnpm@11.15.1` in `packageManager`; use `corepack enable` or `npm install -g pnpm@11.15.1`
+- **pnpm** 12 — the repo pins `pnpm@12.6.0` in `packageManager`; use `corepack enable` or `npm install -g pnpm@12.6.0`
 
 ---
 

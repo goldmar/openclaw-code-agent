@@ -197,7 +197,7 @@ async function main(): Promise<void> {
   try {
     watcher = setInterval(() => { try { capture(); } catch { observationFailure = true; } }, 100);
     const pm = inside(fixture, join(fixture, "pm", "node_modules", "pnpm", "bin", "pnpm.mjs"));
-    assert.equal(await run(process.execPath, [pm, "--version"], ROOT, "pnpm-version"), "11.15.1");
+    assert.equal(await run(process.execPath, [pm, "--version"], ROOT, "pnpm-version"), "12.6.0");
     if (opts["--mode"] === "focused") {
       stage = "focused-temp-boundary-tests";
       await run(process.execPath, [pm, "test:file", "tests/agent-pr-execute.test.ts", "tests/opencode-harness.test.ts", "tests/worktree.test.ts"], ROOT, stage);
