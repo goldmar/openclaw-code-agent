@@ -6,6 +6,17 @@ import { compareReleases } from "./runtime-dependency-pins.mjs";
 export const sdkRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const exactVersion = /^\d{4}\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
 
+/**
+ * pnpm 12 writes pnpm-lock.yaml as two YAML documents: the pinned package
+ * manager's own lockfile, then the project's. pnpm 11 wrote only the project's.
+ */
+function projectLockfile(lockfile) {
+  if (!lockfile.startsWith("---\n")) return lockfile;
+  const documents = lockfile.slice(4).split("\n---\n");
+  if (documents.length !== 2) throw new Error("pnpm-lock.yaml must hold the package manager and project documents");
+  return documents[1];
+}
+
 /** The build baseline and development dependency are independent, exact pins. */
 export function validateOpenClawSdkPins(pkg, lockfile) {
   const baseline = pkg.openclaw?.build?.openclawVersion;
@@ -23,7 +34,7 @@ export function validateOpenClawSdkPins(pkg, lockfile) {
   if (compareReleases(dev, baseline) < 0) throw new Error("OpenClaw dev SDK must not be older than the build baseline");
   if (lockfile !== undefined) {
     // Read only the root importer's devDependencies, never a transitive match.
-    const importer = lockfile.match(/^  \.:\n([\s\S]*?)(?=^  \S|^\S|$(?![\s\S]))/mu)?.[1];
+    const importer = projectLockfile(lockfile).match(/^  \.:\n([\s\S]*?)(?=^  \S|^\S|$(?![\s\S]))/mu)?.[1];
     const dependencies = importer?.match(/^    devDependencies:\n([\s\S]*?)(?=^    \S|$(?![\s\S]))/mu)?.[1];
     for (const [name, specifier, version] of [
       ["openclaw", dev, dev], ["openclaw-baseline", `npm:openclaw@${baseline}`, `openclaw@${baseline}`],

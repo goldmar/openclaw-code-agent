@@ -9,7 +9,7 @@ allowBuilds:
   protobufjs: true
   tree-sitter-bash: false
 
-# No publication-age gate here: pnpm 11 checks every lockfile entry against
+# No publication-age gate here: pnpm checks every lockfile entry against
 # minimumReleaseAge at install time, including frozen CI and release installs,
 # so any window would block same-day OpenClaw compatibility and Claude SDK
 # updates. Dependabot's 3-day cooldown (.github/dependabot.yml) delays

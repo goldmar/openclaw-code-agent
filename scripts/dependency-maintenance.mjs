@@ -86,12 +86,11 @@ function graphVersions(packages) {
   return result;
 }
 
-// pnpm 11 canonical package keys; unknown syntax is a manual-review hold.
-export function pnpmVersions(text) {
+// pnpm lockfile v9 canonical package keys; unknown syntax is a manual-review hold.
+function pnpmDocumentVersions(text, prefix, result) {
   if (!text.startsWith("lockfileVersion: '9.0'\n")) throw new Error("unsupported pnpm lockfile");
   const section = text.split("\npackages:\n")[1]?.split("\nsnapshots:\n")[0];
   if (!section) throw new Error("missing pnpm packages");
-  const result = {};
   let current;
   for (const line of section.split("\n")) {
     if (line.startsWith("    resolution: ")) {
@@ -105,8 +104,18 @@ export function pnpmVersions(text) {
     const match = /^  ['"]?(.+)@(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)['"]?:$/u.exec(line);
     if (!match) throw new Error("unsupported pnpm package key");
     current = { version: match[2], integrity: undefined, resolved: undefined };
-    result[`node_modules/${match[1]}/${match[2]}/node_modules/${match[1]}`] = current;
+    result[`${prefix}node_modules/${match[1]}/${match[2]}/node_modules/${match[1]}`] = current;
   }
+}
+
+// pnpm 12 writes two YAML documents: the pinned package manager's own lockfile,
+// then the project's. Both graphs are compared; pnpm 11 wrote only the project's.
+export function pnpmVersions(text) {
+  const documents = text.startsWith("---\n") ? text.slice(4).split("\n---\n") : [undefined, text];
+  if (documents.length !== 2) throw new Error("unsupported pnpm lockfile documents");
+  const result = {};
+  if (documents[0] !== undefined) pnpmDocumentVersions(documents[0], "packageManager/", result);
+  pnpmDocumentVersions(documents[1], "", result);
   if (!Object.keys(result).length) throw new Error("empty pnpm packages");
   return result;
 }

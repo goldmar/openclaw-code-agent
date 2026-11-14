@@ -69,11 +69,15 @@ printf '%s  %s\n' "$node_hash" "$task_root/node.tar.gz" | sha256sum -c - > "$tas
 mkdir "$task_root/node"; tar -xzf "$task_root/node.tar.gz" --strip-components=1 -C "$task_root/node"
 export PATH="$task_root/node/bin:$task_root/pm/node_modules/.bin:/usr/bin:/bin"
 [ "$(node --version)" = "v$floor" ] || { printf '%s\n' 'Private Node runtime prerequisite unavailable (including libatomic.so.1 on Node26)' >&2; exit 1; }
-curl --fail --silent --show-error --max-time 120 --max-filesize 67108864 --proto '=https' --tlsv1.2 https://registry.npmjs.org/pnpm/-/pnpm-11.15.1.tgz -o "$task_root/pnpm.tgz"
-pnpm_sri='gTULB+U8lTigLx8jA7QpD6LXvgTlbiqXDEzEtBfcdh3hlu2r1J1Vx9yVgNuBAHxEFD5OPX5GKzAA0jwlUSLQZQ=='
+curl --fail --silent --show-error --max-time 120 --max-filesize 67108864 --proto '=https' --tlsv1.2 https://registry.npmjs.org/pnpm/-/pnpm-12.6.0.tgz -o "$task_root/pnpm.tgz"
+pnpm_sri='PvaPlRyxEawgS0paFvCy3fDaVqluBBPoHYVdnwtV75JnFHCQKOHNAMQFwsX7e56OxNxGd3yAXQNzwvL/AP0g7A=='
 [ "$(openssl dgst -sha512 -binary "$task_root/pnpm.tgz" | openssl base64 -A)" = "$pnpm_sri" ]
-npm install --prefix "$task_root/pm" --ignore-scripts --no-audit --no-fund "$task_root/pnpm.tgz" > "$task_root/pm-install.log" 2>&1
-[ "$(pnpm --version)" = 11.15.1 ]
+# pnpm 12 is a native binary in a per-platform package; the wrapper's bin/pnpm.mjs runs it without install scripts.
+curl --fail --silent --show-error --max-time 120 --max-filesize 67108864 --proto '=https' --tlsv1.2 https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.6.0.tgz -o "$task_root/pnpm-exe.tgz"
+pnpm_exe_sri='qFWBneHJAJ73W4whtbaFOL1M/7DBC6ILHXuxc7ZPtEhfPuT1zeZiGrmKHoMAfJA+mcm6xhOFljqVTUS+00Jabw=='
+[ "$(openssl dgst -sha512 -binary "$task_root/pnpm-exe.tgz" | openssl base64 -A)" = "$pnpm_exe_sri" ]
+npm install --prefix "$task_root/pm" --ignore-scripts --no-audit --no-fund "$task_root/pnpm.tgz" "$task_root/pnpm-exe.tgz" > "$task_root/pm-install.log" 2>&1
+[ "$(pnpm --version)" = 12.6.0 ]
 if [ "$mode" != host ]; then
   pnpm install --frozen-lockfile --store-dir "$task_root/store"
 else

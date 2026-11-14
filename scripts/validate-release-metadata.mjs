@@ -171,7 +171,7 @@ export function validateReleaseMetadata(options = {}) {
 
   validateOpenClawSdkPins(packageJson, lockfile);
 
-  if (packageJson.packageManager !== "pnpm@11.15.1") {
+  if (packageJson.packageManager !== "pnpm@12.6.0") {
     throw new Error(`Unexpected package manager: ${packageJson.packageManager}`);
   }
 

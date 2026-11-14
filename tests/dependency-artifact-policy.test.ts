@@ -25,7 +25,7 @@ describe("dependency artifact policy", () => {
     const packageJson = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
     const dependabot = read(".github/dependabot.yml");
 
-    // pnpm 11 checks every lockfile entry against minimumReleaseAge at install
+    // pnpm checks every lockfile entry against minimumReleaseAge at install
     // time (frozen CI and release installs included), which would block
     // same-day OpenClaw compatibility releases.
     assert.match(workspace, /^minimumReleaseAge: 0$/m);

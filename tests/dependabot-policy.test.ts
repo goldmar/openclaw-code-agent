@@ -341,6 +341,18 @@ describe("actual dependency diff eligibility", () => {
   it("reads the real pinned graph, allowing unchanged prereleases but holding unknown syntax", () => {
     assert.ok(Object.keys(pnpmVersions(read("pnpm-lock.yaml"))).length > 100);
     assert.throws(() => pnpmVersions("lockfileVersion: 'future'\n"));
+    // pnpm 12 puts the pinned package manager's own lockfile in a first YAML document.
+    const manager = (version: string) => `---\n${lock(version).replace(/qs@/u, "pnpm@")}\n---\n${lock("6.16.1")}`;
+    assert.deepEqual(Object.keys(pnpmVersions(manager("12.6.0"))), [
+      "packageManager/node_modules/pnpm/12.6.0/node_modules/pnpm", "node_modules/qs/6.16.1/node_modules/qs",
+    ]);
+    assert.equal(pnpmVersions(read("pnpm-lock.yaml"))["packageManager/node_modules/pnpm/12.6.0/node_modules/pnpm"]?.version, "12.6.0");
+    assert.throws(() => pnpmVersions(`${manager("12.6.0")}\n---\n${lock("6.16.1")}`));
+    assert.throws(() => pnpmVersions(manager("12.6.0").replace("lockfileVersion: '9.0'", "lockfileVersion: 'future'")));
+    const m = fixture();
+    m.contents["pnpm-lock.yaml"] = { before: `---\n${lock("12.6.0").replace(/qs@/u, "pnpm@")}\n---\n${m.contents["pnpm-lock.yaml"].before}`,
+      after: `---\n${lock("12.7.0").replace(/qs@/u, "pnpm@")}\n---\n${m.contents["pnpm-lock.yaml"].after}` };
+    assert.equal(dependencyScope(m), "unapproved-transitive-change");
     assert.throws(() => pnpmVersions(lock("6.16.1").replace("qs@6.16.1", "qs@https://invalid")));
   });
 
