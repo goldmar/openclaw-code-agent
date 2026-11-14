@@ -109,13 +109,18 @@ function pnpmDocumentVersions(text, prefix, result) {
 }
 
 // pnpm 12 writes two YAML documents: the pinned package manager's own lockfile,
-// then the project's. Both graphs are compared; pnpm 11 wrote only the project's.
-export function pnpmVersions(text) {
+// then the project's. pnpm 11 wrote only the project's.
+function pnpmDocuments(text) {
   const documents = text.startsWith("---\n") ? text.slice(4).split("\n---\n") : [undefined, text];
   if (documents.length !== 2) throw new Error("unsupported pnpm lockfile documents");
+  return { manager: documents[0], project: documents[1] };
+}
+
+export function pnpmVersions(text) {
+  const { manager, project } = pnpmDocuments(text);
   const result = {};
-  if (documents[0] !== undefined) pnpmDocumentVersions(documents[0], "packageManager/", result);
-  pnpmDocumentVersions(documents[1], "", result);
+  if (manager !== undefined) pnpmDocumentVersions(manager, "packageManager/", result);
+  pnpmDocumentVersions(project, "", result);
   if (!Object.keys(result).length) throw new Error("empty pnpm packages");
   return result;
 }
@@ -238,6 +243,8 @@ export function dependencyScope(snapshot) {
     const shrinkwrap = contents["npm-shrinkwrap.json"];
     const workspace = contents["pnpm-workspace.yaml"];
     if (!runtime && shrinkwrap.before !== shrinkwrap.after) return "development-update-changes-published-graph";
+    // A routine update never changes the package manager's own lockfile.
+    if (pnpmDocuments(pnpm.before).manager !== pnpmDocuments(pnpm.after).manager) return "package-manager-change";
     if (!safeGraph(pnpmVersions(pnpm.before), pnpmVersions(pnpm.after), runtime) ||
         !safeGraph(JSON.parse(shrinkwrap.before).packages, JSON.parse(shrinkwrap.after).packages, runtime)) {
       return "unapproved-transitive-change";
