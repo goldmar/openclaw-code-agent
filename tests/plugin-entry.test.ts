@@ -438,7 +438,7 @@ describe("plugin entry source", () => {
       "max",
     ]);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
-    assert.equal(harnessDefaults?.codex?.defaultModel, "gpt-6.1-sol");
+    assert.equal(harnessDefaults?.codex?.defaultModel, "gpt-6.2-sol");
     assert.equal(harnessDefaults?.["claude-code"]?.defaultModel, "opus");
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
     assert.equal(harnessDefaults?.codex?.fastMode, false);

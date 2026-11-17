@@ -39,12 +39,12 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.harness, "codex");
-    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
+    assert.equal(spawnConfig?.model, "gpt-6.2-sol");
     assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.fastMode, undefined);
     assert.equal("codexApprovalPolicy" in (spawnConfig ?? {}), false);
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, / · codex \| gpt-6.1-sol/);
+    assert.match(text, / · codex \| gpt-6.2-sol/);
     assert.match(text, /Mode: plan first, approval: delegate · worktree: delegate/);
     const [summary, note] = text.split("\n\n");
     assert.ok(summary!.split("\n").length <= 5, `compact launch summary: ${text}`);
@@ -452,7 +452,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
+    assert.equal(spawnConfig?.model, "gpt-6.2-sol");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
     assert.equal(spawnConfig?.forkSession, true);
     assert.equal(spawnConfig?.rewindTurns, 1);
@@ -501,7 +501,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6.1-sol");
+    assert.equal(spawnConfig?.model, "gpt-6.2-sol");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
 

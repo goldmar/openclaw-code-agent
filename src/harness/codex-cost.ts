@@ -23,7 +23,9 @@ type TokenRates = {
 // https://developers.openai.com/api/docs/changelog).
 // GPT-6.1 Sol: https://developers.openai.com/api/docs/models/gpt-6.1-sol
 // (2026-09-29); cached input is 5% of the uncached input rate.
+// GPT-6.2 Sol: https://developers.openai.com/api/docs/models/gpt-6.2-sol
 const STANDARD_RATES: Record<string, TokenRates> = {
+  "gpt-6.2-sol": { input: 2, cachedInput: 0.1, output: 10 },
   "gpt-6.1-sol": { input: 2, cachedInput: 0.1, output: 10 },
   "gpt-6-astra": { input: 10, cachedInput: 1, output: 50 },
   "gpt-6-sol": { input: 2, cachedInput: 0.2, output: 10 },

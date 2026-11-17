@@ -704,16 +704,16 @@ describe("CodexHarness launch settings", () => {
     assert.equal("model" in client.requestsFor("thread/start")[0], false);
   });
 
-  it("keeps the shipped GPT-6.1 Sol effort at medium when the live catalog defaults to low", async () => {
+  it("keeps the shipped GPT-6.2 Sol effort at medium when the live catalog defaults to low", async () => {
     setPluginConfig({});
     const client = new MockCodexClient({
-      models: [codexCatalogModel("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
+      models: [codexCatalogModel("gpt-6.2-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
     });
     const messages = await collectMessages(launch(client, {
       model: resolveDefaultModelForHarness("codex"),
       reasoningEffort: resolveReasoningEffortForHarness("codex"),
     }));
-    assert.equal(client.requestsFor("thread/start")[0].model, "gpt-6.1-sol");
+    assert.equal(client.requestsFor("thread/start")[0].model, "gpt-6.2-sol");
     const turn = client.requestsFor("turn/start")[0] as { effort: string; collaborationMode: { settings: { reasoning_effort: string } } };
     assert.equal(turn.effort, "medium");
     assert.equal(turn.collaborationMode.settings.reasoning_effort, "medium");
@@ -1105,14 +1105,14 @@ describe("CodexHarness minimum Codex CLI version (B23)", () => {
 });
 
 describe("CodexHarness cost accounting (B8)", () => {
-  it("prices GPT-6.1 Sol responses once and carries estimates separately for subscription goals", async () => {
+  it("prices GPT-6.2 Sol responses once and carries estimates separately for subscription goals", async () => {
     for (const accountType of ["apiKey", "chatgpt"] as const) {
       const client = new MockCodexClient({
         accountType,
-        models: [codexCatalogModel("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
+        models: [codexCatalogModel("gpt-6.2-sol", ["low", "medium", "high", "xhigh", "max"], "low")],
         tokenUsage: [breakdown(1_000, 400, 200, 100, 90), breakdown(500, 0, 0, 50, 40)],
       });
-      const messages = await collectMessages(launch(client, { model: "gpt-6.1-sol" }));
+      const messages = await collectMessages(launch(client, { model: "gpt-6.2-sol" }));
       const result = runCompleted(messages);
       assert.equal(result?.data.total_cost_usd, accountType === "apiKey" ? 0.00384 : 0);
       const estimates = messages.flatMap((message) => message.type === "usage_updated" && message.usage.estimatedCostUsd !== undefined

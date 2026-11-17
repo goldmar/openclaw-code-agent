@@ -8,8 +8,8 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | --- | --- |
 | `defaultHarness` | `claude-code` |
 | `harnesses.claude-code.defaultModel` | `opus` |
-| `harnesses.codex.defaultModel` | `gpt-6.1-sol` |
-| `harnesses.codex.allowedModels` | `["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
+| `harnesses.codex.defaultModel` | `gpt-6.2-sol` |
+| `harnesses.codex.allowedModels` | `["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
 | `harnesses.codex.permissionProfile` | unset; follows `tools.exec.mode` (`:danger-full-access` when that is unset) |
@@ -99,9 +99,9 @@ For automation, `planOfferTool: true`, effective tool grants, OCA activation, an
   {
     "harnesses": {
       "codex": {
-        "defaultModel": "gpt-6.1-sol",
+        "defaultModel": "gpt-6.2-sol",
         "reasoningEffort": "medium",
-        "allowedModels": ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        "allowedModels": ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
       },
       "claude-code": {
         "defaultModel": "opus",
@@ -220,9 +220,9 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-6.1-sol",
+        "defaultModel": "gpt-6.2-sol",
         "reasoningEffort": "medium",
-        "allowedModels": ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        "allowedModels": ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
         "fastMode": false
       },
       "opencode": {}
@@ -276,7 +276,7 @@ Claude Code decisions for 5.0:
 - **Only `default`, `plan` and `bypassPermissions` are exposed.** The SDK's `acceptEdits`, `dontAsk` and `auto` modes are Claude-specific (`auto` also needs a model with `supportsAutoMode`), have no Codex or OpenCode counterpart, and would make `permission_mode` mean different things per harness.
 - **No per-turn Codex tier.** Codex can override the tier for one turn (`serviceTierForTurn`), but OCA's `fast_mode` is a session setting, so the thread tier is used.
 
-The built-in Codex default (`gpt-6.1-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
+The built-in Codex default (`gpt-6.2-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
 Codex harness details:
 
