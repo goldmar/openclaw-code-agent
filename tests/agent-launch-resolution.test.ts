@@ -198,7 +198,7 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
-  for (const model of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const model of ["gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     it(`accepts ${model} under the built-in Codex allowlist`, () => {
       const result = resolveAgentLaunchRequest(
         {
@@ -245,7 +245,7 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
       assert.equal(result.harness, "codex");
-      assert.equal(result.resolvedModel, "gpt-6.1-sol");
+      assert.equal(result.resolvedModel, "gpt-6.2-sol");
       assert.equal(result.reasoningEffort, "medium");
     }
   });
@@ -253,7 +253,7 @@ describe("resolveAgentLaunchRequest", () => {
   for (const active of [false, true]) {
     it(`preserves ${active ? "active" : "persisted"} Codex model and effort pins when the default changes`, () => {
       const manager = {
-        resolve: () => active ? { harnessName: "codex", model: "gpt-6-sol", reasoningEffort: "high" as const } : undefined,
+        resolve: () => active ? { harnessName: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" as const } : undefined,
         getPersistedSession: () => ({ harness: "codex", model: "gpt-5.6-sol", reasoningEffort: "low" as const }),
         resolveBackendConversationId: () => "123e4567-e89b-42d3-a456-426614174000",
       };
@@ -261,16 +261,16 @@ describe("resolveAgentLaunchRequest", () => {
       const result = resolveAgentLaunchRequest(params, { workspaceDir: "/tmp", oneShotCliRun: true }, manager);
       assert.equal(result.kind, "resolved");
       if (result.kind === "resolved") {
-        assert.equal(result.resolvedModel, active ? "gpt-6-sol" : "gpt-5.6-sol");
+        assert.equal(result.resolvedModel, active ? "gpt-6.1-sol" : "gpt-5.6-sol");
         assert.equal(result.reasoningEffort, active ? "high" : "low");
       }
       const explicit = resolveAgentLaunchRequest(
-        { ...params, model: "openai/gpt-6.1-sol", reasoning_effort: "medium" },
+        { ...params, model: "openai/gpt-6.2-sol", reasoning_effort: "medium" },
         { workspaceDir: "/tmp", oneShotCliRun: true }, manager,
       );
       assert.equal(explicit.kind, "resolved");
       if (explicit.kind === "resolved") {
-        assert.equal(explicit.resolvedModel, "gpt-6.1-sol");
+        assert.equal(explicit.resolvedModel, "gpt-6.2-sol");
         assert.equal(explicit.reasoningEffort, "medium");
       }
     });
@@ -451,7 +451,7 @@ describe("resolveAgentLaunchRequest", () => {
     );
     assert.equal(defaulted.kind, "resolved");
     if (defaulted.kind === "resolved") {
-      assert.equal(defaulted.resolvedModel, "gpt-6.1-sol");
+      assert.equal(defaulted.resolvedModel, "gpt-6.2-sol");
       assert.equal(defaulted.resolvedResumeId, persisted.harnessSessionId);
     }
 

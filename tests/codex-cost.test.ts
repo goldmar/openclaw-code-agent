@@ -21,18 +21,21 @@ describe("Codex API cost accounting", () => {
     assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", serviceTier: "flex", usage }), 0.131);
   });
 
-  it("switches GPT-6.1 Sol input, cache-write, and output rates above 272K input tokens", () => {
-    const usage = {
-      inputTokens: 272_000, cachedInputTokens: 100_000, cacheWriteInputTokens: 50_000,
-      outputTokens: 1_000, reasoningOutputTokens: 500,
-    };
-    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", usage }), 0.389);
-    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6.1-sol", usage: { ...usage, inputTokens: 272_001 } }), 0.773004);
-    assert.equal(estimateCodexApiCostUsd({
-      model: "gpt-6.1-sol", serviceTier: "priority", usage: { ...usage, inputTokens: 300_000 },
-    // 150K uncached * $8 + 100K cached * $0.40 + 50K writes * $10 + 1K output * $30.
-    }), 1.77);
-  });
+  for (const model of ["gpt-6.1-sol", "gpt-6.2-sol"]) {
+    it(`switches ${model} input, cache-write, and output rates above 272K input tokens`, () => {
+      const usage = {
+        inputTokens: 272_000, cachedInputTokens: 100_000, cacheWriteInputTokens: 50_000,
+        outputTokens: 1_000, reasoningOutputTokens: 500,
+      };
+      assert.equal(estimateCodexApiCostUsd({ model, usage }), 0.389);
+      assert.equal(estimateCodexApiCostUsd({ model, usage: { ...usage, inputTokens: 272_001 } }), 0.773004);
+      assert.equal(estimateCodexApiCostUsd({
+        model, serviceTier: "priority", usage: { ...usage, inputTokens: 300_000 },
+      // 150K uncached * $8 + 100K cached * $0.40 + 50K writes * $10 + 1K output * $30.
+      }), 1.77);
+    });
+  }
+
   it("prices GPT-6 Astra input, cached input, and output tokens", () => {
     const cost = estimateCodexApiCostUsd({
       model: "gpt-6-astra",

@@ -48,23 +48,23 @@ describe("harness model configuration", () => {
 
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.1-sol");
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6.2-sol");
     assert.equal("allowedModels" in pluginConfig, false);
     assert.equal(resolve("claude-code", "haiku").kind, "error");
   });
 
   it("keeps Sol selection inside the Codex policy and Claude models inside their own policy", () => {
     setPluginConfig({});
-    for (const model of [undefined, "gpt-6.1-sol", "openai/gpt-6.1-sol"]) {
+    for (const model of [undefined, "gpt-6.2-sol", "openai/gpt-6.2-sol"]) {
       const request = resolve("codex", model);
       assert.equal(request.kind, "resolved");
       if (request.kind === "resolved") {
-        assert.equal(request.resolvedModel, "gpt-6.1-sol");
+        assert.equal(request.resolvedModel, "gpt-6.2-sol");
         assert.equal(request.reasoningEffort, "medium");
       }
     }
-    assert.equal(resolve("codex", "gpt-6.1-sol-unlisted").kind, "error");
-    assert.equal(resolve("claude-code", "gpt-6.1-sol").kind, "error");
+    assert.equal(resolve("codex", "gpt-6.2-sol-unlisted").kind, "error");
+    assert.equal(resolve("claude-code", "gpt-6.2-sol").kind, "error");
     assert.equal(resolve("codex", "anthropic/opus").kind, "error");
     for (const model of ["sonnet", "opus", "anthropic/opus"]) {
       assert.equal(resolve("claude-code", model).kind, "resolved");

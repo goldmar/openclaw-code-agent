@@ -128,7 +128,7 @@ export async function resolveGoalLaunchRequest(
   if (canonicalModel && !isModelFormatSupportedForHarness(harness, canonicalModel)) {
     return {
       kind: "error",
-      text: `Error: Model "${rawModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6.1-sol" or "gpt-6-astra".`,
+      text: `Error: Model "${rawModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6.2-sol" or "gpt-6-astra".`,
     };
   }
 
