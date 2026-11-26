@@ -34,6 +34,6 @@ overrides:
   fast-uri@<3.1.9: 3.1.9
   qs@<6.17.1: 6.17.1
   proxy-addr@<2.0.8: 2.0.8
-  hono@<4.13.16: 4.13.16
-  "@hono/node-server@<2.1.6": 2.1.6
+  hono@<4.13.18: 4.13.18
+  "@hono/node-server@<2.1.8": 2.1.8
   undici@>=8.0.0 <8.9.0: 8.9.0
